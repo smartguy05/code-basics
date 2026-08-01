@@ -1,0 +1,674 @@
+//! The .NET ecosystem adapter.
+//!
+//! # The VSTest / Microsoft.Testing.Platform split
+//!
+//! `dotnet test` has two entirely separate execution paths, and telling them
+//! apart is the single most important thing this module does.
+//!
+//! * **VSTest** — the classic path. Takes `--logger "trx;LogFileName=..."`.
+//! * **Microsoft.Testing.Platform (MTP)** — the newer path. Takes
+//!   `-- --report-trx --report-trx-filename ...`, and **silently ignores**
+//!   VSTest's `--logger`.
+//!
+//! Because MTP ignores the flags rather than rejecting them, getting this
+//! wrong does not produce an error. The run appears to succeed, exits zero,
+//! and simply leaves no report behind — which surfaces to the user as "the
+//! tests ran but nothing appeared". That is why detection has its own
+//! extensive tests below, and why a missing report is reported with a message
+//! that names this as the likely cause.
+//!
+//! Both paths can emit TRX, so a single parser serves both.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use crate::model::{
+    ConfigSource, Invocation, ProjectKind, ReportFormat, ReportSpec, RunConfig, RunKind, TestRunner,
+};
+
+/// Values read out of a `.csproj` / `.fsproj` or a `Directory.Build.props`.
+///
+/// Every field is optional because MSBuild properties can be set in any of
+/// several files that layer on top of each other.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ProjectFile {
+    pub output_type: Option<String>,
+    pub target_frameworks: Vec<String>,
+    pub is_test_project: Option<bool>,
+    /// `<TestingPlatformDotnetTestSupport>` — an explicit opt in to MTP.
+    pub testing_platform_support: Option<bool>,
+    /// `<EnableMSTestRunner>` / `<UseMicrosoftTestingPlatformRunner>` — the
+    /// per-framework ways of switching MSTest and NUnit onto MTP.
+    pub enable_mtp_runner: Option<bool>,
+    pub package_references: Vec<String>,
+}
+
+impl ProjectFile {
+    /// Case-insensitive test for a package reference, optionally by prefix.
+    pub fn references(&self, name: &str) -> bool {
+        self.package_references
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(name))
+    }
+
+    pub fn references_prefix(&self, prefix: &str) -> bool {
+        let prefix = prefix.to_ascii_lowercase();
+        self.package_references
+            .iter()
+            .any(|p| p.to_ascii_lowercase().starts_with(&prefix))
+    }
+}
+
+/// Extract the handful of MSBuild properties and package references we care
+/// about.
+///
+/// This is deliberately a shallow scan rather than an MSBuild evaluation: we
+/// only need enough to classify a project, and evaluating MSBuild properly
+/// would mean shipping MSBuild.
+pub fn parse_project_file(xml: &str) -> ProjectFile {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut out = ProjectFile::default();
+    let mut current: Option<String> = None;
+    let mut text = String::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                if name.eq_ignore_ascii_case("PackageReference") {
+                    if let Some(include) = attr_value(&e, "Include") {
+                        out.package_references.push(include);
+                    }
+                }
+                current = Some(name);
+                text.clear();
+            }
+            Ok(Event::Empty(e)) => {
+                let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                if name.eq_ignore_ascii_case("PackageReference") {
+                    if let Some(include) = attr_value(&e, "Include") {
+                        out.package_references.push(include);
+                    }
+                }
+            }
+            Ok(Event::Text(t)) => {
+                if current.is_some() {
+                    text.push_str(&t.unescape().unwrap_or_default());
+                }
+            }
+            Ok(Event::End(_)) => {
+                if let Some(name) = current.take() {
+                    let value = text.trim();
+                    if !value.is_empty() {
+                        apply_property(&mut out, &name, value);
+                    }
+                }
+                text.clear();
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+
+    out
+}
+
+fn attr_value(e: &quick_xml::events::BytesStart, name: &str) -> Option<String> {
+    e.attributes().flatten().find_map(|a| {
+        if a.key.local_name().as_ref().eq_ignore_ascii_case(name.as_bytes()) {
+            a.unescape_value().ok().map(|v| v.into_owned())
+        } else {
+            None
+        }
+    })
+}
+
+fn apply_property(out: &mut ProjectFile, name: &str, value: &str) {
+    let truthy = || value.eq_ignore_ascii_case("true");
+
+    if name.eq_ignore_ascii_case("OutputType") {
+        out.output_type = Some(value.to_string());
+    } else if name.eq_ignore_ascii_case("TargetFramework") {
+        out.target_frameworks = vec![value.to_string()];
+    } else if name.eq_ignore_ascii_case("TargetFrameworks") {
+        out.target_frameworks = value
+            .split(';')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+    } else if name.eq_ignore_ascii_case("IsTestProject") {
+        out.is_test_project = Some(truthy());
+    } else if name.eq_ignore_ascii_case("TestingPlatformDotnetTestSupport") {
+        out.testing_platform_support = Some(truthy());
+    } else if name.eq_ignore_ascii_case("EnableMSTestRunner")
+        || name.eq_ignore_ascii_case("UseMicrosoftTestingPlatformRunner")
+    {
+        out.enable_mtp_runner = Some(truthy());
+    }
+}
+
+/// The runner selection recorded in a `dotnet.config`.
+///
+/// The .NET 10 SDK reads `[dotnet.test:runner] name = "Microsoft.Testing.Platform"`
+/// from a `dotnet.config` beside the solution. When present it overrides
+/// everything else, so it is checked first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfiguredRunner {
+    MicrosoftTestingPlatform,
+    VsTest,
+}
+
+/// Read the runner selection out of a `dotnet.config`.
+///
+/// Parsed as INI rather than TOML: the section name `dotnet.test:runner`
+/// contains a colon, which is not a legal TOML bare key.
+pub fn parse_dotnet_config(content: &str) -> Option<ConfiguredRunner> {
+    let mut in_runner_section = false;
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+
+        if let Some(section) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            in_runner_section = section.trim().eq_ignore_ascii_case("dotnet.test:runner");
+            continue;
+        }
+
+        if in_runner_section {
+            if let Some((key, value)) = line.split_once('=') {
+                if key.trim().eq_ignore_ascii_case("name") {
+                    let value = value.trim().trim_matches(['"', '\'']);
+                    return Some(if value.eq_ignore_ascii_case("Microsoft.Testing.Platform") {
+                        ConfiguredRunner::MicrosoftTestingPlatform
+                    } else {
+                        ConfiguredRunner::VsTest
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Decide whether a project contains tests at all.
+pub fn is_test_project(project: &ProjectFile, inherited: &[ProjectFile]) -> bool {
+    if let Some(explicit) = project
+        .is_test_project
+        .or_else(|| inherited.iter().rev().find_map(|p| p.is_test_project))
+    {
+        return explicit;
+    }
+
+    let all = std::iter::once(project).chain(inherited.iter());
+    all.into_iter().any(|p| {
+        p.references("Microsoft.NET.Test.Sdk")
+            || p.references_prefix("xunit")
+            || p.references_prefix("nunit")
+            || p.references_prefix("MSTest")
+            || p.references_prefix("TUnit")
+            || p.references_prefix("Microsoft.Testing.Platform")
+    })
+}
+
+/// Decide which of the two `dotnet test` paths a project uses.
+///
+/// Precedence, highest first:
+/// 1. An explicit `dotnet.config` runner selection.
+/// 2. An explicit `<TestingPlatformDotnetTestSupport>` property.
+/// 3. An explicit per-framework runner switch (`<EnableMSTestRunner>`).
+/// 4. Package evidence: an MTP-native framework, or MTP extensions without
+///    `Microsoft.NET.Test.Sdk` — which is what VSTest requires.
+///
+/// Anything else is assumed to be VSTest, since that remains the default.
+pub fn classify_runner(
+    project: &ProjectFile,
+    inherited: &[ProjectFile],
+    configured: Option<ConfiguredRunner>,
+) -> TestRunner {
+    match configured {
+        Some(ConfiguredRunner::MicrosoftTestingPlatform) => {
+            return TestRunner::MicrosoftTestingPlatform
+        }
+        Some(ConfiguredRunner::VsTest) => return TestRunner::VsTest,
+        None => {}
+    }
+
+    let layered: Vec<&ProjectFile> = std::iter::once(project).chain(inherited.iter()).collect();
+
+    // An explicit property wins over any amount of package guesswork. Nearest
+    // file first, so a project overrides Directory.Build.props.
+    if let Some(explicit) = layered.iter().find_map(|p| p.testing_platform_support) {
+        return if explicit {
+            TestRunner::MicrosoftTestingPlatform
+        } else {
+            TestRunner::VsTest
+        };
+    }
+    if let Some(explicit) = layered.iter().find_map(|p| p.enable_mtp_runner) {
+        return if explicit {
+            TestRunner::MicrosoftTestingPlatform
+        } else {
+            TestRunner::VsTest
+        };
+    }
+
+    // xunit.v3 and TUnit run on MTP natively.
+    let mtp_native = layered
+        .iter()
+        .any(|p| p.references_prefix("xunit.v3") || p.references_prefix("TUnit"));
+    if mtp_native {
+        return TestRunner::MicrosoftTestingPlatform;
+    }
+
+    // MTP extensions present *and* no VSTest host: only MTP can run this.
+    let has_mtp_packages = layered
+        .iter()
+        .any(|p| p.references_prefix("Microsoft.Testing.Platform") || p.references_prefix("Microsoft.Testing.Extensions"));
+    let has_vstest_host = layered.iter().any(|p| p.references("Microsoft.NET.Test.Sdk"));
+    if has_mtp_packages && !has_vstest_host {
+        return TestRunner::MicrosoftTestingPlatform;
+    }
+
+    TestRunner::VsTest
+}
+
+/// Whether the TRX reporting extension is available for an MTP project.
+///
+/// Without `Microsoft.Testing.Extensions.TrxReport`, MTP accepts
+/// `--report-trx` but produces nothing, so this is worth warning about before
+/// the run rather than diagnosing afterwards.
+pub fn has_trx_extension(project: &ProjectFile, inherited: &[ProjectFile]) -> bool {
+    std::iter::once(project)
+        .chain(inherited.iter())
+        .any(|p| {
+            p.references_prefix("Microsoft.Testing.Extensions.TrxReport")
+                // xunit.v3 and TUnit bundle TRX reporting in their main package.
+                || p.references_prefix("xunit.v3")
+                || p.references_prefix("TUnit")
+        })
+}
+
+pub fn project_kind(project: &ProjectFile, is_test: bool) -> ProjectKind {
+    if is_test {
+        return ProjectKind::Test;
+    }
+    match project.output_type.as_deref() {
+        Some(t) if t.eq_ignore_ascii_case("Exe") || t.eq_ignore_ascii_case("WinExe") => {
+            ProjectKind::Executable
+        }
+        Some(_) => ProjectKind::Library,
+        // A project with no OutputType is a library unless an SDK says
+        // otherwise; web SDKs are the common exception.
+        None => ProjectKind::Library,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// launchSettings.json
+// ---------------------------------------------------------------------------
+
+/// One profile from `Properties/launchSettings.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchProfile {
+    pub name: String,
+    pub command_name: Option<String>,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub working_directory: Option<String>,
+    pub application_url: Option<String>,
+}
+
+/// Parse `launchSettings.json` into the profiles worth offering as run
+/// configurations.
+///
+/// Only `Project`-command profiles are returned: IIS Express and Docker
+/// profiles describe a hosting model this app does not launch.
+pub fn parse_launch_settings(json: &str) -> Vec<LaunchProfile> {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(profiles) = root.get("profiles").and_then(|p| p.as_object()) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for (name, body) in profiles {
+        let command_name = body
+            .get("commandName")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+
+        if !matches!(command_name.as_deref(), None | Some("Project")) {
+            continue;
+        }
+
+        let args = body
+            .get("commandLineArgs")
+            .and_then(|v| v.as_str())
+            .map(split_args)
+            .unwrap_or_default();
+
+        let env = body
+            .get("environmentVariables")
+            .and_then(|v| v.as_object())
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        out.push(LaunchProfile {
+            name: name.clone(),
+            command_name,
+            args,
+            env,
+            working_directory: body
+                .get("workingDirectory")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            application_url: body
+                .get("applicationUrl")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        });
+    }
+
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Split a command line string into arguments, honouring double quotes.
+pub fn split_args(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut has_content = false;
+
+    for ch in raw.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                // A quoted empty string is still an argument.
+                has_content = true;
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if has_content {
+                    out.push(std::mem::take(&mut current));
+                    has_content = false;
+                }
+            }
+            c => {
+                current.push(c);
+                has_content = true;
+            }
+        }
+    }
+    if has_content {
+        out.push(current);
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Building invocations
+// ---------------------------------------------------------------------------
+
+/// Everything needed to turn a [`RunConfig`] into a command line.
+pub struct BuildContext<'a> {
+    pub workspace_root: &'a Path,
+    /// Where report files should be written.
+    pub results_dir: &'a Path,
+    /// The runner in use, for test configurations.
+    pub runner: Option<TestRunner>,
+    /// Whether TRX reporting is available. Only meaningful under MTP.
+    pub trx_extension_available: bool,
+    /// Fully qualified names to restrict the run to, for "re-run failed".
+    pub filter: Option<Vec<String>>,
+}
+
+/// Build the `dotnet test` command line for a test configuration.
+pub fn test_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
+    let runner = ctx.runner.unwrap_or(TestRunner::VsTest);
+    let report_path = ctx.results_dir.join(format!("{}.trx", sanitise(&config.id)));
+    let report_name = report_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "report.trx".to_string());
+
+    let mut args = vec!["test".to_string()];
+    let mut warnings = Vec::new();
+
+    if let Some(project) = &config.project {
+        args.push(ctx.workspace_root.join(project).display().to_string());
+    }
+    if let Some(configuration) = &config.build_configuration {
+        args.push("-c".into());
+        args.push(configuration.clone());
+    }
+    if let Some(framework) = &config.framework {
+        args.push("-f".into());
+        args.push(framework.clone());
+    }
+
+    match runner {
+        TestRunner::MicrosoftTestingPlatform => {
+            if !ctx.trx_extension_available {
+                warnings.push(
+                    "This project runs on Microsoft.Testing.Platform but does not reference \
+                     Microsoft.Testing.Extensions.TrxReport. The run will succeed but produce \
+                     no results. Add the package to see test results here."
+                        .to_string(),
+                );
+            }
+            // Everything after `--` is MTP's own command line. VSTest options
+            // before it would be silently ignored.
+            args.push("--".into());
+            args.push("--report-trx".into());
+            args.push("--report-trx-filename".into());
+            args.push(report_name);
+            args.push("--results-directory".into());
+            args.push(ctx.results_dir.display().to_string());
+
+            if let Some(names) = &ctx.filter {
+                if !names.is_empty() {
+                    args.push("--filter".into());
+                    args.push(vstest_filter(names));
+                    warnings.push(
+                        "Re-running only failed tests uses `--filter`, which is provided by the \
+                         VSTest bridge. Runners that implement Microsoft.Testing.Platform \
+                         natively may ignore it and run the full suite."
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        _ => {
+            args.push("--logger".into());
+            args.push(format!("trx;LogFileName={report_name}"));
+            args.push("--results-directory".into());
+            args.push(ctx.results_dir.display().to_string());
+
+            if let Some(names) = &ctx.filter {
+                if !names.is_empty() {
+                    args.push("--filter".into());
+                    args.push(vstest_filter(names));
+                }
+            }
+        }
+    }
+
+    args.extend(config.args.iter().cloned());
+
+    Invocation {
+        program: "dotnet".into(),
+        args,
+        cwd: resolve_cwd(config, ctx.workspace_root),
+        env: config.env.clone(),
+        report: Some(ReportSpec {
+            path: report_path,
+            format: ReportFormat::Trx,
+        }),
+        warnings,
+    }
+}
+
+/// Build the `dotnet run` command line for an application configuration.
+pub fn run_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
+    let mut args = vec!["run".to_string()];
+
+    if let Some(project) = &config.project {
+        args.push("--project".into());
+        args.push(ctx.workspace_root.join(project).display().to_string());
+    }
+    if let Some(configuration) = &config.build_configuration {
+        args.push("-c".into());
+        args.push(configuration.clone());
+    }
+    if let Some(framework) = &config.framework {
+        args.push("-f".into());
+        args.push(framework.clone());
+    }
+
+    match &config.launch_profile {
+        Some(profile) => {
+            args.push("--launch-profile".into());
+            args.push(profile.clone());
+        }
+        // Without this, `dotnet run` silently applies the first profile in
+        // launchSettings.json, quietly overriding the environment and URLs
+        // this configuration specifies.
+        None => args.push("--no-launch-profile".into()),
+    }
+
+    if !config.args.is_empty() {
+        args.push("--".into());
+        args.extend(config.args.iter().cloned());
+    }
+
+    Invocation {
+        program: "dotnet".into(),
+        args,
+        cwd: resolve_cwd(config, ctx.workspace_root),
+        env: config.env.clone(),
+        report: None,
+        warnings: Vec::new(),
+    }
+}
+
+/// Build a VSTest filter expression restricting a run to specific tests.
+fn vstest_filter(full_names: &[String]) -> String {
+    full_names
+        .iter()
+        .map(|n| format!("FullyQualifiedName={}", strip_arguments(n)))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// Drop a theory's argument list from a name.
+///
+/// `FullyQualifiedName` matches the method, not an individual data row, and
+/// leaving `(value: 2)` on would match nothing at all.
+fn strip_arguments(full_name: &str) -> &str {
+    match full_name.find('(') {
+        Some(i) => &full_name[..i],
+        None => full_name,
+    }
+}
+
+fn resolve_cwd(config: &RunConfig, workspace_root: &Path) -> PathBuf {
+    if let Some(cwd) = &config.cwd {
+        return workspace_root.join(cwd);
+    }
+    // Default to the project's directory so relative paths in the app behave
+    // the way they do when launched from an IDE.
+    if let Some(project) = &config.project {
+        let full = workspace_root.join(project);
+        if let Some(parent) = full.parent() {
+            return parent.to_path_buf();
+        }
+    }
+    workspace_root.to_path_buf()
+}
+
+/// Make an id safe to use as a file name.
+fn sanitise(id: &str) -> String {
+    id.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect()
+}
+
+/// Create the standard set of configurations for a discovered project.
+pub fn configs_for_project(
+    project_id: &str,
+    project_name: &str,
+    relative_path: &Path,
+    kind: ProjectKind,
+    frameworks: &[String],
+    launch_profiles: &[LaunchProfile],
+) -> Vec<RunConfig> {
+    let mut out = Vec::new();
+    let framework = (frameworks.len() > 1).then(|| frameworks[0].clone());
+
+    match kind {
+        ProjectKind::Test => {
+            for configuration in ["Debug", "Release"] {
+                let mut config = RunConfig::new(
+                    format!("{project_id}:test:{}", configuration.to_lowercase()),
+                    format!("{project_name} tests ({configuration})"),
+                    RunKind::Test,
+                    "dotnet",
+                    ConfigSource::Detected,
+                );
+                config.project = Some(relative_path.to_path_buf());
+                config.build_configuration = Some(configuration.to_string());
+                config.framework = framework.clone();
+                out.push(config);
+            }
+        }
+        ProjectKind::Executable => {
+            // A profile per launch profile, so the environment and URLs the
+            // project already defines are preserved.
+            for profile in launch_profiles {
+                let mut config = RunConfig::new(
+                    format!("{project_id}:run:{}", sanitise(&profile.name)),
+                    format!("{project_name} ({})", profile.name),
+                    RunKind::App,
+                    "dotnet",
+                    ConfigSource::Detected,
+                );
+                config.project = Some(relative_path.to_path_buf());
+                config.build_configuration = Some("Debug".to_string());
+                config.framework = framework.clone();
+                config.launch_profile = Some(profile.name.clone());
+                out.push(config);
+            }
+
+            for configuration in ["Debug", "Release"] {
+                let mut config = RunConfig::new(
+                    format!("{project_id}:run:{}", configuration.to_lowercase()),
+                    format!("{project_name} ({configuration})"),
+                    RunKind::App,
+                    "dotnet",
+                    ConfigSource::Detected,
+                );
+                config.project = Some(relative_path.to_path_buf());
+                config.build_configuration = Some(configuration.to_string());
+                config.framework = framework.clone();
+                out.push(config);
+            }
+        }
+        // Libraries cannot be launched and have no tests to run.
+        ProjectKind::Library | ProjectKind::Unknown => {}
+    }
+
+    out
+}
