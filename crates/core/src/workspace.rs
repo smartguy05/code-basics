@@ -15,7 +15,7 @@ use specta::Type;
 use walkdir::WalkDir;
 
 use crate::adapters::{dotnet, node};
-use crate::model::{Project, ProjectKind, RunConfig, TestRunner};
+use crate::model::{Project, RunConfig, TestRunner};
 
 /// Directories never worth descending into.
 ///
@@ -301,7 +301,7 @@ pub fn configs_by_project(workspace: &Workspace) -> BTreeMap<String, Vec<&RunCon
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::RunKind;
+    use crate::model::{ProjectKind, RunKind};
 
     /// Build a workspace on disk from `(relative path, contents)` pairs.
     fn workspace_with(files: &[(&str, &str)]) -> tempfile::TempDir {
