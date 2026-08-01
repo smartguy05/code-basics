@@ -1,0 +1,40 @@
+{
+  "numFailedTestSuites": 1,
+  "numFailedTests": 1,
+  "numPassedTestSuites": 0,
+  "numPassedTests": 1,
+  "numPendingTests": 0,
+  "numTotalTestSuites": 1,
+  "numTotalTests": 2,
+  "startTime": 1754057000000,
+  "success": false,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["formatCurrency"],
+          "failureMessages": [],
+          "fullName": "formatCurrency formats whole amounts",
+          "status": "passed",
+          "title": "formats whole amounts",
+          "duration": 2
+        },
+        {
+          "ancestorTitles": ["formatCurrency"],
+          "failureMessages": [
+            "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: \"$1.50\"\nReceived: \"$1.5\"\n    at Object.<anonymous> (/repo/src/currency.test.js:11:32)\n    at Promise.then.completed (/repo/node_modules/jest-circus/build/utils.js:298:28)"
+          ],
+          "fullName": "formatCurrency formats fractional amounts",
+          "status": "failed",
+          "title": "formats fractional amounts",
+          "duration": 4
+        }
+      ],
+      "endTime": 1754057000850,
+      "failureMessage": "  ● formatCurrency › formats fractional amounts\n\n    expect(received).toBe(expected)",
+      "name": "/repo/src/currency.test.js",
+      "startTime": 1754057000120,
+      "status": "failed"
+    }
+  ]
+}

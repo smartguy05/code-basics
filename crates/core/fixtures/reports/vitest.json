@@ -1,0 +1,64 @@
+{
+  "numTotalTestSuites": 2,
+  "numTotalTests": 4,
+  "numPassedTests": 2,
+  "numFailedTests": 1,
+  "numPendingTests": 1,
+  "numTodoTests": 0,
+  "startTime": 1754056951000,
+  "success": false,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["math", "add"],
+          "fullName": "math add adds numbers",
+          "status": "passed",
+          "title": "adds numbers",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": ["math", "add"],
+          "fullName": "math add is commutative",
+          "status": "failed",
+          "title": "is commutative",
+          "duration": 5,
+          "failureMessages": [
+            "AssertionError: expected 3 to be 2 // Object.is equality\n\n- Expected\n+ Received\n\n- 2\n+ 3\n    at /repo/src/math.test.ts:9:23\n    at file:///repo/node_modules/@vitest/runner/dist/index.js:146:14"
+          ]
+        },
+        {
+          "ancestorTitles": ["math", "divide"],
+          "fullName": "math divide handles zero",
+          "status": "skipped",
+          "title": "handles zero",
+          "duration": null,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1754056951100,
+      "endTime": 1754056951420,
+      "status": "failed",
+      "message": "",
+      "name": "/repo/src/math.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "renders without crashing",
+          "status": "passed",
+          "title": "renders without crashing",
+          "duration": 12,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1754056951430,
+      "endTime": 1754056951700,
+      "status": "passed",
+      "message": "",
+      "name": "/repo/src/app.test.tsx"
+    }
+  ]
+}

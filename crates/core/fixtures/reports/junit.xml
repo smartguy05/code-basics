@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="pytest" tests="4" failures="1" errors="0" skipped="1" time="1.842">
+  <testsuite name="tests" tests="4" failures="1" errors="0" skipped="1" time="1.842" timestamp="2026-08-01T14:31:02.115430">
+    <testcase classname="tests.test_math" name="test_addition" time="0.001">
+      <system-out>adding 1 and 1</system-out>
+    </testcase>
+    <testcase classname="tests.test_math" name="test_subtraction" time="0.002">
+      <failure message="assert 3 == 2">tests/test_math.py:14: in test_subtraction
+    assert subtract(5, 2) == 2
+E   assert 3 == 2</failure>
+    </testcase>
+    <testcase classname="tests.test_math" name="test_division" time="0.000">
+      <skipped type="pytest.skip" message="division not implemented">tests/test_math.py:19: division not implemented</skipped>
+    </testcase>
+    <testcase classname="tests.test_strings" name="test_upper" time="0.001" />
+  </testsuite>
+</testsuites>

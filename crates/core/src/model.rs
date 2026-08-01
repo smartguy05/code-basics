@@ -214,13 +214,16 @@ pub struct Invocation {
 // Test results
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum TestOutcome {
     Passed,
     Failed,
     Skipped,
     /// Ran but produced no clear verdict (inconclusive, aborted, timed out).
+    /// Also the default, so an unrecognised outcome is never silently counted
+    /// as a pass.
+    #[default]
     Other,
 }
 

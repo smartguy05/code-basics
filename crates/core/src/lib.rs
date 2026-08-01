@@ -12,7 +12,7 @@ pub mod git;
 pub mod importers;
 pub mod model;
 pub mod process;
-pub mod tests;
+pub mod testing;
 pub mod workspace;
 
 pub use model::*;
