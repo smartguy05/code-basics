@@ -1,0 +1,17 @@
+/target
+/node_modules
+/dist
+/src/ipc/bindings.ts
+src-tauri/target
+src-tauri/gen/schemas
+
+*.local
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Test scratch output
+/fixtures/**/TestResults/
+/fixtures/**/bin/
+/fixtures/**/obj/

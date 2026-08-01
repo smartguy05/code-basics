@@ -1,0 +1,7 @@
+[package]
+name = "cb-app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cb-core = { path = "../crates/core" }

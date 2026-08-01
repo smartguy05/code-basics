@@ -1,0 +1,31 @@
+[workspace]
+members = ["crates/core", "src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+quick-xml = { version = "0.37", features = ["serialize"] }
+git2 = { version = "0.19", default-features = false }
+globset = "0.4"
+walkdir = "2"
+toml = "0.8"
+regex = "1"
+specta = { version = "2.0.0-rc.20", features = ["derive"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
