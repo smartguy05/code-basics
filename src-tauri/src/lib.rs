@@ -16,11 +16,40 @@ mod commands {
 
 use state::AppState;
 
+/// Open the workspace named on the command line, so `code-basics .` works the
+/// way every other developer tool does.
+///
+/// A bad path is not fatal: the app still starts and shows its welcome screen,
+/// which is more useful than refusing to launch.
+fn workspace_from_args(state: &AppState) {
+    let Some(arg) = std::env::args().nth(1) else {
+        return;
+    };
+    let path = std::path::PathBuf::from(arg);
+    if !path.is_dir() {
+        eprintln!("code-basics: {} is not a directory", path.display());
+        return;
+    }
+
+    match cb_core::workspace::scan(&path) {
+        Ok(mut workspace) => {
+            if let Ok(saved) = cb_core::config::load(&workspace.root) {
+                workspace.configs = cb_core::config::merge(workspace.configs, saved.configs);
+            }
+            let _ = state.set_workspace(workspace);
+        }
+        Err(e) => eprintln!("code-basics: could not open {}: {e:#}", path.display()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let state = AppState::default();
+    workspace_from_args(&state);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::default())
+        .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::workspace::open_workspace,
             commands::workspace::current_workspace,

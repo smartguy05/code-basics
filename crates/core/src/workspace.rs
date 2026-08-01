@@ -483,6 +483,59 @@ mod tests {
         }
     }
 
+    /// The contract the config editor's project dropdown is written against.
+    ///
+    /// The UI has to put *something* in `RunConfig.project`, and the only
+    /// values that resolve are workspace-relative paths: the `.csproj` for
+    /// .NET, the project directory for everything else. A `Project::id` looks
+    /// close enough to tempt, but ids replace separators with `-`, so they
+    /// never resolve — pin both halves so neither side drifts.
+    #[test]
+    fn relative_paths_resolve_but_ids_do_not() {
+        let dir = workspace_with(&[
+            ("src/App/App.csproj", EXE_CSPROJ),
+            ("web/package.json", r#"{"name":"web","scripts":{"dev":"vite"}}"#),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        for project in &ws.projects {
+            let absolute = if project.ecosystem == "dotnet" {
+                &project.manifest_path
+            } else {
+                &project.dir
+            };
+            let target = relative(&ws.root, absolute);
+
+            let by_path = RunConfig {
+                project: Some(target.clone()),
+                ..ws.configs[0].clone()
+            };
+            assert_eq!(
+                find_project(&ws, &by_path).map(|p| &p.id),
+                Some(&project.id),
+                "relative path {} must resolve to {}",
+                target.display(),
+                project.id
+            );
+
+            // For a project sitting directly at the root the id and the
+            // relative path are the same string, so there is nothing to catch.
+            // Everywhere else the id has had its separators flattened and must
+            // not resolve.
+            if PathBuf::from(&project.id) != target {
+                let by_id = RunConfig {
+                    project: Some(PathBuf::from(&project.id)),
+                    ..ws.configs[0].clone()
+                };
+                assert!(
+                    find_project(&ws, &by_id).is_none(),
+                    "id {} must not resolve; the UI has to send a path",
+                    project.id
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_context_is_read_fresh_from_disk() {
         let dir = workspace_with(&[("src/T/T.csproj", XUNIT_CSPROJ)]);

@@ -1,0 +1,546 @@
+/* A single dark theme. The app is small enough that a theme switcher would
+   cost more than it earns, and Rider users generally run dark anyway. */
+
+:root {
+  --bg: #16181d;
+  --bg-raised: #1c1f26;
+  --bg-inset: #12141a;
+  --border: #2a2e37;
+  --border-strong: #3a3f4b;
+  --text: #d6dae2;
+  --text-dim: #8b93a3;
+  --text-faint: #5f6675;
+  --accent: #5a78dc;
+  --accent-dim: #3d55a8;
+  --pass: #4fb573;
+  --fail: #e05561;
+  --skip: #c9a227;
+  --add-bg: rgba(79, 181, 115, 0.14);
+  --del-bg: rgba(224, 85, 97, 0.14);
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--border);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent);
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* --------------------------------------------------------------------- */
+/* Shell                                                                  */
+/* --------------------------------------------------------------------- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.titlebar .workspace-name {
+  font-weight: 600;
+}
+
+.titlebar .spacer {
+  flex: 1;
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.tabs button {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--text-dim);
+  padding: 4px 12px;
+}
+
+.tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.sidebar {
+  width: 280px;
+  flex: 0 0 auto;
+  border-right: 1px solid var(--border);
+  background: var(--bg-raised);
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.split {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.split > .top {
+  flex: 1 1 60%;
+  min-height: 0;
+  overflow: auto;
+}
+
+.split > .bottom {
+  flex: 1 1 40%;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+  overflow: auto;
+}
+
+/* --------------------------------------------------------------------- */
+/* Common                                                                 */
+/* --------------------------------------------------------------------- */
+
+.muted {
+  color: var(--text-dim);
+}
+
+.faint {
+  color: var(--text-faint);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.error {
+  margin: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--fail);
+  border-radius: 4px;
+  background: var(--del-bg);
+  white-space: pre-wrap;
+}
+
+.warning {
+  margin: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--skip);
+  border-radius: 4px;
+  background: rgba(201, 162, 39, 0.12);
+}
+
+.group-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  padding: 10px 6px 4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+}
+
+.row:hover {
+  background: var(--border);
+}
+
+.row.selected {
+  background: var(--accent-dim);
+}
+
+.badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.dot.passed { background: var(--pass); }
+.dot.failed { background: var(--fail); }
+.dot.skipped { background: var(--skip); }
+.dot.other { background: var(--text-faint); }
+
+.spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex: 0 0 auto;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* --------------------------------------------------------------------- */
+/* Tests                                                                  */
+/* --------------------------------------------------------------------- */
+
+.test-tree {
+  padding: 4px;
+}
+
+.test-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.test-node:hover {
+  background: var(--border);
+}
+
+.test-node.selected {
+  background: var(--accent-dim);
+}
+
+.test-node .label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.test-node .twisty {
+  width: 12px;
+  color: var(--text-faint);
+  flex: 0 0 auto;
+}
+
+.test-node .duration {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.failure-detail {
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.failure-detail h3 {
+  margin: 0 0 8px;
+  font-family: var(--font);
+  font-size: 13px;
+}
+
+.failure-detail pre {
+  margin: 0 0 12px;
+  padding: 8px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.summary-counts {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------- */
+/* Console                                                                */
+/* --------------------------------------------------------------------- */
+
+.console {
+  height: 100%;
+  background: var(--bg-inset);
+  padding: 4px 6px;
+}
+
+.console .xterm {
+  height: 100%;
+}
+
+/* --------------------------------------------------------------------- */
+/* Changes / diff                                                         */
+/* --------------------------------------------------------------------- */
+
+.file-list .row {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.file-list .status {
+  width: 22px;
+  flex: 0 0 auto;
+  font-weight: 600;
+  text-align: center;
+}
+
+.file-list .status.staged { color: var(--pass); }
+.file-list .status.unstaged { color: var(--skip); }
+.file-list .status.conflicted { color: var(--fail); }
+
+.file-list .path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.diff-host {
+  height: 100%;
+  overflow: auto;
+}
+
+.cm-editor {
+  height: 100%;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.cm-editor .cm-scroller {
+  font-family: var(--mono);
+}
+
+/* Selected-for-revert lines, driven by a CodeMirror decoration. */
+.cb-line-selected {
+  background: rgba(90, 120, 220, 0.22) !important;
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.commit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.commit-box textarea {
+  resize: vertical;
+  min-height: 56px;
+  font-family: var(--mono);
+}
+
+/* --------------------------------------------------------------------- */
+/* History                                                                */
+/* --------------------------------------------------------------------- */
+
+.commit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.commit-row:hover {
+  background: var(--bg-raised);
+}
+
+.commit-row.selected {
+  background: var(--accent-dim);
+}
+
+.commit-row .summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-row .meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  display: flex;
+  gap: 8px;
+}
+
+/* --------------------------------------------------------------------- */
+/* Modal                                                                  */
+/* --------------------------------------------------------------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.modal {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  min-width: 460px;
+  max-width: 760px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal header {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.modal .modal-body {
+  padding: 12px 14px;
+  overflow: auto;
+}
+
+.modal footer {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.field label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}

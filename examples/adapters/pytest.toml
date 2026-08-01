@@ -1,0 +1,35 @@
+# A worked example of a declarative adapter.
+#
+# Copy this to `.code-basics/adapters/pytest.toml` inside a workspace and
+# pytest projects will appear in the Tests view alongside .NET and JS/TS ones,
+# with no Rust code involved.
+#
+# This works because JUnit XML is already parsed. Any runner that can emit it —
+# pytest, cargo-nextest, go-junit-report, Gradle, PHPUnit, RSpec — can be added
+# the same way.
+
+id = "pytest"
+name = "pytest"
+
+# A project directory is one containing any of these files.
+detect = ["pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg"]
+
+[test]
+program = "pytest"
+# `{report}` is replaced with the absolute path the app expects the report at.
+# `{project}` and `{root}` are also available.
+args = ["--junit-xml={report}", "-q"]
+report_format = "junitXml"
+report_extension = "xml"
+
+# How "re-run failed" is expressed. Without these the whole suite runs, and the
+# app warns rather than appearing to ignore the request.
+filter_template = "-k"
+filter_separator = " or "
+
+# Optional named application launches, one per `[run.<name>]` section.
+# These appear in the Run view.
+[run.serve]
+program = "uvicorn"
+args = ["app.main:app", "--reload"]
+env = { PYTHONUNBUFFERED = "1" }

@@ -1,7 +1,12 @@
 //! Types shared between the Rust core and the TypeScript frontend.
 //!
-//! Everything here derives [`specta::Type`] so `cb-app` can export a single
-//! `bindings.ts` and the UI never hand-maintains a duplicate of these shapes.
+//! `src/ipc/types.ts` mirrors these by hand. The `tests` module at the bottom
+//! pins the exact JSON keys each type serialises to, so renaming a field here
+//! fails a test that names the TypeScript file rather than silently producing
+//! `undefined` in the UI.
+//!
+//! Everything also derives [`specta::Type`], which keeps the door open to
+//! generating the TypeScript instead.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -15,6 +20,7 @@ use specta::Type;
 
 /// A project discovered inside a workspace by one of the ecosystem adapters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct Project {
     /// Stable identifier, derived from the path relative to the workspace root.
     pub id: String,
@@ -297,4 +303,100 @@ pub struct TestNode {
     /// Set only on leaves.
     pub case: Option<TestCase>,
     pub children: Vec<TestNode>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The exact JSON keys each model produces.
+    ///
+    /// The TypeScript in `src/ipc/types.ts` is written by hand against these
+    /// names, so a rename on the Rust side has to fail somewhere visible.
+    /// Without this, a renamed field would serialise happily and only show up
+    /// as an undefined value in the UI.
+    fn keys(value: &serde_json::Value) -> Vec<String> {
+        let mut keys: Vec<String> = value
+            .as_object()
+            .expect("expected a JSON object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    #[test]
+    fn test_case_serialises_with_the_keys_the_ui_reads() {
+        let case = TestCase {
+            id: "id".into(),
+            name: "name".into(),
+            full_name: "full".into(),
+            suite: None,
+            project: None,
+            outcome: TestOutcome::Passed,
+            duration_ms: None,
+            message: None,
+            stack_trace: None,
+            stdout: None,
+        };
+
+        assert_eq!(
+            keys(&serde_json::to_value(&case).unwrap()),
+            [
+                "durationMs", "fullName", "id", "message", "name", "outcome", "project",
+                "stackTrace", "stdout", "suite"
+            ]
+        );
+    }
+
+    #[test]
+    fn project_serialises_with_camel_case_keys() {
+        let project = Project {
+            id: "id".into(),
+            name: "name".into(),
+            manifest_path: "a.csproj".into(),
+            dir: ".".into(),
+            ecosystem: "dotnet".into(),
+            kind: ProjectKind::Test,
+            frameworks: vec![],
+            is_test_project: true,
+            test_runner: Some(TestRunner::VsTest),
+        };
+
+        assert_eq!(
+            keys(&serde_json::to_value(&project).unwrap()),
+            [
+                "dir", "ecosystem", "frameworks", "id", "isTestProject", "kind", "manifestPath",
+                "name", "testRunner"
+            ]
+        );
+    }
+
+    #[test]
+    fn enum_variants_serialise_in_camel_case() {
+        assert_eq!(serde_json::to_string(&TestOutcome::Passed).unwrap(), "\"passed\"");
+        assert_eq!(
+            serde_json::to_string(&TestRunner::MicrosoftTestingPlatform).unwrap(),
+            "\"microsoftTestingPlatform\""
+        );
+        assert_eq!(serde_json::to_string(&RunKind::Test).unwrap(), "\"test\"");
+        assert_eq!(
+            serde_json::to_string(&ConfigSource::RiderImport).unwrap(),
+            "\"riderImport\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ReportFormat::JestLike).unwrap(),
+            "\"jestLike\""
+        );
+    }
+
+    #[test]
+    fn optional_config_fields_are_omitted_rather_than_null() {
+        // The config file is checked in, so absent fields should not appear.
+        let config = RunConfig::new("id", "name", RunKind::App, "dotnet", ConfigSource::Detected);
+        let json = serde_json::to_value(&config).unwrap();
+
+        assert_eq!(keys(&json), ["ecosystem", "id", "kind", "name", "source"]);
+    }
 }

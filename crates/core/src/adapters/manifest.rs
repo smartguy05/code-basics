@@ -61,6 +61,14 @@ pub struct CommandTemplate {
     /// Extension for the generated report path. Defaults to `xml`.
     #[serde(default)]
     pub report_extension: Option<String>,
+    /// Where the runner writes its report, when that location is fixed rather
+    /// than passed on the command line.
+    ///
+    /// cargo-nextest is the motivating case: its JUnit path comes from
+    /// `.config/nextest.toml`, so `{report}` never reaches it. Supports the
+    /// same `{project}` and `{root}` substitutions as `args`.
+    #[serde(default)]
+    pub report_path: Option<String>,
     /// Flag introducing a test-name filter, e.g. `-k` for pytest.
     #[serde(default)]
     pub filter_template: Option<String>,
@@ -133,12 +141,29 @@ pub fn build_invocation(
     filter: Option<&[String]>,
 ) -> Invocation {
     let extension = template.report_extension.as_deref().unwrap_or("xml");
-    let report_path = results_dir.join(format!("{}.{extension}", sanitise(&config.id)));
+    let default_report = results_dir.join(format!("{}.{extension}", sanitise(&config.id)));
+
+    // A runner that decides its own report location is read from there
+    // instead; `{report}` would never reach it.
+    let report_path = match &template.report_path {
+        Some(fixed) => {
+            let expanded = fixed
+                .replace("{project}", &project_dir.display().to_string())
+                .replace("{root}", &workspace_root.display().to_string());
+            let path = PathBuf::from(expanded);
+            if path.is_absolute() {
+                path
+            } else {
+                project_dir.join(path)
+            }
+        }
+        None => default_report.clone(),
+    };
 
     let mut args: Vec<String> = template
         .args
         .iter()
-        .map(|a| substitute(a, &report_path, project_dir, workspace_root))
+        .map(|a| substitute(a, &default_report, project_dir, workspace_root))
         .collect();
 
     let mut warnings = Vec::new();
