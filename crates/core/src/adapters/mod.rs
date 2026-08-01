@@ -1,6 +1,7 @@
 //! Ecosystem adapters.
 
 pub mod dotnet;
+pub mod manifest;
 pub mod node;
 
 #[cfg(test)]
