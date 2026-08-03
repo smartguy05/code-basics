@@ -8,7 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "docs:index": "node scripts/generate-index.mjs",
+    "docs:check": "node scripts/check-docs.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",
