@@ -10,6 +10,7 @@ Deliberately thin. Every decision lives in [`cb-core`](core-crate.md); what rema
 | `src/state.rs` | `AppState` |
 | `src/invocation.rs` | Config → command dispatch |
 | `src/commands/workspace.rs` | Workspace, config, favourites/ordering, launch-profile, and Rider-import commands |
+| `src/commands/files.rs` | Workspace file commands (directory tree listing, file read/write for the editor) |
 | `src/commands/run.rs` | Run/test/build execution commands |
 | `src/commands/secrets.rs` | .NET user-secrets commands |
 | `src/commands/git.rs` | Git commands |

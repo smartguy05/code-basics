@@ -41,10 +41,10 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/App.tsx` | 197 |  |
 | `src/components/BranchMenu.tsx` | 343 |  |
 | `src/components/ConfigEditor.tsx` | 279 |  |
-| `src/components/DiffView.tsx` | 319 |  |
+| `src/components/DiffView.tsx` | 321 |  |
 | `src/components/EnvironmentPicker.tsx` | 107 |  |
 | `src/components/ErrorBoundary.tsx` | 65 |  |
-| `src/components/FileEditor.tsx` | 111 |  |
+| `src/components/FileEditor.tsx` | 112 |  |
 | `src/components/FileTree.tsx` | 118 |  |
 | `src/components/OutputConsole.tsx` | 513 |  |
 | `src/components/RiderImportDialog.tsx` | 135 |  |
@@ -52,13 +52,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/SecretsEditor.tsx` | 99 |  |
 | `src/components/Sidebar.tsx` | 50 |  |
 | `src/components/TestTree.tsx` | 150 |  |
-| `src/components/language.ts` | 57 |  |
+| `src/components/language.ts` | 113 |  |
 | `src/ipc/api.ts` | 207 | Typed wrappers over the Tauri command surface. |
 | `src/ipc/types.ts` | 254 |  |
 | `src/main.tsx` | 24 |  |
 | `src/views/ChangesView.tsx` | 319 |  |
 | `src/views/HistoryView.tsx` | 234 |  |
-| `src/views/RunView.tsx` | 692 |  |
+| `src/views/RunView.tsx` | 704 |  |
 | `src/views/TestsView.tsx` | 402 |  |
 | `src-tauri/src/commands/files.rs` | 36 | Workspace file commands, for the Run tab's directory tree and file editor. |
 | `src-tauri/src/commands/git.rs` | 267 | Git commands. |

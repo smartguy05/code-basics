@@ -6,7 +6,8 @@ Built as a native desktop application (Tauri 2): a compiled Rust core does all t
 
 ## What it does
 
-- **Run** — discovers runnable projects, `launchSettings.json` profiles, and `package.json` scripts; launches them with streamed output in per-run console tabs, and kills the whole process tree on cancel. Favourites and custom ordering, an `ASPNETCORE_ENVIRONMENT` picker, build/rebuild/clean actions, and a .NET user-secrets editor round out the tab.
+- **Run** — discovers runnable projects, `launchSettings.json` profiles, and `package.json` scripts; launches them with streamed output in per-run console tabs, and kills the whole process tree on cancel. Configurations live in a titlebar dropdown (status dots, favourites, custom ordering); an `ASPNETCORE_ENVIRONMENT` picker, build/rebuild/clean actions, and a .NET user-secrets editor round out the tab.
+- **Edit** — a directory tree of the workspace sits beside the Run tab's console; files open in a syntax-highlighted CodeMirror editor above it (Ctrl+S saves, split is resizable), covering the quick fix-and-rerun loop without switching tools.
 - **Tests** — discovers test projects (VSTest, Microsoft.Testing.Platform, Vitest, Jest — plus anything added via a [declarative adapter](docs/guides/adding-an-ecosystem.md)), runs them with live output and live per-test progress, parses the report into a project → suite → test tree, and can re-run only the failures.
 - **Changes** — git working-copy review with side-by-side or inline diffs, staging, unstaging, and revert down to the individual line, plus commit operations.
 - **History** — commit log with per-commit diffs, branches, stash, and push/pull/fetch.
