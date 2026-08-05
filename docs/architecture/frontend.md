@@ -6,18 +6,39 @@ React 19 + TypeScript, built with Vite, rendered inside the native Tauri window 
 
 ```
 src/
-├── main.tsx              entry: mounts <App/> plus global + xterm CSS
-├── App.tsx               tab bar, workspace open/reopen, recents (localStorage)
+├── main.tsx              entry: mounts <App/> in an ErrorBoundary; suppresses the
+│                         webview context menu (editable fields keep the native one)
+├── App.tsx               titlebar (branch widget, run-config slot) + tab row (Run
+│                         first), workspace open/reopen, recents (localStorage);
+│                         Run + Tests stay mounted while hidden so running
+│                         processes keep their consoles
 ├── views/
-│   ├── TestsView.tsx     test configs, run / re-run failed, output + result tree
-│   ├── RunView.tsx       app configs, launch/cancel, config editor, Rider import
-│   ├── ChangesView.tsx   git status, comparison modes, diff with line staging
+│   ├── RunView.tsx       file-tree sidebar, editor pane over per-run console tabs,
+│   │                     config dropdown (portaled to the titlebar), env picker,
+│   │                     build actions, secrets
+│   ├── TestsView.tsx     test configs, run / re-run failed, live progress + tree
+│   ├── ChangesView.tsx   git status, comparison modes, side-by-side/inline diff
 │   └── HistoryView.tsx   commit log, per-commit diffs, branches, push/pull/fetch
 ├── components/
-│   ├── OutputConsole.tsx xterm.js terminal for streamed ProcessEvents
+│   ├── OutputConsole.tsx xterm.js terminal: links, severity colours, search/filter,
+│   │                     copy-on-select, context menu with Copy diagnostics
 │   ├── TestTree.tsx      collapsible outcome tree with text/outcome filters
-│   ├── DiffView.tsx      CodeMirror-based diff with per-line selection
-│   ├── ConfigEditor.tsx  RunConfig form (args, env, cwd, framework, ...)
+│   ├── DiffView.tsx      CodeMirror diff (side-by-side MergeView or unified),
+│   │                     per-line selection
+│   ├── ConfigEditor.tsx  RunConfig form (project, launch profile dropdown, args,
+│   │                     env, cwd, ...; Delete lives in its footer)
+│   ├── BranchMenu.tsx    titlebar branch widget: tree, sections, fetch/pull/push,
+│   │                     create-from context menu
+│   ├── RunConfigMenu.tsx titlebar run-config dropdown: status dots, favourites,
+│   │                     reorder, new/import items (portal from RunView)
+│   ├── FileTree.tsx      lazy workspace directory tree (one fs_list_dir per expand)
+│   ├── FileEditor.tsx    CodeMirror editor over one file; Ctrl+S saves, reports dirty
+│   ├── language.ts       file-extension → CodeMirror language mode, plus the
+│   │                     shared syntax-colour theme and bracket matching
+│   ├── EnvironmentPicker.tsx  ASPNETCORE_ENVIRONMENT dropdown with in-menu add/remove
+│   ├── SecretsEditor.tsx .NET user-secrets modal
+│   ├── Sidebar.tsx       the resizable left column (shared stored width)
+│   ├── ErrorBoundary.tsx last-resort error screen instead of a blank window
 │   └── RiderImportDialog.tsx  review step before an import is saved
 └── ipc/
     ├── api.ts            typed wrappers over every Tauri command
@@ -32,11 +53,13 @@ src/
 
 ## Components worth knowing
 
-- **OutputConsole** wraps xterm.js (with the fit addon) behind a `ConsoleHandle` (`write` / `clear` / `handle(event)`) exposed via `useImperativeHandle`. A real terminal matters because runners redraw progress with bare `\r` and ANSI escapes — the backend deliberately preserves those ([core crate](core-crate.md#process)), and xterm renders them faithfully.
-- **DiffView** builds on CodeMirror 6's `unifiedMergeView` with per-language syntax highlighting (JS/TS, JSON, CSS, HTML, Python, Rust, XML, C++). It renders the `FileDiff` hunks from the backend and lets the user select individual changed lines; selections become the `lines: number[]` passed to `git_stage_lines` / `git_revert_lines`. `allChangedIndices` selects a whole file's changes at once.
+- **OutputConsole** wraps xterm.js (fit, web-links, and search addons) behind a `ConsoleHandle` (`write` / `clear` / `handle(event)`) exposed via `useImperativeHandle`. A real terminal matters because runners redraw progress with bare `\r` and ANSI escapes — the backend deliberately preserves those ([core crate](core-crate.md#process)), and xterm renders them faithfully. On top: URLs open in the system browser, unstyled severity markers are coloured client-side, Ctrl+F opens a find/filter bar (severity threshold + text, rebuilt from a raw-text tail of the output), selection copies, and the right-click menu offers Copy all / Copy diagnostics (command line + exit + last 100 lines). Panes hosting a terminal must be `overflow: hidden` — an outer scrollbar fights the fit addon.
+- **DiffView** builds on CodeMirror 6's merge package with per-language syntax highlighting (JS/TS, JSON, CSS, HTML, Python, Rust, XML, C++): side-by-side `MergeView` by default (editors auto-size, `.diff-host` scrolls — the revert buttons are positioned in document coordinates) or the unified `unifiedMergeView`. It renders the `FileDiff` hunks from the backend and lets the user select individual changed lines; selections become the `lines: number[]` passed to `git_stage_lines` / `git_revert_lines`. `allChangedIndices` selects a whole file's changes at once.
 - **TestTree** renders `TestNode` hierarchies with worst-outcome colouring, duration formatting, expansion state, and combined text + outcome filtering.
 - **ConfigEditor** edits a `RunConfig`. Environment variables are typed as `KEY=value` lines and split on the *first* `=` only, so connection strings, base64, and JWTs survive intact.
 - **RiderImportDialog** shows the conversion preview — including per-config warnings — and writes nothing until the user confirms ([Rider import](../guides/rider-import.md)).
+- **RunConfigMenu** is rendered by `RunView` (which owns selection, favourites and process status) but displayed in the titlebar via `createPortal` into `#run-config-slot` — the state stays in the view without being lifted to `App`.
+- **FileEditor** instances stay mounted while hidden — like console sessions — so undo history and unsaved edits survive switching file tabs. Files load via `fs_read_file` and save with Ctrl+S via `fs_write_file`; the editor/console split fraction persists in `localStorage` (`code-basics.editorSplit`).
 
 ## Conventions
 

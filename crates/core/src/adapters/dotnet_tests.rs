@@ -300,6 +300,7 @@ fn ctx<'a>(root: &'a Path, results: &'a Path, runner: TestRunner) -> BuildContex
         results_dir: results,
         runner: Some(runner),
         trx_extension_available: true,
+        has_launch_settings: false,
         filter: None,
     }
 }
@@ -314,6 +315,8 @@ fn vstest_invocation_uses_the_logger_flag() {
     assert!(inv.args.contains(&"--logger".to_string()));
     let logger = inv.args.iter().find(|a| a.starts_with("trx;")).expect("trx logger");
     assert!(logger.contains("LogFileName="));
+    // Per-test console lines feed the UI's live progress counter.
+    assert!(inv.args.contains(&"console;verbosity=normal".to_string()));
     // The MTP separator must not appear, or the logger would be ignored.
     assert!(!inv.args.contains(&"--".to_string()));
 }
@@ -422,13 +425,28 @@ fn mtp_filtering_warns_that_it_may_not_apply() {
 }
 
 #[test]
-fn run_invocation_disables_launch_profiles_when_none_is_chosen() {
-    // Otherwise `dotnet run` silently applies the first profile, overriding
-    // the environment this configuration sets.
+fn run_invocation_leaves_the_default_profile_to_dotnet_run() {
+    // No profile named means `dotnet run` behaves as it does from a terminal:
+    // the first Project profile applies, environment and applicationUrl
+    // included. Suppressing it silently cost real users their user secrets
+    // and their URLs.
     let root = Path::new("/repo");
     let results = Path::new("/repo/results");
     let mut c = RunConfig::new("p:run", "app", RunKind::App, "dotnet", ConfigSource::Detected);
     c.project = Some(PathBuf::from("src/App/App.csproj"));
+
+    let inv = run_invocation(&c, &ctx(root, results, TestRunner::VsTest));
+    assert!(!inv.args.contains(&"--no-launch-profile".to_string()));
+    assert!(!inv.args.contains(&"--launch-profile".to_string()));
+}
+
+#[test]
+fn run_invocation_can_opt_out_of_launch_settings() {
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+    let mut c = RunConfig::new("p:run", "app", RunKind::App, "dotnet", ConfigSource::Detected);
+    c.project = Some(PathBuf::from("src/App/App.csproj"));
+    c.ignore_launch_settings = true;
 
     let inv = run_invocation(&c, &ctx(root, results, TestRunner::VsTest));
     assert!(inv.args.contains(&"--no-launch-profile".to_string()));
@@ -446,6 +464,89 @@ fn run_invocation_selects_a_named_launch_profile() {
     let idx = inv.args.iter().position(|a| a == "--launch-profile").unwrap();
     assert_eq!(inv.args[idx + 1], "https");
     assert!(!inv.args.contains(&"--no-launch-profile".to_string()));
+}
+
+#[test]
+fn skipping_launch_settings_warns_about_the_environment_it_loses() {
+    // `--no-launch-profile` means no ASPNETCORE_ENVIRONMENT=Development,
+    // which silently disables .NET user secrets — apps that keep connection
+    // strings there fail at startup with no visible reason.
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+    let mut c = RunConfig::new("p:run", "app", RunKind::App, "dotnet", ConfigSource::Detected);
+    c.project = Some(PathBuf::from("src/App/App.csproj"));
+    c.ignore_launch_settings = true;
+
+    let mut build = ctx(root, results, TestRunner::VsTest);
+    build.has_launch_settings = true;
+
+    let inv = run_invocation(&c, &build);
+    assert!(inv.warnings.iter().any(|w| w.contains("user secrets")), "{:?}", inv.warnings);
+}
+
+#[test]
+fn the_launch_settings_warning_stays_quiet_when_it_does_not_apply() {
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+    let mut c = RunConfig::new("p:run", "app", RunKind::App, "dotnet", ConfigSource::Detected);
+    c.project = Some(PathBuf::from("src/App/App.csproj"));
+    c.ignore_launch_settings = true;
+
+    // No launchSettings.json at all: nothing is being ignored.
+    let inv = run_invocation(&c, &ctx(root, results, TestRunner::VsTest));
+    assert!(inv.warnings.is_empty(), "{:?}", inv.warnings);
+
+    let mut build = ctx(root, results, TestRunner::VsTest);
+    build.has_launch_settings = true;
+
+    // Not opting out: `dotnet run` applies its default profile.
+    c.ignore_launch_settings = false;
+    let inv = run_invocation(&c, &build);
+    assert!(inv.warnings.is_empty(), "{:?}", inv.warnings);
+
+    // A profile is selected: launchSettings.json applies.
+    c.launch_profile = Some("https".into());
+    let inv = run_invocation(&c, &build);
+    assert!(inv.warnings.is_empty(), "{:?}", inv.warnings);
+
+    // Opted out but the environment is set explicitly: the user has taken over.
+    c.launch_profile = None;
+    c.ignore_launch_settings = true;
+    c.env.insert("ASPNETCORE_ENVIRONMENT".into(), "Development".into());
+    let inv = run_invocation(&c, &build);
+    assert!(inv.warnings.is_empty(), "{:?}", inv.warnings);
+}
+
+#[test]
+fn build_actions_produce_the_expected_dotnet_verbs() {
+    let root = Path::new("/repo");
+    let mut c = RunConfig::new("p:run", "app", RunKind::App, "dotnet", ConfigSource::Detected);
+    c.project = Some(PathBuf::from("src/App/App.csproj"));
+    c.build_configuration = Some("Release".into());
+
+    let build = build_action_invocation(&c, BuildAction::Build, root);
+    assert_eq!(build.program, "dotnet");
+    assert_eq!(build.args[0], "build");
+    assert!(!build.args.contains(&"--no-incremental".to_string()));
+    assert!(build.args.contains(&"Release".to_string()));
+
+    // Rebuild is a full compile, not an incremental one.
+    let rebuild = build_action_invocation(&c, BuildAction::Rebuild, root);
+    assert_eq!(rebuild.args[0], "build");
+    assert_eq!(rebuild.args[1], "--no-incremental");
+
+    let clean = build_action_invocation(&c, BuildAction::Clean, root);
+    assert_eq!(clean.args[0], "clean");
+    assert!(clean.args.iter().any(|a| a.ends_with("App.csproj")));
+}
+
+#[test]
+fn build_action_names_cross_ipc_in_camel_case() {
+    assert_eq!(serde_json::to_string(&BuildAction::Rebuild).unwrap(), "\"rebuild\"");
+    assert_eq!(
+        serde_json::from_str::<BuildAction>("\"clean\"").unwrap(),
+        BuildAction::Clean
+    );
 }
 
 #[test]
@@ -560,7 +661,9 @@ fn malformed_launch_settings_yields_no_profiles() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_projects_get_debug_and_release_configurations() {
+fn test_projects_get_a_single_debug_configuration() {
+    // Debug only, like Rider: `#if !DEBUG` code paths make an auto-offered
+    // Release test run a trap. A Release config can still be saved by hand.
     let configs = configs_for_project(
         "calc-tests",
         "Calc.Tests",
@@ -570,10 +673,10 @@ fn test_projects_get_debug_and_release_configurations() {
         &[],
     );
 
-    assert_eq!(configs.len(), 2);
-    assert!(configs.iter().all(|c| c.kind == RunKind::Test));
-    assert!(configs.iter().any(|c| c.build_configuration.as_deref() == Some("Debug")));
-    assert!(configs.iter().any(|c| c.build_configuration.as_deref() == Some("Release")));
+    assert_eq!(configs.len(), 1);
+    assert_eq!(configs[0].kind, RunKind::Test);
+    assert_eq!(configs[0].build_configuration.as_deref(), Some("Debug"));
+    assert_eq!(configs[0].id, "calc-tests:test:debug", "the id existing favourites reference");
 }
 
 #[test]
@@ -636,4 +739,24 @@ fn project_kind_follows_output_type() {
 
     // A test project is a test project regardless of what it compiles to.
     assert_eq!(project_kind(&exe, true), ProjectKind::Test);
+}
+
+#[test]
+fn web_sdk_projects_are_executables_without_declaring_an_output_type() {
+    // ASP.NET Core templates never write <OutputType>; the SDK implies Exe.
+    for sdk in [
+        "Microsoft.NET.Sdk.Web",
+        "Microsoft.NET.Sdk.Worker",
+        "Microsoft.NET.Sdk.BlazorWebAssembly",
+    ] {
+        let p = parse_project_file(&format!(
+            r#"<Project Sdk="{sdk}"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>"#
+        ));
+        assert_eq!(p.sdk.as_deref(), Some(sdk));
+        assert_eq!(project_kind(&p, false), ProjectKind::Executable, "{sdk}");
+    }
+
+    // The plain SDK (and Razor class libraries) still default to Library.
+    let plain = csproj("<TargetFramework>net9.0</TargetFramework>");
+    assert_eq!(project_kind(&plain, false), ProjectKind::Library);
 }

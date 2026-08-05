@@ -2,15 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
 import { Decoration, EditorView, keymap, lineNumbers, type DecorationSet } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { unifiedMergeView } from "@codemirror/merge";
-import { javascript } from "@codemirror/lang-javascript";
-import { json } from "@codemirror/lang-json";
-import { css } from "@codemirror/lang-css";
-import { html } from "@codemirror/lang-html";
-import { python } from "@codemirror/lang-python";
-import { rust } from "@codemirror/lang-rust";
-import { xml } from "@codemirror/lang-xml";
-import { cpp } from "@codemirror/lang-cpp";
+import { MergeView, unifiedMergeView } from "@codemirror/merge";
+import { editorColors, languageFor } from "./language";
 import type { FileDiff } from "../ipc/types";
 
 /** Highlight for lines the user has picked for revert or staging. */
@@ -37,53 +30,8 @@ const selectedLineField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
-/**
- * Pick a language mode from the file extension.
- *
- * Syntax highlighting is cosmetic here, so an unknown extension falls back to
- * no mode rather than guessing.
- */
-function languageFor(path: string): Extension[] {
-  const extension = path.split(".").pop()?.toLowerCase() ?? "";
-
-  switch (extension) {
-    case "ts":
-    case "tsx":
-      return [javascript({ typescript: true, jsx: extension === "tsx" })];
-    case "js":
-    case "jsx":
-    case "mjs":
-    case "cjs":
-      return [javascript({ jsx: extension === "jsx" })];
-    case "json":
-      return [json()];
-    case "css":
-    case "scss":
-      return [css()];
-    case "html":
-      return [html()];
-    case "py":
-      return [python()];
-    case "rs":
-      return [rust()];
-    case "xml":
-    case "csproj":
-    case "fsproj":
-    case "props":
-    case "targets":
-      return [xml()];
-    case "cs":
-    case "c":
-    case "h":
-    case "cpp":
-    case "hpp":
-      // No dedicated C# mode ships with CodeMirror; the C-family one is a
-      // close enough approximation for reviewing a diff.
-      return [cpp()];
-    default:
-      return [];
-  }
-}
+/** How to render the comparison. */
+export type DiffLayout = "inline" | "sideBySide";
 
 export interface DiffViewProps {
   path: string;
@@ -93,6 +41,7 @@ export interface DiffViewProps {
   working: string;
   /** Structured diff, used to map editor lines back to diff line indices. */
   diff: FileDiff;
+  layout: DiffLayout;
   editable: boolean;
   /** Called when the user saves an edit made in place. */
   onSave: (content: string) => void;
@@ -114,6 +63,7 @@ export function DiffView({
   baseline,
   working,
   diff,
+  layout,
   editable,
   onSave,
   onSelectionChange,
@@ -121,6 +71,7 @@ export function DiffView({
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [editorError, setEditorError] = useState<string | null>(null);
 
   // Callbacks are read through a ref so changing them does not tear down and
   // rebuild the editor, which would lose scroll position and the cursor.
@@ -186,6 +137,15 @@ export function DiffView({
   useEffect(() => {
     if (!hostRef.current) return;
 
+    // Fill-the-pane sizing is only correct for a single editor. The
+    // side-by-side MergeView positions its revert buttons and alignment
+    // spacers in *document* coordinates, so its editors must auto-size and
+    // scroll via the outer .diff-host instead.
+    const heightTheme = EditorView.theme({
+      "&": { height: "100%" },
+      ".cm-scroller": { overflow: "auto" },
+    });
+
     const extensions: Extension[] = [
       lineNumbers(),
       history(),
@@ -202,37 +162,79 @@ export function DiffView({
       ]),
       selectedLineField,
       EditorView.editable.of(editable),
-      EditorView.theme({
-        "&": { height: "100%" },
-        ".cm-scroller": { overflow: "auto" },
-      }),
       ...languageFor(path),
+      ...editorColors,
     ];
 
-    // A file with no committed baseline has nothing to diff against, so it is
-    // shown as a plain editor rather than an all-green diff.
-    if (baseline != null) {
-      extensions.push(
-        unifiedMergeView({
-          original: baseline,
-          mergeControls: true,
+    // A CodeMirror failure must degrade to a message for this one file, not
+    // take down the whole UI (an effect error unmounts the React tree).
+    try {
+      // A file with no committed baseline has nothing to diff against, so it
+      // is shown as a plain editor rather than an all-green diff.
+      if (baseline != null && layout === "sideBySide") {
+        const merge = new MergeView({
+          a: {
+            doc: baseline,
+            extensions: [
+              lineNumbers(),
+              EditorView.editable.of(false),
+              ...languageFor(path),
+              ...editorColors,
+            ],
+          },
+          b: { doc: working, extensions },
+          parent: hostRef.current,
+          // The buttons copy a chunk from the baseline onto the working copy —
+          // the side-by-side equivalent of the unified view's revert control.
+          // (There is no "accept": keeping the working copy is a no-op.)
+          revertControls: editable ? "a-to-b" : undefined,
+          // The library's default control is a bare "⇜" glyph, invisible on a
+          // dark theme. The library positions the element and handles clicks.
+          renderRevertControl: () => {
+            const button = document.createElement("button");
+            button.textContent = "↶";
+            button.title = "Revert this chunk to the baseline";
+            button.setAttribute("aria-label", "Revert this chunk");
+            return button;
+          },
           highlightChanges: true,
           gutter: true,
-        }),
-      );
+        });
+        setEditorError(null);
+        viewRef.current = merge.b;
+        return () => {
+          merge.destroy();
+          viewRef.current = null;
+        };
+      }
+
+      if (baseline != null) {
+        extensions.push(
+          unifiedMergeView({
+            original: baseline,
+            mergeControls: true,
+            highlightChanges: true,
+            gutter: true,
+          }),
+        );
+      }
+      extensions.push(heightTheme);
+
+      const view = new EditorView({
+        state: EditorState.create({ doc: working, extensions }),
+        parent: hostRef.current,
+      });
+      setEditorError(null);
+      viewRef.current = view;
+      return () => {
+        view.destroy();
+        viewRef.current = null;
+      };
+    } catch (e) {
+      setEditorError(e instanceof Error ? `${e.message}\n${e.stack ?? ""}` : String(e));
+      return;
     }
-
-    const view = new EditorView({
-      state: EditorState.create({ doc: working, extensions }),
-      parent: hostRef.current,
-    });
-    viewRef.current = view;
-
-    return () => {
-      view.destroy();
-      viewRef.current = null;
-    };
-  }, [path, baseline, working, editable]);
+  }, [path, baseline, working, layout, editable]);
 
   // Push the highlight into the editor whenever the selection changes.
   useEffect(() => {
@@ -290,6 +292,15 @@ export function DiffView({
 
   // A new file or a new diff invalidates any previous selection.
   useEffect(() => setSelected(new Set()), [path, diff]);
+
+  if (editorError) {
+    return (
+      <div className="error" style={{ whiteSpace: "pre-wrap" }}>
+        The diff editor failed to open {path}:{"\n"}
+        {editorError}
+      </div>
+    );
+  }
 
   return <div className="diff-host" ref={hostRef} />;
 }

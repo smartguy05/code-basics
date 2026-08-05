@@ -38,9 +38,18 @@ pub struct Workspace {
     pub name: String,
     pub projects: Vec<Project>,
     pub configs: Vec<RunConfig>,
+    /// Ids of starred configurations, from `.code-basics/config.json`. The
+    /// scan leaves this empty; layering the saved file on fills it in.
+    #[serde(default)]
+    pub favorites: Vec<String>,
+    /// The user's preferred config ordering, same source as `favorites`.
+    #[serde(default)]
+    pub order: Vec<String>,
 }
 
-fn should_skip(name: &str) -> bool {
+/// Whether a directory name is in `SKIP_DIRS`. Shared with the file tree
+/// (`files::list_dir`), so what the tree shows matches what the scan sees.
+pub(crate) fn should_skip(name: &str) -> bool {
     SKIP_DIRS.iter().any(|d| d.eq_ignore_ascii_case(name))
 }
 
@@ -106,7 +115,7 @@ fn configured_runner(root: &Path, project_dir: &Path) -> Option<dotnet::Configur
 }
 
 /// Read the launch profiles beside a .NET project, if any.
-fn launch_profiles(project_path: &Path) -> Vec<dotnet::LaunchProfile> {
+pub fn launch_profiles(project_path: &Path) -> Vec<dotnet::LaunchProfile> {
     let Some(dir) = project_path.parent() else {
         return Vec::new();
     };
@@ -118,8 +127,9 @@ fn launch_profiles(project_path: &Path) -> Vec<dotnet::LaunchProfile> {
 
 /// Scan a workspace root for projects and derive run configurations.
 pub fn scan(root: &Path) -> Result<Workspace> {
-    let root = root
-        .canonicalize()
+    // dunce keeps Windows paths in their familiar `C:\...` form instead of the
+    // `\\?\C:\...` verbatim form std's canonicalize produces.
+    let root = dunce::canonicalize(root)
         .with_context(|| format!("workspace root does not exist: {}", root.display()))?;
 
     let mut projects = Vec::new();
@@ -130,7 +140,18 @@ pub fn scan(root: &Path) -> Result<Workspace> {
         .into_iter()
         .filter_entry(|e| {
             // Always accept the root itself, or nothing is scanned.
-            e.depth() == 0 || !e.file_name().to_str().is_some_and(should_skip)
+            if e.depth() == 0 {
+                return true;
+            }
+            if e.file_name().to_str().is_some_and(should_skip) {
+                return false;
+            }
+            // A directory with its own `.git` entry is a separate checkout — a
+            // nested repository, submodule or worktree (worktrees keep `.git`
+            // as a file). Its projects belong to that checkout, not to this
+            // workspace, and detecting them duplicates every project once per
+            // copy.
+            !(e.file_type().is_dir() && e.path().join(".git").exists())
         });
 
     for entry in walker.flatten() {
@@ -168,7 +189,7 @@ pub fn scan(root: &Path) -> Result<Workspace> {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| root.display().to_string());
 
-    Ok(Workspace { root, name, projects, configs })
+    Ok(Workspace { root, name, projects, configs, favorites: Vec::new(), order: Vec::new() })
 }
 
 fn scan_dotnet_project(root: &Path, path: &Path) -> Option<(Project, Vec<RunConfig>)> {
@@ -361,6 +382,24 @@ mod tests {
         let ws = scan(dir.path()).unwrap();
 
         assert_eq!(ws.projects.len(), 1);
+    }
+
+    #[test]
+    fn ignores_nested_checkouts() {
+        // A nested repository (`.git` directory) or worktree (`.git` file) is
+        // a separate checkout; scanning into it duplicates every project once
+        // per copy.
+        let dir = workspace_with(&[
+            ("src/App/App.csproj", EXE_CSPROJ),
+            ("vendored/.git/HEAD", "ref: refs/heads/main"),
+            ("vendored/App/App.csproj", EXE_CSPROJ),
+            (".claude/worktrees/wt1/.git", "gitdir: elsewhere"),
+            (".claude/worktrees/wt1/src/App/App.csproj", EXE_CSPROJ),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        assert_eq!(ws.projects.len(), 1);
+        assert_eq!(ws.projects[0].id, "src-App-App.csproj");
     }
 
     #[test]
@@ -567,6 +606,19 @@ mod tests {
         assert!(ws.projects.is_empty());
         assert!(ws.configs.is_empty());
         assert!(!ws.name.is_empty());
+    }
+
+    #[test]
+    fn workspace_serialises_with_the_keys_the_ui_reads() {
+        // `src/ipc/types.ts` mirrors this by hand, like the model types.
+        let dir = tempfile::tempdir().unwrap();
+        let ws = scan(dir.path()).unwrap();
+
+        let json = serde_json::to_value(&ws).unwrap();
+        let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+
+        assert_eq!(keys, ["configs", "favorites", "name", "order", "projects", "root"]);
     }
 
     #[test]

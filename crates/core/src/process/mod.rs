@@ -32,8 +32,11 @@ pub enum Stream {
 }
 
 /// Events emitted over the lifetime of one spawned process.
+//
+// `rename_all` covers the variant names only; without `rename_all_fields`,
+// `duration_ms` crosses IPC as snake_case and the UI reads `undefined`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ProcessEvent {
     /// The process is running. Carries the resolved command line for display.
     Started {
@@ -105,9 +108,19 @@ impl Supervisor {
         }
 
         // Force machine-friendly, colour-capable output where the ecosystem
-        // supports it. Both are overridable by the config's own env.
+        // supports it. All of these are overridable by the config's own env.
         if !invocation.env.contains_key("FORCE_COLOR") {
             cmd.env("FORCE_COLOR", "1");
+        }
+        // .NET's console logger turns colour off when output is redirected,
+        // which is exactly how everything here runs. This configuration key
+        // (the env form of Logging:Console:FormatterOptions:ColorBehavior)
+        // turns it back on for the terminal view.
+        if !invocation
+            .env
+            .contains_key("Logging__Console__FormatterOptions__ColorBehavior")
+        {
+            cmd.env("Logging__Console__FormatterOptions__ColorBehavior", "Enabled");
         }
 
         kill::configure_process_group(&mut cmd);
@@ -282,6 +295,23 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn events_serialise_with_the_keys_the_ui_reads() {
+        // `src/ipc/types.ts` mirrors this by hand, like the model types.
+        let event = ProcessEvent::Exited {
+            code: Some(1),
+            success: false,
+            duration_ms: 5,
+            cancelled: false,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+
+        assert_eq!(keys, ["cancelled", "code", "durationMs", "success", "type"]);
+        assert_eq!(json["type"], "exited");
+    }
+
     #[tokio::test]
     async fn streams_stdout_and_reports_success() {
         let inv = invocation("sh", &["-c", "printf 'hello\\nworld\\n'"]);
@@ -339,10 +369,15 @@ mod tests {
         let (marker, cwd) = out.split_once('|').expect("marker and cwd");
 
         assert_eq!(marker, "set");
-        // Compare canonicalised paths: /tmp is a symlink on macOS.
+        // The unique tempdir name is enough to prove the cwd was applied, and
+        // comparing only it stays immune to path-notation differences: /tmp is
+        // a symlink on macOS, and on Windows `sh` is Git Bash, whose `pwd`
+        // prints MSYS-style paths (`/c/Users/...`).
         assert_eq!(
-            PathBuf::from(cwd),
-            dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf())
+            PathBuf::from(cwd).file_name(),
+            dir.path().file_name(),
+            "shell cwd {cwd} does not match {}",
+            dir.path().display()
         );
     }
 

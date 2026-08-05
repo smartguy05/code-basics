@@ -25,14 +25,15 @@ Three layers with a strict dependency rule:
 
 1. **`crates/core` (`cb-core`)** — all decision-making logic, deliberately with **no Tauri dependency** so everything is unit-testable headlessly:
    - `workspace.rs` — scans an opened directory for projects. Filesystem-only detection (no MSBuild/npm invocation); skips `SKIP_DIRS`, max depth 10.
-   - `adapters/` — per-ecosystem knowledge (`dotnet.rs`, `node.rs`): how to detect a project and build the command line to run/test it. `manifest.rs` adds declarative TOML adapters loaded from `.code-basics/adapters/*.toml` in a workspace (see `examples/adapters/` for pytest and cargo-nextest); any runner that emits JUnit XML can be added without Rust code.
+   - `adapters/` — per-ecosystem knowledge (`dotnet.rs`, `node.rs`): how to detect a project and build the command line to run/test/build it. `manifest.rs` adds declarative TOML adapters loaded from `.code-basics/adapters/*.toml` in a workspace (see `examples/adapters/` for pytest and cargo-nextest); any runner that emits JUnit XML can be added without Rust code. .NET: no launch profile means `dotnet run`'s default profile applies (`ignore_launch_settings` opts out); detected test configs are Debug-only.
    - `testing/` — parses test report files (`trx`, `junitXml`, `jestLike` formats). The core design: runners stream raw output live to the console, then the test tree is built from the structured report file written at exit.
    - `git/` — libgit2 (`git2`) operations including partial staging and line-level revert via patch manipulation (`patch.rs`).
    - `importers/rider.rs` — converts Rider `.run/*.xml` configurations.
-   - `config.rs` — `.code-basics/config.json` per workspace: only user-created/imported configs are saved; detected ones are re-derived on every scan.
-   - `process/` — process spawning, output chunking, cross-platform kill.
-2. **`src-tauri`** — thin bridge only: app state (`state.rs`), dispatch of a config to the right adapter (`invocation.rs`), and the `#[tauri::command]` surface in `commands/{workspace,run,git}.rs`, registered in `lib.rs`. New backend functionality goes in `cb-core` first; commands here should stay small.
-3. **`src/` (React 19 + Vite)** — four tab views (`views/`: Tests, Run, Changes, History), CodeMirror-based diff/config editors (`components/`), and typed IPC wrappers in `ipc/api.ts`.
+   - `config.rs` — `.code-basics/config.json` per workspace: only user-created/imported configs are saved; detected ones are re-derived on every scan. Also holds `favorites`/`order` (config ids; favourites sort first, then saved order, then names).
+   - `secrets.rs` — .NET user secrets (`%APPDATA%\Microsoft\UserSecrets\<id>\secrets.json`); validates the comment-tolerant JSON dialect .NET accepts and can add a `<UserSecretsId>` to a project.
+   - `process/` — process spawning, output chunking, cross-platform kill. Layers colour-enabling env defaults under the config's own.
+2. **`src-tauri`** — thin bridge only: app state (`state.rs`), dispatch of a config to the right adapter (`invocation.rs`), and the `#[tauri::command]` surface in `commands/{workspace,run,secrets,git}.rs`, registered in `lib.rs`. New backend functionality goes in `cb-core` first; commands here should stay small.
+3. **`src/` (React 19 + Vite)** — four tab views (`views/`: Run, Tests, Changes, History — Run and Tests stay mounted while hidden because they own running processes), a titlebar branch widget, CodeMirror-based diff/config editors and the xterm console (`components/`), and typed IPC wrappers in `ipc/api.ts`. Terminal-hosting panes must be `overflow: hidden` (a scrollbar fights xterm's fit addon).
 
 ### The Rust↔TS type contract
 

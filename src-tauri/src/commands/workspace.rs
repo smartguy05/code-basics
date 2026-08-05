@@ -16,7 +16,7 @@ fn load(root: &std::path::Path) -> Result<Workspace, String> {
     let mut scanned = workspace::scan(root).map_err(|e| format!("{e:#}"))?;
     let saved = config::load(&scanned.root).map_err(|e| format!("{e:#}"))?;
 
-    scanned.configs = config::merge(scanned.configs, saved.configs);
+    config::apply(&mut scanned, saved);
     Ok(scanned)
 }
 
@@ -71,6 +71,50 @@ pub async fn delete_config(state: State<'_, AppState>, id: String) -> Result<Wor
     Ok(workspace)
 }
 
+/// Names of the launch profiles a .NET project defines, for the config
+/// editor's profile dropdown. Only `Project` profiles are returned — the only
+/// kind `dotnet run --launch-profile` can apply.
+#[tauri::command]
+pub async fn launch_profiles(
+    state: State<'_, AppState>,
+    project: String,
+) -> Result<Vec<String>, String> {
+    let root = state.workspace_root()?;
+    Ok(workspace::launch_profiles(&root.join(project))
+        .into_iter()
+        .map(|p| p.name)
+        .collect())
+}
+
+/// Star or unstar a configuration. Favourites sort to the top of every list.
+#[tauri::command]
+pub async fn set_favorite(
+    state: State<'_, AppState>,
+    id: String,
+    favorite: bool,
+) -> Result<Workspace, String> {
+    let root = state.workspace_root()?;
+    config::set_favorite(&root, &id, favorite).map_err(|e| format!("{e:#}"))?;
+
+    let workspace = load(&root)?;
+    state.set_workspace(workspace.clone())?;
+    Ok(workspace)
+}
+
+/// Persist the user's preferred configuration ordering, as a list of ids.
+#[tauri::command]
+pub async fn set_config_order(
+    state: State<'_, AppState>,
+    order: Vec<String>,
+) -> Result<Workspace, String> {
+    let root = state.workspace_root()?;
+    config::set_order(&root, order).map_err(|e| format!("{e:#}"))?;
+
+    let workspace = load(&root)?;
+    state.set_workspace(workspace.clone())?;
+    Ok(workspace)
+}
+
 /// What a Rider import would produce, for the review step.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,8 +132,12 @@ pub struct RiderImportPreview {
 pub async fn preview_rider_import(
     state: State<'_, AppState>,
 ) -> Result<RiderImportPreview, String> {
-    let root = state.workspace_root()?;
-    let result = rider::import(&root);
+    let workspace = state.workspace()?;
+    let mut result = rider::import(&workspace.root);
+
+    // Compound members are recorded as Rider display names; rewrite them into
+    // ids of configurations that actually exist here.
+    rider::resolve_compounds(&mut result.configs, &workspace.configs);
 
     Ok(RiderImportPreview {
         configs: result.configs,

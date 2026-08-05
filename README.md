@@ -6,11 +6,13 @@ Built as a native desktop application (Tauri 2): a compiled Rust core does all t
 
 ## What it does
 
-- **Tests** — discovers test projects (VSTest, Microsoft.Testing.Platform, Vitest, Jest — plus anything added via a [declarative adapter](docs/guides/adding-an-ecosystem.md)), runs them with live output, parses the report into a project → suite → test tree, and can re-run only the failures.
-- **Run** — discovers runnable projects and `package.json` scripts, launches them with streamed output, and kills the whole process tree on cancel.
-- **Changes** — git working-copy review with staging, unstaging, and revert down to the individual line, plus commit, branch, and stash operations.
-- **History** — commit log with per-commit diffs.
+- **Run** — discovers runnable projects, `launchSettings.json` profiles, and `package.json` scripts; launches them with streamed output in per-run console tabs, and kills the whole process tree on cancel. Favourites and custom ordering, an `ASPNETCORE_ENVIRONMENT` picker, build/rebuild/clean actions, and a .NET user-secrets editor round out the tab.
+- **Tests** — discovers test projects (VSTest, Microsoft.Testing.Platform, Vitest, Jest — plus anything added via a [declarative adapter](docs/guides/adding-an-ecosystem.md)), runs them with live output and live per-test progress, parses the report into a project → suite → test tree, and can re-run only the failures.
+- **Changes** — git working-copy review with side-by-side or inline diffs, staging, unstaging, and revert down to the individual line, plus commit operations.
+- **History** — commit log with per-commit diffs, branches, stash, and push/pull/fetch.
+- **Branches everywhere** — a Rider-style titlebar widget with a branch tree (slash-named branches group into folders), switching (including remote checkout), creation from any base, and fetch/pull/push.
 - **Rider import** — converts JetBrains Rider `.run/*.xml` configurations, with a review step that surfaces anything that could not be translated.
+- **Console built for troubleshooting** — clickable URLs, severity colouring, Ctrl+F search, filtering by severity/text, copy-on-select, and a one-click paste-ready diagnostics block.
 
 ## Quick start
 

@@ -1,16 +1,112 @@
-import { useEffect, useRef, useState } from "react";
-import { OutputConsole, type ConsoleHandle } from "../components/OutputConsole";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  OutputConsole,
+  stripAnsi,
+  type ConsoleHandle,
+} from "../components/OutputConsole";
 import { TestTree } from "../components/TestTree";
 import * as api from "../ipc/api";
 import type {
+  ProcessEvent,
   RunConfig,
+  TestCase,
   TestNode,
   TestOutcome,
   TestRunOutcome,
+  TestSummary,
   Workspace,
 } from "../ipc/types";
 
 const OUTCOME_FILTERS: TestOutcome[] = ["passed", "failed", "skipped", "other"];
+
+/** Provisional per-test counts read off the runner's console output. */
+interface LiveCounts {
+  passed: number;
+  failed: number;
+  skipped: number;
+}
+
+/**
+ * Per-test result lines across the supported runners: VSTest's
+ * `Passed Name [1 ms]` (console verbosity `normal`), MTP's lowercase
+ * `failed Name`, Vitest's `✓ file > name`, Jest's per-file `PASS path`.
+ * Summary lines like `Passed!  - Failed: 0, ...` do not match — the `!`
+ * blocks the required whitespace after the word.
+ */
+const LIVE_LINE = /^\s*(passed|√|✓|✔|pass|failed|×|✗|✕|fail|skipped|↓|○|skip)\s+(\S.*)$/i;
+const PASS_MARKS = new Set(["passed", "√", "✓", "✔", "pass"]);
+const FAIL_MARKS = new Set(["failed", "×", "✗", "✕", "fail"]);
+
+/** Read one console line as a test result, extracting the test's name. */
+function classifyLine(line: string): { outcome: TestOutcome; name: string } | null {
+  const match = LIVE_LINE.exec(line);
+  if (!match || match[1] == null || match[2] == null) return null;
+
+  const marker = match[1].toLowerCase();
+  const outcome: TestOutcome = PASS_MARKS.has(marker)
+    ? "passed"
+    : FAIL_MARKS.has(marker)
+      ? "failed"
+      : "skipped";
+  // Drop a trailing duration: `[12 ms]`, `(12ms)`, or a bare `12ms`.
+  const name = match[2].replace(/\s*[[(]?[\d.,]+\s*m?s[\])]?\s*$/i, "").trim();
+  return { outcome, name };
+}
+
+/** The live outcome of a case, matched loosely against reported names. */
+function liveOutcomeFor(testCase: TestCase, results: Map<string, TestOutcome>): TestOutcome {
+  const exact = results.get(testCase.fullName) ?? results.get(testCase.name);
+  if (exact) return exact;
+  for (const [name, outcome] of results) {
+    if (name.endsWith(testCase.fullName) || testCase.fullName.endsWith(name)) {
+      return outcome;
+    }
+  }
+  return "other";
+}
+
+/**
+ * Recolour a finished run's tree with this run's live results: every test
+ * starts grey and turns green/red/yellow as its result line streams in.
+ */
+function applyLiveOutcomes(
+  node: TestNode,
+  results: Map<string, TestOutcome>,
+): TestNode {
+  if (node.case) {
+    const outcome = liveOutcomeFor(node.case, results);
+    const summary: TestSummary = {
+      total: 1,
+      passed: outcome === "passed" ? 1 : 0,
+      failed: outcome === "failed" ? 1 : 0,
+      skipped: outcome === "skipped" ? 1 : 0,
+      other: outcome === "other" ? 1 : 0,
+    };
+    return { ...node, outcome, durationMs: null, summary };
+  }
+
+  const children = node.children.map((child) => applyLiveOutcomes(child, results));
+  const summary = children.reduce<TestSummary>(
+    (sum, child) => ({
+      total: sum.total + child.summary.total,
+      passed: sum.passed + child.summary.passed,
+      failed: sum.failed + child.summary.failed,
+      skipped: sum.skipped + child.summary.skipped,
+      other: sum.other + child.summary.other,
+    }),
+    { total: 0, passed: 0, failed: 0, skipped: 0, other: 0 },
+  );
+  const outcome: TestOutcome =
+    summary.failed > 0
+      ? "failed"
+      : summary.other > 0
+        ? "other" // still running somewhere below
+        : summary.passed > 0
+          ? "passed"
+          : "skipped";
+
+  return { ...node, children, outcome, durationMs: null, summary };
+}
 
 export function TestsView({ workspace }: { workspace: Workspace }) {
   const testConfigs = workspace.configs.filter((c) => c.kind === "test");
@@ -24,8 +120,46 @@ export function TestsView({ workspace }: { workspace: Workspace }) {
   const [filter, setFilter] = useState("");
   const [outcomeFilter, setOutcomeFilter] = useState<Set<TestOutcome>>(new Set());
   const [selectedNode, setSelectedNode] = useState<TestNode | null>(null);
+  const [live, setLive] = useState<LiveCounts | null>(null);
+  const [liveResults, setLiveResults] = useState<Map<string, TestOutcome>>(new Map());
 
   const consoleRef = useRef<ConsoleHandle>(null);
+  /** Output chunks split lines anywhere; the tail carries over. */
+  const partialLine = useRef("");
+
+  function trackLive(event: ProcessEvent) {
+    if (event.type !== "output") return;
+    const text = partialLine.current + event.text;
+    const lines = text.split(/\r?\n/);
+    partialLine.current = lines.pop() ?? "";
+
+    const found = lines
+      .map((raw) => classifyLine(stripAnsi(raw)))
+      .filter((r): r is { outcome: TestOutcome; name: string } => r !== null);
+    if (found.length === 0) return;
+
+    setLive((previous) => {
+      if (!previous) return previous;
+      const next = { ...previous };
+      for (const { outcome } of found) {
+        if (outcome === "passed") next.passed += 1;
+        else if (outcome === "failed") next.failed += 1;
+        else next.skipped += 1;
+      }
+      return next;
+    });
+    setLiveResults((previous) => {
+      const next = new Map(previous);
+      for (const { name, outcome } of found) next.set(name, outcome);
+      return next;
+    });
+  }
+
+  /** The previous run's tree recoloured with this run's results so far. */
+  const liveTree = useMemo(() => {
+    if (!running || !outcome) return null;
+    return outcome.tree.map((node) => applyLiveOutcomes(node, liveResults));
+  }, [running, outcome, liveResults]);
 
   // Restore the previous run when switching configurations, so the tree does
   // not go blank just because the selection changed.
@@ -54,18 +188,26 @@ export function TestsView({ workspace }: { workspace: Workspace }) {
 
     setRunning(true);
     setError(null);
+    // Show the console: a selected failure would otherwise cover it just as
+    // the new activity starts.
+    setSelectedNode(null);
     consoleRef.current?.clear();
+    partialLine.current = "";
+    setLive({ passed: 0, failed: 0, skipped: 0 });
+    setLiveResults(new Map());
 
     try {
-      const result = await api.runTests(selectedConfig, onlyFailed, (event) =>
-        consoleRef.current?.handle(event),
-      );
+      const result = await api.runTests(selectedConfig, onlyFailed, (event) => {
+        consoleRef.current?.handle(event);
+        trackLive(event);
+      });
       setOutcome(result);
       setSelectedNode(null);
     } catch (e) {
       setError(api.errorMessage(e));
     } finally {
       setRunning(false);
+      setLive(null);
     }
   }
 
@@ -119,6 +261,12 @@ export function TestsView({ workspace }: { workspace: Workspace }) {
         <button onClick={cancel} disabled={!running}>
           Stop
         </button>
+        <button
+          onClick={() => consoleRef.current?.clear()}
+          title="Clear the console output"
+        >
+          Clear
+        </button>
 
         {running && <span className="spinner" />}
 
@@ -149,7 +297,24 @@ export function TestsView({ workspace }: { workspace: Workspace }) {
         ))}
       </div>
 
-      {outcome && (
+      {running && live && (
+        <div className="toolbar summary-counts">
+          <span>
+            <span className="dot passed" /> {live.passed} passed
+          </span>
+          <span>
+            <span className="dot failed" /> {live.failed} failed
+          </span>
+          <span>
+            <span className="dot skipped" /> {live.skipped} skipped
+          </span>
+          <span className="muted">
+            live — the tree and exact counts land when the run finishes
+          </span>
+        </div>
+      )}
+
+      {outcome && !running && (
         <div className="toolbar summary-counts">
           <span>
             <span className="dot passed" /> {outcome.result.summary.passed} passed
@@ -177,17 +342,29 @@ export function TestsView({ workspace }: { workspace: Workspace }) {
 
       <div className="content split">
         <div className="top">
-          <TestTree
-            nodes={outcome?.tree ?? []}
-            filter={filter}
-            outcomes={outcomeFilter}
-            selectedId={selectedNode?.id ?? null}
-            onSelect={setSelectedNode}
-          />
+          {running && !outcome ? (
+            <div className="empty">
+              <span className="spinner" style={{ display: "inline-block", marginRight: 8 }} />
+              Running tests — the tree appears after the first run of this
+              configuration…
+            </div>
+          ) : (
+            <TestTree
+              // While running, the previous run's tree recoloured live: grey
+              // until each test reports, then green/red/yellow.
+              nodes={liveTree ?? outcome?.tree ?? []}
+              filter={filter}
+              outcomes={outcomeFilter}
+              selectedId={selectedNode?.id ?? null}
+              onSelect={setSelectedNode}
+            />
+          )}
         </div>
 
         <div className="bottom">
-          {selectedCase ? (
+          {/* The console stays mounted while a failure detail covers it —
+              unmounting would drop streamed output and break clear(). */}
+          {selectedCase && (
             <div className="failure-detail">
               <h3>{selectedCase.fullName}</h3>
               {selectedCase.message && (
@@ -214,9 +391,10 @@ export function TestsView({ workspace }: { workspace: Workspace }) {
                   <div className="muted">This test produced no output.</div>
                 )}
             </div>
-          ) : (
-            <OutputConsole ref={consoleRef} />
           )}
+          <div style={{ display: selectedCase ? "none" : "block", height: "100%" }}>
+            <OutputConsole ref={consoleRef} />
+          </div>
         </div>
       </div>
     </div>

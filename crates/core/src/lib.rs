@@ -8,6 +8,7 @@
 
 pub mod adapters;
 pub mod config;
+pub mod files;
 pub mod git;
 pub mod importers;
 
@@ -15,6 +16,7 @@ pub mod importers;
 
 pub mod model;
 pub mod process;
+pub mod secrets;
 pub mod testing;
 pub mod workspace;
 

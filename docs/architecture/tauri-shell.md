@@ -9,8 +9,9 @@ Deliberately thin. Every decision lives in [`cb-core`](core-crate.md); what rema
 | `src/main.rs` / `src/lib.rs` | Entry point: builds `AppState`, opens a workspace named on the command line (`code-basics .`), registers every command in `tauri::generate_handler!` |
 | `src/state.rs` | `AppState` |
 | `src/invocation.rs` | Config → command dispatch |
-| `src/commands/workspace.rs` | Workspace, config, and Rider-import commands |
-| `src/commands/run.rs` | Run/test execution commands |
+| `src/commands/workspace.rs` | Workspace, config, favourites/ordering, launch-profile, and Rider-import commands |
+| `src/commands/run.rs` | Run/test/build execution commands |
+| `src/commands/secrets.rs` | .NET user-secrets commands |
 | `src/commands/git.rs` | Git commands |
 
 The complete command list with parameters is in the [command reference](../reference/commands.md); it must stay in sync with the `generate_handler!` block in `lib.rs`.

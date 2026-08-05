@@ -612,6 +612,63 @@ impl Repo {
         .with_context(|| format!("failed to switch to {name}"))
     }
 
+    /// Create a branch pointing at `start_point` — a local or remote branch
+    /// name, or any revision — rather than at HEAD.
+    pub fn create_branch_from(
+        &self,
+        name: &str,
+        start_point: &str,
+        checkout: bool,
+    ) -> Result<()> {
+        let (object, _) = self
+            .inner
+            .revparse_ext(start_point)
+            .with_context(|| format!("unknown revision {start_point}"))?;
+        let commit = object
+            .peel_to_commit()
+            .with_context(|| format!("{start_point} does not point at a commit"))?;
+
+        self.inner
+            .branch(name, &commit, false)
+            .with_context(|| format!("failed to create branch {name}"))?;
+
+        if checkout {
+            self.checkout_branch(name)?;
+        }
+        Ok(())
+    }
+
+    /// Check out a remote-tracking branch the way `git switch` does: create
+    /// the local branch (remote prefix dropped) pointing at the remote tip
+    /// with its upstream set, then switch to it. If the local branch already
+    /// exists, just switch — never clobber local work.
+    pub fn checkout_remote_branch(&self, name: &str) -> Result<()> {
+        let local_name = name.split_once('/').map_or(name, |(_, rest)| rest);
+
+        if self.inner.find_branch(local_name, git2::BranchType::Local).is_ok() {
+            return self.checkout_branch(local_name);
+        }
+
+        let remote = self
+            .inner
+            .find_branch(name, git2::BranchType::Remote)
+            .with_context(|| format!("unknown remote branch {name}"))?;
+        let commit = remote
+            .get()
+            .peel_to_commit()
+            .with_context(|| format!("{name} does not point at a commit"))?;
+
+        let mut local = self
+            .inner
+            .branch(local_name, &commit, false)
+            .with_context(|| format!("failed to create branch {local_name}"))?;
+        local
+            .set_upstream(Some(name))
+            .with_context(|| format!("failed to track {name}"))?;
+
+        self.checkout_branch(local_name)
+    }
+
     pub fn delete_branch(&self, name: &str) -> Result<()> {
         let mut branch = self
             .inner

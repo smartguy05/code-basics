@@ -18,13 +18,20 @@ A single `.gitignore` entry (`.code-basics/results/`) covers everything transien
 ```json
 {
   "version": 1,
-  "configs": [ /* RunConfig objects */ ]
+  "configs": [ /* RunConfig objects */ ],
+  "favorites": [ /* config ids, optional */ ],
+  "order": [ /* config ids, optional */ ]
 }
 ```
 
 - `version` exists so a future format change can migrate rather than fail (currently `1`).
 - Meant to be **checked in**, sharing run configurations the way Rider's `.run/` directory does.
 - Only user-created and imported configurations are written here. Auto-detected ones are re-derived on every scan, which keeps the file small and lets detection keep working as projects change. On open/rescan, saved configs are merged over detected ones.
+- `favorites` holds starred config ids; they sort before everything else in the UI. `order` is the user's preferred ordering — ids listed there sort by position, anything unlisted follows in name order. Both keys are omitted while empty.
+
+## .NET user secrets
+
+Secrets are deliberately **not** part of `config.json` (which is checked in). The Run tab's **Secrets…** button edits the standard .NET user-secrets store: the project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere), which the .NET configuration system reads at runtime. Saving secrets for a project without an id adds one to the `.csproj`, exactly like `dotnet user-secrets init`. Core logic: `crates/core/src/secrets.rs`.
 
 ## `RunConfig` fields
 
@@ -40,7 +47,8 @@ Defined in `crates/core/src/model.rs`, mirrored in `src/ipc/types.ts`. Optional 
 | `project` | path? | Target project, **relative to the workspace root** so the file stays portable |
 | `buildConfiguration` | string? | .NET `Debug` / `Release` |
 | `framework` | string? | .NET target framework when multi-targeted (`net8.0`) |
-| `launchProfile` | string? | `launchSettings.json` profile name |
+| `launchProfile` | string? | `launchSettings.json` profile name. When absent, `dotnet run` applies its default profile (the first `Project` one), environment and `applicationUrl` included |
+| `ignoreLaunchSettings` | bool? | Skip `launchSettings.json` entirely (`--no-launch-profile`). Warned about when the project has one, since it drops `ASPNETCORE_ENVIRONMENT` and with it user secrets |
 | `script` | string? | npm/pnpm script name (or manifest run-command name) |
 | `args` | string[] | Arguments passed to the program itself |
 | `env` | map | Environment layered on top of the inherited environment |

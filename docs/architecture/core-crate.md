@@ -25,6 +25,8 @@ Because MTP ignores rather than rejects the wrong flags, a misclassification exi
 
 Also parses `launchSettings.json` profiles for application launches and handles multi-target frameworks and build configurations. Both paths emit TRX, so one parser serves both.
 
+Application launches follow `dotnet run`'s own defaults: no named profile means the first `Project` profile applies (environment and `applicationUrl` included); `RunConfig.ignore_launch_settings` is the explicit `--no-launch-profile` opt-out, and warns when it strips `ASPNETCORE_ENVIRONMENT` (which silently disables user secrets). Detected test configurations are Debug-only — `#if !DEBUG` code paths make an auto-offered Release test run a trap. `BuildAction` / `build_action_invocation` produce the `dotnet build` / `build --no-incremental` / `clean` command lines behind the UI's build buttons.
+
 ### `adapters::node`
 
 Detects Vitest/Jest from `package.json` dependencies, the package manager from lockfiles, and workspace roots. The detail worth knowing: **Vitest's JSON reporter replaces the console reporter**, silencing live output — so both reporters are requested together, which is also why the report file must be passed as `--outputFile.json=` rather than plain `--outputFile=`. Jest's default reporter writes to stderr and has no such problem; the JSON shape is the same, so one parser serves both.
@@ -54,7 +56,7 @@ Two implementations by design:
 
 `git::patch` is the heart of line-level operations: it builds a unified diff containing only the selected lines and hands it to `git apply` (forward to stage, reversed to revert). The subtlety is that **unselected** lines must be treated differently per direction — an unselected addition is *dropped* going forward but becomes *context* in reverse, and vice versa for deletions. The module doc has the full truth table; getting it backwards produces patches that are rejected, or worse, apply and revert lines the user never selected.
 
-`git::repo::Repo` exposes the full operation set: three comparison modes (working↔HEAD, working↔index, index↔HEAD), file/line staging and unstaging, line revert, discard, commit (with amend), branches, history, per-commit diffs, and stash. Integration tests live in `crates/core/tests/git_operations.rs`.
+`git::repo::Repo` exposes the full operation set: three comparison modes (working↔HEAD, working↔index, index↔HEAD), file/line staging and unstaging, line revert, discard, commit (with amend), branches (create from HEAD or any revision, switch, delete, and `checkout_remote_branch` — the `git switch` behaviour of creating a local tracking branch from a remote one), history, per-commit diffs, and stash. Integration tests live in `crates/core/tests/git_operations.rs`.
 
 ## `process`
 
@@ -62,6 +64,7 @@ The single place that spawns anything: test runs, app launches, git network call
 
 - `chunker::Utf8Chunker` decodes raw byte chunks incrementally, holding back partial multi-byte characters across reads — output is read as bytes, not lines, because runners draw progress with bare `\r` and ANSI escapes that line-buffering would swallow.
 - `kill` terminates the process **tree**: a new process group at spawn time (Unix `setpgid`, Windows process groups), because killing only the wrapper leaves `dotnet run`'s assembly or a dev-server holding its port.
+- Colour-friendly defaults are layered under the config's own env: `FORCE_COLOR=1`, and the configuration key that re-enables .NET's console-logger colours under redirection (`Logging__Console__FormatterOptions__ColorBehavior=Enabled`).
 
 ## `importers::rider`
 
@@ -69,7 +72,15 @@ Best-effort conversion of JetBrains Rider `.run/*.xml` files. JetBrains publishe
 
 ## `config`
 
-`.code-basics/config.json` — saved run configurations, versioned for future migration, meant to be checked in like Rider's `.run/`. Only user-created/imported configs are written; detected ones are re-derived every scan so the file stays small and detection keeps working as projects change. Also defines the `.code-basics/results/` report directory. See [Configuration](../reference/configuration.md).
+`.code-basics/config.json` — saved run configurations, versioned for future migration, meant to be checked in like Rider's `.run/`. Only user-created/imported configs are written; detected ones are re-derived every scan so the file stays small and detection keeps working as projects change. Also holds `favorites` and `order` (config ids; `sort_configs` puts favourites first, then the saved order, then names) and defines the `.code-basics/results/` report directory. `config::apply` layers a saved file onto a scanned workspace in one call. See [Configuration](../reference/configuration.md).
+
+## `files`
+
+Workspace file access for the Run tab's directory tree and editor. `list_dir` lists one directory per call (the tree expands lazily), directories first, filtered by the same `SKIP_DIRS` the scanner uses; `read_file`/`write_file` move file contents in and out of the editor. All paths are workspace-relative, and anything that could escape the root (absolute paths, `..`) is rejected. Reads refuse binary content and files over 5 MB with a clear error rather than garbage.
+
+## `secrets`
+
+.NET user secrets, the way `dotnet user-secrets` and Rider manage them: a project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere) — secrets never touch the workspace. `read` returns id/path/content; `write` validates against the same JSON dialect .NET's configuration loader accepts (comments and trailing commas included) and adds a `<UserSecretsId>` to the project file first when missing, like `dotnet user-secrets init`.
 
 ## `model`
 

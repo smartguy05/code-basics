@@ -124,6 +124,12 @@ pub struct RunConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_profile: Option<String>,
 
+    /// Skip `launchSettings.json` entirely (`dotnet run --no-launch-profile`).
+    /// When false and no profile is named, `dotnet run` applies its default —
+    /// the first Project profile, including its environment and URLs.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ignore_launch_settings: bool,
+
     /// npm/pnpm script name for Node projects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
@@ -145,6 +151,12 @@ pub struct RunConfig {
     /// could not be translated, so the user can see it during review.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+
+    /// Ids of the member configurations a compound configuration launches
+    /// together. Non-empty only for compounds (`ecosystem == "compound"`),
+    /// which have no invocation of their own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compound: Vec<String>,
 }
 
 impl RunConfig {
@@ -166,11 +178,13 @@ impl RunConfig {
             build_configuration: None,
             framework: None,
             launch_profile: None,
+            ignore_launch_settings: false,
             script: None,
             args: Vec::new(),
             env: BTreeMap::new(),
             cwd: None,
             warnings: Vec::new(),
+            compound: Vec::new(),
         }
     }
 }
@@ -398,5 +412,27 @@ mod tests {
         let json = serde_json::to_value(&config).unwrap();
 
         assert_eq!(keys(&json), ["ecosystem", "id", "kind", "name", "source"]);
+    }
+
+    #[test]
+    fn ignoring_launch_settings_serialises_under_the_key_the_ui_reads() {
+        // False is the default and stays out of the checked-in file entirely
+        // (pinned by `optional_config_fields_are_omitted_rather_than_null`).
+        let mut config =
+            RunConfig::new("id", "name", RunKind::App, "dotnet", ConfigSource::UserFile);
+        config.ignore_launch_settings = true;
+        let json = serde_json::to_value(&config).unwrap();
+
+        assert_eq!(json["ignoreLaunchSettings"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn compound_members_serialise_under_the_key_the_ui_reads() {
+        let mut config =
+            RunConfig::new("id", "name", RunKind::App, "compound", ConfigSource::RiderImport);
+        config.compound = vec!["member".into()];
+        let json = serde_json::to_value(&config).unwrap();
+
+        assert_eq!(json["compound"], serde_json::json!(["member"]));
     }
 }

@@ -17,6 +17,28 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `delete_config` | `id: String` | `Workspace` | |
 | `preview_rider_import` | – | `RiderImportPreview` | Parses `.run/*.xml`; writes nothing |
 | `apply_rider_import` | `configs: RunConfig[]` | `Workspace` | Saves the reviewed selection |
+| `launch_profiles` | `project: String` | `String[]` | Launch profile names a .NET project defines (`Project` profiles only), for the editor dropdown |
+| `set_favorite` | `id: String`, `favorite: bool` | `Workspace` | Starred configs sort first; persisted in `config.json` |
+| `set_config_order` | `order: String[]` | `Workspace` | Preferred ordering as config ids; unlisted ids keep name order after them |
+
+## Workspace files
+
+`src-tauri/src/commands/files.rs` — backs the Run tab's directory tree and file editor. All paths are workspace-relative; paths that would escape the root (absolute, `..`) are rejected.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `fs_list_dir` | `path: String` | `DirEntry[]` | One directory per call (the tree expands lazily); directories first, sorted case-insensitively, `SKIP_DIRS` (`node_modules`, `bin`, `obj`, …) hidden |
+| `fs_read_file` | `path: String` | `String` | UTF-8 text only; binary or >5 MB files are a clear error |
+| `fs_write_file` | `path: String`, `content: String` | `()` | Saves the file editor's contents (Ctrl+S) |
+
+## .NET user secrets
+
+`src-tauri/src/commands/secrets.rs` — `project` is the workspace-relative `.csproj` path a .NET `RunConfig.project` holds. Secrets live in `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere), never in the repository.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `read_project_secrets` | `project: String` | `ProjectSecrets` | Id, secrets file path, and contents when the file exists |
+| `write_project_secrets` | `project: String`, `content: String` | `ProjectSecrets` | Validates JSON; adds a `<UserSecretsId>` to the project first when missing, like `dotnet user-secrets init` |
 
 ## Running & tests
 
@@ -24,7 +46,8 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `start_run` | `config_id: String`, `channel: Channel<ProcessEvent>` | `()` | Streams output; resolves on exit |
+| `start_run` | `config_id: String`, `channel: Channel<ProcessEvent>`, `env: Map?` | `()` | Streams output; resolves on exit. `env` is layered over the config's own for this run only (the Run tab's environment picker) |
+| `build_project` | `config_id: String`, `action: "build" \| "rebuild" \| "clean"`, `channel: Channel<ProcessEvent>` | `()` | .NET only; runs `dotnet build` / `build --no-incremental` / `clean`, registered as `<config_id>:build` |
 | `cancel_run` | `config_id: String` | `bool` | Kills the process **tree** |
 | `running_ids` | – | `String[]` | Config ids currently running |
 | `run_tests` | `config_id: String`, `only_failed: bool`, `channel: Channel<ProcessEvent>` | `TestRunOutcome` | Streams output, then parses the report; `only_failed` filters to the previous run's failures |
@@ -48,8 +71,9 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `git_discard_file` | `path: String` | `()` | |
 | `git_commit` | `message: String`, `amend: bool` | `String` | Returns the new commit id |
 | `git_branches` | – | `Branch[]` | |
-| `git_create_branch` | `name: String`, `checkout: bool` | `()` | |
+| `git_create_branch` | `name: String`, `checkout: bool`, `from: String?` | `()` | `from` is the revision to branch from; absent means HEAD |
 | `git_checkout_branch` | `name: String` | `()` | |
+| `git_checkout_remote_branch` | `name: String` | `()` | Like `git switch`: creates the local tracking branch (or reuses it), then switches |
 | `git_delete_branch` | `name: String` | `()` | |
 | `git_history` | `limit: u32` | `Commit[]` | |
 | `git_commit_diff` | `id: String` | `FileDiff[]` | |

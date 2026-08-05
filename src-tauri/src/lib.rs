@@ -9,8 +9,10 @@ mod invocation;
 mod state;
 
 mod commands {
+    pub mod files;
     pub mod git;
     pub mod run;
+    pub mod secrets;
     pub mod workspace;
 }
 
@@ -34,7 +36,7 @@ fn workspace_from_args(state: &AppState) {
     match cb_core::workspace::scan(&path) {
         Ok(mut workspace) => {
             if let Ok(saved) = cb_core::config::load(&workspace.root) {
-                workspace.configs = cb_core::config::merge(workspace.configs, saved.configs);
+                cb_core::config::apply(&mut workspace, saved);
             }
             let _ = state.set_workspace(workspace);
         }
@@ -49,6 +51,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::workspace::open_workspace,
@@ -58,7 +61,16 @@ pub fn run() {
             commands::workspace::delete_config,
             commands::workspace::preview_rider_import,
             commands::workspace::apply_rider_import,
+            commands::workspace::launch_profiles,
+            commands::workspace::set_favorite,
+            commands::workspace::set_config_order,
+            commands::files::fs_list_dir,
+            commands::files::fs_read_file,
+            commands::files::fs_write_file,
+            commands::secrets::read_project_secrets,
+            commands::secrets::write_project_secrets,
             commands::run::start_run,
+            commands::run::build_project,
             commands::run::cancel_run,
             commands::run::running_ids,
             commands::run::run_tests,
@@ -77,6 +89,7 @@ pub fn run() {
             commands::git::git_branches,
             commands::git::git_create_branch,
             commands::git::git_checkout_branch,
+            commands::git::git_checkout_remote_branch,
             commands::git::git_delete_branch,
             commands::git::git_history,
             commands::git::git_commit_diff,

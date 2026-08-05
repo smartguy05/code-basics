@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { DiffView, allChangedIndices } from "../components/DiffView";
+import {
+  DiffView,
+  allChangedIndices,
+  type DiffLayout,
+} from "../components/DiffView";
+import { Sidebar } from "../components/Sidebar";
 import * as api from "../ipc/api";
 import type {
   ComparisonMode,
@@ -8,6 +13,12 @@ import type {
   FileDiff,
   WorkingStatus,
 } from "../ipc/types";
+
+const DIFF_LAYOUT_KEY = "code-basics.diffLayout";
+
+function loadDiffLayout(): DiffLayout {
+  return localStorage.getItem(DIFF_LAYOUT_KEY) === "inline" ? "inline" : "sideBySide";
+}
 
 const MODE_LABELS: Record<ComparisonMode, string> = {
   workingToHead: "Working tree vs HEAD",
@@ -46,6 +57,12 @@ export function ChangesView() {
   const [message, setMessage] = useState("");
   const [amend, setAmend] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [diffLayout, setDiffLayout] = useState<DiffLayout>(loadDiffLayout);
+
+  function changeDiffLayout(layout: DiffLayout) {
+    setDiffLayout(layout);
+    localStorage.setItem(DIFF_LAYOUT_KEY, layout);
+  }
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -144,7 +161,7 @@ export function ChangesView() {
 
   return (
     <>
-      <div className="sidebar file-list">
+      <Sidebar className="file-list">
         <div className="group-label">
           {status?.branch ?? "no branch"}
           {status && (status.ahead > 0 || status.behind > 0) && (
@@ -201,7 +218,7 @@ export function ChangesView() {
             Commit
           </button>
         </div>
-      </div>
+      </Sidebar>
 
       <div className="main">
         <div className="toolbar">
@@ -244,6 +261,16 @@ export function ChangesView() {
           </button>
 
           <span style={{ flex: 1 }} />
+
+          <select
+            value={diffLayout}
+            onChange={(e) => changeDiffLayout(e.target.value as DiffLayout)}
+            title="How to lay the comparison out"
+          >
+            <option value="sideBySide">Side by side</option>
+            <option value="inline">Inline</option>
+          </select>
+
           <span className="faint" style={{ fontSize: 11 }}>
             Click a line number to select · ⌘S / Ctrl+S to save an edit
           </span>
@@ -278,6 +305,7 @@ export function ChangesView() {
                 baseline={contents.baseline}
                 working={contents.working}
                 diff={diff}
+                layout={diffLayout}
                 editable
                 onSave={save}
                 onSelectionChange={setSelectedLines}

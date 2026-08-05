@@ -31,6 +31,8 @@ pub struct RiderConfiguration {
     pub env: BTreeMap<String, String>,
     /// npm configurations record the script separately from the options.
     pub scripts: Vec<String>,
+    /// Names of the member configurations a compound configuration launches.
+    pub to_run: Vec<String>,
 }
 
 impl RiderConfiguration {
@@ -118,6 +120,14 @@ pub fn parse(xml: &str) -> Vec<RiderConfiguration> {
                             }
                         }
                     }
+                    // Compound configurations list their members this way.
+                    b"toRun" => {
+                        if let Some(config) = current.as_mut() {
+                            if let Some(name) = attr(&e, "name") {
+                                config.to_run.push(name);
+                            }
+                        }
+                    }
                     b"command" => {
                         if let Some(config) = current.as_mut() {
                             if let Some(value) = attr(&e, "value") {
@@ -181,8 +191,12 @@ fn id_for(name: &str) -> String {
 pub fn convert(config: &RiderConfiguration, workspace_root: &Path) -> Option<RunConfig> {
     match config.kind.as_str() {
         "DotNetProject" | "DotNetExe" => Some(convert_dotnet(config, workspace_root)),
-        "DotNetLaunchSettings" => Some(convert_launch_settings(config, workspace_root)),
+        // Rider has written both type names for launch-settings profiles.
+        "DotNetLaunchSettings" | "LaunchSettings" => {
+            Some(convert_launch_settings(config, workspace_root))
+        }
         "js.build_tools.npm" => Some(convert_npm(config, workspace_root)),
+        "CompoundRunConfigurationType" => Some(convert_compound(config)),
         _ => None,
     }
 }
@@ -291,6 +305,87 @@ fn convert_npm(config: &RiderConfiguration, root: &Path) -> RunConfig {
     }
 
     out
+}
+
+fn convert_compound(config: &RiderConfiguration) -> RunConfig {
+    let mut out = base(config, "compound", RunKind::App);
+
+    // Members are recorded by Rider display name for now;
+    // [`resolve_compounds`] rewrites them into config ids once the full set of
+    // available configurations is known.
+    out.compound = config.to_run.clone();
+
+    if out.compound.is_empty() {
+        out.warnings
+            .push("This compound configuration lists nothing to run.".to_string());
+    }
+    out
+}
+
+/// Rewrite compound members from Rider display names into config ids.
+///
+/// A member is looked up, in order, among the other imported configurations
+/// (by Rider name), among `existing` by exact name, and finally — since Rider
+/// names launch-profile configurations `Project: profile` while detection
+/// names them `Project (profile)` — among `existing` by project file stem and
+/// launch profile. Members that resolve nowhere are dropped with a warning, so
+/// the review step shows exactly what the compound will launch.
+pub fn resolve_compounds(imported: &mut [RunConfig], existing: &[RunConfig]) {
+    let by_rider_name: BTreeMap<String, String> = imported
+        .iter()
+        .filter(|c| c.compound.is_empty())
+        .map(|c| (c.name.clone(), c.id.clone()))
+        .collect();
+
+    let targets_project = |c: &RunConfig, project: &str| {
+        c.project
+            .as_deref()
+            .and_then(Path::file_stem)
+            .is_some_and(|stem| stem == project)
+    };
+
+    let resolve = |member: &str| -> Option<String> {
+        if let Some(id) = by_rider_name.get(member) {
+            return Some(id.clone());
+        }
+        if let Some(found) = existing.iter().find(|c| c.name == member) {
+            return Some(found.id.clone());
+        }
+        // `Project: profile` — how Rider names launch-profile configurations.
+        if let Some((project, profile)) = member.split_once(": ") {
+            return existing
+                .iter()
+                .find(|c| c.launch_profile.as_deref() == Some(profile) && targets_project(c, project))
+                .map(|c| c.id.clone());
+        }
+        // A bare project name — how Rider references a plain project run.
+        // Prefer the Debug configuration detection generates for executables.
+        existing
+            .iter()
+            .filter(|c| c.kind == RunKind::App && c.launch_profile.is_none())
+            .filter(|c| targets_project(c, member))
+            .min_by_key(|c| c.build_configuration.as_deref() != Some("Debug"))
+            .map(|c| c.id.clone())
+    };
+
+    for config in imported.iter_mut().filter(|c| !c.compound.is_empty()) {
+        let mut resolved = Vec::new();
+        for member in std::mem::take(&mut config.compound) {
+            match resolve(&member) {
+                Some(id) => resolved.push(id),
+                None => config.warnings.push(format!(
+                    "`{member}` could not be matched to any configuration and was dropped. \
+                     Import or create it, then re-import this compound."
+                )),
+            }
+        }
+        if resolved.is_empty() {
+            config
+                .warnings
+                .push("None of the members resolved, so this launches nothing.".to_string());
+        }
+        config.compound = resolved;
+    }
 }
 
 /// The result of scanning a workspace for Rider configurations.

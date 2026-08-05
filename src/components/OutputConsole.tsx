@@ -1,7 +1,116 @@
-import { useEffect, useImperativeHandle, useRef, forwardRef } from "react";
+import {
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  forwardRef,
+} from "react";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { ProcessEvent } from "../ipc/types";
+
+const URL_RE = /https?:\/\/[^\s"'<>)\]]+/g;
+
+/**
+ * Severity tokens worth colouring when the tool did not colour them itself:
+ * the .NET console logger's level prefixes (`info:`, `warn:`, `fail:`, ...)
+ * and MSBuild's `warning CS1234:` / `error CS1234:` diagnostics.
+ */
+const SEVERITIES: [RegExp, string][] = [
+  [/^(\s*)(trce|dbug)(?=:)/, "$1\x1b[90m$2\x1b[39m"], // grey
+  [/^(\s*)(info)(?=:)/, "$1\x1b[32m$2\x1b[39m"], // green
+  [/^(\s*)(warn)(?=:)/, "$1\x1b[33m$2\x1b[39m"], // yellow
+  [/^(\s*)(fail|crit)(?=:)/, "$1\x1b[1;31m$2\x1b[22;39m"], // bold red
+  [/\b(warning( [A-Z]+\d+)?)(?=:)/, "\x1b[33m$1\x1b[39m"], // yellow
+  [/\b(error( [A-Z]+\d+)?)(?=:)/, "\x1b[1;31m$1\x1b[22;39m"], // bold red
+];
+
+/**
+ * Colour URLs and severity markers in a chunk of output.
+ *
+ * Lines that already contain ANSI styling are left alone — the tool knows
+ * better than a heuristic. URLs go bright blue + underlined so they read as
+ * the clickable links they are.
+ */
+function decorate(text: string): string {
+  return text
+    .split(/(\r?\n|\r)/)
+    .map((part) => {
+      if (/\r|\n/.test(part) || part.includes("\x1b[")) return part;
+
+      let out = part;
+      for (const [pattern, replacement] of SEVERITIES) {
+        const styled = out.replace(pattern, replacement);
+        if (styled !== out) {
+          out = styled;
+          break;
+        }
+      }
+      return out.replace(URL_RE, "\x1b[94;4m$&\x1b[39;24m");
+    })
+    .join("");
+}
+
+/** Strip ANSI escape sequences, for clipboard-bound text. */
+export function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g, "");
+}
+
+/** How much raw output to keep for Copy All / diagnostics. */
+const RAW_CAP = 1_000_000;
+
+/** The criticality filter's levels, in ascending severity. */
+type Severity = "all" | "info" | "warn" | "error";
+
+const SEVERITY_RANK: Record<Severity, number> = { all: 0, info: 1, warn: 2, error: 3 };
+
+/** Rank a single (ANSI-stripped) line. Unclassified output ranks 0. */
+function lineSeverity(line: string): number {
+  if (/^\s*(fail|crit):/.test(line) || /\berror( [A-Z]+\d+)?:/i.test(line)) return 3;
+  if (/^\s*warn:/.test(line) || /\bwarning( [A-Z]+\d+)?:/i.test(line)) return 2;
+  if (/^\s*info:/.test(line)) return 1;
+  return 0;
+}
+
+/**
+ * Keep only the lines at or above `severity` that contain `text`.
+ *
+ * A line starting with whitespace inherits the previous line's severity, so a
+ * stack trace stays attached to the `fail:` line that produced it.
+ */
+function filterLines(raw: string, severity: Severity, text: string): string {
+  const needle = text.toLowerCase();
+  const threshold = SEVERITY_RANK[severity];
+  const out: string[] = [];
+  let current = 0;
+
+  for (const line of raw.split(/\r?\n/)) {
+    const plain = stripAnsi(line);
+    if (!(/^\s/.test(plain) && plain.trim() !== "")) {
+      current = lineSeverity(plain);
+    } else if (lineSeverity(plain) > current) {
+      current = lineSeverity(plain);
+    }
+
+    const matches =
+      current >= threshold && (!needle || plain.toLowerCase().includes(needle));
+    if (matches) out.push(line);
+  }
+  return out.join("\r\n");
+}
+
+const SEARCH_DECORATIONS = {
+  matchBackground: "#3d55a8",
+  matchBorder: "#3d55a8",
+  matchOverviewRuler: "#5a78dc",
+  activeMatchBackground: "#5a78dc",
+  activeMatchBorder: "#5a78dc",
+  activeMatchColorOverviewRuler: "#d6dae2",
+};
 
 export interface ConsoleHandle {
   write(text: string): void;
@@ -16,12 +125,118 @@ export interface ConsoleHandle {
  * xterm rather than a `<pre>`: `dotnet` and `vitest` both emit ANSI colour and
  * redraw progress with bare carriage returns, which a plain text node renders
  * as unreadable noise.
+ *
+ * On top of the raw stream it carries the troubleshooting affordances: Ctrl+F
+ * search, copy-on-select, and a right-click menu with Copy All and Copy
+ * diagnostics (command line + exit + the last output lines, paste-ready).
  */
 export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
   function OutputConsole({ className }, ref) {
     const hostRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
-    const fitRef = useRef<FitAddon | null>(null);
+    const searchRef = useRef<SearchAddon | null>(null);
+
+    /** Plain-text tail of everything written, for clipboard features. */
+    const rawRef = useRef("");
+    /** The last `started` / `exited` events, for Copy diagnostics. */
+    const startedRef = useRef<Extract<ProcessEvent, { type: "started" }> | null>(null);
+    const exitedRef = useRef<Extract<ProcessEvent, { type: "exited" }> | null>(null);
+
+    const [searchOpen, setSearchOpen] = useState(false);
+    const [query, setQuery] = useState("");
+    const [filterOn, setFilterOn] = useState(false);
+    const [severity, setSeverity] = useState<Severity>("all");
+    const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+    const searchInputRef = useRef<HTMLInputElement>(null);
+
+    /** Mirror of the filter state, readable from the imperative handle. */
+    const filterRef = useRef<{ active: boolean; severity: Severity; text: string }>({
+      active: false,
+      severity: "all",
+      text: "",
+    });
+    const rebuildTimer = useRef<number | null>(null);
+
+    function appendRaw(text: string) {
+      const next = rawRef.current + text;
+      rawRef.current = next.length > RAW_CAP ? next.slice(-RAW_CAP) : next;
+    }
+
+    /** Re-render the terminal from the raw buffer, filtered or not. */
+    function rebuildView() {
+      const term = termRef.current;
+      if (!term) return;
+      const filter = filterRef.current;
+      const content = filter.active
+        ? filterLines(rawRef.current, filter.severity, filter.text)
+        : rawRef.current;
+
+      term.reset();
+      if (content) term.write(decorate(content.endsWith("\n") ? content : `${content}\r\n`));
+      term.scrollToBottom();
+    }
+
+    /** Rebuilds are debounced: chatty processes stream many chunks a second. */
+    function scheduleRebuild() {
+      if (rebuildTimer.current !== null) return;
+      rebuildTimer.current = window.setTimeout(() => {
+        rebuildTimer.current = null;
+        rebuildView();
+      }, 250);
+    }
+
+    function updateFilter(on: boolean, level: Severity, text: string) {
+      setFilterOn(on);
+      setSeverity(level);
+      filterRef.current = {
+        active: on || level !== "all",
+        severity: level,
+        text: on ? text : "",
+      };
+      rebuildView();
+    }
+
+    /** Route text to the terminal, honouring an active filter. */
+    function emit(term: Terminal, decorated: string) {
+      if (filterRef.current.active) {
+        scheduleRebuild();
+      } else {
+        term.write(decorated);
+      }
+    }
+
+    function copyText(text: string) {
+      void navigator.clipboard.writeText(text);
+    }
+
+    function copyAll() {
+      copyText(stripAnsi(rawRef.current));
+    }
+
+    /** A paste-ready troubleshooting block. */
+    function copyDiagnostics() {
+      const started = startedRef.current;
+      const exited = exitedRef.current;
+      const lines = stripAnsi(rawRef.current).split(/\r?\n/);
+      const tail = lines.slice(-100).join("\n");
+
+      const block = [
+        started && `$ ${started.program} ${started.args.join(" ")}`,
+        started && `cwd: ${started.cwd}`,
+        exited &&
+          `exit: ${exited.code ?? "killed"} (${exited.success ? "success" : "failure"}${
+            exited.cancelled ? ", cancelled" : ""
+          }) after ${(exited.durationMs / 1000).toFixed(2)}s`,
+        exited === null && started !== null && "exit: still running",
+        "",
+        "--- last output ---",
+        tail,
+      ]
+        .filter((part): part is string => typeof part === "string")
+        .join("\n");
+
+      copyText(block);
+    }
 
     useEffect(() => {
       if (!hostRef.current) return;
@@ -32,6 +247,7 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
         fontSize: 12,
         convertEol: true,
         scrollback: 20000,
+        allowProposedApi: true,
         theme: {
           background: "#12141a",
           foreground: "#d6dae2",
@@ -41,11 +257,48 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
 
       const fit = new FitAddon();
       term.loadAddon(fit);
+      // URLs in the output ("Now listening on: https://...") open in the
+      // system browser — inside the webview they would replace the app.
+      term.loadAddon(
+        new WebLinksAddon((_event, uri) => {
+          void openUrl(uri);
+        }),
+      );
+      const search = new SearchAddon();
+      term.loadAddon(search);
+      searchRef.current = search;
+
       term.open(hostRef.current);
       fit.fit();
 
+      // Terminal muscle memory: select-to-copy, and Ctrl+C copies a selection
+      // (there is no shell on the other side to interrupt).
+      term.onSelectionChange(() => {
+        const selection = term.getSelection();
+        if (selection) void navigator.clipboard.writeText(selection);
+      });
+      term.attachCustomKeyEventHandler((event) => {
+        if (event.type !== "keydown") return true;
+        if (event.ctrlKey && event.key.toLowerCase() === "c" && term.hasSelection()) {
+          return false; // selection already copied by onSelectionChange
+        }
+        return true;
+      });
+
+      // Ctrl+F is intercepted at the window level, capture phase, so the
+      // webview's own find bar never sees it. Only the visible console reacts
+      // (hidden tabs have no offsetParent).
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (!event.ctrlKey || event.key.toLowerCase() !== "f") return;
+        if (!hostRef.current || hostRef.current.offsetParent === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setSearchOpen(true);
+        setTimeout(() => searchInputRef.current?.focus(), 0);
+      };
+      window.addEventListener("keydown", onKeyDown, true);
+
       termRef.current = term;
-      fitRef.current = fit;
 
       const observer = new ResizeObserver(() => {
         // Fitting a detached or zero-sized terminal throws.
@@ -59,17 +312,42 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
 
       return () => {
         observer.disconnect();
+        window.removeEventListener("keydown", onKeyDown, true);
         term.dispose();
         termRef.current = null;
+        searchRef.current = null;
       };
     }, []);
 
+    function findNext(text: string, backwards = false) {
+      const search = searchRef.current;
+      if (!search || !text) return;
+      if (backwards) {
+        search.findPrevious(text, { decorations: SEARCH_DECORATIONS });
+      } else {
+        search.findNext(text, { decorations: SEARCH_DECORATIONS });
+      }
+    }
+
+    function closeSearch() {
+      setSearchOpen(false);
+      searchRef.current?.clearDecorations();
+      updateFilter(false, "all", "");
+      termRef.current?.focus();
+    }
+
     useImperativeHandle(ref, () => ({
       write(text: string) {
+        appendRaw(text);
         termRef.current?.write(text);
       },
       clear() {
-        termRef.current?.clear();
+        rawRef.current = "";
+        startedRef.current = null;
+        exitedRef.current = null;
+        // reset() rather than clear(): clear() keeps the cursor line, which
+        // leaves a stray fragment of output behind.
+        termRef.current?.reset();
       },
       handle(event: ProcessEvent) {
         const term = termRef.current;
@@ -77,34 +355,159 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
 
         switch (event.type) {
           case "started":
-            term.write(
+            startedRef.current = event;
+            exitedRef.current = null;
+            appendRaw(`$ ${event.program} ${event.args.join(" ")}\n  in ${event.cwd}\n`);
+            emit(
+              term,
               `\x1b[38;5;245m$ ${event.program} ${event.args.join(" ")}\r\n` +
                 `  in ${event.cwd}\x1b[0m\r\n`,
             );
             break;
           case "output":
-            term.write(event.text);
+            appendRaw(event.text);
+            emit(term, decorate(event.text));
             break;
           case "exited": {
+            exitedRef.current = event;
             const seconds = (event.durationMs / 1000).toFixed(2);
             if (event.cancelled) {
-              term.write(`\r\n\x1b[33mcancelled after ${seconds}s\x1b[0m\r\n`);
+              appendRaw(`\ncancelled after ${seconds}s\n`);
+              emit(term, `\r\n\x1b[33mcancelled after ${seconds}s\x1b[0m\r\n`);
             } else if (event.success) {
-              term.write(`\r\n\x1b[32mfinished in ${seconds}s\x1b[0m\r\n`);
+              appendRaw(`\nfinished in ${seconds}s\n`);
+              emit(term, `\r\n\x1b[32mfinished in ${seconds}s\x1b[0m\r\n`);
             } else {
-              term.write(
+              appendRaw(`\nexited with code ${event.code ?? "unknown"} after ${seconds}s\n`);
+              emit(
+                term,
                 `\r\n\x1b[31mexited with code ${event.code ?? "unknown"} after ${seconds}s\x1b[0m\r\n`,
               );
             }
             break;
           }
           case "failed":
-            term.write(`\r\n\x1b[31m${event.message}\x1b[0m\r\n`);
+            appendRaw(`\n${event.message}\n`);
+            emit(term, `\r\n\x1b[31m${event.message}\x1b[0m\r\n`);
             break;
         }
       },
     }));
 
-    return <div className={`console ${className ?? ""}`} ref={hostRef} />;
+    return (
+      <div
+        className="console-host"
+        onContextMenu={(e) => {
+          e.preventDefault();
+          const bounds = e.currentTarget.getBoundingClientRect();
+          setMenu({ x: e.clientX - bounds.left, y: e.clientY - bounds.top });
+        }}
+      >
+        {searchOpen && (
+          <div className="console-search">
+            <input
+              ref={searchInputRef}
+              placeholder={filterOn ? "Filter lines" : "Find in output"}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                if (filterOn) {
+                  updateFilter(true, severity, e.target.value);
+                } else {
+                  findNext(e.target.value);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !filterOn) findNext(query, e.shiftKey);
+                if (e.key === "Escape") closeSearch();
+              }}
+            />
+            <button
+              onClick={() => findNext(query, true)}
+              disabled={filterOn}
+              title="Previous match (Shift+Enter)"
+            >
+              ↑
+            </button>
+            <button
+              onClick={() => findNext(query)}
+              disabled={filterOn}
+              title="Next match (Enter)"
+            >
+              ↓
+            </button>
+            <select
+              value={severity}
+              onChange={(e) => updateFilter(filterOn, e.target.value as Severity, query)}
+              title="Hide lines below this severity"
+            >
+              <option value="all">All levels</option>
+              <option value="info">Info+</option>
+              <option value="warn">Warn+</option>
+              <option value="error">Errors</option>
+            </select>
+            <button
+              className={filterOn ? "primary" : ""}
+              onClick={() => updateFilter(!filterOn, severity, query)}
+              title="Hide lines that do not contain the text (instead of jumping between matches)"
+            >
+              Filter
+            </button>
+            <button onClick={closeSearch} title="Close (Esc)">
+              ×
+            </button>
+          </div>
+        )}
+
+        {menu && (
+          <>
+            <div className="dropdown-backdrop" onClick={() => setMenu(null)} />
+            <div className="dropdown-menu" style={{ left: menu.x, top: menu.y }}>
+              <div
+                className="dropdown-item"
+                onClick={() => {
+                  const selection = termRef.current?.getSelection();
+                  if (selection) copyText(selection);
+                  setMenu(null);
+                }}
+              >
+                Copy selection
+              </div>
+              <div
+                className="dropdown-item"
+                onClick={() => {
+                  copyAll();
+                  setMenu(null);
+                }}
+              >
+                Copy all output
+              </div>
+              <div
+                className="dropdown-item"
+                onClick={() => {
+                  copyDiagnostics();
+                  setMenu(null);
+                }}
+                title="Command line, exit code, and the last 100 lines — paste-ready"
+              >
+                Copy diagnostics
+              </div>
+              <div
+                className="dropdown-item"
+                onClick={() => {
+                  setSearchOpen(true);
+                  setMenu(null);
+                  setTimeout(() => searchInputRef.current?.focus(), 0);
+                }}
+              >
+                Find… (Ctrl+F)
+              </div>
+            </div>
+          </>
+        )}
+
+        <div className={`console ${className ?? ""}`} ref={hostRef} />
+      </div>
+    );
   },
 );

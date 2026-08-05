@@ -32,6 +32,8 @@ use crate::model::{
 /// several files that layer on top of each other.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ProjectFile {
+    /// The `Sdk` attribute of the `<Project>` element.
+    pub sdk: Option<String>,
     pub output_type: Option<String>,
     pub target_frameworks: Vec<String>,
     pub is_test_project: Option<bool>,
@@ -40,6 +42,8 @@ pub struct ProjectFile {
     /// `<EnableMSTestRunner>` / `<UseMicrosoftTestingPlatformRunner>` — the
     /// per-framework ways of switching MSTest and NUnit onto MTP.
     pub enable_mtp_runner: Option<bool>,
+    /// `<UserSecretsId>` — names the secrets store under the user profile.
+    pub user_secrets_id: Option<String>,
     pub package_references: Vec<String>,
 }
 
@@ -84,6 +88,9 @@ pub fn parse_project_file(xml: &str) -> ProjectFile {
                     if let Some(include) = attr_value(&e, "Include") {
                         out.package_references.push(include);
                     }
+                }
+                if name.eq_ignore_ascii_case("Project") {
+                    out.sdk = attr_value(&e, "Sdk");
                 }
                 current = Some(name);
                 text.clear();
@@ -150,6 +157,8 @@ fn apply_property(out: &mut ProjectFile, name: &str, value: &str) {
         || name.eq_ignore_ascii_case("UseMicrosoftTestingPlatformRunner")
     {
         out.enable_mtp_runner = Some(truthy());
+    } else if name.eq_ignore_ascii_case("UserSecretsId") {
+        out.user_secrets_id = Some(value.to_string());
     }
 }
 
@@ -305,10 +314,26 @@ pub fn project_kind(project: &ProjectFile, is_test: bool) -> ProjectKind {
             ProjectKind::Executable
         }
         Some(_) => ProjectKind::Library,
-        // A project with no OutputType is a library unless an SDK says
-        // otherwise; web SDKs are the common exception.
-        None => ProjectKind::Library,
+        // A project with no OutputType is a library unless its SDK produces an
+        // executable by default — ASP.NET Core templates in particular never
+        // write an OutputType.
+        None => {
+            if project.sdk.as_deref().is_some_and(sdk_defaults_to_executable) {
+                ProjectKind::Executable
+            } else {
+                ProjectKind::Library
+            }
+        }
     }
+}
+
+/// SDKs whose projects build an executable without declaring `<OutputType>`.
+fn sdk_defaults_to_executable(sdk: &str) -> bool {
+    let sdk = sdk.to_ascii_lowercase();
+    matches!(
+        sdk.as_str(),
+        "microsoft.net.sdk.web" | "microsoft.net.sdk.worker" | "microsoft.net.sdk.blazorwebassembly"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -431,6 +456,9 @@ pub struct BuildContext<'a> {
     pub runner: Option<TestRunner>,
     /// Whether TRX reporting is available. Only meaningful under MTP.
     pub trx_extension_available: bool,
+    /// Whether the project has a `Properties/launchSettings.json`, so running
+    /// without a profile can warn about the environment it leaves behind.
+    pub has_launch_settings: bool,
     /// Fully qualified names to restrict the run to, for "re-run failed".
     pub filter: Option<Vec<String>>,
 }
@@ -494,6 +522,11 @@ pub fn test_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
         _ => {
             args.push("--logger".into());
             args.push(format!("trx;LogFileName={report_name}"));
+            // The default console verbosity prints nothing per test; `normal`
+            // prints a Passed/Failed line as each test finishes, which is what
+            // the UI's live progress counter reads.
+            args.push("--logger".into());
+            args.push("console;verbosity=normal".into());
             args.push("--results-directory".into());
             args.push(ctx.results_dir.display().to_string());
 
@@ -524,6 +557,7 @@ pub fn test_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
 /// Build the `dotnet run` command line for an application configuration.
 pub fn run_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
     let mut args = vec!["run".to_string()];
+    let mut warnings = Vec::new();
 
     if let Some(project) = &config.project {
         args.push("--project".into());
@@ -543,10 +577,32 @@ pub fn run_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
             args.push("--launch-profile".into());
             args.push(profile.clone());
         }
-        // Without this, `dotnet run` silently applies the first profile in
-        // launchSettings.json, quietly overriding the environment and URLs
-        // this configuration specifies.
-        None => args.push("--no-launch-profile".into()),
+        // An explicit opt-out. Skipping the profile silently bites hard —
+        // no ASPNETCORE_ENVIRONMENT=Development (so no user secrets), no
+        // applicationUrl — so opting out gets a warning unless the config
+        // sets the environment itself.
+        None if config.ignore_launch_settings => {
+            args.push("--no-launch-profile".into());
+
+            if ctx.has_launch_settings
+                && !config.env.contains_key("ASPNETCORE_ENVIRONMENT")
+                && !config.env.contains_key("DOTNET_ENVIRONMENT")
+            {
+                warnings.push(
+                    "This configuration ignores launchSettings.json, so its environment \
+                     variables and applicationUrl are not applied — the app runs without \
+                     ASPNETCORE_ENVIRONMENT=Development, which also disables .NET user \
+                     secrets. Pick a launch profile, set the environment variables \
+                     explicitly, or untick \"Ignore launchSettings.json\"."
+                        .to_string(),
+                );
+            }
+        }
+        // No profile named: leave `dotnet run` to its own default — the first
+        // Project profile in launchSettings.json, with its environment and
+        // applicationUrl applied. This matches running from a terminal or an
+        // IDE, which is what people expect a plain "run" to do.
+        None => {}
     }
 
     if !config.args.is_empty() {
@@ -558,6 +614,50 @@ pub fn run_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
         program: "dotnet".into(),
         args,
         cwd: resolve_cwd(config, ctx.workspace_root),
+        env: config.env.clone(),
+        report: None,
+        warnings,
+    }
+}
+
+/// A build-system action on a project, as opposed to running it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum BuildAction {
+    Build,
+    /// A full non-incremental compile, like Rider's Rebuild.
+    Rebuild,
+    Clean,
+}
+
+/// Build the `dotnet build` / `dotnet clean` command line for a configuration.
+pub fn build_action_invocation(
+    config: &RunConfig,
+    action: BuildAction,
+    workspace_root: &Path,
+) -> Invocation {
+    let mut args = match action {
+        BuildAction::Build => vec!["build".to_string()],
+        BuildAction::Rebuild => vec!["build".to_string(), "--no-incremental".to_string()],
+        BuildAction::Clean => vec!["clean".to_string()],
+    };
+
+    if let Some(project) = &config.project {
+        args.push(workspace_root.join(project).display().to_string());
+    }
+    if let Some(configuration) = &config.build_configuration {
+        args.push("-c".into());
+        args.push(configuration.clone());
+    }
+    if let Some(framework) = &config.framework {
+        args.push("-f".into());
+        args.push(framework.clone());
+    }
+
+    Invocation {
+        program: "dotnet".into(),
+        args,
+        cwd: resolve_cwd(config, workspace_root),
         env: config.env.clone(),
         report: None,
         warnings: Vec::new(),
@@ -620,19 +720,22 @@ pub fn configs_for_project(
 
     match kind {
         ProjectKind::Test => {
-            for configuration in ["Debug", "Release"] {
-                let mut config = RunConfig::new(
-                    format!("{project_id}:test:{}", configuration.to_lowercase()),
-                    format!("{project_name} tests ({configuration})"),
-                    RunKind::Test,
-                    "dotnet",
-                    ConfigSource::Detected,
-                );
-                config.project = Some(relative_path.to_path_buf());
-                config.build_configuration = Some(configuration.to_string());
-                config.framework = framework.clone();
-                out.push(config);
-            }
+            // Debug only, like Rider's default test session. A Release test
+            // run is a legitimate but rare want (and `#if !DEBUG` code paths
+            // make it a trap — missing user secrets, managed-identity-only
+            // branches); anyone who needs one can save a custom config with
+            // Build configuration set to Release.
+            let mut config = RunConfig::new(
+                format!("{project_id}:test:debug"),
+                format!("{project_name} tests"),
+                RunKind::Test,
+                "dotnet",
+                ConfigSource::Detected,
+            );
+            config.project = Some(relative_path.to_path_buf());
+            config.build_configuration = Some("Debug".to_string());
+            config.framework = framework;
+            out.push(config);
         }
         ProjectKind::Executable => {
             // A profile per launch profile, so the environment and URLs the

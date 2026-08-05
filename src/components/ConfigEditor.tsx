@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import * as api from "../ipc/api";
 import type { Project, RunConfig, Workspace } from "../ipc/types";
 
 function envToText(env: Record<string, string> | undefined): string {
@@ -53,15 +54,36 @@ export function ConfigEditor({
   workspace,
   onCancel,
   onSave,
+  onDelete,
 }: {
   config: RunConfig;
   workspace: Workspace;
   onCancel: () => void;
   onSave: (config: RunConfig) => void;
+  /** Delete this configuration. Absent for new or detected configurations. */
+  onDelete?: () => void;
 }) {
   const [draft, setDraft] = useState<RunConfig>(config);
   const [envText, setEnvText] = useState(() => envToText(config.env));
   const [argsText, setArgsText] = useState(() => (config.args ?? []).join(" "));
+  const [profiles, setProfiles] = useState<string[]>([]);
+
+  // The launch profiles the targeted project actually defines, so the
+  // dropdown can only offer names `dotnet run --launch-profile` will accept.
+  useEffect(() => {
+    if (draft.ecosystem !== "dotnet" || !draft.project) {
+      setProfiles([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .launchProfiles(draft.project)
+      .then((names) => !cancelled && setProfiles(names))
+      .catch(() => !cancelled && setProfiles([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [draft.ecosystem, draft.project]);
 
   const update = <K extends keyof RunConfig>(key: K, value: RunConfig[K]) =>
     setDraft((previous) => ({ ...previous, [key]: value }));
@@ -153,14 +175,46 @@ export function ConfigEditor({
 
               <div className="field">
                 <label>Launch profile</label>
-                <input
-                  placeholder="Leave empty to ignore launchSettings.json"
+                <select
                   value={draft.launchProfile ?? ""}
                   onChange={(e) =>
                     update("launchProfile", e.target.value || undefined)
                   }
-                />
+                >
+                  <option value="">
+                    (default — dotnet run picks the first profile)
+                  </option>
+                  {profiles.map((profile) => (
+                    <option key={profile} value={profile}>
+                      {profile}
+                    </option>
+                  ))}
+                  {/* A saved value the project no longer defines still has to
+                      be visible, or the select would silently lie about it. */}
+                  {draft.launchProfile && !profiles.includes(draft.launchProfile) && (
+                    <option value={draft.launchProfile}>
+                      {draft.launchProfile} (not found in launchSettings.json)
+                    </option>
+                  )}
+                </select>
               </div>
+
+              {!draft.launchProfile && (
+                <div className="field">
+                  <label style={{ textTransform: "none", letterSpacing: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={!!draft.ignoreLaunchSettings}
+                      onChange={(e) =>
+                        update("ignoreLaunchSettings", e.target.checked || undefined)
+                      }
+                    />{" "}
+                    Ignore launchSettings.json (skips its environment variables
+                    and applicationUrl; otherwise <code>dotnet run</code> applies
+                    the default profile)
+                  </label>
+                </div>
+              )}
             </>
           )}
 
@@ -205,6 +259,15 @@ export function ConfigEditor({
         </div>
 
         <footer>
+          {onDelete && (
+            <button
+              onClick={onDelete}
+              style={{ marginRight: "auto", borderColor: "var(--fail)" }}
+              title="Remove this configuration from .code-basics/config.json"
+            >
+              Delete
+            </button>
+          )}
           <button onClick={onCancel}>Cancel</button>
           <button className="primary" onClick={save} disabled={!draft.name.trim()}>
             Save

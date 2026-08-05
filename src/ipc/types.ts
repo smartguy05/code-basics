@@ -26,6 +26,9 @@ export type TestRunner =
 
 export type RunKind = "app" | "test";
 
+/** A build-system action on a .NET project (`adapters/dotnet.rs`). */
+export type BuildAction = "build" | "rebuild" | "clean";
+
 export type ConfigSource = "detected" | "userFile" | "riderImport";
 
 export interface Project {
@@ -50,11 +53,18 @@ export interface RunConfig {
   buildConfiguration?: string;
   framework?: string;
   launchProfile?: string;
+  /**
+   * Skip launchSettings.json entirely (`--no-launch-profile`). When absent
+   * and no profile is named, `dotnet run` applies its default profile.
+   */
+  ignoreLaunchSettings?: boolean;
   script?: string;
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
   warnings?: string[];
+  /** Member config ids; non-empty only for compounds (ecosystem "compound"). */
+  compound?: string[];
 }
 
 export interface Workspace {
@@ -62,6 +72,28 @@ export interface Workspace {
   name: string;
   projects: Project[];
   configs: RunConfig[];
+  /** Ids of starred configs; they sort before everything else. */
+  favorites: string[];
+  /** The user's preferred config ordering, as config ids. */
+  order: string[];
+}
+
+/** One entry in a directory listing (`crates/core/src/files.rs`). */
+export interface DirEntry {
+  name: string;
+  /** Workspace-relative path, usable directly in `fsReadFile`/`fsListDir`. */
+  path: string;
+  isDir: boolean;
+}
+
+/** A .NET project's user secrets (`crates/core/src/secrets.rs`). */
+export interface ProjectSecrets {
+  /** The project's `<UserSecretsId>`, when it has one. */
+  secretsId: string | null;
+  /** Absolute path of the `secrets.json` the id resolves to. */
+  path: string | null;
+  /** Contents of that file, when it exists. */
+  content: string | null;
 }
 
 // ---------------------------------------------------------------------------

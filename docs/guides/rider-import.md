@@ -18,6 +18,12 @@ The importer (`crates/core/src/importers/rider.rs`) parses the XML into name/kin
 
 Warnings survive into the saved configuration's `warnings` field, so the context is still visible when editing later.
 
+## Compound configurations
+
+Rider's compound configurations (`CompoundRunConfigurationType`) launch several other configurations together. They import as a `RunConfig` with `ecosystem: "compound"` whose `compound` field lists member config ids; running one starts every member (each under its own id, so members can be stopped individually or all at once via the compound).
+
+Rider records members by display name, so during preview `resolve_compounds` matches each name against, in order: the other imported configurations, existing configurations by exact name, and detected launch-profile configurations (Rider's `Project: profile` naming matched by project file stem and profile). Members that resolve nowhere are dropped with a warning on the compound, visible in the review step.
+
 ## Extending it
 
 Handling a new Rider configuration kind means extending `convert()` in `rider.rs`. The test suite (`rider_tests.rs`) uses XML samples shaped the way Rider actually writes them — add a real sample for any new kind.

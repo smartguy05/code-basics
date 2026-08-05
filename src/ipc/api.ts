@@ -3,12 +3,15 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   Branch,
+  BuildAction,
   Commit,
   ComparisonMode,
+  DirEntry,
   FileContents,
   FileDiff,
   NetworkKind,
   ProcessEvent,
+  ProjectSecrets,
   RiderImportPreview,
   RunConfig,
   TestRunOutcome,
@@ -34,11 +37,42 @@ export const saveConfig = (config: RunConfig) =>
 export const deleteConfig = (id: string) =>
   invoke<Workspace>("delete_config", { id });
 
+/** Launch profile names a .NET project defines (`Project` profiles only). */
+export const launchProfiles = (project: string) =>
+  invoke<string[]>("launch_profiles", { project });
+
+export const setFavorite = (id: string, favorite: boolean) =>
+  invoke<Workspace>("set_favorite", { id, favorite });
+
+export const setConfigOrder = (order: string[]) =>
+  invoke<Workspace>("set_config_order", { order });
+
+/** `project` is the workspace-relative path from `RunConfig.project`. */
+export const readProjectSecrets = (project: string) =>
+  invoke<ProjectSecrets>("read_project_secrets", { project });
+
+export const writeProjectSecrets = (project: string, content: string) =>
+  invoke<ProjectSecrets>("write_project_secrets", { project, content });
+
 export const previewRiderImport = () =>
   invoke<RiderImportPreview>("preview_rider_import");
 
 export const applyRiderImport = (configs: RunConfig[]) =>
   invoke<Workspace>("apply_rider_import", { configs });
+
+// ---------------------------------------------------------------------------
+// Workspace files (directory tree and file editor)
+// ---------------------------------------------------------------------------
+
+/** List one directory of the workspace, filtered like the project scan. */
+export const fsListDir = (path: string) =>
+  invoke<DirEntry[]>("fs_list_dir", { path });
+
+export const fsReadFile = (path: string) =>
+  invoke<string>("fs_read_file", { path });
+
+export const fsWriteFile = (path: string, content: string) =>
+  invoke<void>("fs_write_file", { path, content });
 
 // ---------------------------------------------------------------------------
 // Running
@@ -53,10 +87,23 @@ export const applyRiderImport = (configs: RunConfig[]) =>
 export function startRun(
   configId: string,
   onEvent: (event: ProcessEvent) => void,
+  /** Environment variables layered over the config's own, for this run only. */
+  env?: Record<string, string>,
 ): Promise<void> {
   const channel = new Channel<ProcessEvent>();
   channel.onmessage = onEvent;
-  return invoke<void>("start_run", { configId, channel });
+  return invoke<void>("start_run", { configId, channel, env });
+}
+
+/** Build / rebuild / clean the project behind a .NET configuration. */
+export function buildProject(
+  configId: string,
+  action: BuildAction,
+  onEvent: (event: ProcessEvent) => void,
+): Promise<void> {
+  const channel = new Channel<ProcessEvent>();
+  channel.onmessage = onEvent;
+  return invoke<void>("build_project", { configId, action, channel });
 }
 
 export const cancelRun = (configId: string) =>
@@ -118,11 +165,16 @@ export const gitCommit = (message: string, amend: boolean) =>
 
 export const gitBranches = () => invoke<Branch[]>("git_branches");
 
-export const gitCreateBranch = (name: string, checkout: boolean) =>
-  invoke<void>("git_create_branch", { name, checkout });
+/** `from` names the revision to branch from; absent means HEAD. */
+export const gitCreateBranch = (name: string, checkout: boolean, from?: string) =>
+  invoke<void>("git_create_branch", { name, checkout, from });
 
 export const gitCheckoutBranch = (name: string) =>
   invoke<void>("git_checkout_branch", { name });
+
+/** Check out `origin/x` like `git switch x`: local tracking branch + switch. */
+export const gitCheckoutRemoteBranch = (name: string) =>
+  invoke<void>("git_checkout_remote_branch", { name });
 
 export const gitDeleteBranch = (name: string) =>
   invoke<void>("git_delete_branch", { name });

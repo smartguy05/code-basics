@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { BranchMenu } from "./components/BranchMenu";
 import { ChangesView } from "./views/ChangesView";
 import { HistoryView } from "./views/HistoryView";
 import { RunView } from "./views/RunView";
@@ -10,8 +11,8 @@ import type { Workspace } from "./ipc/types";
 type Tab = "tests" | "run" | "changes" | "history";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "tests", label: "Tests" },
   { id: "run", label: "Run" },
+  { id: "tests", label: "Tests" },
   { id: "changes", label: "Changes" },
   { id: "history", label: "History" },
 ];
@@ -33,9 +34,12 @@ function rememberRecent(path: string) {
   localStorage.setItem(RECENTS_KEY, JSON.stringify(recents));
 }
 
+/** True when running inside the Tauri webview (false in a plain browser tab). */
+const inTauri = "__TAURI_INTERNALS__" in window;
+
 export function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [tab, setTab] = useState<Tab>("tests");
+  const [tab, setTab] = useState<Tab>("run");
   const [error, setError] = useState<string | null>(null);
   const [recents, setRecents] = useState<string[]>(loadRecents);
   const [loading, setLoading] = useState(true);
@@ -64,8 +68,12 @@ export function App() {
   }
 
   async function pickFolder() {
-    const chosen = await open({ directory: true, multiple: false });
-    if (typeof chosen === "string") await openPath(chosen);
+    try {
+      const chosen = await open({ directory: true, multiple: false });
+      if (typeof chosen === "string") await openPath(chosen);
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
   }
 
   async function rescan() {
@@ -75,6 +83,19 @@ export function App() {
     } catch (e) {
       setError(api.errorMessage(e));
     }
+  }
+
+  if (!inTauri) {
+    return (
+      <div className="empty" style={{ paddingTop: 80 }}>
+        <h2 style={{ marginBottom: 4 }}>code-basics</h2>
+        <p className="muted">
+          This page is running in a plain browser, so the desktop backend is not
+          available. Launch the app with <code>pnpm tauri dev</code> and use the
+          native window instead.
+        </p>
+      </div>
+    );
   }
 
   if (loading) {
@@ -119,19 +140,12 @@ export function App() {
           {workspace.root}
         </span>
 
-        <div className="spacer" />
+        {/* Keyed by root: a different workspace is a different repository. */}
+        <BranchMenu key={workspace.root} />
 
-        <div className="tabs">
-          {TABS.map(({ id, label }) => (
-            <button
-              key={id}
-              className={tab === id ? "active" : ""}
-              onClick={() => setTab(id)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* The Run view portals its configuration dropdown here (it owns the
+            selection and process state; see RunConfigMenu). */}
+        <div id="run-config-slot" />
 
         <div className="spacer" />
 
@@ -145,16 +159,39 @@ export function App() {
         <button onClick={pickFolder}>Open…</button>
       </div>
 
+      <div className="tabs tabs-row">
+        {TABS.map(({ id, label }) => (
+          <button
+            key={id}
+            className={tab === id ? "active" : ""}
+            onClick={() => setTab(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       {error && <div className="error">{error}</div>}
 
-      <div className="body">
-        {tab === "tests" && <TestsView workspace={workspace} key={workspace.root} />}
-        {tab === "run" && (
-          <RunView workspace={workspace} onWorkspaceChange={setWorkspace} />
-        )}
-        {tab === "changes" && <ChangesView key={workspace.root} />}
-        {tab === "history" && <HistoryView key={workspace.root} />}
+      {/* Run and Tests stay mounted while hidden: they own running processes
+          and their consoles, which must survive a tab switch. Changes and
+          History re-mount so they re-read git state on every visit. */}
+      <div className="body" hidden={tab !== "run"}>
+        <RunView workspace={workspace} onWorkspaceChange={setWorkspace} />
       </div>
+      <div className="body" hidden={tab !== "tests"}>
+        <TestsView workspace={workspace} key={workspace.root} />
+      </div>
+      {tab === "changes" && (
+        <div className="body">
+          <ChangesView key={workspace.root} />
+        </div>
+      )}
+      {tab === "history" && (
+        <div className="body">
+          <HistoryView key={workspace.root} />
+        </div>
+      )}
     </div>
   );
 }

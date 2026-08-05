@@ -491,6 +491,61 @@ fn creates_switches_and_deletes_branches() {
 }
 
 #[test]
+fn creates_a_branch_from_another_branch() {
+    let dir = init_repo(&[("f.txt", "x\n")]);
+    let path = dir.path();
+    let repo = Repo::open(path).unwrap();
+
+    // `base` gains a commit that main does not have.
+    repo.create_branch("base", true).unwrap();
+    write(path, "g.txt", "on base\n");
+    run(path, &["add", "."]);
+    run(path, &["commit", "-m", "base work"]);
+    repo.checkout_branch("main").unwrap();
+
+    // Branching from `base` while standing on main must take base's tip.
+    repo.create_branch_from("feature", "base", true).unwrap();
+
+    assert_eq!(repo.status().unwrap().branch.as_deref(), Some("feature"));
+    assert_eq!(read(path, "g.txt"), "on base\n", "the branch must start at base's tip");
+}
+
+#[test]
+fn checking_out_a_remote_branch_creates_a_tracking_local() {
+    // Repo A has a slash-named branch; a clone of it sees only the
+    // remote-tracking ref. Checking that out must behave like `git switch`:
+    // local branch, upstream set, no detached HEAD.
+    let origin = init_repo(&[("f.txt", "x\n")]);
+    run(origin.path(), &["branch", "users/anthony/feature"]);
+
+    let clone_dir = tempfile::tempdir().unwrap();
+    let clone_path = clone_dir.path().join("clone");
+    run(
+        clone_dir.path(),
+        &["clone", origin.path().to_str().unwrap(), clone_path.to_str().unwrap()],
+    );
+
+    let repo = Repo::open(&clone_path).unwrap();
+    repo.checkout_remote_branch("origin/users/anthony/feature").unwrap();
+
+    let status = repo.status().unwrap();
+    assert_eq!(status.branch.as_deref(), Some("users/anthony/feature"));
+
+    let branch = repo
+        .branches()
+        .unwrap()
+        .into_iter()
+        .find(|b| !b.is_remote && b.name == "users/anthony/feature")
+        .expect("a local branch must exist");
+    assert_eq!(branch.upstream.as_deref(), Some("origin/users/anthony/feature"));
+
+    // Doing it again (local already exists) is a plain switch, not an error.
+    repo.checkout_branch("main").unwrap();
+    repo.checkout_remote_branch("origin/users/anthony/feature").unwrap();
+    assert_eq!(repo.status().unwrap().branch.as_deref(), Some("users/anthony/feature"));
+}
+
+#[test]
 fn refuses_to_delete_the_checked_out_branch() {
     let dir = init_repo(&[("f.txt", "x\n")]);
     let repo = Repo::open(dir.path()).unwrap();

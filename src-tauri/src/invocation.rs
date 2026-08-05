@@ -28,6 +28,12 @@ pub fn build(
         .map_err(|e| format!("failed to create {}: {e}", results.display()))?;
 
     match config.ecosystem.as_str() {
+        // Compounds have no command of their own; commands/run.rs launches
+        // their members individually and must never get here.
+        "compound" => Err(format!(
+            "{} is a compound configuration with no command of its own",
+            config.name
+        )),
         "dotnet" => Ok(build_dotnet(workspace, config, &results, filter)),
         "node" => build_node(workspace, config, &results, filter),
         // Anything else must come from a declarative manifest.
@@ -50,11 +56,18 @@ fn build_dotnet(
         None => (None, false),
     };
 
+    let has_launch_settings = config
+        .project
+        .as_ref()
+        .and_then(|p| root.join(p).parent().map(|d| d.join("Properties").join("launchSettings.json")))
+        .is_some_and(|p| p.exists());
+
     let ctx = dotnet::BuildContext {
         workspace_root: root,
         results_dir: results,
         runner: runner.or(Some(TestRunner::VsTest)),
         trx_extension_available: trx_available,
+        has_launch_settings,
         filter: filter.map(<[String]>::to_vec),
     };
 

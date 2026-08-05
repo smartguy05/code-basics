@@ -146,16 +146,33 @@ pub async fn git_create_branch(
     state: State<'_, AppState>,
     name: String,
     checkout: bool,
+    // Revision to branch from. Absent means HEAD.
+    from: Option<String>,
 ) -> Result<(), String> {
-    open(&state)?
-        .create_branch(&name, checkout)
-        .map_err(|e| format!("{e:#}"))
+    let repo = open(&state)?;
+    match from {
+        Some(start) => repo.create_branch_from(&name, &start, checkout),
+        None => repo.create_branch(&name, checkout),
+    }
+    .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 pub async fn git_checkout_branch(state: State<'_, AppState>, name: String) -> Result<(), String> {
     open(&state)?
         .checkout_branch(&name)
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Check out a remote-tracking branch like `git switch`: create the local
+/// branch with its upstream set (or reuse an existing one), then switch.
+#[tauri::command]
+pub async fn git_checkout_remote_branch(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<(), String> {
+    open(&state)?
+        .checkout_remote_branch(&name)
         .map_err(|e| format!("{e:#}"))
 }
 

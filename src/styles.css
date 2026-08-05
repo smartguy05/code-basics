@@ -122,6 +122,28 @@ textarea:focus {
   gap: 2px;
 }
 
+/* The tab strip on its own row, below the titlebar. */
+.tabs-row {
+  padding: 0 12px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+/* The run-configuration dropdown portaled into the titlebar (RunConfigMenu). */
+#run-config-slot .dropdown > button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 320px;
+}
+
+#run-config-slot .config-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tabs button {
   background: transparent;
   border: 1px solid transparent;
@@ -142,13 +164,29 @@ textarea:focus {
   display: flex;
 }
 
+/* `display: flex` above would beat the UA's [hidden] rule. */
+.body[hidden] {
+  display: none;
+}
+
 .sidebar {
-  width: 280px;
+  width: 280px; /* overridden by the Sidebar component's stored width */
   flex: 0 0 auto;
   border-right: 1px solid var(--border);
   background: var(--bg-raised);
   overflow-y: auto;
   padding: 8px;
+}
+
+.sidebar-resizer {
+  flex: 0 0 4px;
+  margin-left: -4px;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.sidebar-resizer:hover {
+  background: var(--accent-dim);
 }
 
 .main {
@@ -174,6 +212,12 @@ textarea:focus {
   overflow: auto;
 }
 
+/* Panes that host a terminal must not grow a scrollbar of their own — it
+   fights xterm's fit addon (see .split > .bottom). */
+.content.console-area {
+  overflow: hidden;
+}
+
 .split {
   display: flex;
   flex-direction: column;
@@ -191,7 +235,10 @@ textarea:focus {
   flex: 1 1 40%;
   min-height: 0;
   border-top: 1px solid var(--border);
-  overflow: auto;
+  /* hidden, not auto: a scrollbar here fights xterm's fit addon — the bar
+     appears, the pane shrinks, the terminal refits, the bar vanishes, loop.
+     Children (terminal, failure detail) scroll themselves. */
+  overflow: hidden;
 }
 
 /* --------------------------------------------------------------------- */
@@ -262,6 +309,116 @@ textarea:focus {
   background: var(--accent-dim);
 }
 
+/* --------------------------------------------------------------------- */
+/* Dropdown menu (environment picker)                                     */
+/* --------------------------------------------------------------------- */
+
+.dropdown {
+  position: relative;
+}
+
+.dropdown-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 190px;
+  /* Long lists (branches, environments) scroll rather than run off-window. */
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 4px;
+  z-index: 41;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dropdown-item:hover {
+  background: var(--border);
+}
+
+.dropdown-item.selected {
+  background: var(--accent-dim);
+}
+
+/* A collapsible section header inside a dropdown (Local / Remote). */
+.dropdown-section {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px 2px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.dropdown-section:hover {
+  color: var(--text);
+}
+
+.dropdown-item .remove {
+  color: var(--text-faint);
+  padding: 0 2px;
+}
+
+.dropdown-item .remove:hover {
+  color: var(--fail);
+}
+
+.dropdown-menu input {
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* A thin rule between a dropdown's list and its action items. */
+.dropdown-separator {
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+/* Small inline action inside a .row (a span, since rows are buttons). */
+.row-action {
+  flex: 0 0 auto;
+  width: 16px;
+  text-align: center;
+  color: var(--text-faint);
+}
+
+.row-action:hover {
+  color: var(--text);
+}
+
+/* Favourite toggle inside a .row (a span, since rows are buttons). */
+.star {
+  flex: 0 0 auto;
+  width: 16px;
+  text-align: center;
+  color: var(--text-faint);
+}
+
+.star:hover {
+  color: var(--text);
+}
+
+.star.active {
+  color: var(--skip);
+}
+
 .badge {
   font-size: 10px;
   padding: 1px 5px;
@@ -295,6 +452,82 @@ textarea:focus {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* --------------------------------------------------------------------- */
+/* File tree and editor pane (Run tab)                                    */
+/* --------------------------------------------------------------------- */
+
+.file-tree .tree-row {
+  padding: 2px 4px;
+  white-space: nowrap;
+}
+
+.file-tree .twisty {
+  width: 12px;
+  color: var(--text-faint);
+  flex: 0 0 auto;
+}
+
+.file-tree .tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Editor stacked above the console, divided by a draggable resizer. */
+.editor-console-split {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.editor-pane {
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-area {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-inset);
+}
+
+.editor-host {
+  height: 100%;
+  overflow: hidden; /* the CodeMirror scroller scrolls, not this pane */
+}
+
+.split-resizer {
+  flex: 0 0 4px;
+  cursor: row-resize;
+  background: var(--border);
+}
+
+.split-resizer:hover {
+  background: var(--accent-dim);
+}
+
+.console-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Hosts terminals: hidden, not auto — a scrollbar fights xterm's fit addon. */
+.console-sessions {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dirty-dot {
+  color: var(--skip);
+  font-size: 9px;
+  flex: 0 0 auto;
 }
 
 /* --------------------------------------------------------------------- */
@@ -347,6 +580,10 @@ textarea:focus {
   padding: 10px 12px;
   font-family: var(--mono);
   font-size: 12px;
+  /* Scrolls itself: its parent pane is overflow-hidden to keep xterm's fit
+     addon from fighting a scrollbar. */
+  height: 100%;
+  overflow: auto;
 }
 
 .failure-detail h3 {
@@ -376,6 +613,66 @@ textarea:focus {
 /* --------------------------------------------------------------------- */
 /* Console                                                                */
 /* --------------------------------------------------------------------- */
+
+.console-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 8px 0;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  overflow-x: auto;
+}
+
+.console-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  color: var(--text-dim);
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+.console-tabs button.active {
+  color: var(--text);
+  background: var(--bg-inset);
+  border-color: var(--border);
+}
+
+.tab-status {
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+
+.tab-status.ok { color: var(--pass); }
+.tab-status.fail { color: var(--fail); }
+.tab-status.stopped { color: var(--text-faint); }
+
+.console-host {
+  position: relative;
+  height: 100%;
+}
+
+.console-search {
+  position: absolute;
+  top: 6px;
+  right: 16px;
+  z-index: 30;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.console-search input {
+  width: 180px;
+}
 
 .console {
   height: 100%;
@@ -422,6 +719,29 @@ textarea:focus {
   overflow: auto;
 }
 
+/* Side-by-side merge view: the editors auto-size and .diff-host scrolls —
+   the merge view aligns panes and positions its revert buttons in document
+   coordinates, which internal scrolling would break. */
+
+/* The per-chunk revert buttons in the spacer between the two panes. */
+.diff-host .cm-merge-revert {
+  width: 28px;
+}
+
+.diff-host .cm-merge-revert button {
+  color: var(--accent);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.diff-host .cm-merge-revert button:hover {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
 .cm-editor {
   height: 100%;
   font-family: var(--mono);
@@ -430,6 +750,16 @@ textarea:focus {
 
 .cm-editor .cm-scroller {
   font-family: var(--mono);
+}
+
+/* The bracket pair under the cursor (bracketMatching in language.ts). */
+.cm-editor .cm-matchingBracket {
+  background: rgba(90, 120, 220, 0.3);
+  outline: 1px solid var(--accent-dim);
+}
+
+.cm-editor .cm-nonmatchingBracket {
+  background: rgba(224, 85, 97, 0.3);
 }
 
 /* Selected-for-revert lines, driven by a CodeMirror decoration. */

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { OutputConsole, type ConsoleHandle } from "../components/OutputConsole";
+import { Sidebar } from "../components/Sidebar";
 import * as api from "../ipc/api";
 import type { Branch, Commit, FileDiff, NetworkKind, WorkingStatus } from "../ipc/types";
 
@@ -98,7 +99,7 @@ export function HistoryView() {
 
   return (
     <>
-      <div className="sidebar">
+      <Sidebar>
         <div className="group-label">Branches</div>
         {branches
           .filter((branch) => !branch.isRemote)
@@ -149,7 +150,7 @@ export function HistoryView() {
         <button className="row" disabled={busy} onClick={() => act(api.gitStashPop)}>
           Pop most recent stash
         </button>
-      </div>
+      </Sidebar>
 
       <div className="main">
         <div className="toolbar">

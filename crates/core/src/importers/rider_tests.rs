@@ -60,6 +60,24 @@ const DOCKER: &str = r#"<component name="ProjectRunConfigurationManager">
   </configuration>
 </component>"#;
 
+/// Rider also writes launch-settings profiles with the bare type name.
+const LAUNCH_SETTINGS_BARE: &str = r#"<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Web: https" type="LaunchSettings" factoryName=".NET Launch Settings Profile">
+    <option name="LAUNCH_PROFILE_PROJECT_FILE_PATH" value="$PROJECT_DIR$/src/Web/Web.csproj" />
+    <option name="LAUNCH_PROFILE_TFM" value="net9.0" />
+    <option name="LAUNCH_PROFILE_NAME" value="https" />
+    <method v="2" />
+  </configuration>
+</component>"#;
+
+const COMPOUND: &str = r#"<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Web + API" type="CompoundRunConfigurationType">
+    <toRun name="Web: https" type="LaunchSettings" />
+    <toRun name="Api: https" type="LaunchSettings" />
+    <method v="2" />
+  </configuration>
+</component>"#;
+
 fn root() -> PathBuf {
     PathBuf::from("/repo")
 }
@@ -203,6 +221,148 @@ fn an_npm_test_script_becomes_a_test_configuration() {
     let config = convert(&parsed[0], &root()).unwrap();
 
     assert_eq!(config.kind, RunKind::Test);
+}
+
+#[test]
+fn converts_the_bare_launch_settings_type_name() {
+    let parsed = parse(LAUNCH_SETTINGS_BARE);
+    let config = convert(&parsed[0], &root()).unwrap();
+
+    assert_eq!(config.launch_profile.as_deref(), Some("https"));
+    assert_eq!(config.project, Some(PathBuf::from("src/Web/Web.csproj")));
+}
+
+#[test]
+fn converts_a_compound_configuration_with_its_member_names() {
+    let parsed = parse(COMPOUND);
+    assert_eq!(parsed[0].to_run, vec!["Web: https", "Api: https"]);
+
+    let config = convert(&parsed[0], &root()).unwrap();
+    assert_eq!(config.ecosystem, "compound");
+    assert_eq!(config.kind, RunKind::App);
+    assert_eq!(config.compound, vec!["Web: https", "Api: https"]);
+}
+
+#[test]
+fn resolves_compound_members_against_imported_and_detected_configs() {
+    use crate::model::RunConfig;
+
+    let mut imported = vec![
+        {
+            // "Web: https" was imported alongside the compound.
+            let mut c = RunConfig::new(
+                "rider:web---https",
+                "Web: https",
+                RunKind::App,
+                "dotnet",
+                ConfigSource::RiderImport,
+            );
+            c.launch_profile = Some("https".into());
+            c
+        },
+        {
+            let mut c = RunConfig::new(
+                "rider:web---api",
+                "Web + API",
+                RunKind::App,
+                "compound",
+                ConfigSource::RiderImport,
+            );
+            c.compound = vec!["Web: https".into(), "Api: https".into(), "Gone: x".into()];
+            c
+        },
+    ];
+
+    // "Api: https" only exists as a detected launch-profile configuration,
+    // which detection names "Api (https)".
+    let detected = vec![{
+        let mut c = RunConfig::new(
+            "src-Api-Api.csproj:run:https",
+            "Api (https)",
+            RunKind::App,
+            "dotnet",
+            ConfigSource::Detected,
+        );
+        c.project = Some(PathBuf::from("src/Api/Api.csproj"));
+        c.launch_profile = Some("https".into());
+        c
+    }];
+
+    resolve_compounds(&mut imported, &detected);
+
+    let compound = &imported[1];
+    assert_eq!(
+        compound.compound,
+        vec!["rider:web---https", "src-Api-Api.csproj:run:https"]
+    );
+    assert!(
+        compound.warnings.iter().any(|w| w.contains("Gone: x")),
+        "the unresolvable member must be surfaced: {:?}",
+        compound.warnings
+    );
+}
+
+#[test]
+fn resolves_a_bare_project_name_to_its_debug_run_configuration() {
+    use crate::model::RunConfig;
+
+    let mut imported = vec![{
+        let mut c = RunConfig::new(
+            "rider:mobile---api",
+            "Mobile + API",
+            RunKind::App,
+            "compound",
+            ConfigSource::RiderImport,
+        );
+        // Rider references a plain project run by project name alone.
+        c.compound = vec!["App.Mobile".into()];
+        c
+    }];
+
+    let config_for = |id: &str, build: &str| {
+        let mut c = RunConfig::new(
+            id,
+            format!("App.Mobile ({build})"),
+            RunKind::App,
+            "dotnet",
+            ConfigSource::Detected,
+        );
+        c.project = Some(PathBuf::from("App.Mobile/App.Mobile.csproj"));
+        c.build_configuration = Some(build.into());
+        c
+    };
+    // Release sorts before Debug here, so this also pins the preference.
+    let detected = vec![
+        config_for("app:run:release", "Release"),
+        config_for("app:run:debug", "Debug"),
+    ];
+
+    resolve_compounds(&mut imported, &detected);
+
+    assert_eq!(imported[0].compound, vec!["app:run:debug"]);
+    assert!(imported[0].warnings.is_empty(), "got {:?}", imported[0].warnings);
+}
+
+#[test]
+fn a_compound_whose_members_all_resolve_nowhere_warns_it_launches_nothing() {
+    use crate::model::RunConfig;
+
+    let mut imported = vec![{
+        let mut c = RunConfig::new(
+            "rider:solo",
+            "Solo",
+            RunKind::App,
+            "compound",
+            ConfigSource::RiderImport,
+        );
+        c.compound = vec!["Missing: x".into()];
+        c
+    }];
+
+    resolve_compounds(&mut imported, &[]);
+
+    assert!(imported[0].compound.is_empty());
+    assert!(imported[0].warnings.iter().any(|w| w.contains("launches nothing")));
 }
 
 #[test]

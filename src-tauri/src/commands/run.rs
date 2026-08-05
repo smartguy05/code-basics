@@ -32,6 +32,9 @@ pub async fn start_run(
     state: State<'_, AppState>,
     config_id: String,
     channel: Channel<ProcessEvent>,
+    // Environment variables layered over the configuration's own for this
+    // run only — the UI's environment picker (e.g. ASPNETCORE_ENVIRONMENT).
+    env: Option<std::collections::BTreeMap<String, String>>,
 ) -> Result<(), String> {
     let workspace = state.workspace()?;
     let config = workspace
@@ -40,7 +43,16 @@ pub async fn start_run(
         .find(|c| c.id == config_id)
         .ok_or_else(|| format!("no configuration named {config_id}"))?;
 
-    let invocation = invocation::build(&workspace, config, None)?;
+    if !config.compound.is_empty() {
+        return start_compound(&state, &workspace, config, &env, channel).await;
+    }
+
+    // Merged into the config *before* building, so invocation-time checks
+    // (like the missing-launch-profile warning) see the effective environment.
+    let mut config = config.clone();
+    config.env.extend(env.into_iter().flatten());
+
+    let invocation = invocation::build(&workspace, &config, None)?;
 
     // Surface anything questionable about the command before it runs.
     for warning in &invocation.warnings {
@@ -61,8 +73,137 @@ pub async fn start_run(
         .map_err(|e| format!("{e:#}"))
 }
 
+/// Launch every member of a compound configuration and wait for all of them.
+///
+/// Members run under their own config ids, so `cancel_run` on either the
+/// compound or an individual member works. Output from all members is
+/// interleaved onto the one channel, the way a shared console would show it.
+async fn start_compound(
+    state: &State<'_, AppState>,
+    workspace: &cb_core::workspace::Workspace,
+    config: &cb_core::model::RunConfig,
+    env: &Option<std::collections::BTreeMap<String, String>>,
+    channel: Channel<ProcessEvent>,
+) -> Result<(), String> {
+    // Resolve and build everything before starting anything, so a broken
+    // member stops the whole launch rather than leaving half of it running.
+    let mut members = Vec::new();
+    for member_id in &config.compound {
+        let member = workspace
+            .configs
+            .iter()
+            .find(|c| c.id == *member_id)
+            .ok_or_else(|| format!("compound member `{member_id}` no longer exists"))?;
+        if !member.compound.is_empty() {
+            return Err(format!(
+                "`{}` is itself a compound configuration; nesting is not supported",
+                member.name
+            ));
+        }
+        let mut member = member.clone();
+        member.env.extend(env.iter().flatten().map(|(k, v)| (k.clone(), v.clone())));
+
+        let invocation = invocation::build(workspace, &member, None)?;
+        members.push((member, invocation));
+    }
+
+    let mut handles = Vec::new();
+    for (member, invocation) in members {
+        let _ = channel.send(ProcessEvent::Output {
+            stream: cb_core::process::Stream::Stderr,
+            text: format!("[code-basics] starting {}\n", member.name),
+        });
+        for warning in &invocation.warnings {
+            let _ = channel.send(ProcessEvent::Output {
+                stream: cb_core::process::Stream::Stderr,
+                text: format!("[code-basics] {}: {warning}\n", member.name),
+            });
+        }
+
+        let (tx, rx) = mpsc::channel(512);
+        forward(rx, channel.clone());
+
+        let supervisor = state.supervisor.clone();
+        handles.push(tokio::spawn(async move {
+            supervisor
+                .run(&member.id, &invocation, tx)
+                .await
+                .map(|_| ())
+                .map_err(|e| format!("{}: {e:#}", member.name))
+        }));
+    }
+
+    let mut errors = Vec::new();
+    for handle in handles {
+        match handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => errors.push(e),
+            Err(e) => errors.push(format!("{e}")),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+/// Run a build-system action (build / rebuild / clean) for a configuration's
+/// project, streaming compiler output to the console.
+///
+/// Registered with the supervisor under `<config_id>:build`, so a hung build
+/// can be cancelled without touching a running app under the same config.
+#[tauri::command]
+pub async fn build_project(
+    state: State<'_, AppState>,
+    config_id: String,
+    action: cb_core::adapters::dotnet::BuildAction,
+    channel: Channel<ProcessEvent>,
+) -> Result<(), String> {
+    let workspace = state.workspace()?;
+    let config = workspace
+        .configs
+        .iter()
+        .find(|c| c.id == config_id)
+        .ok_or_else(|| format!("no configuration named {config_id}"))?;
+
+    if config.ecosystem != "dotnet" {
+        return Err(format!(
+            "build actions are only available for .NET configurations; {} is `{}`",
+            config.name, config.ecosystem
+        ));
+    }
+
+    let invocation =
+        cb_core::adapters::dotnet::build_action_invocation(config, action, &workspace.root);
+
+    let (tx, rx) = mpsc::channel(512);
+    forward(rx, channel);
+
+    state
+        .supervisor
+        .run(&format!("{config_id}:build"), &invocation, tx)
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("{e:#}"))
+}
+
 #[tauri::command]
 pub async fn cancel_run(state: State<'_, AppState>, config_id: String) -> Result<bool, String> {
+    // Stopping a compound means stopping its members: the members are what is
+    // actually registered with the supervisor.
+    if let Ok(workspace) = state.workspace() {
+        if let Some(config) = workspace.configs.iter().find(|c| c.id == config_id) {
+            if !config.compound.is_empty() {
+                let mut any = false;
+                for member in &config.compound {
+                    any |= state.supervisor.cancel(member).await;
+                }
+                return Ok(any);
+            }
+        }
+    }
     Ok(state.supervisor.cancel(&config_id).await)
 }
 
