@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="4b5a1020-561f-47b3-bce0-b65cc984a1d5" name="mtp 2026-08-06 13:59:04" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-08-06T13:59:04.0279775Z" queuing="2026-08-06T13:59:04.0279775Z" start="2026-08-06T13:59:04.0279775Z" finish="2026-08-06T13:59:04.2035663Z" />
+  <TestSettings name="default" id="6dbfc55d-bfd2-4330-9f1f-b5bbd6087a58">
+    <Deployment runDeploymentRoot="builder_BUILDHOST_2026-08-06_13_59_04.2005977" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="60f5e718-3533-47f8-bb0f-59a41acbc56c" testId="147faad6-ad8b-8a5d-bbbd-4a5d2e33f0c7" testName="TestMethod1" computerName="BUILDHOST" duration="00:00:00.0087200" startTime="2026-08-06T13:59:04.1477186+00:00" endTime="2026-08-06T13:59:04.1787821+00:00" testType="13CDC9D9-DDB5-4fa4-A97D-D965CCFC6D4B" outcome="Passed" testListId="8C84FA94-04C1-424b-9868-57A2D4851A1D" relativeResultsDirectory="60f5e718-3533-47f8-bb0f-59a41acbc56c" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="TestMethod1" storage="c:\build\bin\debug\net10.0\t.dll" id="147faad6-ad8b-8a5d-bbbd-4a5d2e33f0c7">
+      <Execution id="60f5e718-3533-47f8-bb0f-59a41acbc56c" />
+      <TestMethod codeBase="C:\build\bin\Debug\net10.0\T.dll" adapterTypeName="executor://MSTestExtension/4.0.2" className="T.Test1" name="TestMethod1" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="147faad6-ad8b-8a5d-bbbd-4a5d2e33f0c7" executionId="60f5e718-3533-47f8-bb0f-59a41acbc56c" testListId="8C84FA94-04C1-424b-9868-57A2D4851A1D" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8C84FA94-04C1-424b-9868-57A2D4851A1D" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Completed">
+    <Counters total="1" executed="1" passed="1" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+  </ResultSummary>
+</TestRun>

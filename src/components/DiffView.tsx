@@ -47,6 +47,12 @@ export interface DiffViewProps {
   onSave: (content: string) => void;
   /** Called with the diff line indices the user selected. */
   onSelectionChange: (indices: number[]) => void;
+  /**
+   * Diff line indices to select on open, so choosing an intent card lands on
+   * its lines already highlighted. The user can still change the selection
+   * afterwards; this only seeds it.
+   */
+  highlight?: number[];
 }
 
 /**
@@ -67,6 +73,7 @@ export function DiffView({
   editable,
   onSave,
   onSelectionChange,
+  highlight,
 }: DiffViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -290,8 +297,17 @@ export function DiffView({
     return () => host.removeEventListener("click", onClick);
   }, [lineToDiffIndex, adjacentDeletions]);
 
-  // A new file or a new diff invalidates any previous selection.
-  useEffect(() => setSelected(new Set()), [path, diff]);
+  // A new file or a new diff invalidates any previous selection. When the
+  // caller supplied lines to start from — opening an intent card — those seed
+  // it instead of starting empty.
+  //
+  // Keyed on the joined indices rather than the array, so a caller that
+  // rebuilds an equal array on every render does not reset the user's own
+  // selection underneath them.
+  const highlightKey = highlight?.join(",") ?? "";
+  useEffect(() => {
+    setSelected(new Set(highlightKey === "" ? [] : highlightKey.split(",").map(Number)));
+  }, [path, diff, highlightKey]);
 
   if (editorError) {
     return (

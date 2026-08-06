@@ -4,14 +4,22 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   Branch,
   BuildAction,
+  Changelists,
   Commit,
   ComparisonMode,
   DirEntry,
   FileContents,
   FileDiff,
+  InstallPlan,
+  InstallScope,
+  IntentGroup,
+  LaunchProfile,
+  MergeReport,
   NetworkKind,
   ProcessEvent,
   ProjectSecrets,
+  ProviderId,
+  ProviderStatus,
   RiderImportPreview,
   RunConfig,
   TestRunOutcome,
@@ -37,9 +45,12 @@ export const saveConfig = (config: RunConfig) =>
 export const deleteConfig = (id: string) =>
   invoke<Workspace>("delete_config", { id });
 
-/** Launch profile names a .NET project defines (`Project` profiles only). */
+/**
+ * Launch profiles a .NET project defines, including the hosting profiles
+ * `dotnet run` cannot apply — those come back with `launchable: false`.
+ */
 export const launchProfiles = (project: string) =>
-  invoke<string[]>("launch_profiles", { project });
+  invoke<LaunchProfile[]>("launch_profiles", { project });
 
 export const setFavorite = (id: string, favorite: boolean) =>
   invoke<Workspace>("set_favorite", { id, favorite });
@@ -179,6 +190,42 @@ export const gitCheckoutRemoteBranch = (name: string) =>
 export const gitDeleteBranch = (name: string) =>
   invoke<void>("git_delete_branch", { name });
 
+/**
+ * Merge a branch into the current one.
+ *
+ * Conflicts do not throw: the merge is left in progress and reported with
+ * `outcome: "conflicted"`, to be resolved in the Changes tab or backed out
+ * with `gitAbortMerge`.
+ */
+export const gitMergeBranch = (name: string) =>
+  invoke<MergeReport>("git_merge_branch", { name });
+
+/** Undo an in-progress merge, returning to the pre-merge commit. */
+export const gitAbortMerge = () => invoke<void>("git_abort_merge");
+
+// ---------------------------------------------------------------------------
+// Change groups
+//
+// Local bookkeeping, not git state. Every mutation returns the full set so the
+// Changes tab re-renders from one round trip.
+// ---------------------------------------------------------------------------
+
+export const gitChangelists = () => invoke<Changelists>("git_changelists");
+
+export const gitCreateChangelist = (name: string) =>
+  invoke<Changelists>("git_create_changelist", { name });
+
+/** Delete a group; its files become ungrouped rather than disappearing. */
+export const gitDeleteChangelist = (name: string) =>
+  invoke<Changelists>("git_delete_changelist", { name });
+
+export const gitRenameChangelist = (from: string, to: string) =>
+  invoke<Changelists>("git_rename_changelist", { from, to });
+
+/** Move files into a group, or out of every group when `group` is null. */
+export const gitAssignToChangelist = (paths: string[], group: string | null) =>
+  invoke<Changelists>("git_assign_to_changelist", { paths, group });
+
 export const gitHistory = (limit: number) =>
   invoke<Commit[]>("git_history", { limit });
 
@@ -198,6 +245,46 @@ export function gitNetwork(
   channel.onmessage = onEvent;
   return invoke<number | null>("git_network", { kind, channel });
 }
+
+// ---------------------------------------------------------------------------
+// Agent intent
+// ---------------------------------------------------------------------------
+
+/** The intent cards for the whole working tree, recomputed on every call. */
+export const intentGroups = (mode: ComparisonMode) =>
+  invoke<IntentGroup[]>("intent_groups", { mode });
+
+/**
+ * Stage everything in one group, returning how many files changed.
+ *
+ * The group is named rather than its lines sent back: line indices are only
+ * valid for one comparison mode, and staging uses a different one from
+ * whatever the user is looking at.
+ */
+export const stageIntentGroup = (group: string) =>
+  invoke<number>("stage_intent_group", { group });
+
+/** Revert everything in one group, in the mode currently displayed. */
+export const revertIntentGroup = (group: string, mode: ComparisonMode) =>
+  invoke<number>("revert_intent_group", { group, mode });
+
+/** What each agent can currently do for this workspace. */
+export const intentCaptureStatus = () =>
+  invoke<ProviderStatus[]>("intent_capture_status");
+
+/** Exactly what enabling capture would write. Touches nothing. */
+export const intentInstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("intent_install_plan", { provider, scope });
+
+/** Perform an install the user has confirmed. */
+export const enableIntentCapture = (provider: ProviderId, scope: InstallScope) =>
+  invoke<ProviderStatus[]>("enable_intent_capture", { provider, scope });
+
+/** Read what the agents already recorded, with no setup. Returns the total. */
+export const importIntentHistory = () =>
+  invoke<number>("import_intent_history");
+
+export const clearIntentHistory = () => invoke<void>("clear_intent_history");
 
 /** Tauri returns command errors as plain strings. */
 export function errorMessage(error: unknown): string {

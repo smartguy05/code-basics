@@ -34,6 +34,15 @@ env = { PYTHONUNBUFFERED = "1" }
 
 With this in place, matching projects appear in the Tests view (one test configuration) and the Run view (one configuration per `[run.<name>]`) alongside the built-in .NET and JS/TS ones.
 
+## How matching works during a scan
+
+A directory is claimed by a manifest when it contains any file named in `detect`. Two rules keep that predictable:
+
+- **Built-in adapters win.** A directory that .NET or Node already claimed keeps its built-in project, so a `pyproject.toml` sitting beside a `package.json` does not turn a Node project into a Python one.
+- **The first matching manifest wins.** Manifests are considered in `id` order, so a directory matching two of them becomes one project rather than two sharing a directory.
+
+The same skip rules as the rest of the scan apply: `node_modules`, `bin`, `obj`, `.git` and the other [skipped directories](../architecture/core-crate.md), a depth limit of 10, and nested checkouts left to their own workspace.
+
 ## Template substitutions
 
 Available in `args` (and `report_path`):

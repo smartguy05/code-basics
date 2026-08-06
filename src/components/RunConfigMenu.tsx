@@ -15,6 +15,7 @@ export function RunConfigMenu({
   favorites,
   dotClass,
   canMove,
+  groupLabel,
   onSelect,
   onToggleFavorite,
   onMove,
@@ -28,6 +29,14 @@ export function RunConfigMenu({
   dotClass: (config: RunConfig) => string;
   /** Whether the config has a neighbour `delta` away within its group. */
   canMove: (config: RunConfig, delta: -1 | 1) => boolean;
+  /**
+   * Which solution a config's project belongs to, shown beside its name.
+   *
+   * A label rather than a grouped tree on purpose: the list order is the
+   * user's own (favourites first, then their saved ordering), and grouping
+   * would have to fight it.
+   */
+  groupLabel?: (config: RunConfig) => string | null;
   onSelect: (config: RunConfig) => void;
   onToggleFavorite: (config: RunConfig) => void;
   onMove: (config: RunConfig, delta: -1 | 1) => void;
@@ -80,6 +89,11 @@ export function RunConfigMenu({
                 <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
                   {config.name}
                 </span>
+                {groupLabel?.(config) && (
+                  <span className="badge" title="Solution this project belongs to">
+                    {groupLabel(config)}
+                  </span>
+                )}
                 {config.source !== "detected" && (
                   <span className="badge">
                     {config.source === "riderImport" ? "rider" : "custom"}

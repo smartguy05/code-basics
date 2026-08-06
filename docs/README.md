@@ -20,6 +20,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 - [Development guide](guides/development.md) — build/test commands, conventions, and adding a command end-to-end
 - [Adding an ecosystem](guides/adding-an-ecosystem.md) — declarative adapter manifests (pytest, cargo-nextest, ...)
 - [Rider import](guides/rider-import.md) — how JetBrains Rider run configurations are converted
+- [Agent intent capture](guides/agent-intent-capture.md) — grouping a diff into the decisions behind it, with Claude Code or Codex
 
 ## Reference
 

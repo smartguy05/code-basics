@@ -16,9 +16,13 @@
 //! `git apply` is likewise delegated, because it is the only correct
 //! implementation of partial patch application.
 
+pub mod attribution;
+pub mod grouping;
 pub mod patch;
 pub mod repo;
 
+pub use attribution::{AttributedSpan, Confidence, FileAttribution, HunkAttribution};
+pub use grouping::{GroupFile, GroupKind, IntentGroup};
 pub use patch::{Direction, DiffLine, FileDiff, Hunk, LineOrigin};
 pub use repo::{
     Branch, ChangeKind, Commit, ComparisonMode, FileChange, Repo, StageTarget, WorkingStatus,

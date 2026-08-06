@@ -10,6 +10,73 @@ use specta::Type;
 
 use super::patch::{self, DiffLine, Direction, FileDiff, Hunk, LineOrigin};
 
+/// Strip the read-only attribute from every directory in a working tree,
+/// returning how many were changed.
+///
+/// Windows will not remove a read-only directory, which breaks any checkout
+/// that has to delete one. The attribute carries no meaning for directories —
+/// unlike on a file, it does not protect the contents — so clearing it is safe.
+/// Files are deliberately left alone: there the attribute *is* meaningful.
+///
+/// A no-op off Windows, where the attribute does not exist.
+#[cfg(windows)]
+fn clear_readonly_directories(root: &Path) -> usize {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
+
+    let mut cleared = 0;
+    for entry in walkdir::WalkDir::new(root).into_iter().flatten() {
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.file_attributes() & FILE_ATTRIBUTE_READONLY == 0 {
+            continue;
+        }
+
+        let mut permissions = metadata.permissions();
+        // Windows-only, where this clears FILE_ATTRIBUTE_READONLY and nothing
+        // else. Clippy's warning is about Unix, where the same call would
+        // widen the mode to 0o777 — hence the `cfg(windows)` on this function.
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        if std::fs::set_permissions(entry.path(), permissions).is_ok() {
+            cleared += 1;
+        }
+    }
+    cleared
+}
+
+#[cfg(not(windows))]
+fn clear_readonly_directories(_root: &Path) -> usize {
+    0
+}
+
+/// Explain a checkout blocked by a file or directory another process holds.
+///
+/// Kept separate from the checkout itself so the wording is testable without
+/// having to manufacture an OS-level lock.
+fn locked_checkout_message(name: &str, detail: &str) -> String {
+    let mut message = format!(
+        "Could not switch to {name}: another program is holding a file or directory \
+         open, so Git could not update it."
+    );
+    if !detail.is_empty() {
+        message.push_str("\n\n");
+        message.push_str(detail);
+    }
+    message.push_str(
+        "\n\nRead-only directory attributes have already been cleared and the switch retried, \
+         so something is genuinely holding this path open. Windows will not let a directory be \
+         removed while any process has it open: the usual causes are a terminal whose current \
+         directory is inside the folder, the folder being open in Explorer, or a tool watching \
+         the repository. Close whatever is holding it and switch again.",
+    );
+    message
+}
+
 /// Which two states a diff compares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +157,43 @@ pub struct Commit {
     pub author_email: String,
     /// Seconds since the Unix epoch.
     pub time: i64,
+}
+
+/// How a merge ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeOutcome {
+    /// The branch was already contained in HEAD; nothing to do.
+    UpToDate,
+    /// HEAD simply moved forward — no merge commit was needed.
+    FastForward,
+    /// A merge commit was created.
+    Merged,
+    /// Conflicts need resolving. The merge is still in progress.
+    Conflicted,
+}
+
+/// The result of merging a branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeReport {
+    pub outcome: MergeOutcome,
+    /// The resulting commit, for a fast-forward or a merge commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    /// Paths left conflicted, when `outcome` is `conflicted`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<String>,
+}
+
+impl MergeReport {
+    fn up_to_date() -> Self {
+        Self {
+            outcome: MergeOutcome::UpToDate,
+            commit: None,
+            conflicts: Vec::new(),
+        }
+    }
 }
 
 /// Where a staging operation applies.
@@ -553,6 +657,168 @@ impl Repo {
         Ok(oid.to_string())
     }
 
+    /// Merge `name` into the current branch, the way `git merge` does.
+    ///
+    /// Refuses to start with modified tracked files in the way: a merge that
+    /// hits a conflict leaves the working tree half-written, and untangling
+    /// that from pre-existing edits is exactly the mess this app should not
+    /// create. Untracked files are fine — `git merge` allows them too.
+    ///
+    /// A conflicted merge is **left in place**, `MERGE_HEAD` and all, so the
+    /// conflicts can be resolved in the Changes tab and committed there. That
+    /// mirrors the command line rather than silently aborting the merge.
+    pub fn merge_branch(&self, name: &str) -> Result<MergeReport> {
+        let status = self.status()?;
+
+        if status.in_progress_operation.is_some() {
+            bail!(
+                "a {} is already in progress; finish or abort it before merging",
+                status.in_progress_operation.unwrap_or_default()
+            );
+        }
+
+        let dirty: Vec<&FileChange> = status
+            .files
+            .iter()
+            .filter(|f| {
+                f.staged.is_some() || f.unstaged.is_some_and(|k| k != ChangeKind::Untracked)
+            })
+            .collect();
+        if !dirty.is_empty() {
+            bail!(
+                "commit or stash your changes before merging — {} tracked file(s) are modified, \
+                 starting with {}",
+                dirty.len(),
+                dirty[0].path
+            );
+        }
+
+        let head_name = status
+            .branch
+            .clone()
+            .unwrap_or_else(|| "HEAD".to_string());
+
+        let (object, reference) = self
+            .inner
+            .revparse_ext(name)
+            .with_context(|| format!("unknown branch {name}"))?;
+        let source = match &reference {
+            Some(r) => self.inner.reference_to_annotated_commit(r),
+            None => self.inner.find_annotated_commit(object.id()),
+        }
+        .with_context(|| format!("failed to resolve {name}"))?;
+
+        if self.inner.head()?.peel_to_commit()?.id() == source.id() {
+            return Ok(MergeReport::up_to_date());
+        }
+
+        let (analysis, _) = self
+            .inner
+            .merge_analysis(&[&source])
+            .context("failed to analyse the merge")?;
+
+        if analysis.is_up_to_date() {
+            return Ok(MergeReport::up_to_date());
+        }
+
+        if analysis.is_fast_forward() {
+            let commit = self
+                .inner
+                .find_commit(source.id())
+                .context("failed to read the branch tip")?;
+
+            self.checkout_tree_tolerating_locks(commit.as_object(), name)?;
+
+            let mut head = self.inner.head().context("failed to resolve HEAD")?;
+            head.set_target(source.id(), &format!("merge {name}: fast-forward"))
+                .with_context(|| format!("failed to fast-forward to {name}"))?;
+
+            return Ok(MergeReport {
+                outcome: MergeOutcome::FastForward,
+                commit: Some(source.id().to_string()),
+                conflicts: Vec::new(),
+            });
+        }
+
+        if !analysis.is_normal() {
+            bail!("{name} cannot be merged into {head_name} automatically");
+        }
+
+        self.inner
+            .merge(&[&source], None, None)
+            .with_context(|| format!("failed to merge {name}"))?;
+
+        let mut index = self.inner.index().context("failed to read index")?;
+
+        if index.has_conflicts() {
+            let conflicts = index
+                .conflicts()
+                .context("failed to read merge conflicts")?
+                .flatten()
+                .filter_map(|c| {
+                    c.our
+                        .or(c.their)
+                        .or(c.ancestor)
+                        .map(|entry| String::from_utf8_lossy(&entry.path).into_owned())
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+
+            // Deliberately left mid-merge for the user to resolve.
+            return Ok(MergeReport {
+                outcome: MergeOutcome::Conflicted,
+                commit: None,
+                conflicts,
+            });
+        }
+
+        let signature = self
+            .inner
+            .signature()
+            .context("git has no user.name/user.email configured")?;
+
+        let tree_id = index.write_tree().context("failed to write the merged tree")?;
+        let tree = self.inner.find_tree(tree_id).context("failed to read the merged tree")?;
+        let ours = self.inner.head()?.peel_to_commit().context("HEAD is not a commit")?;
+        let theirs = self
+            .inner
+            .find_commit(source.id())
+            .context("failed to read the branch tip")?;
+
+        let message = format!("Merge branch '{name}' into {head_name}");
+        let oid = self
+            .inner
+            .commit(Some("HEAD"), &signature, &signature, &message, &tree, &[&ours, &theirs])
+            .context("failed to create the merge commit")?;
+
+        self.inner.cleanup_state().context("failed to clear the merge state")?;
+
+        Ok(MergeReport {
+            outcome: MergeOutcome::Merged,
+            commit: Some(oid.to_string()),
+            conflicts: Vec::new(),
+        })
+    }
+
+    /// Abandon a conflicted merge and return to the pre-merge state.
+    pub fn abort_merge(&self) -> Result<()> {
+        let head = self
+            .inner
+            .head()
+            .context("failed to resolve HEAD")?
+            .peel_to_commit()
+            .context("HEAD is not a commit")?;
+
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        self.inner
+            .reset(head.as_object(), git2::ResetType::Hard, Some(&mut checkout))
+            .context("failed to undo the merge")?;
+
+        self.inner.cleanup_state().context("failed to clear the merge state")
+    }
+
     pub fn branches(&self) -> Result<Vec<Branch>> {
         let mut out = Vec::new();
 
@@ -597,9 +863,7 @@ impl Repo {
             .revparse_ext(name)
             .with_context(|| format!("unknown branch {name}"))?;
 
-        self.inner
-            .checkout_tree(&object, None)
-            .with_context(|| format!("failed to check out {name}"))?;
+        self.checkout_tree_tolerating_locks(&object, name)?;
 
         match reference {
             Some(r) => {
@@ -610,6 +874,50 @@ impl Repo {
             None => self.inner.set_head_detached(object.id()),
         }
         .with_context(|| format!("failed to switch to {name}"))
+    }
+
+    /// Check out a tree, retrying briefly when the filesystem reports a lock.
+    ///
+    /// Windows refuses to remove a directory while *any* process has it open,
+    /// and libgit2 surfaces that as a failed checkout — even when the
+    /// directory only needed tidying after a file was removed from it. Tool
+    /// directories are the usual victims, because the tools that own them watch
+    /// them: `.claude/` while a Claude Code session is running, `.idea/`,
+    /// `.vs/`, and so on.
+    ///
+    /// Many such locks last only a moment, so a couple of quick retries clear
+    /// them. What survives that is reported with the path and what to do about
+    /// it, rather than as raw libgit2 text.
+    fn checkout_tree_tolerating_locks(&self, object: &git2::Object<'_>, name: &str) -> Result<()> {
+        const PAUSE: std::time::Duration = std::time::Duration::from_millis(150);
+
+        match self.inner.checkout_tree(object, None) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.code() == git2::ErrorCode::Locked => {}
+            Err(e) => {
+                return Err(anyhow::Error::new(e))
+                    .with_context(|| format!("failed to check out {name}"))
+            }
+        }
+
+        // By far the most common cause on Windows is not a lock at all: a
+        // directory carrying the read-only attribute cannot be removed, and
+        // `RemoveDirectory` reports that as "Access is denied". The attribute
+        // is meaningless on directories — Explorer uses it to mark customised
+        // folders — but tooling sets it in bulk, so a whole repository can be
+        // affected and every branch switch that removes a directory fails.
+        if clear_readonly_directories(&self.workdir) > 0
+            && self.inner.checkout_tree(object, None).is_ok()
+        {
+            return Ok(());
+        }
+
+        // Otherwise something really is holding it; that is often momentary.
+        std::thread::sleep(PAUSE);
+        match self.inner.checkout_tree(object, None) {
+            Ok(()) => Ok(()),
+            Err(e) => bail!(locked_checkout_message(name, e.message())),
+        }
     }
 
     /// Create a branch pointing at `start_point` — a local or remote branch
@@ -914,5 +1222,85 @@ fn unstaged_kind(status: git2::Status) -> Option<ChangeKind> {
         Some(ChangeKind::TypeChange)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The raw libgit2 text a held directory produces on Windows.
+    const LIBGIT2_DETAIL: &str =
+        "failed rmdir - 'C:/repo/.claude/commands/' is locked: Access is denied.";
+
+    #[test]
+    fn a_locked_checkout_explains_itself() {
+        // The raw error names neither the cause nor a way out, which is the
+        // whole problem with reporting it verbatim.
+        let message = locked_checkout_message("users/anthony/docs", LIBGIT2_DETAIL);
+
+        assert!(message.contains("users/anthony/docs"), "must name the branch");
+        assert!(message.contains(".claude/commands"), "must keep the offending path");
+        assert!(
+            message.contains("already been cleared"),
+            "must say the read-only cause was ruled out, or the user re-investigates it"
+        );
+        assert!(message.contains("Close whatever"), "must say what to do");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn read_only_directories_are_cleared_but_read_only_files_are_not() {
+        use std::os::windows::fs::MetadataExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let nested = temp.path().join("outer").join("inner");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let file = nested.join("locked.txt");
+        std::fs::write(&file, "x").unwrap();
+
+        let read_only = |path: &Path| {
+            let mut permissions = std::fs::metadata(path).unwrap().permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(path, permissions).unwrap();
+        };
+        read_only(&nested);
+        read_only(&temp.path().join("outer"));
+        read_only(&file);
+
+        let cleared = clear_readonly_directories(temp.path());
+        assert!(cleared >= 2, "both read-only directories should be cleared, got {cleared}");
+
+        const READONLY: u32 = 0x1;
+        for dir in [temp.path().join("outer"), nested.clone()] {
+            let attributes = std::fs::metadata(&dir).unwrap().file_attributes();
+            assert_eq!(attributes & READONLY, 0, "{} should be writable", dir.display());
+        }
+
+        // A read-only *file* is a deliberate marker and must survive.
+        assert!(
+            std::fs::metadata(&file).unwrap().permissions().readonly(),
+            "file attributes must not be touched"
+        );
+
+        // tempfile cannot clean up what it cannot write to.
+        let mut permissions = std::fs::metadata(&file).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&file, permissions).unwrap();
+    }
+
+    #[test]
+    fn clearing_attributes_on_a_missing_directory_is_harmless() {
+        assert_eq!(clear_readonly_directories(Path::new("/nonexistent/repo")), 0);
+    }
+
+    #[test]
+    fn a_locked_checkout_reads_sensibly_without_any_detail() {
+        let message = locked_checkout_message("main", "");
+
+        assert!(message.starts_with("Could not switch to main:"));
+        assert!(!message.contains("\n\n\n"), "an absent detail must not leave a gap");
     }
 }

@@ -56,7 +56,7 @@ FileDiff (libgit2) ──▶ user selects line indices in the UI
 
 ## Deliberate choices worth knowing
 
-- **Filesystem-only project detection.** No MSBuild evaluation, no `npm ls`, no shelling out during a scan. Opening a workspace must feel instant.
+- **Filesystem-only project detection, by default.** No MSBuild evaluation, no `npm ls`, no shelling out during a scan. Opening a workspace must feel instant. The single exception is opt-in per workspace: `msbuildEvaluation` in `config.json` trades scan speed for MSBuild's real answers (see [`adapters::msbuild`](core-crate.md)), and falls back to the filesystem scan whenever it cannot run.
 - **Two git implementations on purpose.** Reads and local mutations use libgit2 (fast, structured, in-process). Network operations (push/pull/fetch) shell out to system `git` so the user's existing credential setup just works. `git apply` is likewise delegated as the only correct implementation of partial patch application.
 - **Process-tree kill.** Cancelling kills the spawned process's whole group/tree; killing only the wrapper leaves `dotnet run`'s built assembly or a bundler alive and holding its port.
 - **The VSTest / Microsoft.Testing.Platform split.** The two `dotnet test` paths take different, *mutually ignored* flags; getting it wrong produces a clean-exit run with no report. Telling them apart is the single most important job of the .NET adapter — see [core crate](core-crate.md#adapters).

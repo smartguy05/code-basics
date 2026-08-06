@@ -52,6 +52,8 @@ export function BranchMenu() {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Outcome of the last merge — success is otherwise invisible here. */
+  const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   // The Local section starts open, Remote folded; both are toggleable.
   const [expanded, setExpanded] = useState<Set<string>>(
@@ -97,6 +99,7 @@ export function BranchMenu() {
   async function act(label: string, action: () => Promise<unknown>) {
     setBusy(label);
     setError(null);
+    setNotice(null);
     try {
       await action();
       await refresh();
@@ -114,6 +117,41 @@ export function BranchMenu() {
       });
       if (code !== 0 && code !== null) {
         throw new Error(`git ${label.toLowerCase()} exited with code ${code}`);
+      }
+    });
+  }
+
+  /**
+   * Merge a branch into the current one.
+   *
+   * Every outcome is reported: a merge that changed nothing, fast-forwarded,
+   * or stopped on conflicts all look identical in the branch list otherwise.
+   * A conflicted merge is left in progress for the Changes tab to resolve.
+   */
+  function merge(branch: Branch) {
+    const into = status?.branch ?? "HEAD";
+    void act("Merging", async () => {
+      const report = await api.gitMergeBranch(branch.name);
+      switch (report.outcome) {
+        case "upToDate":
+          setNotice(`${into} already contains ${branch.name}.`);
+          break;
+        case "fastForward":
+          setNotice(`Fast-forwarded ${into} to ${branch.name}.`);
+          break;
+        case "merged":
+          setNotice(`Merged ${branch.name} into ${into}.`);
+          break;
+        case "conflicted": {
+          const count = report.conflicts?.length ?? 0;
+          // `refresh` picks the in-progress merge up from git status, which
+          // is what drives the Abort button — no separate flag to keep true.
+          setNotice(
+            `Merging ${branch.name} left ${count} conflicted file${count === 1 ? "" : "s"}. ` +
+              `Resolve them in the Changes tab and commit, or abort the merge.`,
+          );
+          break;
+        }
       }
     });
   }
@@ -305,6 +343,31 @@ export function BranchMenu() {
               </>
             )}
 
+            {/* A merge that stopped on conflicts leaves the repository in a
+                state the user has to finish or undo; nothing else in the
+                titlebar would say so. */}
+            {status?.inProgressOperation === "merge" && (
+              <div
+                className="group-label dropdown-section"
+                style={{ display: "flex", alignItems: "center", gap: 6 }}
+              >
+                <span style={{ flex: 1 }}>Merge in progress</span>
+                <button
+                  disabled={busy !== null}
+                  title="Discard the merge and return to the previous commit"
+                  onClick={() => void act("Aborting", api.gitAbortMerge)}
+                >
+                  Abort
+                </button>
+              </div>
+            )}
+
+            {notice && (
+              <div style={{ margin: "6px 0 0", fontSize: 12, opacity: 0.85 }}>
+                {notice}
+              </div>
+            )}
+
             {error && (
               <div className="error" style={{ margin: "6px 0 0", fontSize: 12 }}>
                 {error}
@@ -333,6 +396,23 @@ export function BranchMenu() {
                 >
                   New branch from {context.branch.name}…
                 </div>
+
+                {/* Merging a branch into itself is the one case with no
+                    meaning, so the current branch only offers the rest. */}
+                {!context.branch.isHead && (
+                  <div
+                    className={`dropdown-item ${busy !== null ? "muted" : ""}`}
+                    title={`Merge ${context.branch.name} into ${status?.branch ?? "HEAD"}`}
+                    onClick={() => {
+                      if (busy !== null) return;
+                      const branch = context.branch;
+                      setContext(null);
+                      merge(branch);
+                    }}
+                  >
+                    Merge {context.branch.name} into {status?.branch ?? "HEAD"}
+                  </div>
+                )}
               </div>
             </>
           )}

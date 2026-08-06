@@ -34,6 +34,11 @@ pub struct Project {
     pub kind: ProjectKind,
     /// Target frameworks for .NET, engines/runtimes elsewhere. May be empty.
     pub frameworks: Vec<String>,
+    /// Build configurations the project offers (`Debug`, `Release`, and
+    /// anything a .NET project adds via `<Configurations>`). Empty for
+    /// ecosystems with no such concept.
+    #[serde(default)]
+    pub configurations: Vec<String>,
     /// True when the project appears to contain tests.
     pub is_test_project: bool,
     /// Which test runner this project uses, when it is a test project.
@@ -374,6 +379,7 @@ mod tests {
             ecosystem: "dotnet".into(),
             kind: ProjectKind::Test,
             frameworks: vec![],
+            configurations: vec![],
             is_test_project: true,
             test_runner: Some(TestRunner::VsTest),
         };
@@ -381,8 +387,8 @@ mod tests {
         assert_eq!(
             keys(&serde_json::to_value(&project).unwrap()),
             [
-                "dir", "ecosystem", "frameworks", "id", "isTestProject", "kind", "manifestPath",
-                "name", "testRunner"
+                "configurations", "dir", "ecosystem", "frameworks", "id", "isTestProject", "kind",
+                "manifestPath", "name", "testRunner"
             ]
         );
     }

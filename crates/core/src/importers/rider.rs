@@ -197,6 +197,13 @@ pub fn convert(config: &RiderConfiguration, workspace_root: &Path) -> Option<Run
         }
         "js.build_tools.npm" => Some(convert_npm(config, workspace_root)),
         "CompoundRunConfigurationType" => Some(convert_compound(config)),
+        // Unit test sessions. Matched on a substring rather than a literal
+        // because JetBrains publishes no schema and has used more than one
+        // name for a single concept before (see the two launch-settings types
+        // above); anything containing "UnitTest" is a test session.
+        kind if kind.to_ascii_lowercase().contains("unittest") => {
+            Some(convert_unit_test(config, workspace_root))
+        }
         _ => None,
     }
 }
@@ -250,6 +257,49 @@ fn convert_dotnet(config: &RiderConfiguration, root: &Path) -> RunConfig {
             "Runtime arguments were set in Rider and have not been imported.".to_string(),
         );
     }
+
+    out
+}
+
+/// Translate a Rider unit test session into a test configuration.
+///
+/// Rider stores far more than we can act on — an explicit list of the tests in
+/// the session, a filter expression, a target framework per assembly. What
+/// transfers is the project to run and the framework to run it under; the
+/// session's test selection does not, because a test run here is expressed as
+/// "run this project's tests", with filtering applied afterwards from the
+/// results tree.
+fn convert_unit_test(config: &RiderConfiguration, root: &Path) -> RunConfig {
+    let mut out = base(config, "dotnet", RunKind::Test);
+
+    // Rider is inconsistent about which option carries the project, so the
+    // known spellings are tried in turn rather than assuming one.
+    out.project = ["PROJECT_PATH", "PROJECT_FILE_PATH", "TEST_PROJECT_PATH"]
+        .iter()
+        .find_map(|key| config.option(key))
+        .map(|p| relativise(p, root));
+    out.framework = ["PROJECT_TFM", "TFM", "TARGET_FRAMEWORK"]
+        .iter()
+        .find_map(|key| config.option(key))
+        .map(str::to_string);
+
+    if out.project.is_none() {
+        out.warnings.push(
+            "Rider did not record a project path for this test session. \
+             Choose the test project before running it."
+                .to_string(),
+        );
+    }
+
+    // Rider sessions can pin an explicit set of tests. We always run the whole
+    // project and let the user re-run failures from the results tree, so say so
+    // rather than quietly running more tests than the session named.
+    out.warnings.push(
+        "Imported as a whole-project test run. Any specific tests this Rider \
+         session selected are not carried over — run it, then use \"Re-run failed\" \
+         or the filter box to narrow the results."
+            .to_string(),
+    );
 
     out
 }

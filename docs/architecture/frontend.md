@@ -28,7 +28,7 @@ src/
 │   ├── ConfigEditor.tsx  RunConfig form (project, launch profile dropdown, args,
 │   │                     env, cwd, ...; Delete lives in its footer)
 │   ├── BranchMenu.tsx    titlebar branch widget: tree, sections, fetch/pull/push,
-│   │                     create-from context menu
+│   │                     right-click create-from / merge-into, abort-merge
 │   ├── RunConfigMenu.tsx titlebar run-config dropdown: status dots, favourites,
 │   │                     reorder, new/import items (portal from RunView)
 │   ├── FileTree.tsx      lazy workspace directory tree (one fs_list_dir per expand)

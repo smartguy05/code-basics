@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use cb_core::adapters::dotnet;
 use cb_core::config;
 use cb_core::importers::rider;
 use cb_core::model::RunConfig;
@@ -12,9 +13,17 @@ use tauri::State;
 use crate::state::AppState;
 
 /// Scan a workspace and layer saved configurations on top of detected ones.
+///
+/// The saved file is read first because it carries the scan options — opting
+/// into MSBuild evaluation has to be known before the scan runs, not after.
 fn load(root: &std::path::Path) -> Result<Workspace, String> {
-    let mut scanned = workspace::scan(root).map_err(|e| format!("{e:#}"))?;
-    let saved = config::load(&scanned.root).map_err(|e| format!("{e:#}"))?;
+    let root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let saved = config::load(&root).map_err(|e| format!("{e:#}"))?;
+
+    let options = workspace::ScanOptions {
+        msbuild_evaluation: saved.msbuild_evaluation,
+    };
+    let mut scanned = workspace::scan_with(&root, options).map_err(|e| format!("{e:#}"))?;
 
     config::apply(&mut scanned, saved);
     Ok(scanned)
@@ -71,19 +80,21 @@ pub async fn delete_config(state: State<'_, AppState>, id: String) -> Result<Wor
     Ok(workspace)
 }
 
-/// Names of the launch profiles a .NET project defines, for the config
-/// editor's profile dropdown. Only `Project` profiles are returned — the only
-/// kind `dotnet run --launch-profile` can apply.
+/// The launch profiles a .NET project defines, for the config editor.
+///
+/// Every profile is returned, including the ones `dotnet run --launch-profile`
+/// cannot apply: `LaunchProfile::launchable` marks those, and showing them
+/// disabled explains why a project appears to have no profiles far better than
+/// an empty dropdown does. The environment variables, arguments and
+/// application URL come along so the editor can show what a profile will
+/// actually do.
 #[tauri::command]
 pub async fn launch_profiles(
     state: State<'_, AppState>,
     project: String,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<dotnet::LaunchProfile>, String> {
     let root = state.workspace_root()?;
-    Ok(workspace::launch_profiles(&root.join(project))
-        .into_iter()
-        .map(|p| p.name)
-        .collect())
+    Ok(workspace::launch_profiles(&root.join(project)))
 }
 
 /// Star or unstar a configuration. Favourites sort to the top of every list.

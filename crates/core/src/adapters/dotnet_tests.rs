@@ -343,6 +343,26 @@ fn mtp_invocation_passes_report_options_after_the_separator() {
 }
 
 #[test]
+fn mtp_invocation_asks_for_per_test_output() {
+    // MTP's default `Normal` verbosity prints only a run summary, so without
+    // this the live progress counter stays at zero until the run finishes.
+    // `Detailed` prints `passed TestName (5ms)` as each test completes —
+    // verified against MSTest 4.0.2 on the .NET 10 SDK.
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/.code-basics/results");
+    let inv = test_invocation(
+        &test_config(),
+        &ctx(root, results, TestRunner::MicrosoftTestingPlatform),
+    );
+
+    let sep = inv.args.iter().position(|a| a == "--").expect("MTP separator");
+    let output = inv.args.iter().position(|a| a == "--output").expect("--output");
+
+    assert!(output > sep, "MTP options must follow the separator");
+    assert_eq!(inv.args[output + 1], "Detailed");
+}
+
+#[test]
 fn both_runners_agree_on_where_the_report_lands() {
     let root = Path::new("/repo");
     let results = Path::new("/repo/.code-basics/results");
@@ -612,14 +632,45 @@ const LAUNCH_SETTINGS: &str = r#"{
 #[test]
 fn reads_project_launch_profiles() {
     let profiles = parse_launch_settings(LAUNCH_SETTINGS);
-    let names: Vec<&str> = profiles.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, vec!["http", "https"]);
+    let launchable: Vec<&str> = profiles
+        .iter()
+        .filter(|p| p.launchable)
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(launchable, vec!["http", "https"]);
 }
 
 #[test]
-fn skips_hosting_profiles_this_app_cannot_launch() {
+fn hosting_profiles_this_app_cannot_launch_are_reported_not_dropped() {
+    // Dropping them made a project whose only profile is IIS Express look like
+    // it had no profiles at all, with nothing to explain why.
     let profiles = parse_launch_settings(LAUNCH_SETTINGS);
-    assert!(!profiles.iter().any(|p| p.name == "IIS Express"));
+    let iis = profiles
+        .iter()
+        .find(|p| p.name == "IIS Express")
+        .expect("the profile must survive parsing");
+
+    assert!(!iis.launchable, "`dotnet run` cannot apply an IISExpress profile");
+    assert_eq!(iis.command_name.as_deref(), Some("IISExpress"));
+}
+
+#[test]
+fn unlaunchable_profiles_produce_no_run_configuration() {
+    let profiles = parse_launch_settings(LAUNCH_SETTINGS);
+    let configs = configs_for_project(
+        "app",
+        "App",
+        Path::new("src/App/App.csproj"),
+        ProjectKind::Executable,
+        &["net8.0".into()],
+        &["Debug".into(), "Release".into()],
+        &profiles,
+    );
+
+    assert!(
+        !configs.iter().any(|c| c.launch_profile.as_deref() == Some("IIS Express")),
+        "offering a profile we cannot launch would fail at run time"
+    );
 }
 
 #[test]
@@ -670,6 +721,7 @@ fn test_projects_get_a_single_debug_configuration() {
         Path::new("src/Calc.Tests/Calc.Tests.csproj"),
         ProjectKind::Test,
         &["net8.0".into()],
+        &["Debug".into(), "Release".into()],
         &[],
     );
 
@@ -688,6 +740,7 @@ fn executables_get_a_configuration_per_launch_profile() {
         Path::new("src/App/App.csproj"),
         ProjectKind::Executable,
         &["net8.0".into()],
+        &["Debug".into(), "Release".into()],
         &profiles,
     );
 
@@ -705,6 +758,7 @@ fn libraries_produce_no_configurations() {
         Path::new("src/Lib/Lib.csproj"),
         ProjectKind::Library,
         &["net8.0".into()],
+        &["Debug".into(), "Release".into()],
         &[],
     );
     assert!(configs.is_empty(), "a library cannot be launched or tested");
@@ -715,30 +769,100 @@ fn framework_is_pinned_only_when_a_project_multi_targets() {
     // Passing -f to a single-target project is noise; to a multi-target one it
     // is required, since `dotnet run` refuses to guess.
     let single = configs_for_project(
-        "a", "A", Path::new("a.csproj"), ProjectKind::Test, &["net8.0".into()], &[],
+        "a", "A", Path::new("a.csproj"), ProjectKind::Test, &["net8.0".into()],
+        &["Debug".into()], &[],
     );
     assert!(single.iter().all(|c| c.framework.is_none()));
 
     let multi = configs_for_project(
         "b", "B", Path::new("b.csproj"), ProjectKind::Test,
-        &["net8.0".into(), "net9.0".into()], &[],
+        &["net8.0".into(), "net9.0".into()], &["Debug".into()], &[],
     );
-    assert!(multi.iter().all(|c| c.framework.as_deref() == Some("net8.0")));
+    // Every framework gets its own configuration: pinning the first silently
+    // hid the others, and `dotnet test -f` runs exactly one.
+    let frameworks: Vec<&str> =
+        multi.iter().filter_map(|c| c.framework.as_deref()).collect();
+    assert_eq!(frameworks, vec!["net8.0", "net9.0"]);
+    assert_eq!(multi.len(), 2);
+    assert!(multi.iter().all(|c| c.id.starts_with("b:test:debug:net")), "ids must stay unique");
+}
+
+#[test]
+fn custom_build_configurations_become_run_configurations() {
+    // `<Configurations>Debug;Release;Staging</Configurations>` is the only way
+    // a non-default configuration is visible without evaluating MSBuild.
+    let configs = configs_for_project(
+        "app",
+        "App",
+        Path::new("src/App/App.csproj"),
+        ProjectKind::Executable,
+        &["net8.0".into()],
+        &["Debug".into(), "Release".into(), "Staging".into()],
+        &[],
+    );
+
+    let names: Vec<&str> = configs.iter().filter_map(|c| c.build_configuration.as_deref()).collect();
+    assert_eq!(names, vec!["Debug", "Release", "Staging"]);
+}
+
+#[test]
+fn declared_configurations_replace_the_default_pair() {
+    let declared = csproj("<Configurations>Debug;Release;Staging</Configurations>");
+    assert_eq!(configurations(&declared, &[]), vec!["Debug", "Release", "Staging"]);
+
+    // Nothing declared means the MSBuild default.
+    let plain = csproj("<TargetFramework>net9.0</TargetFramework>");
+    assert_eq!(configurations(&plain, &[]), vec!["Debug", "Release"]);
+
+    // A Directory.Build.props declaration applies to the projects beneath it.
+    let inherited = csproj("<Configurations>Debug;QA</Configurations>");
+    assert_eq!(configurations(&plain, &[inherited]), vec!["Debug", "QA"]);
 }
 
 #[test]
 fn project_kind_follows_output_type() {
     let exe = csproj("<OutputType>Exe</OutputType>");
-    assert_eq!(project_kind(&exe, false), ProjectKind::Executable);
+    assert_eq!(project_kind(&exe, &[], false), ProjectKind::Executable);
 
     let winexe = csproj("<OutputType>WinExe</OutputType>");
-    assert_eq!(project_kind(&winexe, false), ProjectKind::Executable);
+    assert_eq!(project_kind(&winexe, &[], false), ProjectKind::Executable);
 
     let lib = csproj("<OutputType>Library</OutputType>");
-    assert_eq!(project_kind(&lib, false), ProjectKind::Library);
+    assert_eq!(project_kind(&lib, &[], false), ProjectKind::Library);
 
     // A test project is a test project regardless of what it compiles to.
-    assert_eq!(project_kind(&exe, true), ProjectKind::Test);
+    assert_eq!(project_kind(&exe, &[], true), ProjectKind::Test);
+}
+
+#[test]
+fn output_type_is_inherited_from_directory_build_props() {
+    // A folder of tools commonly sets OutputType once, for all of them.
+    let plain = csproj("<TargetFramework>net9.0</TargetFramework>");
+    let props = csproj("<OutputType>Exe</OutputType>");
+
+    assert_eq!(project_kind(&plain, &[], false), ProjectKind::Library);
+    assert_eq!(project_kind(&plain, &[props], false), ProjectKind::Executable);
+}
+
+#[test]
+fn workload_projects_are_executables_without_an_output_type() {
+    // MAUI heads and Aspire app hosts are launched with `dotnet run`, but the
+    // workload — not the template — decides what they compile to.
+    let maui = csproj("<UseMaui>true</UseMaui>");
+    assert_eq!(project_kind(&maui, &[], false), ProjectKind::Executable);
+
+    let aspire = csproj("<IsAspireHost>true</IsAspireHost>");
+    assert_eq!(project_kind(&aspire, &[], false), ProjectKind::Executable);
+
+    // Aspire hosts layer their SDK in as a nested <Sdk Name="..." /> import.
+    let sdk_import = parse_project_file(
+        r#"<Project Sdk="Microsoft.NET.Sdk">
+             <Sdk Name="Aspire.AppHost.Sdk" Version="9.0.0" />
+             <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+           </Project>"#,
+    );
+    assert_eq!(sdk_import.sdk_imports, vec!["Aspire.AppHost.Sdk"]);
+    assert_eq!(project_kind(&sdk_import, &[], false), ProjectKind::Executable);
 }
 
 #[test]
@@ -753,10 +877,15 @@ fn web_sdk_projects_are_executables_without_declaring_an_output_type() {
             r#"<Project Sdk="{sdk}"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>"#
         ));
         assert_eq!(p.sdk.as_deref(), Some(sdk));
-        assert_eq!(project_kind(&p, false), ProjectKind::Executable, "{sdk}");
+        assert_eq!(project_kind(&p, &[], false), ProjectKind::Executable, "{sdk}");
     }
 
-    // The plain SDK (and Razor class libraries) still default to Library.
+    // The plain SDK still defaults to Library.
     let plain = csproj("<TargetFramework>net9.0</TargetFramework>");
-    assert_eq!(project_kind(&plain, false), ProjectKind::Library);
+    assert_eq!(project_kind(&plain, &[], false), ProjectKind::Library);
+
+    // So does the Razor SDK: it builds Razor *class libraries*, and Blazor
+    // Server apps use the Web SDK instead.
+    let razor = parse_project_file(r#"<Project Sdk="Microsoft.NET.Sdk.Razor"></Project>"#);
+    assert_eq!(project_kind(&razor, &[], false), ProjectKind::Library);
 }

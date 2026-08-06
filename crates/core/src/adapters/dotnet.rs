@@ -34,9 +34,20 @@ use crate::model::{
 pub struct ProjectFile {
     /// The `Sdk` attribute of the `<Project>` element.
     pub sdk: Option<String>,
+    /// Nested `<Sdk Name="..." />` imports, which is how Aspire's app host SDK
+    /// and similar workloads layer on top of `Microsoft.NET.Sdk`.
+    pub sdk_imports: Vec<String>,
     pub output_type: Option<String>,
     pub target_frameworks: Vec<String>,
+    /// `<Configurations>` — the build configurations the project declares.
+    /// Empty means the MSBuild default of `Debug;Release`.
+    pub configurations: Vec<String>,
     pub is_test_project: Option<bool>,
+    /// `<UseMaui>` — a .NET MAUI application, which is launchable even though
+    /// some templates leave `<OutputType>` to the workload.
+    pub use_maui: Option<bool>,
+    /// `<IsAspireHost>` — an Aspire app host, likewise launchable.
+    pub is_aspire_host: Option<bool>,
     /// `<TestingPlatformDotnetTestSupport>` — an explicit opt in to MTP.
     pub testing_platform_support: Option<bool>,
     /// `<EnableMSTestRunner>` / `<UseMicrosoftTestingPlatformRunner>` — the
@@ -92,6 +103,11 @@ pub fn parse_project_file(xml: &str) -> ProjectFile {
                 if name.eq_ignore_ascii_case("Project") {
                     out.sdk = attr_value(&e, "Sdk");
                 }
+                if name.eq_ignore_ascii_case("Sdk") {
+                    if let Some(sdk) = attr_value(&e, "Name") {
+                        out.sdk_imports.push(sdk);
+                    }
+                }
                 current = Some(name);
                 text.clear();
             }
@@ -100,6 +116,11 @@ pub fn parse_project_file(xml: &str) -> ProjectFile {
                 if name.eq_ignore_ascii_case("PackageReference") {
                     if let Some(include) = attr_value(&e, "Include") {
                         out.package_references.push(include);
+                    }
+                }
+                if name.eq_ignore_ascii_case("Sdk") {
+                    if let Some(sdk) = attr_value(&e, "Name") {
+                        out.sdk_imports.push(sdk);
                     }
                 }
             }
@@ -149,8 +170,19 @@ fn apply_property(out: &mut ProjectFile, name: &str, value: &str) {
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .collect();
+    } else if name.eq_ignore_ascii_case("Configurations") {
+        out.configurations = value
+            .split(';')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
     } else if name.eq_ignore_ascii_case("IsTestProject") {
         out.is_test_project = Some(truthy());
+    } else if name.eq_ignore_ascii_case("UseMaui") {
+        out.use_maui = Some(truthy());
+    } else if name.eq_ignore_ascii_case("IsAspireHost") {
+        out.is_aspire_host = Some(truthy());
     } else if name.eq_ignore_ascii_case("TestingPlatformDotnetTestSupport") {
         out.testing_platform_support = Some(truthy());
     } else if name.eq_ignore_ascii_case("EnableMSTestRunner")
@@ -305,11 +337,34 @@ pub fn has_trx_extension(project: &ProjectFile, inherited: &[ProjectFile]) -> bo
         })
 }
 
-pub fn project_kind(project: &ProjectFile, is_test: bool) -> ProjectKind {
+/// Classify a project, layering `Directory.Build.props` underneath it.
+///
+/// `OutputType` is frequently set once in a `Directory.Build.props` for a whole
+/// folder of tools, so the inherited files are consulted before falling back to
+/// SDK defaults.
+pub fn project_kind(project: &ProjectFile, inherited: &[ProjectFile], is_test: bool) -> ProjectKind {
     if is_test {
         return ProjectKind::Test;
     }
-    match project.output_type.as_deref() {
+
+    let layered: Vec<&ProjectFile> = std::iter::once(project).chain(inherited.iter()).collect();
+
+    // Workload markers describe an application regardless of OutputType: MAUI
+    // heads and Aspire app hosts are both launched with `dotnet run`.
+    if layered
+        .iter()
+        .any(|p| p.use_maui == Some(true) || p.is_aspire_host == Some(true))
+        || layered.iter().any(|p| {
+            p.sdk_imports
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case("Aspire.AppHost.Sdk"))
+        })
+    {
+        return ProjectKind::Executable;
+    }
+
+    // Nearest file first, so a project overrides Directory.Build.props.
+    match layered.iter().find_map(|p| p.output_type.as_deref()) {
         Some(t) if t.eq_ignore_ascii_case("Exe") || t.eq_ignore_ascii_case("WinExe") => {
             ProjectKind::Executable
         }
@@ -318,7 +373,10 @@ pub fn project_kind(project: &ProjectFile, is_test: bool) -> ProjectKind {
         // executable by default — ASP.NET Core templates in particular never
         // write an OutputType.
         None => {
-            if project.sdk.as_deref().is_some_and(sdk_defaults_to_executable) {
+            if layered
+                .iter()
+                .any(|p| p.sdk.as_deref().is_some_and(sdk_defaults_to_executable))
+            {
                 ProjectKind::Executable
             } else {
                 ProjectKind::Library
@@ -328,6 +386,9 @@ pub fn project_kind(project: &ProjectFile, is_test: bool) -> ProjectKind {
 }
 
 /// SDKs whose projects build an executable without declaring `<OutputType>`.
+///
+/// `Microsoft.NET.Sdk.Razor` is deliberately absent: it is the Razor *class
+/// library* SDK, and Blazor Server apps use the Web SDK instead.
 fn sdk_defaults_to_executable(sdk: &str) -> bool {
     let sdk = sdk.to_ascii_lowercase();
     matches!(
@@ -336,12 +397,39 @@ fn sdk_defaults_to_executable(sdk: &str) -> bool {
     )
 }
 
+/// The build configurations a project offers, nearest declaration winning.
+///
+/// `<Configurations>` replaces the MSBuild default of `Debug;Release` when a
+/// project declares it, which is the only way a `Staging` or `QA` configuration
+/// becomes visible without evaluating MSBuild.
+pub fn configurations(project: &ProjectFile, inherited: &[ProjectFile]) -> Vec<String> {
+    std::iter::once(project)
+        .chain(inherited.iter())
+        .find(|p| !p.configurations.is_empty())
+        .map(|p| p.configurations.clone())
+        .unwrap_or_else(|| vec!["Debug".to_string(), "Release".to_string()])
+}
+
+/// The configuration to use where a debug build is wanted.
+///
+/// Almost always `Debug`, but a project may declare a configuration set that
+/// omits it entirely, in which case the first declared one has to serve.
+fn debug_configuration(configurations: &[String]) -> String {
+    configurations
+        .iter()
+        .find(|c| c.eq_ignore_ascii_case("Debug"))
+        .or_else(|| configurations.first())
+        .cloned()
+        .unwrap_or_else(|| "Debug".to_string())
+}
+
 // ---------------------------------------------------------------------------
 // launchSettings.json
 // ---------------------------------------------------------------------------
 
 /// One profile from `Properties/launchSettings.json`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
 pub struct LaunchProfile {
     pub name: String,
     pub command_name: Option<String>,
@@ -349,13 +437,27 @@ pub struct LaunchProfile {
     pub env: BTreeMap<String, String>,
     pub working_directory: Option<String>,
     pub application_url: Option<String>,
+    /// Whether `dotnet run --launch-profile` can actually apply this profile.
+    ///
+    /// Only `Project` profiles can. IIS Express, Docker and Executable profiles
+    /// describe a hosting model this app does not launch, but they are still
+    /// reported so the UI can show why a project appears to have no profiles
+    /// rather than leaving the list mysteriously empty.
+    pub launchable: bool,
 }
 
-/// Parse `launchSettings.json` into the profiles worth offering as run
-/// configurations.
+impl LaunchProfile {
+    /// `dotnet run --launch-profile` only understands `Project` profiles; a
+    /// profile with no `commandName` at all defaults to one.
+    pub fn is_launchable(command_name: Option<&str>) -> bool {
+        matches!(command_name, None | Some("Project"))
+    }
+}
+
+/// Parse `launchSettings.json` into its profiles.
 ///
-/// Only `Project`-command profiles are returned: IIS Express and Docker
-/// profiles describe a hosting model this app does not launch.
+/// Every profile is returned, including the hosting models this app cannot
+/// launch; [`LaunchProfile::launchable`] separates them.
 pub fn parse_launch_settings(json: &str) -> Vec<LaunchProfile> {
     let Ok(root) = serde_json::from_str::<serde_json::Value>(json) else {
         return Vec::new();
@@ -371,9 +473,7 @@ pub fn parse_launch_settings(json: &str) -> Vec<LaunchProfile> {
             .and_then(|v| v.as_str())
             .map(str::to_string);
 
-        if !matches!(command_name.as_deref(), None | Some("Project")) {
-            continue;
-        }
+        let launchable = LaunchProfile::is_launchable(command_name.as_deref());
 
         let args = body
             .get("commandLineArgs")
@@ -404,6 +504,7 @@ pub fn parse_launch_settings(json: &str) -> Vec<LaunchProfile> {
                 .get("applicationUrl")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            launchable,
         });
     }
 
@@ -505,6 +606,12 @@ pub fn test_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
             args.push(report_name);
             args.push("--results-directory".into());
             args.push(ctx.results_dir.display().to_string());
+            // MTP's default `Normal` verbosity prints only a run summary, so
+            // the UI's live progress counter has nothing to read until the run
+            // ends. `Detailed` prints a `passed TestName (5ms)` line as each
+            // test finishes — the MTP equivalent of VSTest's console logger.
+            args.push("--output".into());
+            args.push("Detailed".into());
 
             if let Some(names) = &ctx.filter {
                 if !names.is_empty() {
@@ -713,60 +820,113 @@ pub fn configs_for_project(
     relative_path: &Path,
     kind: ProjectKind,
     frameworks: &[String],
+    configurations: &[String],
     launch_profiles: &[LaunchProfile],
 ) -> Vec<RunConfig> {
     let mut out = Vec::new();
-    let framework = (frameworks.len() > 1).then(|| frameworks[0].clone());
+
+    // A single-targeted project needs no `-f` at all; a multi-targeted one
+    // cannot be run without choosing, so every framework gets its own
+    // configuration rather than silently picking the first.
+    let targets: Vec<Option<String>> = if frameworks.len() > 1 {
+        frameworks.iter().cloned().map(Some).collect()
+    } else {
+        vec![None]
+    };
+
+    // Suffixes that keep ids unique and names readable once a project is
+    // multi-targeted, and vanish entirely when it is not.
+    let id_suffix = |framework: &Option<String>| match framework {
+        Some(f) => format!(":{}", sanitise(f)),
+        None => String::new(),
+    };
 
     match kind {
         ProjectKind::Test => {
             // Debug only, like Rider's default test session. A Release test
             // run is a legitimate but rare want (and `#if !DEBUG` code paths
             // make it a trap — missing user secrets, managed-identity-only
-            // branches); anyone who needs one can save a custom config with
-            // Build configuration set to Release.
-            let mut config = RunConfig::new(
-                format!("{project_id}:test:debug"),
-                format!("{project_name} tests"),
-                RunKind::Test,
-                "dotnet",
-                ConfigSource::Detected,
-            );
-            config.project = Some(relative_path.to_path_buf());
-            config.build_configuration = Some("Debug".to_string());
-            config.framework = framework;
-            out.push(config);
-        }
-        ProjectKind::Executable => {
-            // A profile per launch profile, so the environment and URLs the
-            // project already defines are preserved.
-            for profile in launch_profiles {
+            // branches); the config editor's Build configuration dropdown
+            // offers the project's other configurations for anyone who needs
+            // one.
+            let configuration = debug_configuration(configurations);
+
+            for framework in &targets {
+                let label = match framework {
+                    Some(f) => format!("{project_name} tests ({f})"),
+                    None => format!("{project_name} tests"),
+                };
                 let mut config = RunConfig::new(
-                    format!("{project_id}:run:{}", sanitise(&profile.name)),
-                    format!("{project_name} ({})", profile.name),
-                    RunKind::App,
+                    format!(
+                        "{project_id}:test:{}{}",
+                        configuration.to_lowercase(),
+                        id_suffix(framework)
+                    ),
+                    label,
+                    RunKind::Test,
                     "dotnet",
                     ConfigSource::Detected,
                 );
                 config.project = Some(relative_path.to_path_buf());
-                config.build_configuration = Some("Debug".to_string());
+                config.build_configuration = Some(configuration.clone());
                 config.framework = framework.clone();
-                config.launch_profile = Some(profile.name.clone());
                 out.push(config);
             }
+        }
+        ProjectKind::Executable => {
+            let debug = debug_configuration(configurations);
 
-            for configuration in ["Debug", "Release"] {
-                let mut config = RunConfig::new(
-                    format!("{project_id}:run:{}", configuration.to_lowercase()),
-                    format!("{project_name} ({configuration})"),
-                    RunKind::App,
-                    "dotnet",
-                    ConfigSource::Detected,
-                );
-                config.project = Some(relative_path.to_path_buf());
-                config.build_configuration = Some(configuration.to_string());
-                config.framework = framework.clone();
-                out.push(config);
+            // A configuration per launch profile, so the environment and URLs
+            // the project already defines are preserved. Profiles describing a
+            // hosting model we cannot start are skipped here but still reported
+            // to the UI by `workspace::launch_profiles`.
+            for profile in launch_profiles.iter().filter(|p| p.launchable) {
+                for framework in &targets {
+                    let label = match framework {
+                        Some(f) => format!("{project_name} ({}, {f})", profile.name),
+                        None => format!("{project_name} ({})", profile.name),
+                    };
+                    let mut config = RunConfig::new(
+                        format!(
+                            "{project_id}:run:{}{}",
+                            sanitise(&profile.name),
+                            id_suffix(framework)
+                        ),
+                        label,
+                        RunKind::App,
+                        "dotnet",
+                        ConfigSource::Detected,
+                    );
+                    config.project = Some(relative_path.to_path_buf());
+                    config.build_configuration = Some(debug.clone());
+                    config.framework = framework.clone();
+                    config.launch_profile = Some(profile.name.clone());
+                    out.push(config);
+                }
+            }
+
+            for configuration in configurations {
+                for framework in &targets {
+                    let label = match framework {
+                        Some(f) => format!("{project_name} ({configuration}, {f})"),
+                        None => format!("{project_name} ({configuration})"),
+                    };
+                    let mut config = RunConfig::new(
+                        format!(
+                            "{project_id}:run:{}{}",
+                            configuration.to_lowercase(),
+                            id_suffix(framework)
+                        ),
+                        label,
+                        RunKind::App,
+                        "dotnet",
+                        ConfigSource::Detected,
+                    );
+                    config.project = Some(relative_path.to_path_buf());
+                    config.build_configuration = Some(configuration.clone());
+                    config.framework = framework.clone();
+                    out.push(config);
+                }
             }
         }
         // Libraries cannot be launched and have no tests to run.

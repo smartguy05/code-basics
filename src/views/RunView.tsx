@@ -85,6 +85,24 @@ export function RunView({
 }) {
   const appConfigs = workspace.configs.filter((c) => c.kind === "app");
 
+  /**
+   * Which solution a configuration's project belongs to.
+   *
+   * Only meaningful once a workspace holds more than one solution — with a
+   * single one the label would be on every row and say nothing.
+   */
+  const solutionOf = (config: RunConfig): string | null => {
+    if (workspace.solutions.length < 2 || !config.project) return null;
+    // Solution members are stored with forward slashes; a config's project
+    // path can carry whatever separator wrote it.
+    const target = config.project.replace(/\\/g, "/");
+    return (
+      workspace.solutions.find((s) =>
+        s.projects.some((p) => p.path.replace(/\\/g, "/") === target),
+      )?.name ?? null
+    );
+  };
+
   const [selectedId, setSelectedId] = useState<string | null>(
     appConfigs[0]?.id ?? null,
   );
@@ -403,6 +421,7 @@ export function RunView({
         favorites={favorites}
         dotClass={dotClass}
         canMove={(config, delta) => neighborId(config, delta) !== null}
+        groupLabel={solutionOf}
         onSelect={(config) => {
           setSelectedId(config.id);
           // Selecting something that has a console tab focuses that tab.

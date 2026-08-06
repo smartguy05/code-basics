@@ -42,7 +42,8 @@ Working-copy review:
 
 - Three comparison modes: working ↔ HEAD (everything), working ↔ index (unstaged only), index ↔ HEAD (staged only).
 - Two layouts: **side by side** (default — baseline read-only on the left, editable working copy on the right) or inline/unified; the choice persists.
-- Stage/unstage whole files, hunks, or individually selected lines.
+- Stage/unstage whole files, hunks, or individually selected lines. **Right-click a file** to stage or unstage it without opening it.
+- The file list is grouped into **Staged**, your own named **change groups**, and **Unstaged**. Groups are for organising work in progress — right-click a file to move it into one, or use "+ New group". They are local to you and never committed; see [change groups](../reference/configuration.md#change-groups-changelistsjson). A partially staged file shows under both Staged and its unstaged group, as `git status` reports it.
 - Revert individual lines — the app builds a reverse patch of just your selection and lets `git apply` do the surgery ([how that works](../architecture/core-crate.md#git)).
 - Commit (with amend), branches (create/checkout/delete), stash save/pop.
 - Push/pull/fetch shell out to your system `git`, so existing credentials (SSH agent, credential manager) work with no prompts inside the app.

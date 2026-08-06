@@ -140,6 +140,67 @@ fn an_empty_file_yields_nothing() {
     assert!(parse("<component />").is_empty());
 }
 
+/// A unit test session.
+///
+/// Unlike the other samples in this file, this one is *not* transcribed from a
+/// Rider-written file — no test session was available to copy. The importer
+/// therefore matches the type name by substring and tries several option
+/// spellings, and this fixture pins that behaviour rather than the exact shape
+/// JetBrains emits.
+const UNIT_TEST_SESSION: &str = r#"<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Api tests" type="UnitTestRunConfiguration" factoryName="Unit Test Session">
+    <option name="PROJECT_PATH" value="$PROJECT_DIR$/tests/Api.Tests/Api.Tests.csproj" />
+    <option name="PROJECT_TFM" value="net8.0" />
+    <method v="2" />
+  </configuration>
+</component>"#;
+
+#[test]
+fn converts_a_unit_test_session_into_a_test_configuration() {
+    let parsed = parse(UNIT_TEST_SESSION);
+    let config = convert(&parsed[0], &root()).unwrap();
+
+    assert_eq!(config.kind, RunKind::Test, "a test session must not import as an app launch");
+    assert_eq!(config.ecosystem, "dotnet");
+    assert_eq!(config.source, ConfigSource::RiderImport);
+    assert_eq!(config.project, Some(PathBuf::from("tests/Api.Tests/Api.Tests.csproj")));
+    assert_eq!(config.framework.as_deref(), Some("net8.0"));
+}
+
+#[test]
+fn an_imported_test_session_says_its_test_selection_was_dropped() {
+    // Running more tests than the session named is defensible; doing it
+    // silently is not.
+    let config = convert(&parse(UNIT_TEST_SESSION)[0], &root()).unwrap();
+    assert!(config.warnings.iter().any(|w| w.contains("whole-project test run")));
+}
+
+#[test]
+fn unit_test_session_type_names_are_matched_by_substring() {
+    // JetBrains has shipped more than one type name for a single concept
+    // before, so the match is deliberately loose.
+    for kind in [
+        "UnitTestRunConfiguration",
+        "DotNetUnitTest",
+        "RiderUnitTestSession",
+    ] {
+        let xml = UNIT_TEST_SESSION.replace("UnitTestRunConfiguration", kind);
+        let config = convert(&parse(&xml)[0], &root())
+            .unwrap_or_else(|| panic!("{kind} should convert"));
+        assert_eq!(config.kind, RunKind::Test, "{kind}");
+    }
+}
+
+#[test]
+fn a_test_session_without_a_project_is_kept_with_a_warning() {
+    let xml = UNIT_TEST_SESSION
+        .replace(r#"<option name="PROJECT_PATH" value="$PROJECT_DIR$/tests/Api.Tests/Api.Tests.csproj" />"#, "");
+    let config = convert(&parse(&xml)[0], &root()).unwrap();
+
+    assert!(config.project.is_none());
+    assert!(config.warnings.iter().any(|w| w.contains("did not record a project path")));
+}
+
 // ---------------------------------------------------------------------------
 // Macro expansion
 // ---------------------------------------------------------------------------

@@ -668,3 +668,179 @@ fn opening_a_non_repository_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     assert!(Repo::open(dir.path()).is_err());
 }
+
+// ---------------------------------------------------------------------------
+// Merging
+// ---------------------------------------------------------------------------
+
+use cb_core::git::repo::MergeOutcome;
+
+/// A repository on `main` with a `feature` branch one commit ahead.
+///
+/// `main` is left checked out, so a merge of `feature` fast-forwards unless
+/// the caller commits to `main` first.
+fn repo_with_feature_branch() -> tempfile::TempDir {
+    let dir = init_repo(&[("a.txt", "one\n")]);
+    let path = dir.path();
+
+    run(path, &["checkout", "-b", "feature"]);
+    write(path, "b.txt", "from feature\n");
+    run(path, &["add", "."]);
+    run(path, &["commit", "-m", "feature work"]);
+    run(path, &["checkout", "main"]);
+
+    dir
+}
+
+#[test]
+fn merging_a_branch_ahead_of_head_fast_forwards() {
+    let dir = repo_with_feature_branch();
+    let repo = Repo::open(dir.path()).unwrap();
+
+    let report = repo.merge_branch("feature").unwrap();
+
+    assert_eq!(report.outcome, MergeOutcome::FastForward);
+    assert_eq!(read(dir.path(), "b.txt"), "from feature\n");
+    // A fast-forward must not invent a merge commit.
+    assert_eq!(run(dir.path(), &["rev-list", "--count", "HEAD"]).trim(), "2");
+    assert_eq!(repo.status().unwrap().branch.as_deref(), Some("main"));
+}
+
+#[test]
+fn merging_diverged_branches_creates_a_merge_commit() {
+    let dir = repo_with_feature_branch();
+    let path = dir.path();
+
+    // Diverge: a commit on main that feature does not have.
+    write(path, "c.txt", "from main\n");
+    run(path, &["add", "."]);
+    run(path, &["commit", "-m", "main work"]);
+
+    let repo = Repo::open(path).unwrap();
+    let report = repo.merge_branch("feature").unwrap();
+
+    assert_eq!(report.outcome, MergeOutcome::Merged);
+    assert!(report.commit.is_some());
+    // Both sides' files are present, and the commit has two parents.
+    assert_eq!(read(path, "b.txt"), "from feature\n");
+    assert_eq!(read(path, "c.txt"), "from main\n");
+    assert_eq!(run(path, &["cat-file", "-p", "HEAD"]).matches("parent ").count(), 2);
+    // The merge must be finished, not left in progress.
+    assert_eq!(repo.status().unwrap().in_progress_operation, None);
+}
+
+#[test]
+fn merging_a_branch_already_contained_reports_up_to_date() {
+    let dir = repo_with_feature_branch();
+    let repo = Repo::open(dir.path()).unwrap();
+
+    repo.merge_branch("feature").unwrap();
+    let again = repo.merge_branch("feature").unwrap();
+
+    assert_eq!(again.outcome, MergeOutcome::UpToDate);
+    assert_eq!(again.commit, None);
+}
+
+#[test]
+fn a_conflicting_merge_is_reported_and_left_in_progress() {
+    // Left in progress on purpose: aborting silently would throw away the
+    // resolution work the user is about to do in the Changes tab.
+    let dir = init_repo(&[("a.txt", "original\n")]);
+    let path = dir.path();
+
+    run(path, &["checkout", "-b", "feature"]);
+    write(path, "a.txt", "feature version\n");
+    run(path, &["commit", "-am", "feature edit"]);
+
+    run(path, &["checkout", "main"]);
+    write(path, "a.txt", "main version\n");
+    run(path, &["commit", "-am", "main edit"]);
+
+    let repo = Repo::open(path).unwrap();
+    let report = repo.merge_branch("feature").unwrap();
+
+    assert_eq!(report.outcome, MergeOutcome::Conflicted);
+    assert_eq!(report.conflicts, vec!["a.txt"]);
+    assert_eq!(report.commit, None);
+
+    let status = repo.status().unwrap();
+    assert_eq!(status.in_progress_operation.as_deref(), Some("merge"));
+    assert!(status.files.iter().any(|f| f.path == "a.txt" && f.is_conflicted()));
+}
+
+#[test]
+fn aborting_a_conflicted_merge_restores_the_previous_state() {
+    let dir = init_repo(&[("a.txt", "original\n")]);
+    let path = dir.path();
+
+    run(path, &["checkout", "-b", "feature"]);
+    write(path, "a.txt", "feature version\n");
+    run(path, &["commit", "-am", "feature edit"]);
+    run(path, &["checkout", "main"]);
+    write(path, "a.txt", "main version\n");
+    run(path, &["commit", "-am", "main edit"]);
+
+    let repo = Repo::open(path).unwrap();
+    repo.merge_branch("feature").unwrap();
+    repo.abort_merge().unwrap();
+
+    assert_eq!(read(path, "a.txt"), "main version\n");
+    let status = repo.status().unwrap();
+    assert_eq!(status.in_progress_operation, None);
+    assert!(status.files.is_empty(), "the working tree should be clean again");
+}
+
+#[test]
+fn merging_refuses_to_start_with_modified_tracked_files() {
+    // A conflicted merge writes into the working tree; doing that on top of
+    // uncommitted edits makes the two impossible to tell apart.
+    let dir = repo_with_feature_branch();
+    write(dir.path(), "a.txt", "uncommitted edit\n");
+
+    let error = Repo::open(dir.path()).unwrap().merge_branch("feature").unwrap_err().to_string();
+
+    assert!(error.contains("commit or stash"), "got: {error}");
+    assert!(error.contains("a.txt"), "the error should name a file: {error}");
+    // Nothing may have happened.
+    assert_eq!(read(dir.path(), "a.txt"), "uncommitted edit\n");
+    assert!(!dir.path().join("b.txt").exists());
+}
+
+#[test]
+fn untracked_files_do_not_block_a_merge() {
+    // `git merge` allows them, and refusing would be gratuitous.
+    let dir = repo_with_feature_branch();
+    write(dir.path(), "scratch.txt", "not tracked\n");
+
+    let report = Repo::open(dir.path()).unwrap().merge_branch("feature").unwrap();
+
+    assert_eq!(report.outcome, MergeOutcome::FastForward);
+    assert_eq!(read(dir.path(), "scratch.txt"), "not tracked\n");
+}
+
+#[test]
+fn merging_an_unknown_branch_fails_clearly() {
+    let dir = repo_with_feature_branch();
+    let error = Repo::open(dir.path()).unwrap().merge_branch("nope").unwrap_err().to_string();
+
+    assert!(error.contains("nope"), "got: {error}");
+}
+
+#[test]
+fn a_second_merge_is_refused_while_one_is_in_progress() {
+    let dir = init_repo(&[("a.txt", "original\n")]);
+    let path = dir.path();
+
+    run(path, &["checkout", "-b", "feature"]);
+    write(path, "a.txt", "feature version\n");
+    run(path, &["commit", "-am", "feature edit"]);
+    run(path, &["checkout", "main"]);
+    write(path, "a.txt", "main version\n");
+    run(path, &["commit", "-am", "main edit"]);
+
+    let repo = Repo::open(path).unwrap();
+    repo.merge_branch("feature").unwrap();
+
+    let error = repo.merge_branch("feature").unwrap_err().to_string();
+    assert!(error.contains("already in progress"), "got: {error}");
+}

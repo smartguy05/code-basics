@@ -385,6 +385,27 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = include_str!("../../fixtures/reports/sample.trx");
+    /// A TRX produced by Microsoft.Testing.Platform rather than VSTest —
+    /// captured from a real `--report-trx` run of MSTest 4 on the .NET 10 SDK.
+    const MTP: &str = include_str!("../../fixtures/reports/mtp.trx");
+
+    #[test]
+    fn parses_a_report_written_by_microsoft_testing_platform() {
+        // Both `dotnet test` paths emit TRX, and the whole design rests on one
+        // parser serving both. MTP writes the same schema but is a separate
+        // implementation, so it gets its own fixture rather than an assumption.
+        let run = parse(MTP).expect("an MTP-written TRX should parse");
+
+        assert_eq!(run.summary.total, 1);
+        assert_eq!(run.summary.passed, 1);
+
+        let case = &run.cases[0];
+        assert_eq!(case.name, "TestMethod1");
+        assert_eq!(case.full_name, "T.Test1.TestMethod1");
+        assert_eq!(case.suite.as_deref(), Some("T.Test1"), "class name comes from TestDefinitions");
+        assert_eq!(case.project.as_deref(), Some("T"), "assembly name, from the codeBase path");
+        assert!(case.duration_ms.is_some_and(|d| d > 0.0));
+    }
 
     #[test]
     fn parses_outcomes_and_counts() {

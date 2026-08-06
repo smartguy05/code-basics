@@ -874,3 +874,171 @@ textarea:focus {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+
+/* --------------------------------------------------------------------------
+   Intent view: hunks collapsed into the decisions behind them
+   -------------------------------------------------------------------------- */
+
+/* The Files / Intent switch at the top of the Changes sidebar. Buttons carry
+   no active state of their own, so the current mode has to be drawn here or
+   the switch looks inert. */
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px;
+}
+
+.segmented button {
+  flex: 1;
+  padding: 3px 8px;
+  font-size: 11px;
+  background: var(--bg-inset);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+.segmented button.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Setting up capture. A bare glyph was unfindable; this is a labelled row. */
+.intent-setup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 11px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--text-dim);
+}
+
+.intent-setup:hover {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+.intent-setup .twisty {
+  color: var(--text-faint);
+}
+
+.intent-panel {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-inset);
+}
+
+.intent-panel .provider {
+  margin-bottom: 10px;
+}
+
+.intent-panel .provider-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.intent-panel pre {
+  font-size: 10px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px;
+  margin: 4px 0;
+}
+
+.intent-panel .actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+/* One card: a decision, not a hunk. */
+.intent-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+.intent-card:hover {
+  background: var(--bg-raised);
+}
+
+.intent-card.selected {
+  background: var(--bg-raised);
+  border-left-color: var(--accent);
+}
+
+.intent-card .headline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.intent-card .label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A card must never look more certain than it is: a stated intent reads
+   differently from a guess made off a function name. */
+.intent-card .kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  flex: none;
+}
+
+.intent-card .kind.intent {
+  background: rgba(90, 120, 220, 0.18);
+  border-color: var(--accent-dim);
+  color: #9db2f0;
+}
+
+.intent-card .kind.formatting {
+  color: var(--text-faint);
+}
+
+.intent-card .kind.other {
+  border-style: dashed;
+}
+
+.intent-card .confidence {
+  font-size: 9px;
+  letter-spacing: -1px;
+  color: var(--text-faint);
+  flex: none;
+}
+
+.intent-card .meta {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.intent-card .paths {
+  font-size: 11px;
+  color: var(--text-dim);
+  word-break: break-all;
+}

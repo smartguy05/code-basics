@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import * as api from "../ipc/api";
-import type { Project, RunConfig, Workspace } from "../ipc/types";
+import type { LaunchProfile, Project, RunConfig, Workspace } from "../ipc/types";
 
 function envToText(env: Record<string, string> | undefined): string {
   return Object.entries(env ?? {})
@@ -66,10 +66,12 @@ export function ConfigEditor({
   const [draft, setDraft] = useState<RunConfig>(config);
   const [envText, setEnvText] = useState(() => envToText(config.env));
   const [argsText, setArgsText] = useState(() => (config.args ?? []).join(" "));
-  const [profiles, setProfiles] = useState<string[]>([]);
+  const [profiles, setProfiles] = useState<LaunchProfile[]>([]);
 
-  // The launch profiles the targeted project actually defines, so the
-  // dropdown can only offer names `dotnet run --launch-profile` will accept.
+  // The launch profiles the targeted project actually defines. Profiles
+  // `dotnet run --launch-profile` cannot apply are listed but disabled, so a
+  // project whose only profile is IIS Express explains itself instead of
+  // showing an empty dropdown.
   useEffect(() => {
     if (draft.ecosystem !== "dotnet" || !draft.project) {
       setProfiles([]);
@@ -78,12 +80,24 @@ export function ConfigEditor({
     let cancelled = false;
     api
       .launchProfiles(draft.project)
-      .then((names) => !cancelled && setProfiles(names))
+      .then((found) => !cancelled && setProfiles(found))
       .catch(() => !cancelled && setProfiles([]));
     return () => {
       cancelled = true;
     };
   }, [draft.ecosystem, draft.project]);
+
+  /** The project this configuration targets, when it resolves to one. */
+  const target = workspace.projects.find(
+    (p) => projectTarget(p, workspace.root) === draft.project,
+  );
+
+  // Offer what the project declares, falling back to the MSBuild default pair
+  // so the dropdown is never empty for a project we could not read.
+  const buildConfigurations =
+    target?.configurations?.length ? target.configurations : ["Debug", "Release"];
+
+  const selectedProfile = profiles.find((p) => p.name === draft.launchProfile);
 
   const update = <K extends keyof RunConfig>(key: K, value: RunConfig[K]) =>
     setDraft((previous) => ({ ...previous, [key]: value }));
@@ -159,18 +173,45 @@ export function ConfigEditor({
                   }
                 >
                   <option value="">(default)</option>
-                  <option value="Debug">Debug</option>
-                  <option value="Release">Release</option>
+                  {buildConfigurations.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                  {/* A saved value the project no longer declares still has to
+                      be visible, or the select would silently lie about it. */}
+                  {draft.buildConfiguration &&
+                    !buildConfigurations.includes(draft.buildConfiguration) && (
+                      <option value={draft.buildConfiguration}>
+                        {draft.buildConfiguration} (not in &lt;Configurations&gt;)
+                      </option>
+                    )}
                 </select>
               </div>
 
               <div className="field">
                 <label>Target framework</label>
-                <input
-                  placeholder="net8.0 — leave empty unless multi-targeting"
-                  value={draft.framework ?? ""}
-                  onChange={(e) => update("framework", e.target.value || undefined)}
-                />
+                {target && target.frameworks.length > 1 ? (
+                  <select
+                    value={draft.framework ?? ""}
+                    onChange={(e) => update("framework", e.target.value || undefined)}
+                  >
+                    {/* Multi-targeted projects must choose: `dotnet run`
+                        refuses to guess between frameworks. */}
+                    <option value="">(choose a framework)</option>
+                    {target.frameworks.map((framework) => (
+                      <option key={framework} value={framework}>
+                        {framework}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    placeholder="net8.0 — leave empty unless multi-targeting"
+                    value={draft.framework ?? ""}
+                    onChange={(e) => update("framework", e.target.value || undefined)}
+                  />
+                )}
               </div>
 
               <div className="field">
@@ -185,19 +226,58 @@ export function ConfigEditor({
                     (default — dotnet run picks the first profile)
                   </option>
                   {profiles.map((profile) => (
-                    <option key={profile} value={profile}>
-                      {profile}
+                    <option
+                      key={profile.name}
+                      value={profile.name}
+                      disabled={!profile.launchable}
+                    >
+                      {profile.name}
+                      {profile.launchable
+                        ? ""
+                        : ` — ${profile.commandName ?? "unknown"} profiles cannot be launched here`}
                     </option>
                   ))}
                   {/* A saved value the project no longer defines still has to
                       be visible, or the select would silently lie about it. */}
-                  {draft.launchProfile && !profiles.includes(draft.launchProfile) && (
-                    <option value={draft.launchProfile}>
-                      {draft.launchProfile} (not found in launchSettings.json)
-                    </option>
-                  )}
+                  {draft.launchProfile &&
+                    !profiles.some((p) => p.name === draft.launchProfile) && (
+                      <option value={draft.launchProfile}>
+                        {draft.launchProfile} (not found in launchSettings.json)
+                      </option>
+                    )}
                 </select>
               </div>
+
+              {/* What the profile will actually do. These values are applied by
+                  `dotnet run` itself, so without showing them the run has
+                  invisible environment variables and URLs. */}
+              {selectedProfile && (
+                <div className="field">
+                  <label>Profile applies</label>
+                  <div className="mono" style={{ fontSize: "0.85em", opacity: 0.85 }}>
+                    {selectedProfile.applicationUrl && (
+                      <div>URL: {selectedProfile.applicationUrl}</div>
+                    )}
+                    {selectedProfile.workingDirectory && (
+                      <div>Working directory: {selectedProfile.workingDirectory}</div>
+                    )}
+                    {selectedProfile.args.length > 0 && (
+                      <div>Arguments: {selectedProfile.args.join(" ")}</div>
+                    )}
+                    {Object.entries(selectedProfile.env).map(([key, value]) => (
+                      <div key={key}>
+                        {key}={value}
+                      </div>
+                    ))}
+                    {!selectedProfile.applicationUrl &&
+                      !selectedProfile.workingDirectory &&
+                      selectedProfile.args.length === 0 &&
+                      Object.keys(selectedProfile.env).length === 0 && (
+                        <div>Nothing beyond the defaults.</div>
+                      )}
+                  </div>
+                </div>
+              )}
 
               {!draft.launchProfile && (
                 <div className="field">

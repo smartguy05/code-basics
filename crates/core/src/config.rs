@@ -37,6 +37,15 @@ pub struct WorkspaceConfig {
     /// position; anything unlisted keeps its name order after them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub order: Vec<String>,
+    /// Evaluate .NET projects with `dotnet msbuild -getProperty` during a scan
+    /// instead of reading them as XML.
+    ///
+    /// Off by default: it costs a process launch per project and needs the SDK
+    /// installed. Worth turning on for repositories that set properties behind
+    /// MSBuild conditions or in imported `.props` files, which the XML scan
+    /// cannot see. See `crate::adapters::msbuild`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub msbuild_evaluation: bool,
 }
 
 fn default_version() -> u32 {
@@ -50,6 +59,7 @@ impl Default for WorkspaceConfig {
             configs: Vec::new(),
             favorites: Vec::new(),
             order: Vec::new(),
+            msbuild_evaluation: false,
         }
     }
 }
@@ -80,18 +90,56 @@ pub fn load(root: &Path) -> Result<WorkspaceConfig> {
         .with_context(|| format!("{} is not valid configuration JSON", path.display()))
 }
 
+/// Everything under `.code-basics/` that must never be committed.
+///
+/// `results/` is regenerated on every run; `changelists.json` records one
+/// person's work-in-progress grouping and would be noise for everyone else.
+/// `intents/` is a log of what a coding agent did during one person's session,
+/// which is both personal and large.
+const IGNORED: &[&str] = &[
+    "results/",
+    crate::changelists::CHANGELISTS_FILE,
+    "intents/",
+];
+
+/// Make sure `.code-basics/.gitignore` lists everything local.
+///
+/// Entries are appended rather than the file rewritten: a workspace created
+/// before an entry existed still needs it, and anything the user added by hand
+/// has to survive.
+pub fn ensure_gitignore(dir: &Path) -> Result<()> {
+    let path = dir.join(".gitignore");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+
+    let missing: Vec<&str> = IGNORED
+        .iter()
+        .copied()
+        .filter(|entry| !existing.lines().any(|line| line.trim() == *entry))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let mut updated = existing;
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    for entry in missing {
+        updated.push_str(entry);
+        updated.push('\n');
+    }
+
+    std::fs::write(&path, updated)
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
 /// Write the configuration file, creating the directory if needed.
 pub fn save(root: &Path, config: &WorkspaceConfig) -> Result<()> {
     let dir = config_dir(root);
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create {}", dir.display()))?;
 
-    // Results are regenerated on every run and must never be committed.
-    let ignore = dir.join(".gitignore");
-    if !ignore.exists() {
-        std::fs::write(&ignore, format!("{RESULTS_DIR}/\n"))
-            .with_context(|| format!("failed to write {}", ignore.display()))?;
-    }
+    ensure_gitignore(&dir)?;
 
     let path = config_path(root);
     let json = serde_json::to_string_pretty(config).context("failed to serialise configuration")?;

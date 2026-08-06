@@ -7,10 +7,12 @@
 //! webview.
 
 pub mod adapters;
+pub mod changelists;
 pub mod config;
 pub mod files;
 pub mod git;
 pub mod importers;
+pub mod intents;
 
 
 

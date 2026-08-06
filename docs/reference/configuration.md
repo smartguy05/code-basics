@@ -8,10 +8,43 @@ All per-workspace state lives in one directory at the workspace root:
 .code-basics/
 ├── config.json       saved run configurations — check this in
 ├── adapters/*.toml   declarative ecosystem adapters — check these in
+├── changelists.json  your change groups — local, gitignored
+├── intents/          what a coding agent said it was doing — local, gitignored
 └── results/          test report files written by runners — gitignore this
 ```
 
-A single `.gitignore` entry (`.code-basics/results/`) covers everything transient. The scanner never descends into `.code-basics` itself.
+The app writes `.code-basics/.gitignore` covering everything transient (`results/`, `changelists.json`, `intents/`), appending entries it is missing rather than rewriting the file, so a workspace created before an entry existed still picks it up and hand-written rules survive. The scanner never descends into `.code-basics` itself.
+
+## Agent intent (`intents/`)
+
+Two JSON-lines files recording what a coding agent did and why, so the Changes tab can group hunks into the decisions behind them. Written by hooks the agent runs, or imported from its session history. Full walkthrough: [Agent intent capture](../guides/agent-intent-capture.md).
+
+```
+intents/
+├── edits.jsonl    {provider, turnId, toolUseId, seq, path, edit, branch}
+└── labels.jsonl   {provider, turnId, label, paths}
+```
+
+- **Gitignored on purpose.** This is a log of one person's session, and it is large.
+- **The two files join on `turnId`** — `prompt_id` in Claude Code, `turn_id` in Codex. The edit hook knows what changed but has no way to carry a reason; the end-of-turn hook has the reason but not the geometry. Neither agent offers a payload that has both.
+- **Records are content, not positions.** Line numbers are recorded nowhere, because the file moves between the edit and the review. Matching is entirely by text.
+- Safe to delete at any time; nothing else reads it.
+
+Hook configuration is written **outside** this directory, into the agent's own files (`.claude/settings.json`, `.codex/hooks.json`, or their user-level equivalents). Installation is additive and backed up — see the guide.
+
+## Change groups (`changelists.json`)
+
+Named buckets for working-tree files, in the spirit of JetBrains' changelists — a way to keep a half-finished refactor visibly apart from the fix being committed next. Git has no equivalent, so this is purely local bookkeeping and nothing here changes the repository.
+
+```json
+{ "version": 1, "groups": [ { "name": "Refactor", "paths": ["src/a.rs"] } ] }
+```
+
+- **Gitignored on purpose.** Groups describe one person's work in progress; committing them would impose that structure on everyone.
+- **A file belongs to at most one group.** Assigning it somewhere removes it from wherever it was.
+- **Groups hold unstaged work only.** Once something is staged, the index is the grouping that matters, so the Changes tab lists it under Staged. A partially staged file appears in *both* Staged and its group — the same way `git status` lists it under both headings.
+- **Assignments outlive a file becoming clean**, so a file that is committed and later edited again returns to its group rather than being silently forgotten.
+- Deleting a group leaves its files ungrouped rather than discarding anything.
 
 ## `config.json`
 
@@ -20,7 +53,8 @@ A single `.gitignore` entry (`.code-basics/results/`) covers everything transien
   "version": 1,
   "configs": [ /* RunConfig objects */ ],
   "favorites": [ /* config ids, optional */ ],
-  "order": [ /* config ids, optional */ ]
+  "order": [ /* config ids, optional */ ],
+  "msbuildEvaluation": false
 }
 ```
 
@@ -28,6 +62,19 @@ A single `.gitignore` entry (`.code-basics/results/`) covers everything transien
 - Meant to be **checked in**, sharing run configurations the way Rider's `.run/` directory does.
 - Only user-created and imported configurations are written here. Auto-detected ones are re-derived on every scan, which keeps the file small and lets detection keep working as projects change. On open/rescan, saved configs are merged over detected ones.
 - `favorites` holds starred config ids; they sort before everything else in the UI. `order` is the user's preferred ordering — ids listed there sort by position, anything unlisted follows in name order. Both keys are omitted while empty.
+- `msbuildEvaluation` opts this workspace into evaluating .NET projects with `dotnet msbuild -getProperty` during a scan instead of only reading them as XML. Off by default and omitted while false. Turn it on when projects set properties behind MSBuild `Condition`s or in imported `.props` files, which the XML scan cannot see; the cost is one `dotnet` process per project at scan time, and a machine with no SDK simply falls back to the XML scan.
+
+### Detected .NET configurations
+
+What a scan generates per project, before anything saved is layered on:
+
+| Project | Generated |
+|---------|-----------|
+| Executable | One configuration per launchable `launchSettings.json` profile, plus one per build configuration (`Debug`, `Release`, and anything in `<Configurations>`) |
+| Test | One Debug configuration. Release is deliberately not offered — `#if !DEBUG` paths make it a trap — but the editor's build-configuration dropdown lists every configuration the project declares |
+| Library | None; there is nothing to launch or test |
+
+A multi-targeted project (`<TargetFrameworks>`) multiplies the above by framework, since `dotnet run` and `dotnet test` refuse to guess between them. A single-targeted project omits `-f` entirely.
 
 ## .NET user secrets
 

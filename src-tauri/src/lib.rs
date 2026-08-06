@@ -9,12 +9,16 @@ mod invocation;
 mod state;
 
 mod commands {
+    pub mod changelists;
     pub mod files;
     pub mod git;
+    pub mod intents;
     pub mod run;
     pub mod secrets;
     pub mod workspace;
 }
+
+mod recorder;
 
 use state::AppState;
 
@@ -46,6 +50,13 @@ fn workspace_from_args(state: &AppState) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Invoked by an agent's hook rather than by a user: record and exit
+    // without ever creating a window.
+    if recorder::is_record_invocation() {
+        recorder::run();
+        return;
+    }
+
     let state = AppState::default();
     workspace_from_args(&state);
 
@@ -91,11 +102,26 @@ pub fn run() {
             commands::git::git_checkout_branch,
             commands::git::git_checkout_remote_branch,
             commands::git::git_delete_branch,
+            commands::git::git_merge_branch,
+            commands::git::git_abort_merge,
+            commands::changelists::git_changelists,
+            commands::changelists::git_create_changelist,
+            commands::changelists::git_delete_changelist,
+            commands::changelists::git_rename_changelist,
+            commands::changelists::git_assign_to_changelist,
             commands::git::git_history,
             commands::git::git_commit_diff,
             commands::git::git_stash_save,
             commands::git::git_stash_pop,
             commands::git::git_network,
+            commands::intents::intent_groups,
+            commands::intents::stage_intent_group,
+            commands::intents::revert_intent_group,
+            commands::intents::intent_capture_status,
+            commands::intents::intent_install_plan,
+            commands::intents::enable_intent_capture,
+            commands::intents::import_intent_history,
+            commands::intents::clear_intent_history,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start code-basics");

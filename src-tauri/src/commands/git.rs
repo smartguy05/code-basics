@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use cb_core::git::repo::NetworkOperation;
+use cb_core::git::repo::{MergeReport, NetworkOperation};
 use cb_core::git::{Branch, Commit, ComparisonMode, FileDiff, Repo, WorkingStatus};
 use cb_core::process::ProcessEvent;
 use serde::Serialize;
@@ -179,6 +179,24 @@ pub async fn git_checkout_remote_branch(
 #[tauri::command]
 pub async fn git_delete_branch(state: State<'_, AppState>, name: String) -> Result<(), String> {
     open(&state)?.delete_branch(&name).map_err(|e| format!("{e:#}"))
+}
+
+/// Merge a branch into the current one.
+///
+/// A conflicted merge is reported rather than aborted, and left in progress so
+/// the conflicts can be resolved in the Changes tab — `git_abort_merge` backs
+/// out instead.
+#[tauri::command]
+pub async fn git_merge_branch(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<MergeReport, String> {
+    open(&state)?.merge_branch(&name).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn git_abort_merge(state: State<'_, AppState>) -> Result<(), String> {
+    open(&state)?.abort_merge().map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]

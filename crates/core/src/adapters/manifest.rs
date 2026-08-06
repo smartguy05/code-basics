@@ -121,7 +121,20 @@ pub fn load_dir(dir: &Path) -> (Vec<AdapterManifest>, Vec<String>) {
 
 /// Whether a manifest's detection files are present in a directory.
 pub fn matches(manifest: &AdapterManifest, dir: &Path) -> bool {
-    manifest.detect.iter().any(|name| dir.join(name).exists())
+    matched_file(manifest, dir).is_some()
+}
+
+/// The detection file that made a manifest match, in the order the manifest
+/// lists them.
+///
+/// The scan records this as the project's manifest path, so a pytest project
+/// points at its `pyproject.toml` the way a .NET one points at its `.csproj`.
+pub fn matched_file(manifest: &AdapterManifest, dir: &Path) -> Option<PathBuf> {
+    manifest
+        .detect
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.exists())
 }
 
 /// Substitute `{report}`, `{project}` and `{root}` in a template argument.
