@@ -55,30 +55,29 @@ pub fn codex_home() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".codex"))
 }
 
-fn user_hooks_path() -> Option<PathBuf> {
-    codex_home().map(|h| h.join("hooks.json"))
+fn user_hooks_path(home: Option<&Path>) -> Option<PathBuf> {
+    home.map(|h| h.join("hooks.json"))
 }
 
 fn project_hooks_path(root: &Path) -> PathBuf {
     root.join(".codex").join("hooks.json")
 }
 
-impl Provider for Codex {
-    fn id(&self) -> ProviderId {
-        ProviderId::Codex
+/// Everything below takes the Codex home as an argument rather than resolving
+/// it, so a test can point the whole provider at a directory it created. The
+/// trait methods perform the real resolution once and pass it down.
+impl Codex {
+    pub(crate) fn detected_in(&self, home: Option<&Path>) -> bool {
+        home.is_some_and(|h| h.is_dir())
     }
 
-    fn detected(&self) -> bool {
-        codex_home().is_some_and(|h| h.is_dir())
-    }
-
-    fn status(&self, root: &Path) -> ProviderStatus {
-        if !self.detected() {
+    pub(crate) fn status_in(&self, home: Option<&Path>, root: &Path) -> ProviderStatus {
+        if !self.detected_in(home) {
             return ProviderStatus::absent(ProviderId::Codex);
         }
 
         let project = project_hooks_path(root);
-        let user = user_hooks_path();
+        let user = user_hooks_path(home);
 
         let capture = if hooks_json::is_installed(&project) {
             Some(InstallScope::Project)
@@ -88,10 +87,10 @@ impl Provider for Codex {
             None
         };
 
-        let sessions = find_sessions(root).map(|s| s.len()).unwrap_or(0);
+        let sessions = find_sessions_in(home, root).map(|s| s.len()).unwrap_or(0);
 
         let mut caveats = Vec::new();
-        if capture == Some(InstallScope::Project) && !is_trusted(root) {
+        if capture == Some(InstallScope::Project) && !is_trusted_in(home, root) {
             caveats.push(
                 "Codex ignores this repository's .codex/ directory until the project is \
                  trusted. Open it in Codex once and accept the trust prompt."
@@ -103,7 +102,7 @@ impl Provider for Codex {
                 "Codex asks you to review a new command hook the first time it runs.".to_string(),
             );
         }
-        if let Some(skipped) = compressed_session_count(root) {
+        if let Some(skipped) = compressed_session_count(home) {
             if skipped > 0 {
                 caveats.push(format!(
                     "{skipped} older session(s) are compressed and were not read."
@@ -120,17 +119,22 @@ impl Provider for Codex {
         }
     }
 
-    fn install_plan(&self, root: &Path, scope: InstallScope) -> Result<InstallPlan> {
+    pub(crate) fn install_plan_in(
+        &self,
+        home: Option<&Path>,
+        root: &Path,
+        scope: InstallScope,
+    ) -> Result<InstallPlan> {
         let path = match scope {
             InstallScope::Project => project_hooks_path(root),
-            InstallScope::User => user_hooks_path()
+            InstallScope::User => user_hooks_path(home)
                 .ok_or_else(|| anyhow::anyhow!("could not locate the Codex home directory"))?,
         };
 
         let (content, merges_existing) = hooks_json::plan_merge(&path, root)?;
 
         let mut caveats = Vec::new();
-        if scope == InstallScope::Project && !is_trusted(root) {
+        if scope == InstallScope::Project && !is_trusted_in(home, root) {
             caveats.push(
                 "This repository is not yet trusted by Codex, so it will ignore .codex/ \
                  until you accept the trust prompt."
@@ -177,16 +181,42 @@ impl Provider for Codex {
         })
     }
 
-    fn history(&self, root: &Path) -> Result<(Vec<IntentRecord>, Vec<IntentLabel>)> {
+    pub(crate) fn history_in(
+        &self,
+        home: Option<&Path>,
+        root: &Path,
+    ) -> Result<(Vec<IntentRecord>, Vec<IntentLabel>)> {
         let mut records = Vec::new();
         let labels = Vec::new();
         let mut seq = 0u64;
 
-        for session in find_sessions(root)? {
+        for session in find_sessions_in(home, root)? {
             read_rollout(&session, root, &mut seq, &mut records);
         }
 
         Ok((records, labels))
+    }
+}
+
+impl Provider for Codex {
+    fn id(&self) -> ProviderId {
+        ProviderId::Codex
+    }
+
+    fn detected(&self) -> bool {
+        self.detected_in(codex_home().as_deref())
+    }
+
+    fn status(&self, root: &Path) -> ProviderStatus {
+        self.status_in(codex_home().as_deref(), root)
+    }
+
+    fn install_plan(&self, root: &Path, scope: InstallScope) -> Result<InstallPlan> {
+        self.install_plan_in(codex_home().as_deref(), root, scope)
+    }
+
+    fn history(&self, root: &Path) -> Result<(Vec<IntentRecord>, Vec<IntentLabel>)> {
+        self.history_in(codex_home().as_deref(), root)
     }
 }
 
@@ -195,8 +225,8 @@ impl Provider for Codex {
 /// Read as text rather than parsed: the key is a quoted absolute path whose
 /// separators and case vary, and a full TOML parse would still need the same
 /// fuzzy comparison afterwards.
-fn is_trusted(root: &Path) -> bool {
-    let Some(home) = codex_home() else {
+fn is_trusted_in(home: Option<&Path>, root: &Path) -> bool {
+    let Some(home) = home else {
         return false;
     };
     let Ok(config) = std::fs::read_to_string(home.join("config.toml")) else {
@@ -225,19 +255,19 @@ fn is_trusted(root: &Path) -> bool {
     false
 }
 
-fn sessions_roots() -> Vec<PathBuf> {
-    let Some(home) = codex_home() else {
+fn sessions_roots(home: Option<&Path>) -> Vec<PathBuf> {
+    let Some(home) = home else {
         return Vec::new();
     };
     vec![home.join("sessions"), home.join("archived_sessions")]
 }
 
 /// Rollout files whose opening `session_meta` names this workspace.
-fn find_sessions(root: &Path) -> Result<Vec<PathBuf>> {
+fn find_sessions_in(home: Option<&Path>, root: &Path) -> Result<Vec<PathBuf>> {
     let wanted = normalise_path(&root.to_string_lossy()).to_lowercase();
     let mut found = Vec::new();
 
-    for base in sessions_roots() {
+    for base in sessions_roots(home) {
         if !base.is_dir() {
             continue;
         }
@@ -264,9 +294,9 @@ fn find_sessions(root: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Compressed rollouts we deliberately do not read, so the count can be shown.
-fn compressed_session_count(_root: &Path) -> Option<usize> {
+fn compressed_session_count(home: Option<&Path>) -> Option<usize> {
     let mut count = 0;
-    for base in sessions_roots() {
+    for base in sessions_roots(home) {
         if !base.is_dir() {
             continue;
         }
@@ -492,3 +522,7 @@ pub(super) fn hook_commands(root: &Path) -> Value {
 pub fn planned_entries(root: &Path) -> Value {
     json!({ "hooks": hook_commands(root) })
 }
+
+#[cfg(test)]
+#[path = "codex_tests.rs"]
+mod codex_tests;

@@ -1159,6 +1159,37 @@ pub enum NetworkOperation {
     PushSetUpstream(String),
 }
 
+/// Which network operation to perform.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NetworkKind {
+    Fetch,
+    Pull,
+    Push,
+    /// Push a branch that has no upstream yet, establishing one.
+    PushSetUpstream,
+}
+
+/// Turn what the UI asked for into the operation to run.
+///
+/// `current_branch` is whatever `WorkingStatus::branch` reported. Only
+/// `PushSetUpstream` needs it — there is no branch name to set an upstream on
+/// when HEAD is detached, and guessing one would push to the wrong place.
+pub fn resolve_network(
+    kind: NetworkKind,
+    current_branch: Option<String>,
+) -> Result<NetworkOperation, String> {
+    Ok(match kind {
+        NetworkKind::Fetch => NetworkOperation::Fetch,
+        NetworkKind::Pull => NetworkOperation::Pull,
+        NetworkKind::Push => NetworkOperation::Push,
+        NetworkKind::PushSetUpstream => {
+            let branch = current_branch.ok_or_else(|| "cannot push a detached HEAD".to_string())?;
+            NetworkOperation::PushSetUpstream(branch)
+        }
+    })
+}
+
 /// Turn a libgit2 diff into our own structures.
 fn collect_file_diffs(diff: &git2::Diff) -> Result<Vec<FileDiff>> {
     let mut files: Vec<FileDiff> = Vec::new();
@@ -1288,6 +1319,75 @@ fn unstaged_kind(status: git2::Status) -> Option<ChangeKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The exact strings the UI is allowed to send for `NetworkKind`.
+    ///
+    /// `src/ipc/types.ts` writes these by hand, and the enum is
+    /// deserialise-only, so a rename would not show up as a serialisation
+    /// change — only as a runtime "unknown variant" once the button is
+    /// pressed. Pinning the accepted input keeps that failure here.
+    #[test]
+    fn network_kind_accepts_the_camel_case_strings_the_ui_sends() {
+        let parse = |text: &str| {
+            serde_json::from_value::<NetworkKind>(serde_json::Value::String(text.to_string()))
+                .unwrap_or_else(|e| panic!("{text} should deserialise: {e}"))
+        };
+
+        assert!(matches!(parse("fetch"), NetworkKind::Fetch));
+        assert!(matches!(parse("pull"), NetworkKind::Pull));
+        assert!(matches!(parse("push"), NetworkKind::Push));
+        assert!(matches!(
+            parse("pushSetUpstream"),
+            NetworkKind::PushSetUpstream
+        ));
+
+        // The snake_case spelling must stay rejected, or a future rename of
+        // the serde attribute would pass unnoticed.
+        assert!(
+            serde_json::from_value::<NetworkKind>(serde_json::Value::String(
+                "push_set_upstream".to_string()
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn plain_kinds_resolve_without_needing_a_branch() {
+        assert_eq!(
+            resolve_network(NetworkKind::Fetch, None).unwrap(),
+            NetworkOperation::Fetch
+        );
+        assert_eq!(
+            resolve_network(NetworkKind::Pull, None).unwrap(),
+            NetworkOperation::Pull
+        );
+        assert_eq!(
+            resolve_network(NetworkKind::Push, None).unwrap(),
+            NetworkOperation::Push
+        );
+    }
+
+    #[test]
+    fn a_branch_is_ignored_by_the_kinds_that_do_not_use_it() {
+        assert_eq!(
+            resolve_network(NetworkKind::Push, Some("main".to_string())).unwrap(),
+            NetworkOperation::Push
+        );
+    }
+
+    #[test]
+    fn push_set_upstream_carries_the_current_branch() {
+        assert_eq!(
+            resolve_network(NetworkKind::PushSetUpstream, Some("feature/x".to_string())).unwrap(),
+            NetworkOperation::PushSetUpstream("feature/x".to_string())
+        );
+    }
+
+    #[test]
+    fn push_set_upstream_refuses_a_detached_head() {
+        let error = resolve_network(NetworkKind::PushSetUpstream, None).unwrap_err();
+        assert_eq!(error, "cannot push a detached HEAD");
+    }
 
     /// The raw libgit2 text a held directory produces on Windows.
     const LIBGIT2_DETAIL: &str =

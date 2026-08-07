@@ -15,15 +15,11 @@
 
 use std::io::Read;
 
-use cb_core::intents::hook::{self, HookEvent};
-use cb_core::intents::ProviderId;
-
-/// The flag that identifies our own hook entries in a shared config file.
-const MARKER: &str = "--code-basics-intent";
+use cb_core::intents::hook;
 
 /// Did the command line ask for recording rather than for the application?
 pub fn is_record_invocation() -> bool {
-    std::env::args().any(|arg| arg == "record-intent" || arg == MARKER)
+    hook::is_record_invocation(&std::env::args().collect::<Vec<_>>())
 }
 
 /// Read a hook payload from stdin and record it.
@@ -41,20 +37,16 @@ pub fn run() {
 fn record() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
-    let Some(event) = flag(&args, "--event").and_then(|e| HookEvent::parse(&e)) else {
+    let Some(invocation) = hook::parse_recorder_args(&args) else {
         // Some other event fired. Nothing to do, and not a problem.
         return Ok(());
-    };
-    let provider = match flag(&args, "--provider").as_deref() {
-        Some("codex") => ProviderId::Codex,
-        _ => ProviderId::ClaudeCode,
     };
 
     let mut payload = String::new();
     std::io::stdin().read_to_string(&mut payload)?;
     let payload: serde_json::Value = serde_json::from_str(&payload)?;
 
-    let Some(root) = hook::resolve_root(flag(&args, "--workspace").as_deref(), &payload) else {
+    let Some(root) = hook::resolve_root(invocation.workspace.as_deref(), &payload) else {
         return Ok(());
     };
 
@@ -64,12 +56,6 @@ fn record() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    hook::ingest(&root, provider, event, &payload)?;
+    hook::ingest(&root, invocation.provider, invocation.event, &payload)?;
     Ok(())
-}
-
-/// Read `--name value` from the command line.
-fn flag(args: &[String], name: &str) -> Option<String> {
-    let position = args.iter().position(|a| a == name)?;
-    args.get(position + 1).cloned()
 }

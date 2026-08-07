@@ -184,13 +184,11 @@ pub async fn enable_intent_capture(
 #[tauri::command]
 pub async fn import_intent_history(state: State<'_, AppState>) -> Result<usize, String> {
     let root = state.workspace_root()?;
-    let (records, labels) = providers::history(&root);
+    let (mut records, labels) = providers::history(&root);
 
-    let mut base = intents::next_seq(&root);
-    for mut record in records {
-        record.seq += base;
-        intents::append_edit(&root, &record).map_err(|e| format!("{e:#}"))?;
-        base = base.max(record.seq);
+    intents::rebase_seqs(&mut records, intents::next_seq(&root));
+    for record in &records {
+        intents::append_edit(&root, record).map_err(|e| format!("{e:#}"))?;
     }
     for label in &labels {
         intents::append_label(&root, label).map_err(|e| format!("{e:#}"))?;

@@ -1,16 +1,18 @@
 //! Turning a run configuration into a command line.
 //!
 //! The only place that knows which adapter owns which ecosystem. Everything it
-//! calls lives in `cb-core` and is tested there; this is dispatch and path
-//! resolution only.
+//! calls lives in the adapter modules and is tested there; this is dispatch and
+//! path resolution only.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use cb_core::adapters::{dotnet, manifest, node};
-use cb_core::config;
-use cb_core::inspect::session::{self, ArmedDumps};
-use cb_core::model::{Invocation, RunConfig, RunKind, TestRunner};
-use cb_core::workspace::{self, Workspace};
+use crate::adapters::{dotnet, manifest, node};
+use crate::config;
+use crate::inspect::session::{self, ArmedDumps};
+use crate::model::{Invocation, RunConfig, RunKind, TestCase, TestRunner};
+use crate::testing;
+use crate::workspace::{self, Workspace};
 
 /// Build the command for a configuration.
 ///
@@ -48,6 +50,84 @@ pub fn build(
         "node" => build_node(workspace, config, &results, filter),
         // Anything else must come from a declarative manifest.
         other => build_from_manifest(workspace, config, &results, filter, other),
+    }
+}
+
+/// The test-name filter a run should use, given whether the user asked to
+/// re-run only the failures and what the previous run of that same
+/// configuration produced.
+///
+/// Asking to re-run failures when there are none is an error rather than a
+/// silent full run: running the whole suite would look like the request was
+/// ignored.
+pub fn rerun_filter(
+    only_failed: bool,
+    previous: Option<&[TestCase]>,
+) -> Result<Option<Vec<String>>, String> {
+    if !only_failed {
+        return Ok(None);
+    }
+
+    let names = previous
+        .map(testing::tree::failed_names)
+        .filter(|names| !names.is_empty())
+        .ok_or_else(|| {
+            "there are no failed tests from a previous run of this configuration to re-run"
+                .to_string()
+        })?;
+
+    Ok(Some(names))
+}
+
+/// Resolve every member of a compound configuration into the command that will
+/// run it.
+///
+/// Everything is resolved before anything is started, so a broken member stops
+/// the whole launch rather than leaving half of it running — and every problem
+/// is reported at once, because fixing them one error at a time is a poor way
+/// to learn that three members are missing.
+///
+/// `env` is the environment for this run only (the UI's environment picker),
+/// layered over each member's own.
+pub fn plan_compound(
+    workspace: &Workspace,
+    config: &RunConfig,
+    env: Option<&BTreeMap<String, String>>,
+) -> Result<Vec<(RunConfig, Invocation)>, String> {
+    let mut members = Vec::new();
+    let mut errors = Vec::new();
+
+    for member_id in &config.compound {
+        let Some(member) = workspace.configs.iter().find(|c| c.id == *member_id) else {
+            errors.push(format!("compound member `{member_id}` no longer exists"));
+            continue;
+        };
+        if !member.compound.is_empty() {
+            errors.push(format!(
+                "`{}` is itself a compound configuration; nesting is not supported",
+                member.name
+            ));
+            continue;
+        }
+
+        let mut member = member.clone();
+        // The run's environment wins over the configuration's own.
+        member.env.extend(
+            env.into_iter()
+                .flatten()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+
+        match build(workspace, &member, None) {
+            Ok(invocation) => members.push((member, invocation)),
+            Err(e) => errors.push(e),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(members)
+    } else {
+        Err(errors.join("; "))
     }
 }
 

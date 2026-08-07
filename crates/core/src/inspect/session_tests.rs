@@ -129,6 +129,42 @@ fn an_absent_sidecar_is_reported_as_unavailable_with_the_command_to_fix_it() {
     assert!(reason.contains("pnpm sidecar:build"), "got {reason}");
 }
 
+/// A fresh checkout has no sidecar — `cargo build` does not produce one — so
+/// the message has to read as an ordinary missing component and say exactly
+/// what to type, not as a broken installation.
+#[test]
+fn the_missing_sidecar_message_names_the_command_and_the_override() {
+    let reason = missing_sidecar_reason();
+
+    assert!(reason.contains("pnpm sidecar:build"), "got {reason}");
+    assert!(reason.contains("CB_INSPECTOR_PATH"), "got {reason}");
+    assert!(reason.contains(".NET"), "got {reason}");
+}
+
+/// The message names the file the user should expect to find, so it has to be
+/// the real one rather than a hard-coded spelling that could drift.
+#[test]
+fn the_missing_sidecar_message_names_the_binary_it_looked_for() {
+    let reason = missing_sidecar_reason();
+
+    assert!(
+        reason.contains(sidecar::sidecar_file_name(Bitness::X64)),
+        "got {reason}"
+    );
+}
+
+/// Status reports the same reason the function gives, so the UI and any other
+/// caller cannot disagree about why the feature is off.
+#[test]
+fn the_reason_status_reports_is_the_missing_sidecar_message_itself() {
+    let dir = tempfile::tempdir().unwrap();
+
+    assert_eq!(
+        status(dir.path(), None).unavailable_reason,
+        Some(missing_sidecar_reason())
+    );
+}
+
 #[test]
 fn an_installed_sidecar_is_available_and_offers_no_reason() {
     let workspace = tempfile::tempdir().unwrap();
@@ -1311,4 +1347,179 @@ fn the_cost_of_attaching_is_offered_beside_the_button_that_pays_it() {
             "the tab that shows every caveat must still show this one: {caveat}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Retrying with the other architecture
+// ---------------------------------------------------------------------------
+
+fn failure(code: sidecar::FailureCode) -> sidecar::SidecarFailure {
+    sidecar::SidecarFailure {
+        code,
+        message: "the sidecar's own sentence".to_string(),
+    }
+}
+
+#[test]
+fn a_bitness_mismatch_retries_with_the_build_that_can_read_the_target() {
+    // The whole reason a second attempt exists: an x86 target reports a
+    // mismatch to the x64 reader, and the x86 build is sitting right there.
+    let outcome = AttemptOutcome::Failed(failure(sidecar::FailureCode::BitnessMismatch));
+
+    assert_eq!(
+        retry_bitness(&outcome, Bitness::X64, true),
+        Some(Bitness::X86)
+    );
+}
+
+#[test]
+fn the_build_a_retry_would_use_is_never_the_one_that_just_failed() {
+    // What the caller has to resolve on disk before the decision can be made.
+    assert_eq!(other_bitness(Bitness::X64), Bitness::X86);
+    assert_eq!(other_bitness(Bitness::X86), Bitness::X64);
+}
+
+#[test]
+fn a_bitness_mismatch_with_no_other_build_present_surfaces_the_failure() {
+    // Retrying with a binary that is not on disk would fail to resolve and
+    // lose the sidecar's own mismatch message, which is the most useful thing
+    // the user can be shown here.
+    let outcome = AttemptOutcome::Failed(failure(sidecar::FailureCode::BitnessMismatch));
+
+    assert_eq!(retry_bitness(&outcome, Bitness::X64, false), None);
+}
+
+#[test]
+fn a_capture_that_worked_is_never_retried() {
+    assert_eq!(
+        retry_bitness(&AttemptOutcome::Captured, Bitness::X64, true),
+        None
+    );
+    assert_eq!(
+        retry_bitness(&AttemptOutcome::Captured, Bitness::X86, true),
+        None
+    );
+}
+
+#[test]
+fn a_failure_that_is_not_a_mismatch_is_never_retried() {
+    // Every one of these fails identically the second time: retrying doubles
+    // the wait and buries the real message behind a duplicate of itself.
+    for code in [
+        sidecar::FailureCode::NotManaged,
+        sidecar::FailureCode::AccessDenied,
+        sidecar::FailureCode::TargetGone,
+        sidecar::FailureCode::Other,
+    ] {
+        let outcome = AttemptOutcome::Failed(failure(code));
+        assert_eq!(
+            retry_bitness(&outcome, Bitness::X64, true),
+            None,
+            "{code:?} should not earn a second attempt"
+        );
+    }
+}
+
+#[test]
+fn the_fallback_build_is_the_last_attempt() {
+    // x86 is already the narrower reader; a mismatch reported by it has
+    // nowhere left to go, and a loop that tried anyway would not terminate.
+    let outcome = AttemptOutcome::Failed(failure(sidecar::FailureCode::BitnessMismatch));
+
+    assert_eq!(retry_bitness(&outcome, Bitness::X86, true), None);
+}
+
+#[test]
+fn a_result_that_was_never_written_is_not_retried() {
+    // The sidecar died before answering. That is not a mismatch, and running
+    // it again with the other architecture would only produce the same
+    // silence — the parse error afterwards is what names the problem.
+    assert_eq!(
+        retry_bitness(&AttemptOutcome::NoResult, Bitness::X64, true),
+        None
+    );
+}
+
+#[test]
+fn the_outcome_of_an_attempt_is_read_from_the_result_the_sidecar_wrote() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    let document = |extra: &str| {
+        format!(
+            r#"{{
+                "schemaVersion": {},
+                "snapshotId": "n1",
+                "capturedAt": "2026-08-06T14:32:07Z",
+                "target": {{ "target": {{ "kind": "live", "pid": 4242 }} }},
+                "caps": {{ "maxDepth": 5, "maxChildren": 100, "maxStringLength": 512, "maxNodes": 5000 }},
+                "nodes": []{extra}
+            }}"#,
+            crate::inspect::model::SCHEMA_VERSION
+        )
+    };
+
+    // Nothing there at all.
+    assert_eq!(attempt_outcome(&path), AttemptOutcome::NoResult);
+
+    // Something there that this build cannot read is equally not a failure it
+    // can act on: the code is what a retry is decided from, never the prose.
+    std::fs::write(&path, "{ not json").unwrap();
+    assert_eq!(attempt_outcome(&path), AttemptOutcome::NoResult);
+
+    std::fs::write(&path, document("")).unwrap();
+    assert_eq!(attempt_outcome(&path), AttemptOutcome::Captured);
+
+    std::fs::write(
+        &path,
+        document(r#", "failure": "target is 32-bit", "failureCode": "bitnessMismatch""#),
+    )
+    .unwrap();
+    match attempt_outcome(&path) {
+        AttemptOutcome::Failed(f) => {
+            assert_eq!(f.code, sidecar::FailureCode::BitnessMismatch);
+            assert_eq!(f.message, "target is 32-bit");
+        }
+        other => panic!("expected a reported failure, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enumeration: could not look is not the same as nothing there
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_empty_machine_is_a_normal_answer() {
+    // Nothing managed is running. That is data, and the picker shows it as an
+    // empty list rather than as a problem.
+    let listed = enumeration_outcome(Ok(()), || Ok(sidecar::ProcessList::default()));
+
+    assert_eq!(listed, Ok(sidecar::ProcessList::default()));
+}
+
+#[test]
+fn an_enumerator_that_could_not_be_run_never_reads_a_result_file() {
+    // The gate this exists for. A stale listing from an earlier poll would be
+    // read as this poll's answer, and `inspect_capture` refuses a live target
+    // that is absent from the list — so a failure that read as data would tell
+    // the user their process had exited and its pid may have been reused.
+    let mut read = false;
+    let listed = enumeration_outcome(Err("Access is denied. (os error 5)".to_string()), || {
+        read = true;
+        Ok(sidecar::ProcessList::default())
+    });
+
+    assert!(!read, "a failed enumeration must not fall back to a file");
+    let reason = listed.expect_err("a failure must not read as an empty machine");
+    assert!(reason.contains("could not be run"), "got {reason}");
+    assert!(reason.contains("Access is denied"), "got {reason}");
+}
+
+#[test]
+fn a_listing_that_could_not_be_read_is_a_failure_and_not_an_empty_machine() {
+    let listed = enumeration_outcome(Ok(()), || {
+        Err("the inspector did not produce a process list".to_string())
+    });
+
+    let reason = listed.expect_err("an unreadable listing is not an empty machine");
+    assert!(reason.contains("did not produce"), "got {reason}");
 }

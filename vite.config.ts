@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
@@ -22,5 +22,16 @@ export default defineConfig({
   build: {
     target: "es2022",
     sourcemap: true,
+  },
+  test: {
+    // Everything under test is pure logic extracted out of the components, so
+    // there is no DOM to emulate — node keeps the suite fast and dependency-free.
+    environment: "node",
+    include: ["src/**/*.test.ts"],
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*Logic.ts", "src/components/language.ts"],
+      thresholds: { lines: 70 },
+    },
   },
 });

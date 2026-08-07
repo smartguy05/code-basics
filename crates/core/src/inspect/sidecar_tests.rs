@@ -164,6 +164,106 @@ fn a_process_reported_as_its_own_parent_loses_the_parent_not_itself() {
     assert_eq!(list.processes[0].parent_pid, None);
 }
 
+/// One session is one directory, so pruning is a listing of the disk rather
+/// than a bookkeeping file that could drift out of step with it.
+#[test]
+fn every_session_gets_its_own_directory_under_the_sessions_directory() {
+    let root = Path::new("/repo");
+
+    assert_eq!(session_dir(root, "s-1"), sessions_dir(root).join("s-1"));
+    assert_ne!(session_dir(root, "s-1"), session_dir(root, "s-2"));
+    assert_eq!(
+        session_dir(root, "s-1").parent(),
+        Some(sessions_dir(root)).as_deref()
+    );
+}
+
+#[test]
+fn a_sessions_request_and_result_both_live_in_its_own_directory() {
+    let root = Path::new("/repo");
+    let dir = session_dir(root, "s-1");
+
+    assert_eq!(request_path(root, "s-1"), dir.join(REQUEST_FILE));
+    assert_eq!(result_path(root, "s-1"), dir.join(RESULT_FILE));
+}
+
+/// A capture is a copy of process memory, so its directory has to sit inside
+/// the ignored `.code-basics/` tree and nowhere else.
+#[test]
+fn a_session_directory_is_inside_the_ignored_config_directory() {
+    let root = Path::new("/repo");
+
+    assert!(session_dir(root, "s-1").starts_with(crate::config::config_dir(root)));
+}
+
+// -- reading a listing from disk --------------------------------------------
+
+#[test]
+fn a_process_listing_is_read_back_from_the_file_the_sidecar_wrote() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("processes.json");
+    std::fs::write(
+        &path,
+        r#"{ "schemaVersion": 1, "processes": [{ "pid": 42, "name": "Api" }] }"#,
+    )
+    .unwrap();
+
+    let list = parse_process_list_file(&path).unwrap();
+
+    assert_eq!(list.processes.len(), 1);
+    assert_eq!(list.processes[0].pid, 42);
+}
+
+/// A missing file means the sidecar never got as far as answering — a
+/// different problem from an empty machine, and the message has to say which.
+#[test]
+fn a_listing_the_sidecar_never_wrote_is_an_error_naming_the_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("never-written.json");
+
+    let message = format!(
+        "{:#}",
+        parse_process_list_file(&path).expect_err("a missing listing is not an empty machine")
+    );
+
+    assert!(message.contains("did not produce"), "got {message}");
+    assert!(message.contains("never-written.json"), "got {message}");
+}
+
+/// An empty machine is a legitimate answer and must not read as a failure.
+#[test]
+fn a_listing_with_no_processes_reads_as_an_empty_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("processes.json");
+    std::fs::write(&path, r#"{ "schemaVersion": 1, "processes": [] }"#).unwrap();
+
+    let list = parse_process_list_file(&path).unwrap();
+
+    assert!(list.processes.is_empty());
+    assert!(list.warnings.is_empty());
+}
+
+#[test]
+fn a_listing_file_that_is_not_json_is_refused_rather_than_half_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("processes.json");
+    std::fs::write(&path, "not json at all").unwrap();
+
+    assert!(parse_process_list_file(&path).is_err());
+}
+
+/// A stale sidecar is refused whether the listing is parsed from a string or
+/// read from a file — the file path must not become a way around the check.
+#[test]
+fn a_listing_file_from_a_stale_sidecar_is_refused_by_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("processes.json");
+    std::fs::write(&path, r#"{ "schemaVersion": 99, "processes": [] }"#).unwrap();
+
+    let message = format!("{:#}", parse_process_list_file(&path).unwrap_err());
+    assert!(message.contains("99"), "got {message}");
+}
+
 #[test]
 fn a_process_listing_from_a_stale_sidecar_is_refused_by_version() {
     let error = parse_process_list(r#"{ "schemaVersion": 99, "processes": [] }"#)

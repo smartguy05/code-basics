@@ -506,3 +506,129 @@ fn dots_and_underscores_are_also_replaced_when_encoding() {
 
     assert_eq!(encoded, "C--code-my-app-v2");
 }
+
+// -- the provider registry --------------------------------------------------
+
+/// Both agents are always offered, installed or not — the UI needs a row for
+/// one that is missing just as much as for one that is present.
+#[test]
+fn every_known_provider_is_listed_whether_or_not_it_is_installed() {
+    let ids: Vec<ProviderId> = all().iter().map(|p| p.id()).collect();
+
+    assert_eq!(ids, vec![ProviderId::ClaudeCode, ProviderId::Codex]);
+}
+
+#[test]
+fn statuses_reports_one_row_per_provider_in_registry_order() {
+    let dir = workspace();
+
+    let statuses = statuses(dir.path());
+
+    assert_eq!(
+        statuses.iter().map(|s| s.provider).collect::<Vec<_>>(),
+        vec![ProviderId::ClaudeCode, ProviderId::Codex]
+    );
+}
+
+/// A workspace no agent has ever been run in has no sessions, whatever the
+/// machine's own home directories hold.
+///
+/// Capture is deliberately not asserted here: a user-level install on the
+/// developer's own machine legitimately shows as `Some(User)` for every
+/// workspace, which is the point of a user-level install.
+#[test]
+fn a_fresh_workspace_has_no_sessions_for_any_provider() {
+    let dir = workspace();
+
+    for status in statuses(dir.path()) {
+        assert_eq!(status.sessions, 0, "{:?}: {status:?}", status.provider);
+    }
+}
+
+/// Installing hooks in the workspace is visible through the registry, not just
+/// through the provider itself.
+#[test]
+fn a_project_install_shows_up_in_the_statuses_row_for_that_provider() {
+    let dir = workspace();
+    let plan = codex::Codex::new()
+        .install_plan(dir.path(), InstallScope::Project)
+        .unwrap();
+    apply_plan(&plan).unwrap();
+
+    let row = statuses(dir.path())
+        .into_iter()
+        .find(|s| s.provider == ProviderId::Codex)
+        .expect("a Codex row");
+
+    assert_eq!(row.capture, Some(InstallScope::Project));
+}
+
+#[test]
+fn a_workspace_no_agent_has_run_in_has_no_merged_history() {
+    let dir = workspace();
+
+    let (records, labels) = history(dir.path());
+
+    assert!(records.is_empty(), "got: {records:?}");
+    assert!(labels.is_empty(), "got: {labels:?}");
+}
+
+/// Records from the two providers interleave by sequence number; the merge has
+/// to leave them ordered or the intent cards read out of order.
+#[test]
+fn merged_history_comes_back_sorted_by_sequence() {
+    let dir = workspace();
+
+    let (records, _) = history(dir.path());
+
+    let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
+    let mut sorted = seqs.clone();
+    sorted.sort_unstable();
+    assert_eq!(seqs, sorted);
+}
+
+// -- the absent status ------------------------------------------------------
+
+#[test]
+fn an_absent_provider_reports_nothing_available_and_keeps_its_id() {
+    let status = ProviderStatus::absent(ProviderId::ClaudeCode);
+
+    assert_eq!(status.provider, ProviderId::ClaudeCode);
+    assert!(!status.detected);
+    assert_eq!(status.capture, None);
+    assert_eq!(status.sessions, 0);
+    assert!(status.caveats.is_empty());
+}
+
+// -- backups ----------------------------------------------------------------
+
+/// The backup keeps the original extension so it is obviously a copy of that
+/// file and not of a different one.
+#[test]
+fn a_backup_keeps_the_extension_of_the_file_it_copies() {
+    assert_eq!(backup_extension(Path::new("hooks.json")), "json.bak");
+    assert_eq!(backup_extension(Path::new("CLAUDE.md")), "md.bak");
+    assert_eq!(backup_extension(Path::new("settings")), "bak");
+}
+
+/// A file being created for the first time has nothing to back up.
+#[test]
+fn applying_a_plan_that_creates_a_file_writes_no_backup() {
+    let dir = workspace();
+    let path = dir.path().join("hooks.json");
+
+    apply_plan(&InstallPlan {
+        provider: ProviderId::Codex,
+        scope: InstallScope::User,
+        writes: vec![PlannedWrite {
+            path: path.clone(),
+            content: "{}\n".to_string(),
+            merges_existing: false,
+        }],
+        caveats: Vec::new(),
+    })
+    .unwrap();
+
+    assert!(path.exists());
+    assert!(!dir.path().join("hooks.json.bak").exists());
+}

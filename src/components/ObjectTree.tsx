@@ -3,8 +3,8 @@ import type {
   ElidedReason,
   InspectGraph,
   InspectNode,
-  ObjectValue,
 } from "../ipc/types";
+import { countLabel, objectMatches, targetLabel } from "./treeLogic";
 
 /**
  * The object tree and the header that frames it.
@@ -33,54 +33,6 @@ const ELIDED_WORDING: Record<ElidedReason, string> = {
   childLimit: "more items than the child limit allowed",
   nodeLimit: "stopped here — the capture hit its total node limit",
 };
-
-/** The text a filter should be able to find a node by. */
-function searchableValue(value: ObjectValue): string {
-  switch (value.kind) {
-    case "primitive":
-      return value.text;
-    case "text":
-      return value.text;
-    case "reference":
-      return `${value.typeName} ${value.address}`;
-    case "cycle":
-      return value.path;
-    case "unavailable":
-      return value.reason;
-    case "null":
-    case "elided":
-      return "";
-  }
-  return "";
-}
-
-function matches(node: InspectNode, text: string): boolean {
-  if (text === "") return true;
-
-  const own =
-    node.label.toLowerCase().includes(text) ||
-    (node.typeName?.toLowerCase().includes(text) ?? false) ||
-    searchableValue(node.value).toLowerCase().includes(text);
-  if (own) return true;
-
-  // A branch survives if any descendant does, so filtering never hides a
-  // matching field behind a non-matching parent.
-  return node.children.some((child) => matches(child, text));
-}
-
-/** "showing 3 of 5,412" — only ever claims a total the inspector counted. */
-function countLabel(node: InspectNode): string | null {
-  const shown = node.children.length;
-  if (node.childCountTotal != null && node.childCountTotal > shown) {
-    return `showing ${shown.toLocaleString()} of ${node.childCountTotal.toLocaleString()}`;
-  }
-  if (node.hasMore) {
-    // The inspector knew there was more but not how much; saying so beats
-    // inventing a total.
-    return `showing ${shown.toLocaleString()}, more not read`;
-  }
-  return null;
-}
 
 /**
  * The object a re-read would be rooted at, and the row that owns it.
@@ -230,7 +182,7 @@ function Row({
   onExpand,
   onJumpTo,
 }: RowProps) {
-  if (!matches(node, text)) return null;
+  if (!objectMatches(node, text)) return null;
 
   // A cycle is a leaf by construction: it names a node already on the path, so
   // recursing into it is exactly the infinite walk the variant exists to stop.
@@ -326,7 +278,7 @@ export function ObjectTree({
     return <div className="empty">Nothing captured yet.</div>;
   }
 
-  const visible = roots.filter((node) => matches(node, text));
+  const visible = roots.filter((node) => objectMatches(node, text));
   if (visible.length === 0) {
     return <div className="empty">No fields match the current filter.</div>;
   }
@@ -354,13 +306,6 @@ export function ObjectTree({
       ))}
     </div>
   );
-}
-
-function targetLabel(graph: InspectGraph): string {
-  const target = graph.target.target;
-  if (target.kind === "dump") return target.path;
-  const name = graph.target.processName;
-  return name != null ? `${name} (pid ${target.pid})` : `pid ${target.pid}`;
 }
 
 export interface CaptureHeaderProps {

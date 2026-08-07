@@ -357,6 +357,31 @@ pub fn next_seq(root: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// Lift a batch of imported records above the numbering a workspace already
+/// uses, returning the highest sequence number handed out.
+///
+/// History mined from an agent's own session files is numbered in that
+/// agent's terms, starting near zero, and two providers happily reuse the same
+/// numbers. Appending them unchanged would interleave imported edits with
+/// recorded ones and lose the "later edit wins" ordering attribution depends
+/// on, so every imported record is pushed above the workspace's current
+/// maximum before it is written.
+///
+/// Only the ordering is meaningful — the absolute values are not, and the base
+/// is carried forward from each record as it is rebased, so a batch's seqs
+/// accumulate rather than being shifted by one constant. The caller passes
+/// [`next_seq`] and does the writing; this decides nothing about files.
+pub fn rebase_seqs(records: &mut [IntentRecord], base: u64) -> u64 {
+    let mut next = base;
+
+    for record in records.iter_mut() {
+        record.seq = record.seq.saturating_add(next);
+        next = next.max(record.seq);
+    }
+
+    next
+}
+
 /// Forget everything recorded for a workspace.
 pub fn clear(root: &Path) -> Result<()> {
     for path in [edits_path(root), labels_path(root)] {

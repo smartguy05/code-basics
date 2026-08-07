@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>code-basics — Test Coverage Initiative Report</title>
+<style>
+  :root { --ink:#1a2332; --muted:#5b6678; --accent:#0f766e; --bad:#b91c1c; --bg:#f8fafc; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", system-ui, sans-serif; color:#1a2332; background:#f8fafc; margin:0; padding:2rem; line-height:1.55; }
+  main { max-width: 900px; margin: 0 auto; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:2.5rem 3rem; }
+  h1 { font-size:1.6rem; margin:0 0 .25rem; }
+  .sub { color:#64748b; margin-bottom:2rem; }
+  h2 { font-size:1.15rem; margin-top:2.2rem; border-bottom:2px solid #e2e8f0; padding-bottom:.35rem; }
+  table { border-collapse: collapse; width:100%; margin:1rem 0; font-size:.92rem; }
+  th, td { text-align:left; padding:.45rem .7rem; border-bottom:1px solid #e8edf3; }
+  th { background:#f1f5f9; font-weight:600; }
+  td.num, th.num { text-align:right; font-variant-numeric: tabular-nums; }
+  .good { color:#0f766e; font-weight:600; }
+  .warn { color:#b45309; font-weight:600; }
+  .zero { color:#b91c1c; }
+  .kpis { display:flex; gap:1rem; flex-wrap:wrap; margin:1.5rem 0; }
+  .kpi { flex:1 1 180px; background:#f0fdfa; border:1px solid #99f6e4; border-radius:10px; padding:1rem 1.2rem; }
+  .kpi .v { font-size:1.7rem; font-weight:700; color:#0f766e; }
+  .kpi .l { font-size:.82rem; color:#475569; }
+  code { background:#f1f5f9; padding:.1rem .35rem; border-radius:4px; font-size:.88em; }
+  ul { padding-left:1.3rem; }
+  .note { background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:.8rem 1rem; font-size:.92rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>Test Coverage Initiative — code-basics</h1>
+<div class="sub">2026-08-07 · branch <code>claude/lightweight-ide-replacement-52cp2n</code> · goal: ≥70% over code that makes sense to test</div>
+
+<div class="kpis">
+  <div class="kpi"><div class="v">86.27%</div><div class="l">Rust workspace line coverage (was 78.30%)</div></div>
+  <div class="kpi"><div class="v">99.49%</div><div class="l">Frontend logic-module line coverage (was untested)</div></div>
+  <div class="kpi"><div class="v">1,215</div><div class="l">tests now: 1,009 Rust + 206 frontend (~330 added)</div></div>
+  <div class="kpi"><div class="v">0</div><div class="l">failures across every final gate</div></div>
+</div>
+
+<h2>Coverage by phase</h2>
+<table>
+  <tr><th>Phase</th><th>What happened</th><th class="num">Rust total after</th></tr>
+  <tr><td>0 — Baseline</td><td>Installed cargo-llvm-cov; measured; found the <code>sh</code>-on-PATH hang in <code>process::</code> tests</td><td class="num">78.30%</td></tr>
+  <tr><td>1 — Core gaps</td><td>209 tests: codex.rs 21%→96%, claude_code.rs 16%→98%, providers/mod.rs 53%→86%, + spin-loop timeout guards</td><td class="num">84.16%</td></tr>
+  <tr><td>2 — Backfill</td><td>Cancelled — baseline showed repo.rs/trx/junit/solution already 91–96%</td><td class="num">—</td></tr>
+  <tr><td>3 — Refactor</td><td>~60 tests; src-tauri decision logic moved into cb-core (invocation dispatch, compound planning, network mapping, bitness retry, seq rebase, secrets guard, recorder args)</td><td class="num">86.27%</td></tr>
+  <tr><td>4 — Frontend</td><td>vitest added; 10 pure-logic modules extracted mechanically; 206 tests at 99.49% lines / 100% functions</td><td class="num">86.27%</td></tr>
+  <tr><td>5 — Docs</td><td>CLAUDE.md + development.md + frontend.md updated; INDEX.md regenerated; all gates re-run green</td><td class="num">86.27%</td></tr>
+</table>
+
+<h2>Final gate results</h2>
+<table>
+  <tr><th>Gate</th><th>Result</th></tr>
+  <tr><td><code>cargo llvm-cov --workspace --fail-under-lines 70</code></td><td class="good">exit 0 — 86.27% lines, 85.50% regions, 73.74% functions</td></tr>
+  <tr><td><code>cargo test --workspace</code></td><td class="good">961 lib + 44 git_operations + 2 intent_attribution + 2 cb-app — 0 failures</td></tr>
+  <tr><td><code>pnpm coverage</code> (threshold 70)</td><td class="good">99.49% lines, 98.02% branches, 100% functions (206 tests)</td></tr>
+  <tr><td><code>pnpm typecheck</code> / <code>pnpm build</code></td><td class="good">clean</td></tr>
+  <tr><td><code>cargo fmt --check</code></td><td class="good">clean</td></tr>
+  <tr><td><code>cargo clippy --workspace --all-targets</code></td><td class="good">only the 2 pre-existing warnings (rider.rs:65, workspace.rs cmp_owned)</td></tr>
+  <tr><td><code>pnpm docs:index</code> + <code>pnpm docs:check</code></td><td class="good">regenerated; 20 files, links resolve, all under 500 lines</td></tr>
+</table>
+
+<h2>What was deliberately excluded</h2>
+<ul>
+  <li><strong>C# sidecar</strong> (2,033 lines) — ClrMD-bound; meaningful tests need a real crash-dump fixture. Out of scope per decision.</li>
+  <li><strong>Whole-file Rust exclusions</strong>: <code>src-tauri/src/main.rs</code> (Tauri entry) and <code>process/kill.rs</code> (taskkill/libc platform forks, exercised indirectly).</li>
+  <li><strong>src-tauri command wrappers</strong> stay 0% — after the refactor they are thin Tauri plumbing, exercised only through the app; they remain inside the denominator honestly.</li>
+  <li><strong>React rendering code</strong> — the frontend metric covers the extracted <code>*Logic.ts</code> modules only, by design.</li>
+</ul>
+
+<h2>Behaviour changes needing sign-off</h2>
+<ul>
+  <li>Bad CLI path now prints <code>code-basics: {e}</code> — the scan-failure message lost its "could not open &lt;path&gt;:" prefix (the error already names the path).</li>
+  <li>Compound-run start errors now aggregate <em>all</em> member failures joined with "; " instead of reporting only the first.</li>
+  <li>The intent-import seq arithmetic was preserved exactly, including its prefix-sum quirk — now pinned by a characterization test.</li>
+</ul>
+
+<h2>Notable finds along the way</h2>
+<ul>
+  <li>The <code>process::</code> tests hang forever when <code>sh</code> isn't on PATH (spin-wait with no timeout) — this wedged the first coverage run for ~2h. Fixed with 30s timeout guards; documented in CLAUDE.md's command list.</li>
+  <li>A Codex trust-key parsing quirk: a backslash-escaped TOML basic-string project key reads as untrusted (safe direction) — characterized in a test rather than changed.</li>
+  <li>vitest 4's coverage table silently omits fully-covered files — read <code>coverage-summary.json</code>, not the terminal table.</li>
+  <li>One flaky cb-core lib failure in an intermediate coverage run; details lost to output truncation, immediate full rerun green. Worth watching.</li>
+</ul>
+
+<div class="note"><strong>Not committed.</strong> All changes are uncommitted in the working tree (mixed with pre-existing uncommitted docs edits from before this work). Tech debt noted in <code>.memories/features/test-coverage-70/todos.md</code>: two compatibility re-exports (InspectView/OutputConsole) should be retired by pointing RunView/TestsView at the logic modules directly.</div>
+
+</main>
+</body>
+</html>

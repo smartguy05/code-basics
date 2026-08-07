@@ -1,44 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../ipc/api";
 import type { Branch, NetworkKind, WorkingStatus } from "../ipc/types";
-
-/**
- * Slash-named branches (`users/anthony/thing`) rendered as a directory tree:
- * each segment before the last is a collapsible folder.
- */
-interface BranchFolder {
-  /** Full segment path, e.g. `users/anthony`. Unique within its section. */
-  path: string;
-  label: string;
-  folders: BranchFolder[];
-  leaves: { branch: Branch; label: string }[];
-}
-
-function buildTree(branches: Branch[]): BranchFolder {
-  const root: BranchFolder = { path: "", label: "", folders: [], leaves: [] };
-
-  for (const branch of branches) {
-    const parts = branch.name.split("/");
-    let node = root;
-    for (let i = 0; i < parts.length - 1; i++) {
-      const path = parts.slice(0, i + 1).join("/");
-      let child = node.folders.find((folder) => folder.path === path);
-      if (!child) {
-        child = { path, label: parts[i] ?? "", folders: [], leaves: [] };
-        node.folders.push(child);
-      }
-      node = child;
-    }
-    node.leaves.push({ branch, label: parts[parts.length - 1] ?? branch.name });
-  }
-  return root;
-}
-
-/** Folder paths leading to a branch, so the current one can start expanded. */
-function ancestorPaths(name: string): string[] {
-  const parts = name.split("/");
-  return parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/"));
-}
+import { ancestorPaths, buildTree, type BranchFolder } from "./treeLogic";
 
 /**
  * The titlebar's branch widget, in the spirit of Rider's: the current branch

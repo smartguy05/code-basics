@@ -1,31 +1,6 @@
 import { useMemo, useState } from "react";
 import type { TestNode, TestOutcome } from "../ipc/types";
-
-function formatDuration(ms: number | null): string {
-  if (ms == null) return "";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(2)}s`;
-}
-
-/** Does this node, or anything below it, match the filters? */
-function matches(
-  node: TestNode,
-  text: string,
-  outcomes: Set<TestOutcome>,
-): boolean {
-  const outcomeOk = outcomes.size === 0 || outcomes.has(node.outcome);
-  const textOk =
-    text === "" ||
-    node.label.toLowerCase().includes(text) ||
-    (node.case?.fullName.toLowerCase().includes(text) ?? false);
-
-  if (node.children.length === 0) {
-    return outcomeOk && textOk;
-  }
-  // A branch survives if any descendant does, so filtering never hides a
-  // matching test behind a non-matching parent.
-  return node.children.some((child) => matches(child, text, outcomes));
-}
+import { formatDuration, testMatches } from "./treeLogic";
 
 interface RowProps {
   node: TestNode;
@@ -49,7 +24,7 @@ function Row({
   collapsed,
   toggle,
 }: RowProps) {
-  if (!matches(node, text, outcomes)) return null;
+  if (!testMatches(node, text, outcomes)) return null;
 
   const isBranch = node.children.length > 0;
   const isCollapsed = collapsed.has(node.id);
@@ -125,7 +100,7 @@ export function TestTree({
     return <div className="empty">No results yet. Run the tests to see them here.</div>;
   }
 
-  const visible = nodes.filter((node) => matches(node, text, outcomes));
+  const visible = nodes.filter((node) => testMatches(node, text, outcomes));
   if (visible.length === 0) {
     return <div className="empty">No tests match the current filter.</div>;
   }

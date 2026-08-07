@@ -368,6 +368,105 @@ mod tests {
         assert!(ignore.contains("results/"));
     }
 
+    // -- .gitignore, which is written into a directory the user shares -------
+
+    #[test]
+    fn the_ignore_file_is_created_listing_everything_local() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_gitignore(dir.path()).unwrap();
+
+        let ignore = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        for entry in IGNORED {
+            assert!(
+                ignore.lines().any(|l| l.trim() == *entry),
+                "{entry} missing from: {ignore}"
+            );
+        }
+    }
+
+    /// A dump is a verbatim copy of process memory and a changelist is one
+    /// person's work in progress. Neither may ever reach a shared history, so
+    /// the exact entries are pinned rather than merely counted.
+    #[test]
+    fn the_ignore_file_covers_dumps_captures_and_changelists_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_gitignore(dir.path()).unwrap();
+
+        let ignore = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        let lines: Vec<&str> = ignore.lines().map(str::trim).collect();
+
+        assert!(lines.contains(&"dumps/"));
+        assert!(lines.contains(&"inspect/"));
+        assert!(lines.contains(&"intents/"));
+        assert!(lines.contains(&"results/"));
+        assert!(lines.contains(&crate::changelists::CHANGELISTS_FILE));
+    }
+
+    /// Entries are appended, never rewritten: anything a person added by hand
+    /// has to survive.
+    #[test]
+    fn hand_written_ignore_entries_survive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".gitignore");
+        std::fs::write(&path, "# mine\nscratch/\n").unwrap();
+
+        ensure_gitignore(dir.path()).unwrap();
+
+        let ignore = std::fs::read_to_string(&path).unwrap();
+        assert!(ignore.contains("# mine"));
+        assert!(ignore.lines().any(|l| l.trim() == "scratch/"));
+        assert!(ignore.lines().any(|l| l.trim() == "dumps/"));
+    }
+
+    /// A workspace created before an entry existed still needs it.
+    #[test]
+    fn only_the_missing_entries_are_added() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".gitignore");
+        std::fs::write(&path, "results/\n").unwrap();
+
+        ensure_gitignore(dir.path()).unwrap();
+
+        let ignore = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            ignore.lines().filter(|l| l.trim() == "results/").count(),
+            1,
+            "an entry already present must not be duplicated: {ignore}"
+        );
+        assert!(ignore.lines().any(|l| l.trim() == "intents/"));
+    }
+
+    #[test]
+    fn ensuring_the_ignore_file_twice_changes_nothing_the_second_time() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_gitignore(dir.path()).unwrap();
+        let first = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+
+        ensure_gitignore(dir.path()).unwrap();
+        let second = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+
+        assert_eq!(first, second);
+    }
+
+    /// Appending to a file whose last line has no newline must not glue two
+    /// entries into one unusable pattern.
+    #[test]
+    fn an_ignore_file_with_no_trailing_newline_is_not_run_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".gitignore");
+        std::fs::write(&path, "scratch/").unwrap();
+
+        ensure_gitignore(dir.path()).unwrap();
+
+        let ignore = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            ignore.lines().any(|l| l.trim() == "scratch/"),
+            "got: {ignore}"
+        );
+        assert!(ignore.lines().any(|l| l.trim() == "results/"));
+        assert!(!ignore.contains("scratch/results/"), "got: {ignore}");
+    }
+
     #[test]
     fn a_saved_configuration_replaces_a_detected_one_with_the_same_id() {
         let detected = vec![

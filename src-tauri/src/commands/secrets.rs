@@ -12,17 +12,11 @@ use tauri::State;
 use crate::state::AppState;
 
 /// Resolve a workspace-relative project path, refusing anything that escapes
-/// the workspace root.
+/// the workspace root. The containment rule itself lives in
+/// `cb_core::secrets::resolve_project_path`, where it is testable headlessly;
+/// this only supplies the open workspace's root.
 fn resolve(state: &State<'_, AppState>, project: &str) -> Result<PathBuf, String> {
-    let root = state.workspace_root()?;
-    let path = root.join(project);
-
-    let canonical = dunce::canonicalize(&path)
-        .map_err(|e| format!("{} does not exist: {e}", path.display()))?;
-    if !canonical.starts_with(&root) {
-        return Err(format!("{project} is outside the workspace"));
-    }
-    Ok(canonical)
+    secrets::resolve_project_path(&state.workspace_root()?, project)
 }
 
 /// A project's user secrets: its id, where the secrets file lives, and the

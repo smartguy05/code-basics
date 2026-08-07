@@ -27,10 +27,49 @@ pub struct ProjectSecrets {
     pub content: Option<String>,
 }
 
+/// Resolve a workspace-relative project path against the open workspace,
+/// refusing anything that escapes it.
+///
+/// This is one of *two* traversal guards in this module, deliberately: this
+/// one covers the path the frontend sends (a `RunConfig.project`, so
+/// attacker-influenced only as far as the config file is), while
+/// [`secrets_path`] covers the `<UserSecretsId>` read out of project XML.
+/// They guard different inputs crossing different boundaries — an id that
+/// never touches this function still becomes a path segment — so neither
+/// subsumes the other and both must stay.
+///
+/// Containment is decided on the *canonical* path, after the OS has resolved
+/// `..`, symlinks and (on Windows) short names, because only the canonical
+/// form tells us where the path really lands. Note that `Path::join` with an
+/// absolute `project` discards `root` entirely, so this check is the only
+/// thing standing between an absolute path and the filesystem. `starts_with`
+/// compares whole components, so a sibling directory whose name merely begins
+/// with the root's name is correctly outside.
+pub fn resolve_project_path(root: &Path, project: &str) -> Result<PathBuf, String> {
+    // Canonicalise the root too: comparing a canonical path against a
+    // non-canonical prefix can reject a legitimate path (or, worse, fail to
+    // reject an illegitimate one) when the two spell the same directory
+    // differently. Fall back to the root as given if it cannot be resolved,
+    // so the failure is still reported against the project path below.
+    let root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let path = root.join(project);
+
+    let canonical = dunce::canonicalize(&path)
+        .map_err(|e| format!("{} does not exist: {e}", path.display()))?;
+    if !canonical.starts_with(&root) {
+        return Err(format!("{project} is outside the workspace"));
+    }
+    Ok(canonical)
+}
+
 /// Where a secrets id's `secrets.json` lives on this machine.
 ///
 /// The id comes out of an XML property and becomes a path segment, so it is
-/// validated rather than trusted.
+/// validated rather than trusted. This is the second of the two guards
+/// described on [`resolve_project_path`]: that one keeps the *project* inside
+/// the workspace, this one keeps the *id* from steering writes out of the
+/// user-secrets store. A project inside the workspace can still carry a
+/// hostile id, so passing the first guard earns nothing here.
 pub fn secrets_path(id: &str) -> Result<PathBuf> {
     if id.is_empty()
         || id
@@ -410,6 +449,108 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&strip_jsonc("{ \"a\": 1 /* open")).is_err(),
             "an unterminated block comment is still an error"
         );
+    }
+
+    /// A workspace root with `ws/src/App.csproj` inside it, plus a
+    /// `sibling/Other.csproj` and a `ws-evil/Evil.csproj` next to the root.
+    /// The last one exists to catch a *string* prefix comparison: `ws-evil`
+    /// starts with the text `ws` but is not inside it.
+    fn workspace() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dunce::canonicalize(dir.path()).unwrap();
+
+        std::fs::create_dir_all(base.join("ws/src")).unwrap();
+        std::fs::write(base.join("ws/src/App.csproj"), WITH_ID).unwrap();
+        std::fs::create_dir_all(base.join("sibling")).unwrap();
+        std::fs::write(base.join("sibling/Other.csproj"), WITH_ID).unwrap();
+        std::fs::create_dir_all(base.join("ws-evil")).unwrap();
+        std::fs::write(base.join("ws-evil/Evil.csproj"), WITH_ID).unwrap();
+
+        let root = base.join("ws");
+        (dir, root)
+    }
+
+    #[test]
+    fn resolves_a_nested_project() {
+        let (_dir, root) = workspace();
+        let resolved = resolve_project_path(&root, "src/App.csproj").unwrap();
+
+        assert_eq!(
+            resolved,
+            dunce::canonicalize(root.join("src/App.csproj")).unwrap()
+        );
+    }
+
+    #[test]
+    fn rejects_a_parent_traversal() {
+        let (_dir, root) = workspace();
+        let err = resolve_project_path(&root, "../sibling/Other.csproj").unwrap_err();
+
+        assert_eq!(err, "../sibling/Other.csproj is outside the workspace");
+    }
+
+    #[test]
+    fn rejects_a_traversal_that_dips_through_a_real_subdirectory() {
+        // `src` exists, so every component of this path resolves; only the
+        // canonical result reveals that it left the workspace.
+        let (_dir, root) = workspace();
+        let err = resolve_project_path(&root, "src/../../sibling/Other.csproj").unwrap_err();
+
+        assert_eq!(
+            err,
+            "src/../../sibling/Other.csproj is outside the workspace"
+        );
+    }
+
+    #[test]
+    fn rejects_an_absolute_path_outside_the_root() {
+        // `Path::join` with an absolute path discards the root entirely, so
+        // the containment check is the only thing standing here.
+        let (_dir, root) = workspace();
+        let outside = root.parent().unwrap().join("sibling/Other.csproj");
+        let err = resolve_project_path(&root, &outside.to_string_lossy()).unwrap_err();
+
+        assert!(err.ends_with("is outside the workspace"), "{err}");
+    }
+
+    #[test]
+    fn a_sibling_sharing_a_name_prefix_is_outside() {
+        let (_dir, root) = workspace();
+        let err = resolve_project_path(&root, "../ws-evil/Evil.csproj").unwrap_err();
+
+        assert_eq!(err, "../ws-evil/Evil.csproj is outside the workspace");
+    }
+
+    #[test]
+    fn a_missing_project_names_the_path_it_looked_for() {
+        let (_dir, root) = workspace();
+        let err = resolve_project_path(&root, "src/Nope.csproj").unwrap_err();
+
+        // The message names the path as it was assembled — the root plus the
+        // relative path verbatim — so the user can see where it looked.
+        assert!(
+            err.contains(&root.join("src/Nope.csproj").display().to_string()),
+            "{err}"
+        );
+        assert!(err.contains("does not exist"), "{err}");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn accepts_either_separator_on_windows() {
+        let (_dir, root) = workspace();
+        let expected = dunce::canonicalize(root.join("src/App.csproj")).unwrap();
+
+        assert_eq!(
+            resolve_project_path(&root, "src\\App.csproj").unwrap(),
+            expected
+        );
+        assert_eq!(
+            resolve_project_path(&root, "src/App.csproj").unwrap(),
+            expected
+        );
+        // Mixed separators in a traversal must not slip past either.
+        assert!(resolve_project_path(&root, "src\\..\\../sibling/Other.csproj").is_err());
     }
 
     #[test]

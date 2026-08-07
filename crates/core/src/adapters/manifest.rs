@@ -473,6 +473,85 @@ env = { MODE = "manifest", KEEP = "yes" }
         assert!(matches(&manifest, dir.path()));
     }
 
+    /// The scan records this as the project's manifest path, so which file
+    /// matched is the difference between pointing at `pyproject.toml` and
+    /// pointing at nothing.
+    #[test]
+    fn detection_reports_which_file_matched() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = parse(PYTEST).unwrap();
+
+        assert_eq!(matched_file(&manifest, dir.path()), None);
+
+        std::fs::write(dir.path().join("pyproject.toml"), "").unwrap();
+        assert_eq!(
+            matched_file(&manifest, dir.path()),
+            Some(dir.path().join("pyproject.toml"))
+        );
+    }
+
+    /// The manifest lists `pytest.ini` before `pyproject.toml`, and a project
+    /// with both must report the more specific one the manifest named first.
+    #[test]
+    fn the_first_listed_detection_file_wins_when_several_are_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = parse(PYTEST).unwrap();
+        std::fs::write(dir.path().join("pyproject.toml"), "").unwrap();
+        std::fs::write(dir.path().join("pytest.ini"), "").unwrap();
+
+        assert_eq!(
+            matched_file(&manifest, dir.path()),
+            Some(dir.path().join("pytest.ini"))
+        );
+    }
+
+    #[test]
+    fn a_manifest_that_declares_no_detection_files_never_matches() {
+        // Without this, an adapter that forgot `detect` would claim every
+        // directory in the workspace.
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = parse(
+            r#"
+id = "x"
+name = "X"
+[test]
+program = "x"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(matched_file(&manifest, dir.path()), None);
+        assert!(!matches(&manifest, dir.path()));
+    }
+
+    /// `matches` is defined as "something matched", so the two must never
+    /// disagree — a directory that matches has a file to point at.
+    #[test]
+    fn matching_and_the_matched_file_always_agree() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = parse(PYTEST).unwrap();
+
+        assert_eq!(
+            matches(&manifest, dir.path()),
+            matched_file(&manifest, dir.path()).is_some()
+        );
+        std::fs::write(dir.path().join("pytest.ini"), "").unwrap();
+        assert_eq!(
+            matches(&manifest, dir.path()),
+            matched_file(&manifest, dir.path()).is_some()
+        );
+    }
+
+    #[test]
+    fn manifests_are_read_from_the_workspaces_own_config_directory() {
+        // Declarative adapters are per-workspace, not global: a manifest is
+        // part of the repository that needs it.
+        let root = Path::new("/repo");
+
+        assert_eq!(manifest_dir(root), Path::new("/repo/.code-basics/adapters"));
+        assert!(manifest_dir(root).starts_with(crate::config::config_dir(root)));
+    }
+
     #[test]
     fn loads_manifests_from_a_directory_reporting_bad_ones() {
         let dir = tempfile::tempdir().unwrap();

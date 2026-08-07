@@ -303,3 +303,223 @@ fn clearing_a_workspace_that_recorded_nothing_is_not_an_error() {
 
     assert!(clear(dir.path()).is_ok());
 }
+
+// -- path helpers, called directly -------------------------------------------
+
+#[test]
+fn normalising_a_path_only_touches_separators() {
+    assert_eq!(normalise_path("src\\a\\b.rs"), "src/a/b.rs");
+    assert_eq!(normalise_path("src/a/b.rs"), "src/a/b.rs");
+    // Case, spaces and dots are content, not separators.
+    assert_eq!(normalise_path("Src/My File.rs"), "Src/My File.rs");
+    assert_eq!(normalise_path(""), "");
+}
+
+#[test]
+fn a_path_already_relative_is_accepted_unchanged() {
+    let root = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });
+
+    assert_eq!(relative_to(root, "src/a.rs"), Some("src/a.rs".to_string()));
+}
+
+#[test]
+fn a_leading_dot_slash_is_stripped_from_a_relative_path() {
+    let root = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });
+
+    assert_eq!(
+        relative_to(root, "./src/a.rs"),
+        Some("src/a.rs".to_string())
+    );
+}
+
+/// A relative path that climbs out names a file this workspace does not own.
+#[test]
+fn a_relative_path_that_climbs_out_of_the_workspace_is_rejected() {
+    let root = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });
+
+    assert_eq!(relative_to(root, "../other/a.rs"), None);
+}
+
+#[test]
+fn the_workspace_root_itself_is_not_a_file_inside_it() {
+    let root = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });
+
+    // Stripping must require a separator after the root, or `/repository/a.rs`
+    // would be read as a file in `/repo`.
+    assert_eq!(
+        relative_to(root, if cfg!(windows) { "C:/repo" } else { "/repo" }),
+        None
+    );
+    assert_eq!(
+        relative_to(
+            root,
+            if cfg!(windows) {
+                "C:/repository/a.rs"
+            } else {
+                "/repository/a.rs"
+            }
+        ),
+        None
+    );
+}
+
+#[test]
+fn a_trailing_separator_on_the_root_does_not_change_the_result() {
+    let with = Path::new(if cfg!(windows) { "C:/repo/" } else { "/repo/" });
+    let without = Path::new(if cfg!(windows) { "C:/repo" } else { "/repo" });
+    let file = if cfg!(windows) {
+        "C:/repo/src/a.rs"
+    } else {
+        "/repo/src/a.rs"
+    };
+
+    assert_eq!(relative_to(with, file), Some("src/a.rs".to_string()));
+    assert_eq!(relative_to(with, file), relative_to(without, file));
+}
+
+/// On Windows the agent and the opened workspace legitimately disagree on case.
+#[cfg(windows)]
+#[test]
+fn a_windows_root_matches_case_insensitively() {
+    assert_eq!(
+        relative_to(Path::new("C:/Repo"), "c:\\repo\\src\\a.rs"),
+        Some("src/a.rs".to_string())
+    );
+}
+
+#[test]
+fn recorded_intent_lives_under_the_config_directory() {
+    let root = Path::new("/repo");
+
+    assert_eq!(
+        intents_dir(root),
+        crate::config::config_dir(root).join("intents")
+    );
+    assert_eq!(edits_path(root), intents_dir(root).join("edits.jsonl"));
+    assert_eq!(labels_path(root), intents_dir(root).join("labels.jsonl"));
+
+    // Both logs share one directory, which is what makes `clear` a directory
+    // listing rather than a list of names kept in step by hand.
+    assert_eq!(edits_path(root).parent(), labels_path(root).parent());
+}
+
+#[test]
+fn labels_are_kept_separately_from_edits() {
+    let dir = workspace();
+    append_edit(dir.path(), &record(0, "a.rs", &[], &["x"])).unwrap();
+    append_label(dir.path(), &label("turn-1", "why", &[])).unwrap();
+
+    // The two hooks fire at different times and append independently; sharing
+    // one file would interleave them.
+    assert_ne!(edits_path(dir.path()), labels_path(dir.path()));
+    assert!(labels_path(dir.path()).exists());
+    assert_eq!(
+        std::fs::read_to_string(labels_path(dir.path()))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+}
+
+// --- importing history ------------------------------------------------------
+
+#[test]
+fn rebasing_nothing_leaves_the_base_alone() {
+    let mut records: Vec<IntentRecord> = Vec::new();
+
+    // An import that found no history must not advance the workspace's
+    // numbering, or the next real edit would leave a gap for no reason.
+    assert_eq!(rebase_seqs(&mut records, 7), 7);
+    assert!(records.is_empty());
+}
+
+#[test]
+fn rebasing_preserves_the_order_records_were_recorded_in() {
+    let mut records = vec![
+        record(1, "a.rs", &[], &["x"]),
+        record(2, "b.rs", &[], &["y"]),
+        record(3, "c.rs", &[], &["z"]),
+    ];
+
+    rebase_seqs(&mut records, 10);
+
+    // Absolute values are an implementation detail; the ordering is not —
+    // attribution resolves a contested line in favour of the later edit.
+    let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
+    assert!(
+        seqs.windows(2).all(|w| w[0] < w[1]),
+        "order was not preserved: {seqs:?}"
+    );
+    assert!(seqs[0] > 10, "imported records must sit above the base");
+    assert_eq!(records[0].path, "a.rs");
+    assert_eq!(records[2].path, "c.rs");
+}
+
+#[test]
+fn the_base_advances_to_the_highest_seq_not_the_last() {
+    let mut records = vec![
+        record(7, "a.rs", &[], &["x"]),
+        record(0, "b.rs", &[], &["y"]),
+    ];
+
+    // A provider can hand back a record whose own seq is lower than the one
+    // before it. The base still only ever moves forwards.
+    let next = rebase_seqs(&mut records, 0);
+
+    let highest = records.iter().map(|r| r.seq).max().unwrap();
+    assert_eq!(next, highest);
+    assert!(next >= records.last().unwrap().seq);
+}
+
+#[test]
+fn a_second_import_cannot_collide_with_the_first() {
+    let dir = workspace();
+
+    let mut first = vec![
+        record(0, "a.rs", &[], &["x"]),
+        record(1, "b.rs", &[], &["y"]),
+    ];
+    rebase_seqs(&mut first, next_seq(dir.path()));
+    for r in &first {
+        append_edit(dir.path(), r).unwrap();
+    }
+
+    // The same history, imported again: deduplication is by tool id, but the
+    // numbering must not overlap even so.
+    let mut second = vec![
+        record(0, "c.rs", &[], &["x"]),
+        record(1, "d.rs", &[], &["y"]),
+    ];
+    rebase_seqs(&mut second, next_seq(dir.path()));
+
+    let earlier: Vec<u64> = first.iter().map(|r| r.seq).collect();
+    for r in &second {
+        assert!(
+            !earlier.contains(&r.seq),
+            "seq {} collides with {earlier:?}",
+            r.seq
+        );
+        assert!(r.seq > *earlier.iter().max().unwrap());
+    }
+}
+
+#[test]
+fn rebasing_from_zero_leaves_the_first_record_alone() {
+    let mut records = vec![
+        record(0, "a.rs", &[], &["x"]),
+        record(1, "b.rs", &[], &["y"]),
+        record(2, "c.rs", &[], &["z"]),
+    ];
+
+    rebase_seqs(&mut records, 0);
+
+    // Characterising, not endorsing: the base is carried forward from each
+    // record as it is rebased, so seqs accumulate rather than being shifted by
+    // a constant. Only the first record is genuinely untouched at base zero.
+    // Order — the only thing seq is read for — survives either way.
+    assert_eq!(
+        records.iter().map(|r| r.seq).collect::<Vec<_>>(),
+        vec![0, 1, 3]
+    );
+}

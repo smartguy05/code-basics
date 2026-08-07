@@ -14,10 +14,15 @@ pub mod git;
 pub mod importers;
 pub mod inspect;
 pub mod intents;
+pub mod invocation;
 pub mod model;
 pub mod process;
 pub mod secrets;
 pub mod testing;
 pub mod workspace;
+
+#[cfg(test)]
+#[path = "invocation_tests.rs"]
+mod invocation_tests;
 
 pub use model::*;

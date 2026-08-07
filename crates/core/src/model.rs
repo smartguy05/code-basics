@@ -451,6 +451,143 @@ mod tests {
         assert_eq!(json["ignoreLaunchSettings"], serde_json::json!(true));
     }
 
+    // -- summarising a run ---------------------------------------------------
+
+    fn case(outcome: TestOutcome) -> TestCase {
+        TestCase {
+            id: "id".into(),
+            name: "name".into(),
+            full_name: "full".into(),
+            suite: None,
+            project: None,
+            outcome,
+            duration_ms: None,
+            message: None,
+            stack_trace: None,
+            stdout: None,
+        }
+    }
+
+    #[test]
+    fn summarising_no_cases_counts_nothing() {
+        assert_eq!(TestSummary::from_cases(&[]), TestSummary::default());
+        assert_eq!(TestSummary::from_cases(&[]).total, 0);
+    }
+
+    #[test]
+    fn each_outcome_is_counted_in_its_own_bucket() {
+        let summary = TestSummary::from_cases(&[
+            case(TestOutcome::Passed),
+            case(TestOutcome::Passed),
+            case(TestOutcome::Failed),
+            case(TestOutcome::Skipped),
+            case(TestOutcome::Other),
+        ]);
+
+        assert_eq!(summary.passed, 2);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.other, 1);
+    }
+
+    /// Every case lands in exactly one bucket, so the parts always add back up
+    /// to the total. A run where they disagree is a run the UI cannot explain.
+    #[test]
+    fn the_buckets_always_add_up_to_the_total() {
+        let summary = TestSummary::from_cases(&[
+            case(TestOutcome::Passed),
+            case(TestOutcome::Failed),
+            case(TestOutcome::Skipped),
+            case(TestOutcome::Other),
+            case(TestOutcome::Failed),
+        ]);
+
+        assert_eq!(summary.total, 5);
+        assert_eq!(
+            summary.passed + summary.failed + summary.skipped + summary.other,
+            summary.total
+        );
+    }
+
+    /// `Other` is the default outcome precisely so an unrecognised verdict is
+    /// never quietly counted as a pass.
+    #[test]
+    fn an_unrecognised_outcome_is_never_counted_as_a_pass() {
+        let summary = TestSummary::from_cases(&[case(TestOutcome::default())]);
+
+        assert_eq!(summary.passed, 0);
+        assert_eq!(summary.other, 1);
+    }
+
+    #[test]
+    fn a_summary_serialises_with_the_keys_the_ui_reads() {
+        assert_eq!(
+            keys(&serde_json::to_value(TestSummary::default()).unwrap()),
+            ["failed", "other", "passed", "skipped", "total"]
+        );
+    }
+
+    // -- invocations ---------------------------------------------------------
+
+    fn invocation() -> Invocation {
+        Invocation {
+            program: "dotnet".into(),
+            args: vec!["build".into()],
+            cwd: PathBuf::from("/repo"),
+            env: BTreeMap::new(),
+            report: None,
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_invocation_serialises_with_the_keys_the_ui_reads() {
+        assert_eq!(
+            keys(&serde_json::to_value(invocation()).unwrap()),
+            ["args", "cwd", "env", "program"]
+        );
+    }
+
+    /// An application launch has no report and no warnings; both stay out of
+    /// the payload rather than crossing as nulls the UI has to guard against.
+    #[test]
+    fn an_invocation_with_nothing_to_report_omits_those_fields() {
+        let json = serde_json::to_value(invocation()).unwrap();
+
+        assert!(json.get("report").is_none());
+        assert!(json.get("warnings").is_none());
+    }
+
+    #[test]
+    fn a_test_invocation_carries_its_report_spec_across() {
+        let mut inv = invocation();
+        inv.report = Some(ReportSpec {
+            path: PathBuf::from("results/api.trx"),
+            format: ReportFormat::Trx,
+        });
+        inv.warnings = vec!["no TRX package".into()];
+
+        let json = serde_json::to_value(&inv).unwrap();
+
+        assert_eq!(keys(&json["report"]), ["format", "path"]);
+        assert_eq!(json["report"]["format"], serde_json::json!("trx"));
+        assert_eq!(json["warnings"], serde_json::json!(["no TRX package"]));
+    }
+
+    #[test]
+    fn an_invocation_round_trips_through_json() {
+        let mut inv = invocation();
+        inv.env.insert("MODE".into(), "test".into());
+        inv.report = Some(ReportSpec {
+            path: PathBuf::from("results/api.xml"),
+            format: ReportFormat::JunitXml,
+        });
+
+        let json = serde_json::to_string(&inv).unwrap();
+
+        assert_eq!(serde_json::from_str::<Invocation>(&json).unwrap(), inv);
+    }
+
     #[test]
     fn compound_members_serialise_under_the_key_the_ui_reads() {
         let mut config = RunConfig::new(

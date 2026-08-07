@@ -160,6 +160,28 @@ pub fn scan(root: &Path) -> Result<Workspace> {
     scan_with(root, ScanOptions::default())
 }
 
+/// Open a directory as a workspace: scan it, then layer the saved
+/// configuration over what was detected.
+///
+/// The two steps belong together — a scan alone loses the user's own
+/// configurations, favourites and ordering — so every entry point that opens a
+/// directory goes through here rather than calling [`scan`] and
+/// [`crate::config::apply`] itself.
+///
+/// A missing saved configuration is not an error: a workspace that has never
+/// been configured opens with exactly what was detected.
+pub fn workspace_from_dir(path: &Path) -> Result<Workspace, String> {
+    if !path.is_dir() {
+        return Err(format!("{} is not a directory", path.display()));
+    }
+
+    let mut workspace = scan(path).map_err(|e| format!("{e:#}"))?;
+    if let Ok(saved) = crate::config::load(&workspace.root) {
+        crate::config::apply(&mut workspace, saved);
+    }
+    Ok(workspace)
+}
+
 /// Scan a workspace root, choosing how thoroughly projects are inspected.
 pub fn scan_with(root: &Path, options: ScanOptions) -> Result<Workspace> {
     // dunce keeps Windows paths in their familiar `C:\...` form instead of the
@@ -486,7 +508,7 @@ pub fn configs_by_project(workspace: &Workspace) -> BTreeMap<String, Vec<&RunCon
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::RunKind;
+    use crate::model::{ConfigSource, RunKind};
 
     /// Build a workspace on disk from `(relative path, contents)` pairs.
     fn workspace_with(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -1018,6 +1040,178 @@ EndGlobal
         assert!(scan(Path::new("/nonexistent/workspace")).is_err());
     }
 
+    // -- grouping configurations for the sidebar -----------------------------
+
+    #[test]
+    fn configurations_are_grouped_under_the_project_they_belong_to() {
+        let dir = workspace_with(&[
+            ("src/App/App.csproj", EXE_CSPROJ),
+            ("src/App.Tests/App.Tests.csproj", XUNIT_CSPROJ),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        let grouped = configs_by_project(&ws);
+
+        assert!(grouped.contains_key("App"), "got: {:?}", grouped.keys());
+        assert!(grouped.contains_key("App.Tests"));
+        // Every configuration lands in exactly one group.
+        assert_eq!(
+            grouped.values().map(Vec::len).sum::<usize>(),
+            ws.configs.len()
+        );
+    }
+
+    /// A configuration naming no project still has to appear somewhere, or it
+    /// would vanish from the sidebar rather than showing up unfiled.
+    #[test]
+    fn a_configuration_with_no_project_is_grouped_under_the_workspace() {
+        let dir = workspace_with(&[("src/App/App.csproj", EXE_CSPROJ)]);
+        let mut ws = scan(dir.path()).unwrap();
+        ws.configs.push(RunConfig::new(
+            "loose",
+            "Loose",
+            RunKind::App,
+            "dotnet",
+            ConfigSource::UserFile,
+        ));
+
+        let grouped = configs_by_project(&ws);
+
+        assert_eq!(
+            grouped.get("Workspace").map(|c| c.len()),
+            Some(1),
+            "got: {:?}",
+            grouped.keys()
+        );
+        assert_eq!(grouped["Workspace"][0].id, "loose");
+    }
+
+    /// A configuration pointing at a project that is no longer there must not
+    /// be silently dropped from the list the user is looking at.
+    #[test]
+    fn a_configuration_pointing_at_a_missing_project_is_still_listed() {
+        let dir = workspace_with(&[("src/App/App.csproj", EXE_CSPROJ)]);
+        let mut ws = scan(dir.path()).unwrap();
+        let mut orphan = RunConfig::new(
+            "gone",
+            "Gone",
+            RunKind::App,
+            "dotnet",
+            ConfigSource::UserFile,
+        );
+        orphan.project = Some(PathBuf::from("src/Deleted/Deleted.csproj"));
+        ws.configs.push(orphan);
+
+        let grouped = configs_by_project(&ws);
+
+        assert!(grouped["Workspace"].iter().any(|c| c.id == "gone"));
+    }
+
+    #[test]
+    fn a_workspace_with_no_configurations_groups_into_nothing() {
+        let dir = workspace_with(&[("notes.md", "nothing to run")]);
+        let ws = scan(dir.path()).unwrap();
+
+        assert!(configs_by_project(&ws).is_empty());
+    }
+
+    // -- scan options --------------------------------------------------------
+
+    /// The default is filesystem-only, and `scan` is defined as `scan_with` at
+    /// its defaults — so the two must agree exactly.
+    #[test]
+    fn scanning_with_default_options_matches_the_plain_scan() {
+        let dir = workspace_with(&[
+            ("src/App/App.csproj", EXE_CSPROJ),
+            ("src/App.Tests/App.Tests.csproj", XUNIT_CSPROJ),
+        ]);
+
+        assert_eq!(
+            scan(dir.path()).unwrap(),
+            scan_with(dir.path(), ScanOptions::default()).unwrap()
+        );
+        assert!(!ScanOptions::default().msbuild_evaluation);
+    }
+
+    /// MSBuild evaluation only *refines* what the XML already said. With no
+    /// `dotnet` on the machine — or a project it cannot evaluate — the scan
+    /// must still return the projects rather than failing or emptying out.
+    #[test]
+    fn asking_for_msbuild_evaluation_never_costs_the_scan_its_projects() {
+        let dir = workspace_with(&[("src/App/App.csproj", EXE_CSPROJ)]);
+
+        let refined = scan_with(
+            dir.path(),
+            ScanOptions {
+                msbuild_evaluation: true,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(refined.projects.len(), 1);
+        assert_eq!(refined.projects[0].name, "App");
+        assert_eq!(refined.root, scan(dir.path()).unwrap().root);
+    }
+
+    #[test]
+    fn a_missing_root_is_an_error_whichever_options_are_used() {
+        assert!(scan_with(
+            Path::new("/nonexistent/workspace"),
+            ScanOptions {
+                msbuild_evaluation: true,
+            },
+        )
+        .is_err());
+    }
+
+    // -- launch profiles -----------------------------------------------------
+
+    const LAUNCH_SETTINGS: &str = r#"{
+      "profiles": {
+        "http":  { "commandName": "Project", "applicationUrl": "http://localhost:5000" },
+        "https": { "commandName": "Project", "applicationUrl": "https://localhost:5001" }
+      }
+    }"#;
+
+    #[test]
+    fn launch_profiles_are_read_from_beside_the_project() {
+        let dir = workspace_with(&[
+            ("src/App/App.csproj", EXE_CSPROJ),
+            ("src/App/Properties/launchSettings.json", LAUNCH_SETTINGS),
+        ]);
+
+        let profiles = launch_profiles(&dir.path().join("src/App/App.csproj"));
+
+        let names: Vec<&str> = profiles.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["http", "https"]);
+    }
+
+    /// No launch settings is the ordinary case — `dotnet run`'s default
+    /// profile applies — so it must be an empty list, never an error.
+    #[test]
+    fn a_project_with_no_launch_settings_has_no_profiles() {
+        let dir = workspace_with(&[("src/App/App.csproj", EXE_CSPROJ)]);
+
+        assert!(launch_profiles(&dir.path().join("src/App/App.csproj")).is_empty());
+    }
+
+    #[test]
+    fn unreadable_launch_settings_yield_no_profiles_rather_than_failing() {
+        let dir = workspace_with(&[
+            ("src/App/App.csproj", EXE_CSPROJ),
+            ("src/App/Properties/launchSettings.json", "{ not json"),
+        ]);
+
+        assert!(launch_profiles(&dir.path().join("src/App/App.csproj")).is_empty());
+    }
+
+    /// Profiles live beside the project file, so a path with no parent has
+    /// nowhere to look.
+    #[test]
+    fn a_project_path_with_no_parent_has_no_profiles() {
+        assert!(launch_profiles(Path::new("App.csproj")).is_empty());
+    }
+
     #[test]
     fn results_are_ordered_deterministically() {
         let dir = workspace_with(&[
@@ -1033,5 +1227,59 @@ EndGlobal
             vec!["A", "M", "Z"],
             "scan order must not depend on the filesystem"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Opening a directory
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn opening_a_directory_scans_it() {
+        let dir = workspace_with(&[("src/App/App.csproj", EXE_CSPROJ)]);
+        let ws = workspace_from_dir(dir.path()).unwrap();
+
+        assert_eq!(ws.projects.len(), 1);
+        assert_eq!(ws.projects[0].name, "App");
+    }
+
+    #[test]
+    fn opening_a_path_that_does_not_exist_is_refused() {
+        let dir = workspace_with(&[]);
+        let missing = dir.path().join("nowhere");
+
+        let err = workspace_from_dir(&missing).unwrap_err();
+        assert_eq!(err, format!("{} is not a directory", missing.display()));
+    }
+
+    #[test]
+    fn opening_a_file_rather_than_a_directory_is_refused() {
+        let dir = workspace_with(&[("src/App/App.csproj", EXE_CSPROJ)]);
+        let file = dir.path().join("src/App/App.csproj");
+
+        let err = workspace_from_dir(&file).unwrap_err();
+        assert_eq!(err, format!("{} is not a directory", file.display()));
+    }
+
+    #[test]
+    fn opening_a_directory_applies_its_saved_configuration() {
+        let dir = workspace_with(&[
+            ("src/App/App.csproj", EXE_CSPROJ),
+            (
+                ".code-basics/config.json",
+                r#"{"version":1,"configs":[{"id":"custom","name":"Custom","kind":"app",
+                    "ecosystem":"dotnet","source":"userFile"}],"favorites":["custom"]}"#,
+            ),
+        ]);
+
+        let ws = workspace_from_dir(dir.path()).unwrap();
+
+        assert_eq!(ws.favorites, vec!["custom".to_string()]);
+        assert!(
+            ws.configs.iter().any(|c| c.id == "custom"),
+            "the saved configuration should be merged in: {:?}",
+            ws.configs.iter().map(|c| &c.id).collect::<Vec<_>>()
+        );
+        // Favourites sort first, which only `config::apply` arranges.
+        assert_eq!(ws.configs[0].id, "custom");
     }
 }

@@ -3,26 +3,7 @@ import { OutputConsole, type ConsoleHandle } from "../components/OutputConsole";
 import { Sidebar } from "../components/Sidebar";
 import * as api from "../ipc/api";
 import type { Branch, Commit, FileDiff, NetworkKind, WorkingStatus } from "../ipc/types";
-
-function formatTime(seconds: number): string {
-  return new Date(seconds * 1000).toLocaleString();
-}
-
-/** Render a file diff as plain unified text for the read-only commit view. */
-function unifiedText(diff: FileDiff): string {
-  const lines: string[] = [];
-  for (const hunk of diff.hunks) {
-    lines.push(
-      `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@ ${hunk.header}`,
-    );
-    for (const line of hunk.lines) {
-      const marker =
-        line.origin === "addition" ? "+" : line.origin === "deletion" ? "-" : " ";
-      lines.push(marker + line.content);
-    }
-  }
-  return lines.join("\n");
-}
+import { formatTime, unifiedText } from "./historyLogic";
 
 export function HistoryView() {
   const [commits, setCommits] = useState<Commit[]>([]);

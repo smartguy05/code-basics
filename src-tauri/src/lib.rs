@@ -2,10 +2,9 @@
 //!
 //! Deliberately thin: every decision lives in `cb-core`, which has no Tauri
 //! dependency and is unit tested without a windowing system. What remains here
-//! is state management, dispatching a configuration to the right adapter, and
-//! bridging streamed process output onto an IPC channel.
+//! is state management, the `#[tauri::command]` surface, and bridging streamed
+//! process output onto an IPC channel.
 
-mod invocation;
 mod state;
 
 mod commands {
@@ -33,19 +32,12 @@ fn workspace_from_args(state: &AppState) {
         return;
     };
     let path = std::path::PathBuf::from(arg);
-    if !path.is_dir() {
-        eprintln!("code-basics: {} is not a directory", path.display());
-        return;
-    }
 
-    match cb_core::workspace::scan(&path) {
-        Ok(mut workspace) => {
-            if let Ok(saved) = cb_core::config::load(&workspace.root) {
-                cb_core::config::apply(&mut workspace, saved);
-            }
+    match cb_core::workspace::workspace_from_dir(&path) {
+        Ok(workspace) => {
             let _ = state.set_workspace(workspace);
         }
-        Err(e) => eprintln!("code-basics: could not open {}: {e:#}", path.display()),
+        Err(e) => eprintln!("code-basics: {e}"),
     }
 }
 

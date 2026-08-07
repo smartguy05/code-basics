@@ -7,6 +7,7 @@ import { InspectView } from "./views/InspectView";
 import { RunView } from "./views/RunView";
 import { TestsView } from "./views/TestsView";
 import * as api from "./ipc/api";
+import { loadRecents, rememberRecent } from "./recentsLogic";
 import type { InspectTarget, RootSpec, Workspace } from "./ipc/types";
 
 type Tab = "tests" | "run" | "changes" | "history" | "inspect";
@@ -34,23 +35,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "inspect", label: "Objects" },
 ];
 
-/** Workspaces the user has opened before, so reopening is one click. */
-const RECENTS_KEY = "code-basics.recentWorkspaces";
-
-function loadRecents(): string[] {
-  try {
-    const raw = localStorage.getItem(RECENTS_KEY);
-    return raw ? (JSON.parse(raw) as string[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function rememberRecent(path: string) {
-  const recents = [path, ...loadRecents().filter((p) => p !== path)].slice(0, 8);
-  localStorage.setItem(RECENTS_KEY, JSON.stringify(recents));
-}
-
 /** True when running inside the Tauri webview (false in a plain browser tab). */
 const inTauri = "__TAURI_INTERNALS__" in window;
 
@@ -58,7 +42,7 @@ export function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [tab, setTab] = useState<Tab>("run");
   const [error, setError] = useState<string | null>(null);
-  const [recents, setRecents] = useState<string[]>(loadRecents);
+  const [recents, setRecents] = useState<string[]>(() => loadRecents(localStorage));
   const [loading, setLoading] = useState(true);
   /**
    * A contextual Inspect click, held only until the Objects tab has consumed
@@ -88,8 +72,8 @@ export function App() {
     try {
       const opened = await api.openWorkspace(path);
       setWorkspace(opened);
-      rememberRecent(opened.root);
-      setRecents(loadRecents());
+      rememberRecent(localStorage, opened.root);
+      setRecents(loadRecents(localStorage));
       setError(null);
     } catch (e) {
       setError(api.errorMessage(e));

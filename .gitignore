@@ -19,6 +19,9 @@ src-tauri/gen/schemas
 # npm lockfile — pnpm is canonical (pnpm-lock.yaml)
 package-lock.json
 
+# vitest coverage output (`pnpm coverage`)
+/coverage/
+
 # Object-inspector sidecar: .NET build output, and the published binaries the
 # Tauri bundle picks up. Both are produced by `pnpm sidecar:build`.
 /sidecar/**/bin/

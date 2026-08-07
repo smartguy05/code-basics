@@ -224,3 +224,121 @@ fn a_corrupt_file_is_reported_rather_than_silently_ignored() {
     let error = load(dir.path()).unwrap_err().to_string();
     assert!(error.contains("change-group JSON"), "got: {error}");
 }
+
+// -- where the file lives, and the save/load pair on its own -----------------
+
+/// Grouping is one person's work in progress, so the file sits inside the
+/// git-ignored `.code-basics/` directory rather than beside the code.
+#[test]
+fn the_file_lives_in_the_config_directory_under_a_stable_name() {
+    let root = Path::new("/repo");
+
+    assert_eq!(
+        changelists_path(root),
+        crate::config::config_dir(root).join(CHANGELISTS_FILE)
+    );
+    assert_eq!(CHANGELISTS_FILE, "changelists.json");
+    assert!(changelists_path(root).starts_with(crate::config::config_dir(root)));
+}
+
+#[test]
+fn saving_and_loading_round_trips_the_whole_document() {
+    let dir = workspace();
+    let lists = Changelists {
+        version: 1,
+        groups: vec![
+            Changelist {
+                name: "Refactor".into(),
+                paths: vec!["src/a.rs".into(), "src/b.rs".into()],
+            },
+            Changelist {
+                name: "Docs".into(),
+                paths: Vec::new(),
+            },
+        ],
+    };
+
+    save(dir.path(), &lists).unwrap();
+
+    assert_eq!(load(dir.path()).unwrap(), lists);
+}
+
+/// The order groups are written in is the order they are shown, so a save must
+/// not sort or otherwise rearrange them.
+#[test]
+fn saving_preserves_the_order_the_groups_were_given_in() {
+    let dir = workspace();
+    let lists = Changelists {
+        version: 1,
+        groups: ["Zebra", "Apple", "Mango"]
+            .iter()
+            .map(|name| Changelist {
+                name: (*name).to_string(),
+                paths: Vec::new(),
+            })
+            .collect(),
+    };
+
+    save(dir.path(), &lists).unwrap();
+
+    let names: Vec<String> = load(dir.path())
+        .unwrap()
+        .groups
+        .into_iter()
+        .map(|g| g.name)
+        .collect();
+    assert_eq!(names, vec!["Zebra", "Apple", "Mango"]);
+}
+
+/// The first save in a workspace has no `.code-basics/` to write into.
+#[test]
+fn saving_creates_the_config_directory_it_needs() {
+    let dir = workspace();
+    assert!(!crate::config::config_dir(dir.path()).exists());
+
+    save(dir.path(), &Changelists::default()).unwrap();
+
+    assert!(changelists_path(dir.path()).exists());
+}
+
+#[test]
+fn saving_replaces_the_previous_document_rather_than_appending() {
+    let dir = workspace();
+    create(dir.path(), "Old").unwrap();
+
+    save(dir.path(), &Changelists::default()).unwrap();
+
+    assert!(load(dir.path()).unwrap().groups.is_empty());
+}
+
+/// The file is read by hand as often as by the app, so it stays pretty-printed
+/// and newline-terminated.
+#[test]
+fn the_saved_file_is_readable_json() {
+    let dir = workspace();
+    save(
+        dir.path(),
+        &Changelists {
+            version: 1,
+            groups: vec![Changelist {
+                name: "Refactor".into(),
+                paths: vec!["src/a.rs".into()],
+            }],
+        },
+    )
+    .unwrap();
+
+    let text = std::fs::read_to_string(changelists_path(dir.path())).unwrap();
+
+    assert!(text.ends_with('\n'), "got: {text:?}");
+    assert!(text.contains('\n'), "the document must be pretty-printed");
+    assert!(text.contains("\"Refactor\""), "got: {text}");
+}
+
+#[test]
+fn a_saved_document_carries_its_version_forward() {
+    let dir = workspace();
+    save(dir.path(), &Changelists::default()).unwrap();
+
+    assert_eq!(load(dir.path()).unwrap().version, 1);
+}

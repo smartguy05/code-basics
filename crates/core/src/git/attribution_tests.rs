@@ -953,3 +953,91 @@ fn a_reformatted_match_is_reported_below_high_confidence() {
 
     assert!(run(&d, &i).hunks[0].spans[0].confidence < Confidence::High);
 }
+
+// -- attributing a whole working tree ---------------------------------------
+
+/// `attribute` is defined as `attribute_file` over a slice, so the two must
+/// never disagree: the per-file path is the one every test above exercises.
+#[test]
+fn attributing_a_tree_gives_each_file_the_same_answer_as_attributing_it_alone() {
+    let first = one_hunk_diff("a.rs", &["+let alpha = distinctive_first_call();"]);
+    let second = one_hunk_diff("b.rs", &["+let beta = distinctive_second_call();"]);
+    let i = intents(vec![
+        record(0, "a.rs", &[], &["let alpha = distinctive_first_call();"]),
+        record(1, "b.rs", &[], &["let beta = distinctive_second_call();"]),
+    ]);
+
+    let all = attribute(&[first.clone(), second.clone()], &i, Options::default());
+
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0], attribute_file(&first, &i, Options::default()));
+    assert_eq!(all[1], attribute_file(&second, &i, Options::default()));
+}
+
+/// The result is positional: the UI pairs each attribution with the diff at
+/// the same index, so reordering or dropping one would mislabel every file
+/// after it.
+#[test]
+fn every_file_gets_an_attribution_in_the_order_it_was_given() {
+    let diffs = vec![
+        one_hunk_diff("z.rs", &["+let zulu = 1;"]),
+        one_hunk_diff("a.rs", &["+let alpha = 2;"]),
+        one_hunk_diff("m.rs", &["+let mike = 3;"]),
+    ];
+
+    let all = attribute(&diffs, &intents(Vec::new()), Options::default());
+
+    let paths: Vec<&str> = all.iter().map(|a| a.path.as_str()).collect();
+    assert_eq!(paths, vec!["z.rs", "a.rs", "m.rs"]);
+}
+
+/// A file nothing was recorded for still has to appear, with its changed lines
+/// counted as unattributed — silence about a file is not the same as the file
+/// not being there.
+#[test]
+fn a_file_with_no_recorded_intent_is_still_reported_as_unattributed() {
+    let diffs = vec![
+        one_hunk_diff("known.rs", &["+let alpha = distinctive_first_call();"]),
+        one_hunk_diff("unknown.rs", &["+let nobody = claimed_this_line();"]),
+    ];
+    let i = intents(vec![record(
+        0,
+        "known.rs",
+        &[],
+        &["let alpha = distinctive_first_call();"],
+    )]);
+
+    let all = attribute(&diffs, &i, Options::default());
+
+    assert_eq!(all.len(), 2);
+    assert!(all[1].hunks[0].spans.is_empty());
+    assert_eq!(all[1].hunks[0].unattributed_lines, 1);
+    assert_eq!(all[1].hunks[0].dominant, None);
+}
+
+#[test]
+fn an_empty_working_tree_attributes_nothing() {
+    assert!(attribute(&[], &intents(Vec::new()), Options::default()).is_empty());
+}
+
+/// Recorded intent is matched by path, so one file's edits must never be
+/// allowed to claim another file's identical lines.
+#[test]
+fn a_record_for_one_file_does_not_claim_the_same_line_in_another() {
+    let shared = "+let alpha = distinctive_shared_call();";
+    let diffs = vec![
+        one_hunk_diff("a.rs", &[shared]),
+        one_hunk_diff("b.rs", &[shared]),
+    ];
+    let i = intents(vec![record(
+        0,
+        "a.rs",
+        &[],
+        &["let alpha = distinctive_shared_call();"],
+    )]);
+
+    let all = attribute(&diffs, &i, Options::default());
+
+    assert!(!all[0].hunks[0].spans.is_empty(), "a.rs was recorded");
+    assert!(all[1].hunks[0].spans.is_empty(), "b.rs was not");
+}

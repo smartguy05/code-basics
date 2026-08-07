@@ -32,17 +32,31 @@ use super::{
 };
 use crate::intents::{normalise_path, IntentEdit, IntentLabel, IntentRecord, ProviderId};
 
-pub struct ClaudeCode;
-
-impl Default for ClaudeCode {
-    fn default() -> Self {
-        Self::new()
-    }
+#[derive(Debug, Clone, Default)]
+pub struct ClaudeCode {
+    /// An explicit `~/.claude` to read instead of the real one.
+    ///
+    /// Production always leaves this `None` and resolves the home directory
+    /// itself; it exists so the transcript scan can be pointed at a fixture
+    /// tree without an environment variable, which would leak between tests
+    /// running in the same process.
+    home: Option<PathBuf>,
 }
 
 impl ClaudeCode {
     pub fn new() -> Self {
-        Self
+        Self { home: None }
+    }
+
+    /// Read a specific directory as if it were `~/.claude`.
+    pub fn with_home(home: impl Into<PathBuf>) -> Self {
+        Self {
+            home: Some(home.into()),
+        }
+    }
+
+    fn home(&self) -> Option<PathBuf> {
+        self.home.clone().or_else(claude_home)
     }
 }
 
@@ -54,8 +68,8 @@ fn project_settings_path(root: &Path) -> PathBuf {
     root.join(".claude").join("settings.json")
 }
 
-fn user_settings_path() -> Option<PathBuf> {
-    claude_home().map(|h| h.join("settings.json"))
+fn user_settings_path(home: &Path) -> PathBuf {
+    home.join("settings.json")
 }
 
 /// The directory name Claude Code derives from a workspace path.
@@ -78,20 +92,17 @@ impl Provider for ClaudeCode {
     }
 
     fn detected(&self) -> bool {
-        claude_home().is_some_and(|h| h.is_dir())
+        self.home().is_some_and(|h| h.is_dir())
     }
 
     fn status(&self, root: &Path) -> ProviderStatus {
-        if !self.detected() {
+        let Some(home) = self.home().filter(|h| h.is_dir()) else {
             return ProviderStatus::absent(ProviderId::ClaudeCode);
-        }
+        };
 
         let capture = if hooks_json::is_installed(&project_settings_path(root)) {
             Some(InstallScope::Project)
-        } else if user_settings_path()
-            .as_deref()
-            .is_some_and(hooks_json::is_installed)
-        {
+        } else if hooks_json::is_installed(&user_settings_path(&home)) {
             Some(InstallScope::User)
         } else {
             None
@@ -101,7 +112,7 @@ impl Provider for ClaudeCode {
             provider: ProviderId::ClaudeCode,
             detected: true,
             capture,
-            sessions: find_sessions(root).len(),
+            sessions: find_sessions(&home, root).len(),
             caveats: Vec::new(),
         }
     }
@@ -109,7 +120,7 @@ impl Provider for ClaudeCode {
     fn install_plan(&self, root: &Path, scope: InstallScope) -> Result<InstallPlan> {
         let path = match scope {
             InstallScope::Project => project_settings_path(root),
-            InstallScope::User => user_settings_path().ok_or_else(|| {
+            InstallScope::User => self.home().map(|h| user_settings_path(&h)).ok_or_else(|| {
                 anyhow::anyhow!("could not locate the Claude Code home directory")
             })?,
         };
@@ -168,8 +179,10 @@ impl Provider for ClaudeCode {
         let mut labels = Vec::new();
         let mut seq = 0u64;
 
-        for session in find_sessions(root) {
-            read_transcript(&session, root, &mut seq, &mut records, &mut labels);
+        if let Some(home) = self.home() {
+            for session in find_sessions(&home, root) {
+                read_transcript(&session, root, &mut seq, &mut records, &mut labels);
+            }
         }
 
         Ok((records, labels))
@@ -177,10 +190,7 @@ impl Provider for ClaudeCode {
 }
 
 /// Transcript files belonging to this workspace.
-fn find_sessions(root: &Path) -> Vec<PathBuf> {
-    let Some(home) = claude_home() else {
-        return Vec::new();
-    };
+fn find_sessions(home: &Path, root: &Path) -> Vec<PathBuf> {
     let projects = home.join("projects");
     if !projects.is_dir() {
         return Vec::new();
@@ -441,6 +451,10 @@ fn pair_to_edit(value: &Value) -> Option<IntentEdit> {
         whole_file: false,
     })
 }
+
+#[cfg(test)]
+#[path = "claude_code_tests.rs"]
+mod claude_code_tests;
 
 fn lines_of(text: &str) -> Vec<String> {
     if text.is_empty() {

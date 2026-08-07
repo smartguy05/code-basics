@@ -39,6 +39,66 @@ use super::{
     append_edit, append_label, next_seq, IntentEdit, IntentLabel, IntentRecord, ProviderId,
 };
 
+/// Did the command line ask for recording rather than for the application?
+///
+/// The installed hook line carries both the subcommand and the marker flag,
+/// and either alone is accepted: it lives in a config file the user shares
+/// with their team, so a hand-edited line keeping only one must still record.
+/// The marker is read back through the same constant that writes it
+/// ([`super::providers::hooks_json::MARKER`]) so the two cannot drift.
+pub fn is_record_invocation(args: &[String]) -> bool {
+    let marker = format!("--{}", super::providers::hooks_json::MARKER);
+    args.iter()
+        .any(|arg| arg == "record-intent" || *arg == marker)
+}
+
+/// What a `record-intent` command line asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecorderInvocation {
+    /// Which agent installed the hook that fired.
+    pub provider: ProviderId,
+    /// Which lifecycle event fired.
+    pub event: HookEvent,
+    /// The workspace the hook was installed for, if it named one. `None`
+    /// leaves the root to the payload — see [`resolve_root`].
+    pub workspace: Option<String>,
+}
+
+/// Read a `record-intent` command line.
+///
+/// `None` means there is nothing to do and nothing wrong: either this is an
+/// ordinary application launch, or some other lifecycle event fired. The
+/// recorder must be silent in both cases, so neither is an error.
+pub fn parse_recorder_args(args: &[String]) -> Option<RecorderInvocation> {
+    if !is_record_invocation(args) {
+        return None;
+    }
+
+    let event = HookEvent::parse(&flag(args, "--event")?)?;
+
+    // Claude Code is the default rather than a rejected unknown: a hook line
+    // written before the flag existed must keep recording.
+    let provider = match flag(args, "--provider").as_deref() {
+        Some("codex") => ProviderId::Codex,
+        _ => ProviderId::ClaudeCode,
+    };
+
+    Some(RecorderInvocation {
+        provider,
+        event,
+        workspace: flag(args, "--workspace").filter(|w| !w.is_empty()),
+    })
+}
+
+/// Read `--name value` from the command line.
+///
+/// The first occurrence wins, and a flag with nothing after it has no value
+/// rather than swallowing whatever follows.
+fn flag(args: &[String], name: &str) -> Option<String> {
+    let position = args.iter().position(|a| a == name)?;
+    args.get(position + 1).cloned()
+}
+
 /// Which lifecycle event fired.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookEvent {

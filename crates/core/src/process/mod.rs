@@ -450,13 +450,18 @@ mod tests {
             tokio::spawn(async move { sup.run("long", &inv, tx).await })
         };
 
-        // Wait for it to actually be up before cancelling.
-        loop {
-            if sup.is_running("long").await {
-                break;
+        // Wait for it to actually be up before cancelling. Bounded, because an
+        // unbounded spin turns a failed spawn into a hung suite with no output.
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                if sup.is_running("long").await {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        })
+        .await
+        .expect("process never started - is sh on PATH? (run cargo test from Git Bash)");
         assert!(sup.cancel("long").await);
 
         let result = tokio::time::timeout(std::time::Duration::from_secs(10), runner)
@@ -497,12 +502,16 @@ mod tests {
             let sup = sup.clone();
             tokio::spawn(async move { sup.run("tree", &inv, tx).await })
         };
-        loop {
-            if sup.is_running("tree").await {
-                break;
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                if sup.is_running("tree").await {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        })
+        .await
+        .expect("process never started - is sh on PATH? (run cargo test from Git Bash)");
         sup.cancel("tree").await;
         let _ = tokio::time::timeout(std::time::Duration::from_secs(10), runner).await;
 
@@ -527,12 +536,16 @@ mod tests {
             let sup = sup.clone();
             tokio::spawn(async move { sup.run("app", &inv, tx).await })
         };
-        loop {
-            if sup.is_running("app").await {
-                break;
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                if sup.is_running("app").await {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        })
+        .await
+        .expect("process never started - is sh on PATH? (run cargo test from Git Bash)");
 
         let pid = sup.pid("app").await.expect("a running process has a pid");
         assert!(pid > 0);

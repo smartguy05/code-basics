@@ -660,6 +660,212 @@ fn build_actions_produce_the_expected_dotnet_verbs() {
     assert!(clean.args.iter().any(|a| a.ends_with("App.csproj")));
 }
 
+/// A configuration that names no project builds whatever the working
+/// directory contains, rather than emitting a bare `dotnet build` with a
+/// stray flag where the project should be.
+#[test]
+fn a_build_with_no_project_passes_no_target() {
+    let root = Path::new("/repo");
+    let c = RunConfig::new(
+        "loose",
+        "loose",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::UserFile,
+    );
+
+    let inv = build_action_invocation(&c, BuildAction::Build, root);
+
+    assert_eq!(inv.args, vec!["build"]);
+    assert_eq!(inv.cwd, PathBuf::from("/repo"));
+}
+
+/// Every action names the project, or a rebuild would quietly compile
+/// something other than what the user selected.
+#[test]
+fn every_action_names_the_project_it_was_given() {
+    let root = Path::new("/repo");
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
+    c.project = Some(PathBuf::from("src/App/App.csproj"));
+
+    for action in [BuildAction::Build, BuildAction::Rebuild, BuildAction::Clean] {
+        let inv = build_action_invocation(&c, action, root);
+        assert!(
+            inv.args.iter().any(|a| a.ends_with("App.csproj")),
+            "{action:?} lost the project: {:?}",
+            inv.args
+        );
+    }
+}
+
+#[test]
+fn a_build_carries_the_target_framework_across() {
+    let root = Path::new("/repo");
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
+    c.project = Some(PathBuf::from("src/App/App.csproj"));
+    c.framework = Some("net8.0".into());
+
+    let inv = build_action_invocation(&c, BuildAction::Build, root);
+
+    let i = inv.args.iter().position(|a| a == "-f").expect("-f");
+    assert_eq!(inv.args[i + 1], "net8.0");
+}
+
+/// A multi-targeted project built in a named configuration needs both flags,
+/// and neither may displace the other.
+#[test]
+fn a_configuration_and_a_framework_are_both_passed() {
+    let root = Path::new("/repo");
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
+    c.project = Some(PathBuf::from("src/App/App.csproj"));
+    c.build_configuration = Some("Release".into());
+    c.framework = Some("net8.0".into());
+
+    let inv = build_action_invocation(&c, BuildAction::Rebuild, root);
+
+    let ci = inv.args.iter().position(|a| a == "-c").expect("-c");
+    let fi = inv.args.iter().position(|a| a == "-f").expect("-f");
+    assert_eq!(inv.args[ci + 1], "Release");
+    assert_eq!(inv.args[fi + 1], "net8.0");
+    assert_eq!(inv.args[0..2], ["build", "--no-incremental"]);
+}
+
+/// Rebuild and Build differ by exactly one flag; a clean is a different verb
+/// entirely and must never carry it.
+#[test]
+fn only_a_rebuild_disables_incremental_compilation() {
+    let root = Path::new("/repo");
+    let c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
+
+    let flag = "--no-incremental".to_string();
+    assert!(!build_action_invocation(&c, BuildAction::Build, root)
+        .args
+        .contains(&flag));
+    assert!(build_action_invocation(&c, BuildAction::Rebuild, root)
+        .args
+        .contains(&flag));
+    assert!(!build_action_invocation(&c, BuildAction::Clean, root)
+        .args
+        .contains(&flag));
+    assert_eq!(
+        build_action_invocation(&c, BuildAction::Clean, root).args[0],
+        "clean"
+    );
+}
+
+/// The default working directory is the project's own, so relative paths in
+/// build hooks behave the way they do when launched from an IDE.
+#[test]
+fn a_build_runs_in_the_projects_directory_unless_told_otherwise() {
+    let root = Path::new("/repo");
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
+    c.project = Some(PathBuf::from("src/App/App.csproj"));
+
+    assert_eq!(
+        build_action_invocation(&c, BuildAction::Build, root).cwd,
+        PathBuf::from("/repo/src/App")
+    );
+
+    c.cwd = Some(PathBuf::from("tools"));
+    assert_eq!(
+        build_action_invocation(&c, BuildAction::Build, root).cwd,
+        PathBuf::from("/repo/tools")
+    );
+}
+
+/// A build produces no test report, and nothing about it is worth warning
+/// over — an empty warning list is what lets the UI stay quiet.
+#[test]
+fn a_build_leaves_no_report_and_raises_no_warnings() {
+    let root = Path::new("/repo");
+    let c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
+
+    for action in [BuildAction::Build, BuildAction::Rebuild, BuildAction::Clean] {
+        let inv = build_action_invocation(&c, action, root);
+        assert!(inv.report.is_none(), "{action:?}");
+        assert!(inv.warnings.is_empty(), "{action:?}");
+        assert_eq!(inv.program, "dotnet");
+    }
+}
+
+/// The configuration's environment reaches the build, not just the run: a
+/// project that needs `NUGET_PACKAGES` set to restore needs it here too.
+#[test]
+fn the_configurations_environment_reaches_the_build() {
+    let root = Path::new("/repo");
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
+    c.env.insert("NUGET_PACKAGES".into(), "/packages".into());
+
+    let inv = build_action_invocation(&c, BuildAction::Build, root);
+
+    assert_eq!(
+        inv.env.get("NUGET_PACKAGES").map(String::as_str),
+        Some("/packages")
+    );
+}
+
+/// Program arguments belong to the application being launched, not to
+/// `dotnet build` — passing them through would fail the build with an
+/// unrecognised option.
+#[test]
+fn program_arguments_do_not_leak_into_a_build() {
+    let root = Path::new("/repo");
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
+    c.args = vec!["--serve".into(), "--port=8080".into()];
+
+    let inv = build_action_invocation(&c, BuildAction::Build, root);
+
+    assert_eq!(inv.args, vec!["build"]);
+}
+
 #[test]
 fn build_action_names_cross_ipc_in_camel_case() {
     assert_eq!(

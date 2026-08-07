@@ -80,4 +80,4 @@ Two deliberate details:
 
 - Views receive the `Workspace` as a prop from `App` and call back with `onWorkspaceChange` when a command returns an updated one (saving a config, importing, rescanning).
 - `App` restores the backend's open workspace on mount (`currentWorkspace`), so a window reload does not lose state; recents live in `localStorage` under `code-basics.recentWorkspaces`.
-- `pnpm typecheck` must pass; there are no frontend unit tests — logic that needs testing belongs in `cb-core`.
+- `pnpm typecheck` and `pnpm test` must pass. Frontend unit tests (vitest, node environment) cover the pure `*Logic.ts` modules extracted from components — parsing, classification, formatting, index math — with a co-located `.test.ts` per module; components themselves are untested rendering shells. Anything bigger than a display decision still belongs in `cb-core` ([development guide](../guides/development.md)).

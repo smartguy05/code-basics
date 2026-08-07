@@ -1,5 +1,6 @@
 //! Running applications and tests.
 
+use cb_core::invocation;
 use cb_core::model::{TestNode, TestRunResult};
 use cb_core::process::ProcessEvent;
 use cb_core::testing;
@@ -8,7 +9,6 @@ use tauri::ipc::Channel;
 use tauri::State;
 use tokio::sync::mpsc;
 
-use crate::invocation;
 use crate::state::AppState;
 
 /// Forward supervisor events onto an IPC channel until the process ends.
@@ -87,27 +87,7 @@ async fn start_compound(
 ) -> Result<(), String> {
     // Resolve and build everything before starting anything, so a broken
     // member stops the whole launch rather than leaving half of it running.
-    let mut members = Vec::new();
-    for member_id in &config.compound {
-        let member = workspace
-            .configs
-            .iter()
-            .find(|c| c.id == *member_id)
-            .ok_or_else(|| format!("compound member `{member_id}` no longer exists"))?;
-        if !member.compound.is_empty() {
-            return Err(format!(
-                "`{}` is itself a compound configuration; nesting is not supported",
-                member.name
-            ));
-        }
-        let mut member = member.clone();
-        member
-            .env
-            .extend(env.iter().flatten().map(|(k, v)| (k.clone(), v.clone())));
-
-        let invocation = invocation::build(workspace, &member, None)?;
-        members.push((member, invocation));
-    }
+    let members = invocation::plan_compound(workspace, config, env.as_ref())?;
 
     let mut handles = Vec::new();
     for (member, invocation) in members {
@@ -242,18 +222,11 @@ pub async fn run_tests(
 
     // "Re-run failed" needs the names from the previous run of this same
     // configuration.
-    let filter = only_failed
-        .then(|| state.previous_test_run(&config_id))
-        .flatten()
-        .map(|previous| testing::tree::failed_names(&previous.cases))
-        .filter(|names| !names.is_empty());
-
-    if only_failed && filter.is_none() {
-        return Err(
-            "there are no failed tests from a previous run of this configuration to re-run"
-                .to_string(),
-        );
-    }
+    let previous = state.previous_test_run(&config_id);
+    let filter = invocation::rerun_filter(
+        only_failed,
+        previous.as_ref().map(|previous| previous.cases.as_slice()),
+    )?;
 
     let invocation = invocation::build(&workspace, &config, filter.as_deref())?;
     let report = invocation

@@ -9,14 +9,26 @@
 | `pnpm dev` | Frontend only, in a browser — `invoke` calls fail; layout work only |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm build` | Typecheck + Vite production build into `dist/` |
-| `pnpm tauri build` | Full release build: executable + installers |
+| `pnpm tauri build` | Full release build: executable + installers. Does **not** build the sidecar — run `pnpm sidecar:build` first |
+| `pnpm sidecar:build` | Publish the C# inspector (x64 + x86) into `src-tauri/resources/inspector/`. Skipped silently without the .NET SDK |
+| `pnpm test` | Frontend unit tests (vitest, node environment) |
+| `pnpm coverage` | Frontend tests with coverage; fails under 70% lines on the `*Logic.ts` modules |
 | `cargo test -p cb-core` | All core tests (the entire logic layer) |
 | `cargo test -p cb-core <name>` | Tests whose names contain `<name>` |
+| `cargo llvm-cov --workspace --summary-only --fail-under-lines 70 --ignore-filename-regex "src.tauri.src.main\.rs\|process.kill\.rs"` | Rust coverage gate (install with `cargo install cargo-llvm-cov` + `rustup component add llvm-tools-preview`) |
 | `cargo clippy` | Lint the Rust workspace |
+| `cargo fmt` | Format the Rust workspace (stock rustfmt defaults — there is no `rustfmt.toml`) |
 | `pnpm docs:index` | Regenerate [docs/INDEX.md](../INDEX.md) from the source tree |
 | `pnpm docs:check` | Verify doc line limits and relative links |
 
-There is no JavaScript test suite. Logic that needs tests belongs in `cb-core` — that is the point of the [architecture](../architecture/overview.md).
+Frontend tests use vitest (node environment, no jsdom) and cover only the pure `*Logic.ts` modules extracted from components — see the frontend conventions below. Decision-making logic still belongs in `cb-core` first — that is the point of the [architecture](../architecture/overview.md).
+
+### Coverage
+
+Two separate gates, both ≥70% lines:
+
+- **Rust**: `cargo llvm-cov` over the whole workspace. Excluded (whole-file, via `--ignore-filename-regex`): `src-tauri/src/main.rs` (Tauri entry point) and `crates/core/src/process/kill.rs` (`taskkill`/libc platform forks, exercised indirectly by the `process::` tests). Run it from a shell with `sh` on PATH (Git Bash) — the `process::` tests spawn `sh` and fail without it.
+- **Frontend**: `pnpm coverage`, thresholds configured in `vite.config.ts` over the `*Logic.ts` include list only — rendering components are deliberately outside the metric.
 
 ## Where code goes
 
@@ -47,6 +59,7 @@ The dependency rule, restated as a checklist:
 - All IPC goes through `src/ipc/api.ts`; components take data as props.
 - Commands that return an updated `Workspace` flow it back up via `onWorkspaceChange`.
 - Match the existing plain-React style: local `useState`, no state libraries, no router.
+- Pure decision helpers (parsing, classification, formatting, index math) live in a co-located `*Logic.ts` module with a `.test.ts` beside it (`views/testsLogic.ts` + `views/testsLogic.test.ts` is the pattern). Components import from the logic module and stay untested rendering shells. Tests are plain vitest, node environment — no jsdom, no React imports.
 
 ## Documentation conventions
 

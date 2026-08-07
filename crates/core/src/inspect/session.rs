@@ -20,7 +20,7 @@ use super::model::{
     AttachableProcess, Attribution, Bitness, DotnetProcess, DumpFile, ElidedReason, InspectRequest,
     InspectStatus, InspectTarget, RootSpec, RunDump,
 };
-use super::{dumps, sidecar};
+use super::{dumps, graph, sidecar};
 use crate::model::{RunConfig, RunKind};
 
 // ---------------------------------------------------------------------------
@@ -747,6 +747,112 @@ pub fn first_bitness(bundled_dir: Option<&Path>) -> Option<Bitness> {
     [Bitness::X64, Bitness::X86]
         .into_iter()
         .find(|b| sidecar::resolve(bundled_dir, *b).is_some())
+}
+
+/// What one attempt at a capture left behind, as far as a retry is concerned.
+///
+/// Deliberately read from the *raw* result rather than the parsed graph: a
+/// result that carries a failure is not a graph, and the decision below must
+/// be made from the code the sidecar reported, never from its prose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttemptOutcome {
+    /// A result document with no failure in it. There is something to parse.
+    Captured,
+    /// The sidecar ran and explained why it could not capture. That is still a
+    /// successful exchange — it answered.
+    Failed(sidecar::SidecarFailure),
+    /// No result this build can read: the sidecar died before writing one, or
+    /// wrote something that would not parse. Nothing here names an
+    /// architecture, so nothing here can ask for a different one.
+    NoResult,
+}
+
+/// Read what an attempt left at `result`.
+///
+/// Every unreadable case collapses to [`AttemptOutcome::NoResult`] rather than
+/// being reported: the caller re-reads this file properly afterwards, and that
+/// read is what names the problem to the user. Deciding a retry is the only
+/// question being asked here.
+pub fn attempt_outcome(result: &Path) -> AttemptOutcome {
+    let Ok(content) = std::fs::read_to_string(result) else {
+        return AttemptOutcome::NoResult;
+    };
+    let Ok(raw) = graph::parse(&content) else {
+        return AttemptOutcome::NoResult;
+    };
+    match sidecar::failure_of(&raw) {
+        Some(failure) => AttemptOutcome::Failed(failure),
+        None => AttemptOutcome::Captured,
+    }
+}
+
+/// The architecture a retry would use — the one that was not just tried.
+///
+/// There are two builds and never a third, so "the other one" is total. It is
+/// spelled out here rather than at the call site because the caller has to
+/// resolve that binary on disk *before* [`retry_bitness`] can say whether the
+/// retry is worth taking, and both halves of that decision belong in one place.
+pub fn other_bitness(tried: Bitness) -> Bitness {
+    match tried {
+        Bitness::X64 => Bitness::X86,
+        Bitness::X86 => Bitness::X64,
+    }
+}
+
+/// Which sidecar to run next, or `None` when this attempt was the last one.
+///
+/// The rule itself is [`sidecar::next_attempt`]'s — a reported bitness mismatch
+/// on the x64 build and nothing else. What is added here is the second half of
+/// the decision: a retry is only worth taking when the build it would need is
+/// actually on disk. Without it the loop would resolve nothing, fail with the
+/// generic "inspector is not installed" message, and throw away the sidecar's
+/// own mismatch sentence, which is the most useful thing the user could be
+/// shown.
+///
+/// `other_build_present` is whether the *opposite* architecture's binary
+/// resolves; only the caller knows where the bundled directory is, and
+/// `next_attempt` never asks for the one just tried.
+pub fn retry_bitness(
+    outcome: &AttemptOutcome,
+    tried: Bitness,
+    other_build_present: bool,
+) -> Option<Bitness> {
+    let AttemptOutcome::Failed(failure) = outcome else {
+        return None;
+    };
+    let next = sidecar::next_attempt(tried, failure)?;
+    other_build_present.then_some(next)
+}
+
+// ---------------------------------------------------------------------------
+// Enumerating the machine
+// ---------------------------------------------------------------------------
+
+/// One enumeration attempt, reduced to a list or to a reason there is none.
+///
+/// The one thing this must never do is answer "there is nothing there" when
+/// what happened is "I could not look". Those are different statements, and the
+/// second is used as a safety gate: a capture refuses a live target that is not
+/// on the list, telling the user their process has exited and its pid may have
+/// been reused. An unwritable temp directory or a sidecar an anti-virus has
+/// locked would otherwise produce that sentence about a process the user can
+/// watch running in the console.
+///
+/// So `read` is not called at all when the run failed. A listing left by an
+/// earlier poll is still on disk, and reading it would answer this poll with
+/// stale data that looks exactly like a fresh one. An empty list from a run
+/// that *succeeded* is an ordinary answer: nothing managed is running.
+pub fn enumeration_outcome<F>(
+    ran: Result<(), String>,
+    read: F,
+) -> Result<sidecar::ProcessList, String>
+where
+    F: FnOnce() -> Result<sidecar::ProcessList, String>,
+{
+    match ran {
+        Ok(()) => read(),
+        Err(e) => Err(format!("the process enumerator could not be run: {e}")),
+    }
 }
 
 /// Why there is nothing to run, phrased so the reader can act on it.

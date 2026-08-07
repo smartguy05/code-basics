@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 use cb_core::inspect::sidecar::{self, ProcessList};
 use cb_core::inspect::{
-    graph, session, AttachableList, Bitness, ElidedReason, InspectGraph, InspectStatus,
-    InspectTarget, RootSpec, RunDump,
+    session, AttachableList, ElidedReason, InspectGraph, InspectStatus, InspectTarget, RootSpec,
+    RunDump,
 };
 use cb_core::model::Invocation;
 use cb_core::process::{ProcessEvent, Stream};
@@ -55,18 +55,6 @@ fn note(channel: &Channel<ProcessEvent>, text: String) {
         stream: Stream::Stderr,
         text: format!("[code-basics] {text}\n"),
     });
-}
-
-/// Whether the sidecar reported a failure that earns a second attempt.
-///
-/// Reading the raw result rather than the parsed graph, because a result that
-/// carries a failure is deliberately not a graph. The retry rule itself is
-/// `sidecar::next_attempt` — a bitness mismatch on x64 and nothing else.
-fn retry_bitness(result: &Path, tried: Bitness) -> Option<Bitness> {
-    let content = std::fs::read_to_string(result).ok()?;
-    let raw = graph::parse(&content).ok()?;
-    let failure = sidecar::failure_of(&raw)?;
-    sidecar::next_attempt(tried, &failure)
 }
 
 /// Whether the inspector can serve this workspace, and what to warn about.
@@ -132,10 +120,13 @@ async fn enumerate(
         .run(&format!("inspect:list-{session_id}"), &invocation, tx)
         .await;
 
-    let listed = match ran {
-        Ok(_) => sidecar::parse_process_list_file(&result_path).map_err(|e| format!("{e:#}")),
-        Err(e) => Err(format!("the process enumerator could not be run: {e:#}")),
-    };
+    // Ran-or-not and read-or-not are kept apart by `session::enumeration_outcome`,
+    // which does not even open the file when the run failed: a listing left by
+    // an earlier poll would otherwise answer this one as though it were fresh.
+    let listed =
+        session::enumeration_outcome(ran.map(|_| ()).map_err(|e| format!("{e:#}")), || {
+            sidecar::parse_process_list_file(&result_path).map_err(|e| format!("{e:#}"))
+        });
 
     // Read once and gone: it is a poll's answer, not state.
     let _ = std::fs::remove_file(&result_path);
@@ -288,21 +279,28 @@ pub async fn inspect_capture(
             .await
             .map_err(|e| format!("{e:#}"))?;
 
-        match retry_bitness(&result_path, bitness) {
-            // Only retried when the other build actually exists; otherwise the
-            // sidecar's own mismatch message is the most useful thing to show.
-            Some(next) if sidecar::resolve(bundled.as_deref(), next).is_some() => {
-                note(
-                    &channel,
-                    format!(
-                        "the target is a different architecture; retrying with {}",
-                        sidecar::sidecar_file_name(next)
-                    ),
-                );
-                bitness = next;
-            }
-            _ => break,
-        }
+        // The loop and the spawning are this layer's; whether there is another
+        // attempt worth making is `session::retry_bitness`'s, including the
+        // "only when the other build is actually on disk" half of it — which is
+        // why the resolve happens here, where the bundled directory is known.
+        let outcome = session::attempt_outcome(&result_path);
+        let other = session::other_bitness(bitness);
+        let Some(next) = session::retry_bitness(
+            &outcome,
+            bitness,
+            sidecar::resolve(bundled.as_deref(), other).is_some(),
+        ) else {
+            break;
+        };
+
+        note(
+            &channel,
+            format!(
+                "the target is a different architecture; retrying with {}",
+                sidecar::sidecar_file_name(next)
+            ),
+        );
+        bitness = next;
     }
 
     let graph = cb_core::inspect::parse_result_file(&session_id, &result_path)

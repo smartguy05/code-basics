@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use cb_core::git::repo::{MergeReport, NetworkOperation};
+use cb_core::git::repo::{resolve_network, MergeReport};
 use cb_core::git::{Branch, Commit, ComparisonMode, FileDiff, Repo, WorkingStatus};
 use cb_core::process::ProcessEvent;
 use serde::Serialize;
@@ -237,15 +237,10 @@ pub async fn git_stash_pop(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 /// Which network operation to perform.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum NetworkKind {
-    Fetch,
-    Pull,
-    Push,
-    /// Push a branch that has no upstream yet, establishing one.
-    PushSetUpstream,
-}
+///
+/// Re-exported rather than declared here so the IPC deserialisation surface is
+/// unchanged while the mapping it feeds lives in `cb-core`.
+pub use cb_core::git::repo::NetworkKind;
 
 /// Run fetch, pull or push through the system `git`, streaming its progress.
 ///
@@ -260,20 +255,13 @@ pub async fn git_network(
 ) -> Result<Option<i32>, String> {
     let invocation = {
         let repo = open(&state)?;
-        let operation = match kind {
-            NetworkKind::Fetch => NetworkOperation::Fetch,
-            NetworkKind::Pull => NetworkOperation::Pull,
-            NetworkKind::Push => NetworkOperation::Push,
-            NetworkKind::PushSetUpstream => {
-                let branch = repo
-                    .status()
-                    .map_err(|e| format!("{e:#}"))?
-                    .branch
-                    .ok_or_else(|| "cannot push a detached HEAD".to_string())?;
-                NetworkOperation::PushSetUpstream(branch)
-            }
+        // Only the upstream-setting push needs the branch, and status() is not
+        // free, so it stays behind that arm.
+        let current_branch = match kind {
+            NetworkKind::PushSetUpstream => repo.status().map_err(|e| format!("{e:#}"))?.branch,
+            _ => None,
         };
-        repo.network_command(operation)
+        repo.network_command(resolve_network(kind, current_branch)?)
     };
 
     let (tx, rx) = mpsc::channel(256);
