@@ -5,7 +5,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 ## Getting started
 
 - [Installation](getting-started/installation.md) — prerequisites, first run, building a distributable
-- [Using the app](getting-started/using-the-app.md) — opening workspaces and a tour of the four views
+- [Using the app](getting-started/using-the-app.md) — opening workspaces and a tour of the five views
 
 ## Architecture
 

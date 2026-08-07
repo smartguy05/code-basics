@@ -4,13 +4,13 @@
 
 A workspace is any directory. On launch the app shows a welcome screen with an **Open** dialog and a list of recently opened workspaces (kept in `localStorage`, most recent first, capped at eight). You can also launch with a path: `code-basics <dir>`.
 
-When the workspace is a git repository, the titlebar shows a branch widget (⎇ branch, with ahead/behind counts): a Rider-style menu with fetch/pull/push, a new-branch field, and click-to-switch (× deletes a branch). It is available from every tab; the History tab keeps the full console output for network operations. Next to it sits the run-configuration dropdown (see [Run](#run)), and the four view tabs are on their own row below the titlebar.
+When the workspace is a git repository, the titlebar shows a branch widget (⎇ branch, with ahead/behind counts): a Rider-style menu with fetch/pull/push, a new-branch field, and click-to-switch (× deletes a branch). It is available from every tab; the History tab keeps the full console output for network operations. Next to it sits the run-configuration dropdown (see [Run](#run)), and the five view tabs are on their own row below the titlebar.
 
 Opening a workspace scans it for projects — filesystem-only, so it is effectively instant — and layers any saved configurations from `.code-basics/config.json` on top of the detected ones. The backend keeps the open workspace across a window reload. See [Configuration](../reference/configuration.md) for what gets written where.
 
 Directories never scanned: `.git`, `node_modules`, `bin`, `obj`, `target`, `dist`, `.next`, `.nuxt`, `.vs`, `.idea`, `.vscode`, `TestResults`, `.code-basics` (case-insensitive), to a maximum depth of 10.
 
-## The four views
+## The five views
 
 The Run tab is first and opens by default.
 
@@ -51,6 +51,14 @@ Working-copy review:
 ### History
 
 The commit log (subject, author, time) with the full per-file diff of any commit.
+
+### Objects
+
+Reads the real managed heap of a .NET process — either from the crash dump the runtime wrote as it died, or from a process that is still running — and shows the objects it actually held. No debugger is involved and the application does not have to be started differently.
+
+Two limits define the whole feature: **no method is ever called** and **no property is ever evaluated**, because this reads memory rather than a running execution context (auto-properties are the exception — they have a backing field). In exchange, inspecting cannot throw, deadlock, or alter what it inspects. Anything unreadable is shown as an explicit gap with a reason, and anything cut short by a limit says so — never a shorter list that looks complete.
+
+Crash-dump capture is opt-in per workspace and off by default, because a dump is a verbatim copy of process memory. Attaching to a running process offers **every** attachable .NET process on the machine, each labelled *launched*, *descendant* or *unrelated* — the `dotnet run` child is usually the one you want, since the pid code-basics started is the CLI launcher. Full detail, including what attaching costs the target: [Inspecting objects](../guides/inspecting-objects.md).
 
 ## Where app state lives
 
