@@ -100,8 +100,7 @@ impl Provider for Codex {
         }
         if capture.is_some() {
             caveats.push(
-                "Codex asks you to review a new command hook the first time it runs."
-                    .to_string(),
+                "Codex asks you to review a new command hook the first time it runs.".to_string(),
             );
         }
         if let Some(skipped) = compressed_session_count(root) {
@@ -377,7 +376,9 @@ fn read_custom_tool_call(
     // A raw tool call carries no turn of its own, so every file the one patch
     // named shares an intent — which is exactly what a single patch is.
     for file in patchfmt::parse_envelope(input) {
-        push_record(out, root, branch, seq, &file.path, file.edit, call_id, call_id);
+        push_record(
+            out, root, branch, seq, &file.path, file.edit, call_id, call_id,
+        );
     }
 }
 
@@ -445,7 +446,9 @@ fn file_change_to_edit(change: &Value) -> Option<IntentEdit> {
 }
 
 fn split_lines(text: &str) -> Vec<String> {
-    text.lines().map(|l| l.trim_end_matches('\r').to_string()).collect()
+    text.lines()
+        .map(|l| l.trim_end_matches('\r').to_string())
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]

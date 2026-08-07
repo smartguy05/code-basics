@@ -66,7 +66,11 @@ pub fn user_secrets_id(project_path: &Path) -> Result<Option<String>> {
 /// the file's contents when it exists.
 pub fn read(project_path: &Path) -> Result<ProjectSecrets> {
     let Some(id) = user_secrets_id(project_path)? else {
-        return Ok(ProjectSecrets { secrets_id: None, path: None, content: None });
+        return Ok(ProjectSecrets {
+            secrets_id: None,
+            path: None,
+            content: None,
+        });
     };
 
     let path = secrets_path(&id)?;
@@ -76,7 +80,11 @@ pub fn read(project_path: &Path) -> Result<ProjectSecrets> {
         Err(e) => return Err(e).with_context(|| format!("failed to read {}", path.display())),
     };
 
-    Ok(ProjectSecrets { secrets_id: Some(id), path: Some(path), content })
+    Ok(ProjectSecrets {
+        secrets_id: Some(id),
+        path: Some(path),
+        content,
+    })
 }
 
 /// Give a project a `<UserSecretsId>` if it does not have one, returning the
@@ -190,7 +198,9 @@ fn strip_jsonc(text: &str) -> String {
                         }
                     } else {
                         j += 2;
-                        while j < bytes.len() && !(bytes[j] == b'*' && bytes.get(j + 1) == Some(&b'/')) {
+                        while j < bytes.len()
+                            && !(bytes[j] == b'*' && bytes.get(j + 1) == Some(&b'/'))
+                        {
                             j += 1;
                         }
                         j = (j + 2).min(bytes.len());
@@ -231,14 +241,20 @@ pub fn write(project_path: &Path, content: &str) -> Result<ProjectSecrets> {
     let path = secrets_path(&id)?;
 
     let dir = path.parent().expect("secrets path always has a parent");
-    std::fs::create_dir_all(dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
-    let text = if content.ends_with('\n') { content.to_string() } else { format!("{content}\n") };
-    std::fs::write(&path, &text)
-        .with_context(|| format!("failed to write {}", path.display()))?;
+    let text = if content.ends_with('\n') {
+        content.to_string()
+    } else {
+        format!("{content}\n")
+    };
+    std::fs::write(&path, &text).with_context(|| format!("failed to write {}", path.display()))?;
 
-    Ok(ProjectSecrets { secrets_id: Some(id), path: Some(path), content: Some(text) })
+    Ok(ProjectSecrets {
+        secrets_id: Some(id),
+        path: Some(path),
+        content: Some(text),
+    })
 }
 
 #[cfg(test)]
@@ -287,8 +303,15 @@ mod tests {
     #[test]
     fn ensure_id_keeps_an_existing_id() {
         let (_dir, path) = project_with(WITH_ID);
-        assert_eq!(ensure_id(&path).unwrap(), "aa11bb22-cc33-dd44-ee55-ff6677889900");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), WITH_ID, "the file must not change");
+        assert_eq!(
+            ensure_id(&path).unwrap(),
+            "aa11bb22-cc33-dd44-ee55-ff6677889900"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            WITH_ID,
+            "the file must not change"
+        );
     }
 
     #[test]
@@ -297,19 +320,28 @@ mod tests {
         let id = ensure_id(&path).unwrap();
 
         let updated = std::fs::read_to_string(&path).unwrap();
-        assert!(updated.contains(&format!("<UserSecretsId>{id}</UserSecretsId>")), "{updated}");
+        assert!(
+            updated.contains(&format!("<UserSecretsId>{id}</UserSecretsId>")),
+            "{updated}"
+        );
         assert_eq!(
             updated.matches("<PropertyGroup>").count(),
             1,
             "must reuse the existing group, not add a second one: {updated}"
         );
-        assert_eq!(user_secrets_id(&path).unwrap(), Some(id), "the parser must see it back");
+        assert_eq!(
+            user_secrets_id(&path).unwrap(),
+            Some(id),
+            "the parser must see it back"
+        );
     }
 
     #[test]
     fn ensure_id_creates_a_property_group_when_there_is_none() {
-        let (_dir, path) = project_with(r#"<Project Sdk="Microsoft.NET.Sdk">
-</Project>"#);
+        let (_dir, path) = project_with(
+            r#"<Project Sdk="Microsoft.NET.Sdk">
+</Project>"#,
+        );
         let id = ensure_id(&path).unwrap();
 
         let updated = std::fs::read_to_string(&path).unwrap();
@@ -320,7 +352,11 @@ mod tests {
     #[test]
     fn secrets_path_ends_with_the_id_and_file_name() {
         let path = secrets_path("some-id").unwrap();
-        assert!(path.ends_with(Path::new("some-id").join("secrets.json")), "{}", path.display());
+        assert!(
+            path.ends_with(Path::new("some-id").join("secrets.json")),
+            "{}",
+            path.display()
+        );
     }
 
     #[test]
@@ -337,7 +373,10 @@ mod tests {
     fn writing_rejects_invalid_json() {
         let (_dir, path) = project_with(WITH_ID);
         assert!(write(&path, "{ not json").is_err());
-        assert!(write(&path, "[1, 2]").is_err(), "an array is not a secrets object");
+        assert!(
+            write(&path, "[1, 2]").is_err(),
+            "an array is not a secrets object"
+        );
     }
 
     #[test]
@@ -381,8 +420,12 @@ mod tests {
             content: None,
         };
         let json = serde_json::to_value(&secrets).unwrap();
-        let mut keys: Vec<&str> =
-            json.as_object().unwrap().keys().map(String::as_str).collect();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         keys.sort();
 
         assert_eq!(keys, ["content", "path", "secretsId"]);

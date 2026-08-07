@@ -23,7 +23,7 @@ pub mod repo;
 
 pub use attribution::{AttributedSpan, Confidence, FileAttribution, HunkAttribution};
 pub use grouping::{GroupFile, GroupKind, IntentGroup};
-pub use patch::{Direction, DiffLine, FileDiff, Hunk, LineOrigin};
+pub use patch::{DiffLine, Direction, FileDiff, Hunk, LineOrigin};
 pub use repo::{
     Branch, ChangeKind, Commit, ComparisonMode, FileChange, Repo, StageTarget, WorkingStatus,
 };

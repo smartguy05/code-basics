@@ -71,7 +71,10 @@ fn group_without_intent(diffs: &[FileDiff]) -> Vec<IntentGroup> {
 fn a_reindented_line_is_recognised_as_formatting_only() {
     let d = simple(
         "a.rs",
-        &["-    let value = compute(a, b);", "+        let value = compute(a, b);"],
+        &[
+            "-    let value = compute(a, b);",
+            "+        let value = compute(a, b);",
+        ],
         "",
     );
 
@@ -82,7 +85,10 @@ fn a_reindented_line_is_recognised_as_formatting_only() {
 fn collapsing_internal_spacing_is_recognised_as_formatting_only() {
     let d = simple(
         "a.rs",
-        &["-let value = compute( a , b );", "+let value = compute(a, b);"],
+        &[
+            "-let value = compute( a , b );",
+            "+let value = compute(a, b);",
+        ],
         "",
     );
 
@@ -111,7 +117,10 @@ fn reordering_lines_without_changing_them_is_formatting_only() {
 fn a_real_change_is_not_formatting_even_when_spacing_also_changed() {
     let d = simple(
         "a.rs",
-        &["-let value = compute(a, b);", "+let value  =  compute(a, c);"],
+        &[
+            "-let value = compute(a, b);",
+            "+let value  =  compute(a, c);",
+        ],
         "",
     );
 
@@ -175,7 +184,10 @@ fn changing_indentation_in_yaml_is_not_treated_as_formatting() {
 fn respacing_within_a_python_line_is_still_formatting() {
     let d = simple(
         "script.py",
-        &["-    total = compute( a , b )", "+    total = compute(a, b)"],
+        &[
+            "-    total = compute( a , b )",
+            "+    total = compute(a, b)",
+        ],
         "",
     );
 
@@ -187,7 +199,10 @@ fn a_formatting_hunk_is_grouped_and_sorted_last() {
     let diffs = vec![
         simple(
             "a.rs",
-            &["-    let value = compute(a, b);", "+let value = compute(a, b);"],
+            &[
+                "-    let value = compute(a, b);",
+                "+let value = compute(a, b);",
+            ],
             "",
         ),
         simple("b.rs", &["+fn brand_new_function() {}"], ""),
@@ -220,7 +235,11 @@ fn formatting_across_several_files_collapses_into_one_card() {
 
 #[test]
 fn the_symbol_comes_from_the_git_hunk_header_when_there_is_one() {
-    let d = simple("a.rs", &["+    changed_body();"], "fn existing_function(a: u32) -> bool {");
+    let d = simple(
+        "a.rs",
+        &["+    changed_body();"],
+        "fn existing_function(a: u32) -> bool {",
+    );
 
     assert_eq!(
         enclosing_symbol(&d.hunks[0]).as_deref(),
@@ -242,11 +261,18 @@ fn a_declaration_in_the_hunk_is_used_when_the_header_is_empty() {
 fn a_csharp_method_declaration_is_recognised() {
     let d = simple(
         "Thing.cs",
-        &["+    public decimal EstimateCost(int quantity)", "+    {", "+    }"],
+        &[
+            "+    public decimal EstimateCost(int quantity)",
+            "+    {",
+            "+    }",
+        ],
         "",
     );
 
-    assert_eq!(enclosing_symbol(&d.hunks[0]).as_deref(), Some("EstimateCost"));
+    assert_eq!(
+        enclosing_symbol(&d.hunks[0]).as_deref(),
+        Some("EstimateCost")
+    );
 }
 
 #[test]
@@ -425,7 +451,10 @@ fn one_intent_spanning_two_files_becomes_a_single_card() {
     };
 
     let groups = with_intent(&[first, second], &intents);
-    let intent_cards: Vec<_> = groups.iter().filter(|g| g.kind == GroupKind::Intent).collect();
+    let intent_cards: Vec<_> = groups
+        .iter()
+        .filter(|g| g.kind == GroupKind::Intent)
+        .collect();
 
     assert_eq!(intent_cards.len(), 1);
     assert_eq!(intent_cards[0].files.len(), 2);
@@ -532,7 +561,15 @@ fn an_intent_group_serialises_with_the_keys_the_ui_reads() {
 
     assert_eq!(
         keys(&value),
-        ["confidence", "files", "id", "kind", "label", "lineCount", "symbol"]
+        [
+            "confidence",
+            "files",
+            "id",
+            "kind",
+            "label",
+            "lineCount",
+            "symbol"
+        ]
     );
     assert_eq!(keys(&value["files"][0]), ["hunks", "lineIndices", "path"]);
 }
@@ -572,8 +609,8 @@ fn group_kinds_serialise_in_camel_case() {
 
 #[test]
 fn confidence_serialises_in_camel_case() {
-    let json = serde_json::to_string(&[Confidence::Low, Confidence::Medium, Confidence::High])
-        .unwrap();
+    let json =
+        serde_json::to_string(&[Confidence::Low, Confidence::Medium, Confidence::High]).unwrap();
 
     assert_eq!(json, r#"["low","medium","high"]"#);
 }
@@ -601,9 +638,11 @@ fn many_hunks_collapse_into_few_cards() {
 
     let groups = group_without_intent(&diffs);
 
-    assert_eq!(groups.len(), 2, "got {:?}", groups.iter().map(|g| &g.label).collect::<Vec<_>>());
     assert_eq!(
-        groups.iter().map(IntentGroup::hunk_count).sum::<usize>(),
-        8
+        groups.len(),
+        2,
+        "got {:?}",
+        groups.iter().map(|g| &g.label).collect::<Vec<_>>()
     );
+    assert_eq!(groups.iter().map(IntentGroup::hunk_count).sum::<usize>(), 8);
 }

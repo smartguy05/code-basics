@@ -94,7 +94,10 @@ fn reads_name_type_options_and_environment() {
     let c = &configs[0];
     assert_eq!(c.name, "Api");
     assert_eq!(c.kind, "DotNetProject");
-    assert_eq!(c.options.get("PROJECT_TFM").map(String::as_str), Some("net8.0"));
+    assert_eq!(
+        c.options.get("PROJECT_TFM").map(String::as_str),
+        Some("net8.0")
+    );
     assert_eq!(c.env.get("LOG_LEVEL").map(String::as_str), Some("debug"));
 }
 
@@ -108,7 +111,10 @@ fn reads_npm_script_and_package_json_elements() {
         c.options.get("PACKAGE_JSON").map(String::as_str),
         Some("$PROJECT_DIR$/apps/web/package.json")
     );
-    assert_eq!(c.options.get("NPM_COMMAND").map(String::as_str), Some("run"));
+    assert_eq!(
+        c.options.get("NPM_COMMAND").map(String::as_str),
+        Some("run")
+    );
 }
 
 #[test]
@@ -160,10 +166,17 @@ fn converts_a_unit_test_session_into_a_test_configuration() {
     let parsed = parse(UNIT_TEST_SESSION);
     let config = convert(&parsed[0], &root()).unwrap();
 
-    assert_eq!(config.kind, RunKind::Test, "a test session must not import as an app launch");
+    assert_eq!(
+        config.kind,
+        RunKind::Test,
+        "a test session must not import as an app launch"
+    );
     assert_eq!(config.ecosystem, "dotnet");
     assert_eq!(config.source, ConfigSource::RiderImport);
-    assert_eq!(config.project, Some(PathBuf::from("tests/Api.Tests/Api.Tests.csproj")));
+    assert_eq!(
+        config.project,
+        Some(PathBuf::from("tests/Api.Tests/Api.Tests.csproj"))
+    );
     assert_eq!(config.framework.as_deref(), Some("net8.0"));
 }
 
@@ -172,7 +185,10 @@ fn an_imported_test_session_says_its_test_selection_was_dropped() {
     // Running more tests than the session named is defensible; doing it
     // silently is not.
     let config = convert(&parse(UNIT_TEST_SESSION)[0], &root()).unwrap();
-    assert!(config.warnings.iter().any(|w| w.contains("whole-project test run")));
+    assert!(config
+        .warnings
+        .iter()
+        .any(|w| w.contains("whole-project test run")));
 }
 
 #[test]
@@ -185,20 +201,25 @@ fn unit_test_session_type_names_are_matched_by_substring() {
         "RiderUnitTestSession",
     ] {
         let xml = UNIT_TEST_SESSION.replace("UnitTestRunConfiguration", kind);
-        let config = convert(&parse(&xml)[0], &root())
-            .unwrap_or_else(|| panic!("{kind} should convert"));
+        let config =
+            convert(&parse(&xml)[0], &root()).unwrap_or_else(|| panic!("{kind} should convert"));
         assert_eq!(config.kind, RunKind::Test, "{kind}");
     }
 }
 
 #[test]
 fn a_test_session_without_a_project_is_kept_with_a_warning() {
-    let xml = UNIT_TEST_SESSION
-        .replace(r#"<option name="PROJECT_PATH" value="$PROJECT_DIR$/tests/Api.Tests/Api.Tests.csproj" />"#, "");
+    let xml = UNIT_TEST_SESSION.replace(
+        r#"<option name="PROJECT_PATH" value="$PROJECT_DIR$/tests/Api.Tests/Api.Tests.csproj" />"#,
+        "",
+    );
     let config = convert(&parse(&xml)[0], &root()).unwrap();
 
     assert!(config.project.is_none());
-    assert!(config.warnings.iter().any(|w| w.contains("did not record a project path")));
+    assert!(config
+        .warnings
+        .iter()
+        .any(|w| w.contains("did not record a project path")));
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +236,10 @@ fn expands_the_project_directory_macro() {
 
 #[test]
 fn leaves_unknown_text_alone() {
-    assert_eq!(expand_macros("plain/path", Path::new("/repo")), "plain/path");
+    assert_eq!(
+        expand_macros("plain/path", Path::new("/repo")),
+        "plain/path"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +256,10 @@ fn converts_a_dotnet_project_configuration() {
     assert_eq!(config.ecosystem, "dotnet");
     assert_eq!(config.source, ConfigSource::RiderImport);
     assert_eq!(config.framework.as_deref(), Some("net8.0"));
-    assert_eq!(config.env.get("ASPNETCORE_ENVIRONMENT").map(String::as_str), Some("Development"));
+    assert_eq!(
+        config.env.get("ASPNETCORE_ENVIRONMENT").map(String::as_str),
+        Some("Development")
+    );
 }
 
 #[test]
@@ -401,7 +428,11 @@ fn resolves_a_bare_project_name_to_its_debug_run_configuration() {
     resolve_compounds(&mut imported, &detected);
 
     assert_eq!(imported[0].compound, vec!["app:run:debug"]);
-    assert!(imported[0].warnings.is_empty(), "got {:?}", imported[0].warnings);
+    assert!(
+        imported[0].warnings.is_empty(),
+        "got {:?}",
+        imported[0].warnings
+    );
 }
 
 #[test]
@@ -423,7 +454,10 @@ fn a_compound_whose_members_all_resolve_nowhere_warns_it_launches_nothing() {
     resolve_compounds(&mut imported, &[]);
 
     assert!(imported[0].compound.is_empty());
-    assert!(imported[0].warnings.iter().any(|w| w.contains("launches nothing")));
+    assert!(imported[0]
+        .warnings
+        .iter()
+        .any(|w| w.contains("launches nothing")));
 }
 
 #[test]
@@ -471,7 +505,10 @@ fn warns_when_rider_used_an_external_console() {
     let parsed = parse(&xml);
     let config = convert(&parsed[0], &root()).unwrap();
 
-    assert!(config.warnings.iter().any(|w| w.contains("external console")));
+    assert!(config
+        .warnings
+        .iter()
+        .any(|w| w.contains("external console")));
 }
 
 #[test]
@@ -531,7 +568,10 @@ fn records_what_it_skipped_so_the_user_knows_it_was_seen() {
     let result = import(dir.path());
 
     assert_eq!(result.configs.len(), 1);
-    assert_eq!(result.skipped, vec![("compose".to_string(), "docker-deploy".to_string())]);
+    assert_eq!(
+        result.skipped,
+        vec![("compose".to_string(), "docker-deploy".to_string())]
+    );
 }
 
 #[test]
@@ -552,8 +592,14 @@ fn non_xml_files_are_ignored() {
 #[test]
 fn imported_configurations_are_ordered_by_name() {
     let dir = workspace_with(&[
-        (".run/z.run.xml", &DOTNET_PROJECT.replace(r#"name="Api""#, r#"name="Zebra""#)),
-        (".run/a.run.xml", &DOTNET_PROJECT.replace(r#"name="Api""#, r#"name="Alpha""#)),
+        (
+            ".run/z.run.xml",
+            &DOTNET_PROJECT.replace(r#"name="Api""#, r#"name="Zebra""#),
+        ),
+        (
+            ".run/a.run.xml",
+            &DOTNET_PROJECT.replace(r#"name="Api""#, r#"name="Alpha""#),
+        ),
     ]);
     let result = import(dir.path());
 
@@ -564,8 +610,14 @@ fn imported_configurations_are_ordered_by_name() {
 #[test]
 fn imported_ids_are_distinct_per_configuration_name() {
     let dir = workspace_with(&[
-        (".run/a.run.xml", &DOTNET_PROJECT.replace(r#"name="Api""#, r#"name="Api: http""#)),
-        (".run/b.run.xml", &DOTNET_PROJECT.replace(r#"name="Api""#, r#"name="Api: https""#)),
+        (
+            ".run/a.run.xml",
+            &DOTNET_PROJECT.replace(r#"name="Api""#, r#"name="Api: http""#),
+        ),
+        (
+            ".run/b.run.xml",
+            &DOTNET_PROJECT.replace(r#"name="Api""#, r#"name="Api: https""#),
+        ),
     ]);
     let result = import(dir.path());
 

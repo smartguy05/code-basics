@@ -57,10 +57,16 @@ mod tests {
         assert_eq!(parse(ReportFormat::Trx, trx).unwrap().summary.total, 5);
 
         let vitest = include_str!("../../fixtures/reports/vitest.json");
-        assert_eq!(parse(ReportFormat::JestLike, vitest).unwrap().summary.total, 4);
+        assert_eq!(
+            parse(ReportFormat::JestLike, vitest).unwrap().summary.total,
+            4
+        );
 
         let junit = include_str!("../../fixtures/reports/junit.xml");
-        assert_eq!(parse(ReportFormat::JunitXml, junit).unwrap().summary.total, 4);
+        assert_eq!(
+            parse(ReportFormat::JunitXml, junit).unwrap().summary.total,
+            4
+        );
     }
 
     #[test]
@@ -68,9 +74,18 @@ mod tests {
         // Different formats, same contract: a failing case carries a message
         // the UI can show. This is what lets one failure pane serve all of them.
         let inputs = [
-            (ReportFormat::Trx, include_str!("../../fixtures/reports/sample.trx")),
-            (ReportFormat::JestLike, include_str!("../../fixtures/reports/vitest.json")),
-            (ReportFormat::JunitXml, include_str!("../../fixtures/reports/junit.xml")),
+            (
+                ReportFormat::Trx,
+                include_str!("../../fixtures/reports/sample.trx"),
+            ),
+            (
+                ReportFormat::JestLike,
+                include_str!("../../fixtures/reports/vitest.json"),
+            ),
+            (
+                ReportFormat::JunitXml,
+                include_str!("../../fixtures/reports/junit.xml"),
+            ),
         ];
 
         for (format, content) in inputs {
@@ -86,7 +101,10 @@ mod tests {
                 failed[0].message.as_ref().is_some_and(|m| !m.is_empty()),
                 "{format:?} failure should carry a message"
             );
-            assert!(!failed[0].full_name.is_empty(), "{format:?} needs a name to re-run by");
+            assert!(
+                !failed[0].full_name.is_empty(),
+                "{format:?} needs a name to re-run by"
+            );
         }
     }
 

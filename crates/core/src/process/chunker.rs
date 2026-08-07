@@ -180,6 +180,9 @@ mod tests {
     #[test]
     fn treats_bare_cr_as_a_line_so_progress_redraws_are_visible() {
         let mut s = LineSplitter::new();
-        assert_eq!(s.push("50%\r100%\r"), vec!["50%".to_string(), "100%".to_string()]);
+        assert_eq!(
+            s.push("50%\r100%\r"),
+            vec!["50%".to_string(), "100%".to_string()]
+        );
     }
 }

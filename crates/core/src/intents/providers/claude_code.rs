@@ -88,7 +88,10 @@ impl Provider for ClaudeCode {
 
         let capture = if hooks_json::is_installed(&project_settings_path(root)) {
             Some(InstallScope::Project)
-        } else if user_settings_path().as_deref().is_some_and(hooks_json::is_installed) {
+        } else if user_settings_path()
+            .as_deref()
+            .is_some_and(hooks_json::is_installed)
+        {
             Some(InstallScope::User)
         } else {
             None
@@ -106,8 +109,9 @@ impl Provider for ClaudeCode {
     fn install_plan(&self, root: &Path, scope: InstallScope) -> Result<InstallPlan> {
         let path = match scope {
             InstallScope::Project => project_settings_path(root),
-            InstallScope::User => user_settings_path()
-                .ok_or_else(|| anyhow::anyhow!("could not locate the Claude Code home directory"))?,
+            InstallScope::User => user_settings_path().ok_or_else(|| {
+                anyhow::anyhow!("could not locate the Claude Code home directory")
+            })?,
         };
 
         let (content, merges_existing) = hooks_json::plan_merge(&path, root)?;
@@ -337,7 +341,10 @@ fn summarise(text: &str) -> Option<String> {
         .map(str::trim)
         .find(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("```"))?;
 
-    let sentence = first.split_terminator(['.', '!', '?']).next().unwrap_or(first);
+    let sentence = first
+        .split_terminator(['.', '!', '?'])
+        .next()
+        .unwrap_or(first);
     let cleaned = sentence.trim().trim_end_matches(':').trim();
 
     (cleaned.len() >= 8 && cleaned.len() <= 120).then(|| cleaned.to_string())
@@ -352,7 +359,10 @@ fn read_tool_use(
     seq: &mut u64,
     out: &mut Vec<IntentRecord>,
 ) {
-    let name = block.get("name").and_then(Value::as_str).unwrap_or_default();
+    let name = block
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let Some(input) = block.get("input") else {
         return;
     };

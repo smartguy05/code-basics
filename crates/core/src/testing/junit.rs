@@ -232,7 +232,10 @@ fn finish(p: Partial, suite_stack: &[String]) -> TestCase {
     // are already represented by `suite`.
     let project = suite_stack.first().cloned().filter(|s| !s.is_empty());
 
-    let detail = p.detail.map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
+    let detail = p
+        .detail
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty());
 
     TestCase {
         id: full_name.clone(),
@@ -246,7 +249,10 @@ fn finish(p: Partial, suite_stack: &[String]) -> TestCase {
         // When only one is present it becomes the message, so nothing is lost.
         message: p.message.or_else(|| detail.clone()),
         stack_trace: detail,
-        stdout: p.system_out.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        stdout: p
+            .system_out
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
     }
 }
 
@@ -273,7 +279,11 @@ mod tests {
     #[test]
     fn treats_a_testcase_without_children_as_passed() {
         let run = parse(SAMPLE).unwrap();
-        let case = run.cases.iter().find(|c| c.name == "test_addition").unwrap();
+        let case = run
+            .cases
+            .iter()
+            .find(|c| c.name == "test_addition")
+            .unwrap();
         assert_eq!(case.outcome, TestOutcome::Passed);
     }
 
@@ -287,13 +297,21 @@ mod tests {
             .unwrap();
 
         assert_eq!(failed.message.as_deref(), Some("assert 3 == 2"));
-        assert!(failed.stack_trace.as_ref().unwrap().contains("test_math.py:14"));
+        assert!(failed
+            .stack_trace
+            .as_ref()
+            .unwrap()
+            .contains("test_math.py:14"));
     }
 
     #[test]
     fn uses_classname_as_the_suite() {
         let run = parse(SAMPLE).unwrap();
-        let case = run.cases.iter().find(|c| c.name == "test_addition").unwrap();
+        let case = run
+            .cases
+            .iter()
+            .find(|c| c.name == "test_addition")
+            .unwrap();
         assert_eq!(case.suite.as_deref(), Some("tests.test_math"));
         assert_eq!(case.full_name, "tests.test_math.test_addition");
     }

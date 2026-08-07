@@ -37,7 +37,10 @@ pub struct RiderConfiguration {
 
 impl RiderConfiguration {
     fn option(&self, name: &str) -> Option<&str> {
-        self.options.get(name).map(String::as_str).filter(|v| !v.is_empty())
+        self.options
+            .get(name)
+            .map(String::as_str)
+            .filter(|v| !v.is_empty())
     }
 }
 
@@ -178,7 +181,13 @@ fn relativise(value: &str, workspace_root: &Path) -> PathBuf {
 fn id_for(name: &str) -> String {
     let slug: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect();
     format!("rider:{}", slug.trim_matches('-'))
 }
@@ -225,7 +234,9 @@ fn convert_dotnet(config: &RiderConfiguration, root: &Path) -> RunConfig {
 
     out.project = config.option("PROJECT_PATH").map(|p| relativise(p, root));
     out.framework = config.option("PROJECT_TFM").map(str::to_string);
-    out.cwd = config.option("WORKING_DIRECTORY").map(|p| relativise(p, root));
+    out.cwd = config
+        .option("WORKING_DIRECTORY")
+        .map(|p| relativise(p, root));
 
     if let Some(args) = config.option("PROGRAM_PARAMETERS") {
         out.args = crate::adapters::dotnet::split_args(&expand_macros(args, root));
@@ -246,16 +257,18 @@ fn convert_dotnet(config: &RiderConfiguration, root: &Path) -> RunConfig {
         out.warnings
             .push("This configuration targets Mono, which this app does not launch.".to_string());
     }
-    if config.option("USE_EXTERNAL_CONSOLE").is_some_and(|v| v == "1") {
+    if config
+        .option("USE_EXTERNAL_CONSOLE")
+        .is_some_and(|v| v == "1")
+    {
         out.warnings.push(
             "Rider was set to use an external console. Output will appear in this app instead."
                 .to_string(),
         );
     }
     if config.option("RUNTIME_ARGUMENTS").is_some() {
-        out.warnings.push(
-            "Runtime arguments were set in Rider and have not been imported.".to_string(),
-        );
+        out.warnings
+            .push("Runtime arguments were set in Rider and have not been imported.".to_string());
     }
 
     out
@@ -405,7 +418,9 @@ pub fn resolve_compounds(imported: &mut [RunConfig], existing: &[RunConfig]) {
         if let Some((project, profile)) = member.split_once(": ") {
             return existing
                 .iter()
-                .find(|c| c.launch_profile.as_deref() == Some(profile) && targets_project(c, project))
+                .find(|c| {
+                    c.launch_profile.as_deref() == Some(profile) && targets_project(c, project)
+                })
                 .map(|c| c.id.clone());
         }
         // A bare project name — how Rider references a plain project run.

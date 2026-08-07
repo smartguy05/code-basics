@@ -162,11 +162,7 @@ pub fn attribute_file(diff: &FileDiff, intents: &Intents, options: Options) -> F
 }
 
 /// Attribute every file in a working tree.
-pub fn attribute(
-    diffs: &[FileDiff],
-    intents: &Intents,
-    options: Options,
-) -> Vec<FileAttribution> {
+pub fn attribute(diffs: &[FileDiff], intents: &Intents, options: Options) -> Vec<FileAttribution> {
     diffs
         .iter()
         .map(|d| attribute_file(d, intents, options))
@@ -269,8 +265,18 @@ struct Prepared<'a> {
 
 impl<'a> Prepared<'a> {
     fn new(record: &'a IntentRecord) -> Self {
-        let old: Vec<Forms> = record.edit.old_lines.iter().map(|l| Forms::new(l)).collect();
-        let new: Vec<Forms> = record.edit.new_lines.iter().map(|l| Forms::new(l)).collect();
+        let old: Vec<Forms> = record
+            .edit
+            .old_lines
+            .iter()
+            .map(|l| Forms::new(l))
+            .collect();
+        let new: Vec<Forms> = record
+            .edit
+            .new_lines
+            .iter()
+            .map(|l| Forms::new(l))
+            .collect();
 
         // An edit's before and after text share the surrounding lines that
         // made the match unique. Those lines are not what the record changed,
@@ -314,7 +320,8 @@ fn strip_shared_frame(old: Vec<Forms>, new: Vec<Forms>) -> (Vec<Forms>, Vec<Form
     }
 
     let mut back = 0;
-    while back < old.len() - front && back < new.len() - front
+    while back < old.len() - front
+        && back < new.len() - front
         && same(&old[old.len() - 1 - back], &new[new.len() - 1 - back])
     {
         back += 1;
@@ -364,7 +371,12 @@ fn resolve(diff: &FileDiff, prepared: &[Prepared], options: Options) -> BTreeMap
             if line.origin == LineOrigin::Context {
                 continue;
             }
-            changed.push((hunk_index, line.index, line.origin, Forms::new(&line.content)));
+            changed.push((
+                hunk_index,
+                line.index,
+                line.origin,
+                Forms::new(&line.content),
+            ));
         }
     }
 
@@ -403,7 +415,11 @@ fn find_candidates(
                 return Vec::new();
             }
 
-            for level in [MatchLevel::Exact, MatchLevel::Whitespace, MatchLevel::Skeleton] {
+            for level in [
+                MatchLevel::Exact,
+                MatchLevel::Whitespace,
+                MatchLevel::Skeleton,
+            ] {
                 let key = forms.at(level);
                 let mut hits = Vec::new();
 
@@ -477,12 +493,16 @@ fn build_runs(
             });
 
             if !extends && !current.is_empty() {
-                runs.extend(finish_run(record, &current, prepared, corpus, changed, options));
+                runs.extend(finish_run(
+                    record, &current, prepared, corpus, changed, options,
+                ));
                 current.clear();
             }
             current.push(hit);
         }
-        runs.extend(finish_run(record, &current, prepared, corpus, changed, options));
+        runs.extend(finish_run(
+            record, &current, prepared, corpus, changed, options,
+        ));
     }
 
     runs
@@ -502,7 +522,11 @@ fn finish_run(
 
     // The weakest link decides: a run is only as trustworthy as its least
     // convincing line.
-    let level = hits.iter().map(|(_, c)| c.level).max().unwrap_or(MatchLevel::Skeleton);
+    let level = hits
+        .iter()
+        .map(|(_, c)| c.level)
+        .max()
+        .unwrap_or(MatchLevel::Skeleton);
     let fidelity = level.fidelity();
 
     // A line is distinctive when it could not plausibly have matched by
@@ -623,7 +647,7 @@ fn beats(run: &Run, existing: &Claim, prepared: &[Prepared]) -> bool {
     let old_record = prepared[existing.record].record;
 
     match run.level.cmp(&existing.level) {
-        std::cmp::Ordering::Less => true,      // better fidelity (Exact < Skeleton)
+        std::cmp::Ordering::Less => true, // better fidelity (Exact < Skeleton)
         std::cmp::Ordering::Greater => false,
         std::cmp::Ordering::Equal => new_record.seq > old_record.seq,
     }

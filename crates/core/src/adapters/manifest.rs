@@ -28,9 +28,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{
-    ConfigSource, Invocation, ReportFormat, ReportSpec, RunConfig, RunKind,
-};
+use crate::model::{ConfigSource, Invocation, ReportFormat, ReportSpec, RunConfig, RunKind};
 
 /// A user-supplied ecosystem definition.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -82,7 +80,10 @@ pub fn parse(toml_text: &str) -> Result<AdapterManifest> {
     let manifest: AdapterManifest =
         toml::from_str(toml_text).context("adapter manifest is not valid TOML")?;
 
-    anyhow::ensure!(!manifest.id.trim().is_empty(), "adapter manifest needs an id");
+    anyhow::ensure!(
+        !manifest.id.trim().is_empty(),
+        "adapter manifest needs an id"
+    );
     anyhow::ensure!(
         manifest.test.is_some() || !manifest.run.is_empty(),
         "adapter manifest `{}` defines neither a test command nor any run commands",
@@ -109,7 +110,10 @@ pub fn load_dir(dir: &Path) -> (Vec<AdapterManifest>, Vec<String>) {
         if path.extension().and_then(|e| e.to_str()) != Some("toml") {
             continue;
         }
-        match std::fs::read_to_string(&path).map_err(anyhow::Error::from).and_then(|c| parse(&c)) {
+        match std::fs::read_to_string(&path)
+            .map_err(anyhow::Error::from)
+            .and_then(|c| parse(&c))
+        {
             Ok(manifest) => manifests.push(manifest),
             Err(e) => errors.push(format!("{}: {e}", path.display())),
         }
@@ -259,13 +263,21 @@ pub fn configs_for_project(
 
 fn sanitise(id: &str) -> String {
     id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 
 /// Where workspace-local manifests live.
 pub fn manifest_dir(workspace_root: &Path) -> PathBuf {
-    workspace_root.join(crate::config::CONFIG_DIR).join("adapters")
+    workspace_root
+        .join(crate::config::CONFIG_DIR)
+        .join("adapters")
 }
 
 #[cfg(test)]
@@ -287,7 +299,13 @@ filter_separator = " or "
 "#;
 
     fn config() -> RunConfig {
-        let mut c = RunConfig::new("api:pytest:test", "api tests", RunKind::Test, "pytest", ConfigSource::Detected);
+        let mut c = RunConfig::new(
+            "api:pytest:test",
+            "api tests",
+            RunKind::Test,
+            "pytest",
+            ConfigSource::Detected,
+        );
         c.project = Some(PathBuf::from("services/api"));
         c
     }
@@ -305,20 +323,27 @@ filter_separator = " or "
 
     #[test]
     fn a_manifest_that_does_nothing_is_rejected() {
-        let err = parse(r#"id = "x"
-name = "X""#)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("neither a test command nor any run commands"), "got {err}");
+        let err = parse(
+            r#"id = "x"
+name = "X""#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("neither a test command nor any run commands"),
+            "got {err}"
+        );
     }
 
     #[test]
     fn a_manifest_without_an_id_is_rejected() {
-        assert!(parse(r#"id = ""
+        assert!(parse(
+            r#"id = ""
 name = "X"
 [test]
-program = "x""#)
-            .is_err());
+program = "x""#
+        )
+        .is_err());
     }
 
     #[test]
@@ -335,7 +360,10 @@ program = "x""#)
 
         assert_eq!(inv.program, "pytest");
         let report = inv.report.clone().unwrap();
-        assert!(inv.args.iter().any(|a| a == &format!("--junit-xml={}", report.path.display())));
+        assert!(inv
+            .args
+            .iter()
+            .any(|a| a == &format!("--junit-xml={}", report.path.display())));
         assert_eq!(report.format, ReportFormat::JunitXml);
         assert_eq!(report.path.extension().unwrap(), "xml");
     }
@@ -367,21 +395,27 @@ program = "x""#)
             Some(&names),
         );
 
-        let idx = inv.args.iter().position(|a| a == "-k").expect("filter flag");
+        let idx = inv
+            .args
+            .iter()
+            .position(|a| a == "-k")
+            .expect("filter flag");
         assert_eq!(inv.args[idx + 1], "test_a or test_b");
     }
 
     #[test]
     fn warns_when_a_manifest_cannot_express_a_filter() {
         // Silently running everything looks like the filter was ignored.
-        let manifest = parse(r#"
+        let manifest = parse(
+            r#"
 id = "go"
 name = "Go"
 [test]
 program = "gotestsum"
 args = ["--junitfile={report}"]
 report_format = "junitXml"
-"#)
+"#,
+        )
         .unwrap();
 
         let names = vec!["TestThing".to_string()];
@@ -394,18 +428,23 @@ report_format = "junitXml"
             Some(&names),
         );
 
-        assert!(inv.warnings.iter().any(|w| w.contains("does not define a test filter")));
+        assert!(inv
+            .warnings
+            .iter()
+            .any(|w| w.contains("does not define a test filter")));
     }
 
     #[test]
     fn configuration_environment_overrides_the_manifests() {
-        let manifest = parse(r#"
+        let manifest = parse(
+            r#"
 id = "x"
 name = "X"
 [test]
 program = "x"
 env = { MODE = "manifest", KEEP = "yes" }
-"#)
+"#,
+        )
         .unwrap();
 
         let mut c = config();
@@ -457,7 +496,8 @@ env = { MODE = "manifest", KEEP = "yes" }
 
     #[test]
     fn generates_a_test_configuration_and_one_per_run_command() {
-        let manifest = parse(r#"
+        let manifest = parse(
+            r#"
 id = "pytest"
 name = "pytest"
 [test]
@@ -465,7 +505,8 @@ program = "pytest"
 [run.serve]
 program = "uvicorn"
 args = ["app:main"]
-"#)
+"#,
+        )
         .unwrap();
 
         let configs = configs_for_project(&manifest, "api", "api", Path::new("services/api"));

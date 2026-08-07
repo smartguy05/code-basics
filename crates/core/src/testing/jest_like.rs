@@ -143,7 +143,11 @@ pub fn parse(json: &str) -> Result<TestRunResult> {
                 // File plus full name is unique even when two files use the
                 // same describe/it titles.
                 id: format!("{file_label}::{full_name}"),
-                name: if title.is_empty() { full_name.clone() } else { title },
+                name: if title.is_empty() {
+                    full_name.clone()
+                } else {
+                    title
+                },
                 full_name,
                 suite,
                 project: file.name.clone(),
@@ -168,8 +172,7 @@ pub fn parse(json: &str) -> Result<TestRunResult> {
 
             let outcome = file.status.as_deref().map(parse_status).unwrap_or_default();
             if failure.is_some() || outcome == TestOutcome::Failed {
-                let (message, stack_trace) =
-                    failure.map_or((None, None), split_message_and_stack);
+                let (message, stack_trace) = failure.map_or((None, None), split_message_and_stack);
                 cases.push(TestCase {
                     id: format!("{file_label}::<file>"),
                     name: short_file_name(file_label),
@@ -255,7 +258,10 @@ mod tests {
         let stack = failed.stack_trace.as_ref().unwrap();
 
         assert!(message.contains("expected 3 to be 2"));
-        assert!(!message.contains("    at "), "stack frames leaked into the message");
+        assert!(
+            !message.contains("    at "),
+            "stack frames leaked into the message"
+        );
         assert!(stack.starts_with("    at "));
         assert!(stack.contains("math.test.ts:9:23"));
     }
@@ -301,7 +307,11 @@ mod tests {
         assert_eq!(run.summary.total, 1);
         assert_eq!(run.summary.failed, 1);
         assert_eq!(run.cases[0].name, "broken.test.ts");
-        assert!(run.cases[0].message.as_ref().unwrap().contains("Cannot find module"));
+        assert!(run.cases[0]
+            .message
+            .as_ref()
+            .unwrap()
+            .contains("Cannot find module"));
     }
 
     #[test]

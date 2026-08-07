@@ -163,9 +163,7 @@ fn a_unified_diff_separates_added_from_removed_lines() {
 /// `---` and `+++` headers start with the same characters as content lines.
 #[test]
 fn unified_diff_file_headers_are_not_mistaken_for_content() {
-    let edit = parse_unified_diff(
-        "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n",
-    );
+    let edit = parse_unified_diff("--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n");
 
     assert_eq!(edit.old_lines, vec!["old"]);
     assert_eq!(edit.new_lines, vec!["new"]);

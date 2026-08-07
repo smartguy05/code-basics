@@ -50,7 +50,9 @@ fn the_appended_section_is_separated_by_exactly_one_blank_line() {
     let write = planned_write(ProviderId::Codex, dir.path()).expect("a write");
 
     assert!(
-        write.content.contains("Existing guidance.\n\n<!-- code-basics"),
+        write
+            .content
+            .contains("Existing guidance.\n\n<!-- code-basics"),
         "got: {:?}",
         write.content
     );
@@ -64,7 +66,9 @@ fn a_file_without_a_trailing_newline_is_still_separated_properly() {
 
     let write = planned_write(ProviderId::Codex, dir.path()).expect("a write");
 
-    assert!(write.content.contains("No trailing newline\n\n<!-- code-basics"));
+    assert!(write
+        .content
+        .contains("No trailing newline\n\n<!-- code-basics"));
 }
 
 /// Installing twice must not append the request twice.

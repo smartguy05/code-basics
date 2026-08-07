@@ -202,7 +202,11 @@ fn a_tool_call_that_is_not_an_edit_records_nothing() {
 #[test]
 fn an_edit_outside_the_workspace_records_nothing() {
     let dir = workspace();
-    let outside = if cfg!(windows) { "C:/elsewhere/a.rs" } else { "/elsewhere/a.rs" };
+    let outside = if cfg!(windows) {
+        "C:/elsewhere/a.rs"
+    } else {
+        "/elsewhere/a.rs"
+    };
 
     let written = ingest_edit_payload(
         dir.path(),
@@ -276,14 +280,20 @@ fn a_message_with_no_declared_intent_falls_back_to_its_first_sentence() {
     let labels = parse_labels("I added retry handling to the token refresh path. Then tests.");
 
     assert_eq!(labels.len(), 1);
-    assert_eq!(labels[0].1, "I added retry handling to the token refresh path");
+    assert_eq!(
+        labels[0].1,
+        "I added retry handling to the token refresh path"
+    );
 }
 
 #[test]
 fn a_heading_is_skipped_when_falling_back() {
     let labels = parse_labels("## Summary\nSwapped the cost calculation over to the new API");
 
-    assert_eq!(labels[0].1, "Swapped the cost calculation over to the new API");
+    assert_eq!(
+        labels[0].1,
+        "Swapped the cost calculation over to the new API"
+    );
 }
 
 #[test]

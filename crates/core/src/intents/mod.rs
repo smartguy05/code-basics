@@ -182,8 +182,7 @@ impl Intents {
     /// Records touching one file, oldest first.
     pub fn for_path(&self, path: &str) -> Vec<&IntentRecord> {
         let path = normalise_path(path);
-        let mut hits: Vec<&IntentRecord> =
-            self.records.iter().filter(|r| r.path == path).collect();
+        let mut hits: Vec<&IntentRecord> = self.records.iter().filter(|r| r.path == path).collect();
         hits.sort_by_key(|r| r.seq);
         hits
     }
@@ -337,8 +336,7 @@ fn append_line<T: Serialize>(path: &Path, value: &T, root: &Path) -> Result<()> 
     use std::io::Write;
 
     let dir = intents_dir(root);
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     crate::config::ensure_gitignore(&crate::config::config_dir(root))?;
 
     let json = serde_json::to_string(value).context("failed to serialise an intent record")?;

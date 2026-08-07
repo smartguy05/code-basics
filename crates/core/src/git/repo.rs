@@ -119,8 +119,7 @@ pub struct FileChange {
 
 impl FileChange {
     pub fn is_conflicted(&self) -> bool {
-        self.staged == Some(ChangeKind::Conflicted)
-            || self.unstaged == Some(ChangeKind::Conflicted)
+        self.staged == Some(ChangeKind::Conflicted) || self.unstaged == Some(ChangeKind::Conflicted)
     }
 }
 
@@ -332,7 +331,12 @@ impl Repo {
     fn unborn_branch_name(&self) -> Option<String> {
         let reference = self.inner.find_reference("HEAD").ok()?;
         let target = reference.symbolic_target()?;
-        Some(target.strip_prefix("refs/heads/").unwrap_or(target).to_string())
+        Some(
+            target
+                .strip_prefix("refs/heads/")
+                .unwrap_or(target)
+                .to_string(),
+        )
     }
 
     /// Detect a merge, rebase or cherry-pick in progress.
@@ -413,12 +417,11 @@ impl Repo {
             ComparisonMode::WorkingToHead => self
                 .inner
                 .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(options)),
-            ComparisonMode::WorkingToIndex => {
-                self.inner.diff_index_to_workdir(None, Some(options))
+            ComparisonMode::WorkingToIndex => self.inner.diff_index_to_workdir(None, Some(options)),
+            ComparisonMode::IndexToHead => {
+                self.inner
+                    .diff_tree_to_index(head_tree.as_ref(), None, Some(options))
             }
-            ComparisonMode::IndexToHead => self
-                .inner
-                .diff_tree_to_index(head_tree.as_ref(), None, Some(options)),
         };
 
         diff.context("failed to compute diff")
@@ -445,7 +448,10 @@ impl Repo {
             // The file is new; it has no committed content.
             return Ok(None);
         };
-        let blob = self.inner.find_blob(entry.id()).context("failed to read blob")?;
+        let blob = self
+            .inner
+            .find_blob(entry.id())
+            .context("failed to read blob")?;
 
         Ok(Some(String::from_utf8_lossy(blob.content()).into_owned()))
     }
@@ -455,7 +461,10 @@ impl Repo {
         let Some(entry) = index.get_path(Path::new(path), 0) else {
             return Ok(None);
         };
-        let blob = self.inner.find_blob(entry.id).context("failed to read blob")?;
+        let blob = self
+            .inner
+            .find_blob(entry.id)
+            .context("failed to read blob")?;
 
         Ok(Some(String::from_utf8_lossy(blob.content()).into_owned()))
     }
@@ -637,7 +646,10 @@ impl Repo {
 
         let mut index = self.inner.index().context("failed to read index")?;
         let tree_id = index.write_tree().context("failed to write tree")?;
-        let tree = self.inner.find_tree(tree_id).context("failed to read tree")?;
+        let tree = self
+            .inner
+            .find_tree(tree_id)
+            .context("failed to read tree")?;
 
         let head = self.inner.head().ok();
         let parent = head.as_ref().and_then(|h| h.peel_to_commit().ok());
@@ -645,12 +657,26 @@ impl Repo {
         let oid = if amend {
             let target = parent.context("there is no commit to amend")?;
             target
-                .amend(Some("HEAD"), Some(&signature), Some(&signature), None, Some(message), Some(&tree))
+                .amend(
+                    Some("HEAD"),
+                    Some(&signature),
+                    Some(&signature),
+                    None,
+                    Some(message),
+                    Some(&tree),
+                )
                 .context("failed to amend commit")?
         } else {
             let parents: Vec<&git2::Commit> = parent.iter().collect();
             self.inner
-                .commit(Some("HEAD"), &signature, &signature, message, &tree, &parents)
+                .commit(
+                    Some("HEAD"),
+                    &signature,
+                    &signature,
+                    message,
+                    &tree,
+                    &parents,
+                )
                 .context("failed to create commit")?
         };
 
@@ -693,10 +719,7 @@ impl Repo {
             );
         }
 
-        let head_name = status
-            .branch
-            .clone()
-            .unwrap_or_else(|| "HEAD".to_string());
+        let head_name = status.branch.clone().unwrap_or_else(|| "HEAD".to_string());
 
         let (object, reference) = self
             .inner
@@ -778,9 +801,18 @@ impl Repo {
             .signature()
             .context("git has no user.name/user.email configured")?;
 
-        let tree_id = index.write_tree().context("failed to write the merged tree")?;
-        let tree = self.inner.find_tree(tree_id).context("failed to read the merged tree")?;
-        let ours = self.inner.head()?.peel_to_commit().context("HEAD is not a commit")?;
+        let tree_id = index
+            .write_tree()
+            .context("failed to write the merged tree")?;
+        let tree = self
+            .inner
+            .find_tree(tree_id)
+            .context("failed to read the merged tree")?;
+        let ours = self
+            .inner
+            .head()?
+            .peel_to_commit()
+            .context("HEAD is not a commit")?;
         let theirs = self
             .inner
             .find_commit(source.id())
@@ -789,10 +821,19 @@ impl Repo {
         let message = format!("Merge branch '{name}' into {head_name}");
         let oid = self
             .inner
-            .commit(Some("HEAD"), &signature, &signature, &message, &tree, &[&ours, &theirs])
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                &message,
+                &tree,
+                &[&ours, &theirs],
+            )
             .context("failed to create the merge commit")?;
 
-        self.inner.cleanup_state().context("failed to clear the merge state")?;
+        self.inner
+            .cleanup_state()
+            .context("failed to clear the merge state")?;
 
         Ok(MergeReport {
             outcome: MergeOutcome::Merged,
@@ -816,13 +857,19 @@ impl Repo {
             .reset(head.as_object(), git2::ResetType::Hard, Some(&mut checkout))
             .context("failed to undo the merge")?;
 
-        self.inner.cleanup_state().context("failed to clear the merge state")
+        self.inner
+            .cleanup_state()
+            .context("failed to clear the merge state")
     }
 
     pub fn branches(&self) -> Result<Vec<Branch>> {
         let mut out = Vec::new();
 
-        for result in self.inner.branches(None).context("failed to list branches")? {
+        for result in self
+            .inner
+            .branches(None)
+            .context("failed to list branches")?
+        {
             let (branch, kind) = result.context("failed to read branch")?;
             let Some(name) = branch.name().ok().flatten() else {
                 continue;
@@ -922,12 +969,7 @@ impl Repo {
 
     /// Create a branch pointing at `start_point` — a local or remote branch
     /// name, or any revision — rather than at HEAD.
-    pub fn create_branch_from(
-        &self,
-        name: &str,
-        start_point: &str,
-        checkout: bool,
-    ) -> Result<()> {
+    pub fn create_branch_from(&self, name: &str, start_point: &str, checkout: bool) -> Result<()> {
         let (object, _) = self
             .inner
             .revparse_ext(start_point)
@@ -953,7 +995,11 @@ impl Repo {
     pub fn checkout_remote_branch(&self, name: &str) -> Result<()> {
         let local_name = name.split_once('/').map_or(name, |(_, rest)| rest);
 
-        if self.inner.find_branch(local_name, git2::BranchType::Local).is_ok() {
+        if self
+            .inner
+            .find_branch(local_name, git2::BranchType::Local)
+            .is_ok()
+        {
             return self.checkout_branch(local_name);
         }
 
@@ -986,7 +1032,9 @@ impl Repo {
         if branch.is_head() {
             bail!("cannot delete {name} while it is checked out");
         }
-        branch.delete().with_context(|| format!("failed to delete {name}"))
+        branch
+            .delete()
+            .with_context(|| format!("failed to delete {name}"))
     }
 
     pub fn history(&self, limit: usize) -> Result<Vec<Commit>> {
@@ -1005,7 +1053,10 @@ impl Repo {
         let mut out = Vec::new();
         for oid in walk.take(limit) {
             let oid = oid.context("failed to read commit id")?;
-            let commit = self.inner.find_commit(oid).context("failed to read commit")?;
+            let commit = self
+                .inner
+                .find_commit(oid)
+                .context("failed to read commit")?;
             let author = commit.author();
 
             out.push(Commit {
@@ -1047,7 +1098,11 @@ impl Repo {
             .context("git has no user.name/user.email configured")?;
 
         self.inner
-            .stash_save(&signature, message, Some(git2::StashFlags::INCLUDE_UNTRACKED))
+            .stash_save(
+                &signature,
+                message,
+                Some(git2::StashFlags::INCLUDE_UNTRACKED),
+            )
             .context("failed to stash changes")?;
         Ok(())
     }
@@ -1074,7 +1129,12 @@ impl Repo {
             // A branch with no upstream needs one established, which plain
             // `git push` refuses to do.
             NetworkOperation::PushSetUpstream(branch) => {
-                vec!["push".to_string(), "-u".to_string(), "origin".to_string(), branch]
+                vec![
+                    "push".to_string(),
+                    "-u".to_string(),
+                    "origin".to_string(),
+                    branch,
+                ]
             }
         };
 
@@ -1239,8 +1299,14 @@ mod tests {
         // whole problem with reporting it verbatim.
         let message = locked_checkout_message("users/anthony/docs", LIBGIT2_DETAIL);
 
-        assert!(message.contains("users/anthony/docs"), "must name the branch");
-        assert!(message.contains(".claude/commands"), "must keep the offending path");
+        assert!(
+            message.contains("users/anthony/docs"),
+            "must name the branch"
+        );
+        assert!(
+            message.contains(".claude/commands"),
+            "must keep the offending path"
+        );
         assert!(
             message.contains("already been cleared"),
             "must say the read-only cause was ruled out, or the user re-investigates it"
@@ -1270,12 +1336,20 @@ mod tests {
         read_only(&file);
 
         let cleared = clear_readonly_directories(temp.path());
-        assert!(cleared >= 2, "both read-only directories should be cleared, got {cleared}");
+        assert!(
+            cleared >= 2,
+            "both read-only directories should be cleared, got {cleared}"
+        );
 
         const READONLY: u32 = 0x1;
         for dir in [temp.path().join("outer"), nested.clone()] {
             let attributes = std::fs::metadata(&dir).unwrap().file_attributes();
-            assert_eq!(attributes & READONLY, 0, "{} should be writable", dir.display());
+            assert_eq!(
+                attributes & READONLY,
+                0,
+                "{} should be writable",
+                dir.display()
+            );
         }
 
         // A read-only *file* is a deliberate marker and must survive.
@@ -1293,7 +1367,10 @@ mod tests {
 
     #[test]
     fn clearing_attributes_on_a_missing_directory_is_harmless() {
-        assert_eq!(clear_readonly_directories(Path::new("/nonexistent/repo")), 0);
+        assert_eq!(
+            clear_readonly_directories(Path::new("/nonexistent/repo")),
+            0
+        );
     }
 
     #[test]
@@ -1301,6 +1378,9 @@ mod tests {
         let message = locked_checkout_message("main", "");
 
         assert!(message.starts_with("Could not switch to main:"));
-        assert!(!message.contains("\n\n\n"), "an absent detail must not leave a gap");
+        assert!(
+            !message.contains("\n\n\n"),
+            "an absent detail must not leave a gap"
+        );
     }
 }

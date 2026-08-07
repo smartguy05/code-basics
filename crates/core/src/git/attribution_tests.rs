@@ -191,7 +191,12 @@ fn a_deletion_matches_the_removed_text_not_the_added_text() {
 #[test]
 fn records_for_other_files_are_ignored() {
     let d = one_hunk_diff("a.rs", &["+let distinctive_added_line = 1;"]);
-    let i = intents(vec![record(1, "b.rs", &[], &["let distinctive_added_line = 1;"])]);
+    let i = intents(vec![record(
+        1,
+        "b.rs",
+        &[],
+        &["let distinctive_added_line = 1;"],
+    )]);
 
     assert!(run(&d, &i).is_empty());
 }
@@ -227,7 +232,9 @@ fn a_binary_file_produces_no_attributions() {
 #[test]
 fn a_record_is_matched_after_the_file_shifted_by_hundreds_of_lines() {
     let mut index = 0;
-    let mut lines: Vec<String> = (0..300).map(|n| format!(" filler line number {n}")).collect();
+    let mut lines: Vec<String> = (0..300)
+        .map(|n| format!(" filler line number {n}"))
+        .collect();
     lines.push("+let relocated = a_very_distinctive_call();".to_string());
     let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
 
@@ -890,10 +897,7 @@ fn shuffling_the_record_order_produces_an_identical_result() {
 
 #[test]
 fn running_attribution_twice_produces_an_identical_result() {
-    let d = one_hunk_diff(
-        "a.rs",
-        &["+let stable = a_distinctive_repeatable_call();"],
-    );
+    let d = one_hunk_diff("a.rs", &["+let stable = a_distinctive_repeatable_call();"]);
     let i = intents(vec![record(
         1,
         "a.rs",

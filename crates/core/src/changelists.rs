@@ -101,8 +101,7 @@ pub fn load(root: &Path) -> Result<Changelists> {
 
 pub fn save(root: &Path, lists: &Changelists) -> Result<()> {
     let dir = crate::config::config_dir(root);
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     crate::config::ensure_gitignore(&dir)?;
 
     let path = changelists_path(root);

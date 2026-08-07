@@ -134,7 +134,12 @@ pub fn parse(xml: &str) -> Result<TestRunResult> {
                     }
                     cases.push(finish_case(read_result(&e)));
                 } else {
-                    handle_start(&e, &mut current_def_id, &mut current_def, &mut run_duration_ms);
+                    handle_start(
+                        &e,
+                        &mut current_def_id,
+                        &mut current_def,
+                        &mut run_duration_ms,
+                    );
                 }
             }
 
@@ -189,7 +194,10 @@ pub fn parse(xml: &str) -> Result<TestRunResult> {
             }
 
             Event::Eof => {
-                anyhow::ensure!(depth == 0, "TRX report is truncated: {depth} element(s) unclosed");
+                anyhow::ensure!(
+                    depth == 0,
+                    "TRX report is truncated: {depth} element(s) unclosed"
+                );
                 break;
             }
             _ => {}
@@ -313,19 +321,29 @@ fn finish_case(p: PartialResult) -> TestCase {
             .execution_id
             .or_else(|| p.test_id.clone())
             .unwrap_or_else(|| p.test_name.clone()),
-        name: if display.is_empty() { p.test_name.clone() } else { display },
+        name: if display.is_empty() {
+            p.test_name.clone()
+        } else {
+            display
+        },
         full_name: p.test_name,
         // Temporarily the testId; replaced with the class name during the join.
         suite: p.test_id,
         project: None,
         outcome: p.outcome,
         duration_ms: p.duration_ms,
-        message: p.message.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        message: p
+            .message
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         stack_trace: p
             .stack_trace
             .map(|s| s.trim_end().to_string())
             .filter(|s| !s.is_empty()),
-        stdout: p.stdout.map(|s| s.trim_end().to_string()).filter(|s| !s.is_empty()),
+        stdout: p
+            .stdout
+            .map(|s| s.trim_end().to_string())
+            .filter(|s| !s.is_empty()),
     }
 }
 
@@ -345,10 +363,7 @@ fn display_name(full: &str) -> String {
 
 /// Reduce an assembly path to a display name (`/x/y/My.Tests.dll` → `My.Tests`).
 fn assembly_name(storage: &str) -> String {
-    let file = storage
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(storage);
+    let file = storage.rsplit(['/', '\\']).next().unwrap_or(storage);
     file.strip_suffix(".dll")
         .or_else(|| file.strip_suffix(".exe"))
         .unwrap_or(file)
@@ -363,7 +378,11 @@ fn duration_between(start: &str, finish: &str) -> Option<f64> {
     let f = iso_time_of_day_ms(finish)?;
     let delta = f - s;
     // Guard against a run that crossed midnight.
-    Some(if delta < 0.0 { delta + 86_400_000.0 } else { delta })
+    Some(if delta < 0.0 {
+        delta + 86_400_000.0
+    } else {
+        delta
+    })
 }
 
 /// Milliseconds since midnight for the time portion of an ISO-8601 timestamp.
@@ -402,8 +421,16 @@ mod tests {
         let case = &run.cases[0];
         assert_eq!(case.name, "TestMethod1");
         assert_eq!(case.full_name, "T.Test1.TestMethod1");
-        assert_eq!(case.suite.as_deref(), Some("T.Test1"), "class name comes from TestDefinitions");
-        assert_eq!(case.project.as_deref(), Some("T"), "assembly name, from the codeBase path");
+        assert_eq!(
+            case.suite.as_deref(),
+            Some("T.Test1"),
+            "class name comes from TestDefinitions"
+        );
+        assert_eq!(
+            case.project.as_deref(),
+            Some("T"),
+            "assembly name, from the codeBase path"
+        );
         assert!(case.duration_ms.is_some_and(|d| d > 0.0));
     }
 
@@ -433,7 +460,10 @@ mod tests {
     fn keeps_theory_arguments_in_the_display_name() {
         assert_eq!(display_name("N.C.IsEven(value: 2)"), "IsEven(value: 2)");
         // Arguments routinely contain dots, which a naive rsplit would cut on.
-        assert_eq!(display_name("N.C.IsClose(value: 1.5)"), "IsClose(value: 1.5)");
+        assert_eq!(
+            display_name("N.C.IsClose(value: 1.5)"),
+            "IsClose(value: 1.5)"
+        );
         assert_eq!(display_name("N.C.Plain"), "Plain");
     }
 
@@ -461,7 +491,11 @@ mod tests {
             .expect("a failing case");
 
         assert_eq!(failed.name, "Subtracts");
-        assert!(failed.message.as_ref().unwrap().contains("Assert.Equal() Failure"));
+        assert!(failed
+            .message
+            .as_ref()
+            .unwrap()
+            .contains("Assert.Equal() Failure"));
         assert!(failed
             .stack_trace
             .as_ref()

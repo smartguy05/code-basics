@@ -31,10 +31,7 @@ fn existing_dashboard_hooks() -> String {
         "Stop",
         "SessionEnd",
     ] {
-        hooks.insert(
-            event.to_string(),
-            json!([ { "hooks": [handler.clone()] } ]),
-        );
+        hooks.insert(event.to_string(), json!([ { "hooks": [handler.clone()] } ]));
     }
 
     serde_json::to_string_pretty(&json!({ "hooks": hooks })).unwrap()
@@ -78,7 +75,10 @@ fn installing_preserves_every_existing_hook_entry() {
             text.contains("usb_lcd_dashboard"),
             "{event} lost its existing hook: {text}"
         );
-        assert!(text.contains(hooks_json::MARKER), "{event} did not gain ours");
+        assert!(
+            text.contains(hooks_json::MARKER),
+            "{event} did not gain ours"
+        );
     }
 }
 
@@ -109,7 +109,11 @@ fn installing_twice_does_not_duplicate_the_entry() {
     let entries = value["hooks"]["PostToolUse"].as_array().unwrap();
     let ours = entries
         .iter()
-        .filter(|e| serde_json::to_string(e).unwrap().contains(hooks_json::MARKER))
+        .filter(|e| {
+            serde_json::to_string(e)
+                .unwrap()
+                .contains(hooks_json::MARKER)
+        })
         .count();
 
     assert_eq!(ours, 1, "installed twice: {entries:?}");
@@ -142,7 +146,9 @@ fn a_malformed_file_is_reported_and_left_untouched() {
     let path = dir.path().join("hooks.json");
     std::fs::write(&path, "{ not json at all").unwrap();
 
-    let error = hooks_json::plan_merge(&path, dir.path()).unwrap_err().to_string();
+    let error = hooks_json::plan_merge(&path, dir.path())
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("left untouched"), "got: {error}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json at all");
@@ -249,7 +255,9 @@ fn applying_a_plan_backs_up_the_file_it_replaces() {
 
     let backup = dir.path().join("hooks.json.bak");
     assert!(backup.exists(), "no backup was written");
-    assert!(std::fs::read_to_string(backup).unwrap().contains("usb_lcd_dashboard"));
+    assert!(std::fs::read_to_string(backup)
+        .unwrap()
+        .contains("usb_lcd_dashboard"));
 }
 
 #[test]
@@ -463,7 +471,10 @@ fn an_install_plan_serialises_with_the_keys_the_ui_reads() {
     let value = serde_json::to_value(&plan).unwrap();
 
     assert_eq!(keys(&value), ["provider", "scope", "writes"]);
-    assert_eq!(keys(&value["writes"][0]), ["content", "mergesExisting", "path"]);
+    assert_eq!(
+        keys(&value["writes"][0]),
+        ["content", "mergesExisting", "path"]
+    );
 }
 
 #[test]

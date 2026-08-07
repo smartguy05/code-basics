@@ -46,8 +46,8 @@ pub fn list_dir(root: &Path, relative: &Path) -> Result<Vec<DirEntry>> {
     let dir = resolve(root, relative)?;
     let mut entries = Vec::new();
 
-    let read = std::fs::read_dir(&dir)
-        .with_context(|| format!("could not list {}", dir.display()))?;
+    let read =
+        std::fs::read_dir(&dir).with_context(|| format!("could not list {}", dir.display()))?;
 
     for entry in read.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -87,8 +87,8 @@ pub fn read_file(root: &Path, relative: &Path) -> Result<String> {
         );
     }
 
-    let bytes = std::fs::read(&path)
-        .with_context(|| format!("could not read {}", relative.display()))?;
+    let bytes =
+        std::fs::read(&path).with_context(|| format!("could not read {}", relative.display()))?;
     String::from_utf8(bytes)
         .map_err(|_| anyhow::anyhow!("{} is not a text file", relative.display()))
 }

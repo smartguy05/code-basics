@@ -36,10 +36,22 @@ fn finds_dependencies_in_either_section() {
 
 #[test]
 fn identifies_the_test_runner() {
-    assert_eq!(detect_runner(&pkg(r#"{"devDependencies":{"vitest":"^2"}}"#)), Some(TestRunner::Vitest));
-    assert_eq!(detect_runner(&pkg(r#"{"devDependencies":{"jest":"^29"}}"#)), Some(TestRunner::Jest));
-    assert_eq!(detect_runner(&pkg(r#"{"devDependencies":{"ts-jest":"^29"}}"#)), Some(TestRunner::Jest));
-    assert_eq!(detect_runner(&pkg(r#"{"dependencies":{"react":"^19"}}"#)), None);
+    assert_eq!(
+        detect_runner(&pkg(r#"{"devDependencies":{"vitest":"^2"}}"#)),
+        Some(TestRunner::Vitest)
+    );
+    assert_eq!(
+        detect_runner(&pkg(r#"{"devDependencies":{"jest":"^29"}}"#)),
+        Some(TestRunner::Jest)
+    );
+    assert_eq!(
+        detect_runner(&pkg(r#"{"devDependencies":{"ts-jest":"^29"}}"#)),
+        Some(TestRunner::Jest)
+    );
+    assert_eq!(
+        detect_runner(&pkg(r#"{"dependencies":{"react":"^19"}}"#)),
+        None
+    );
 }
 
 #[test]
@@ -59,9 +71,18 @@ fn recognises_a_monorepo_root() {
 
 #[test]
 fn classifies_project_kind_from_scripts_and_deps() {
-    assert_eq!(project_kind(&pkg(r#"{"devDependencies":{"vitest":"^2"}}"#)), ProjectKind::Test);
-    assert_eq!(project_kind(&pkg(r#"{"scripts":{"dev":"vite"}}"#)), ProjectKind::Executable);
-    assert_eq!(project_kind(&pkg(r#"{"name":"lib"}"#)), ProjectKind::Library);
+    assert_eq!(
+        project_kind(&pkg(r#"{"devDependencies":{"vitest":"^2"}}"#)),
+        ProjectKind::Test
+    );
+    assert_eq!(
+        project_kind(&pkg(r#"{"scripts":{"dev":"vite"}}"#)),
+        ProjectKind::Executable
+    );
+    assert_eq!(
+        project_kind(&pkg(r#"{"name":"lib"}"#)),
+        ProjectKind::Library
+    );
 }
 
 #[test]
@@ -91,8 +112,14 @@ fn infers_the_package_manager_from_the_lockfile() {
 
 #[test]
 fn each_manager_runs_scripts_its_own_way() {
-    assert_eq!(PackageManager::Npm.run_script_args("dev"), vec!["run", "dev"]);
-    assert_eq!(PackageManager::Pnpm.run_script_args("dev"), vec!["run", "dev"]);
+    assert_eq!(
+        PackageManager::Npm.run_script_args("dev"),
+        vec!["run", "dev"]
+    );
+    assert_eq!(
+        PackageManager::Pnpm.run_script_args("dev"),
+        vec!["run", "dev"]
+    );
     // yarn and bun take the script name directly.
     assert_eq!(PackageManager::Yarn.run_script_args("dev"), vec!["dev"]);
     assert_eq!(PackageManager::Bun.run_script_args("dev"), vec!["dev"]);
@@ -103,12 +130,22 @@ fn each_manager_runs_scripts_its_own_way() {
 // ---------------------------------------------------------------------------
 
 fn test_config() -> RunConfig {
-    let mut c = RunConfig::new("web:test", "web tests", RunKind::Test, "node", ConfigSource::Detected);
+    let mut c = RunConfig::new(
+        "web:test",
+        "web tests",
+        RunKind::Test,
+        "node",
+        ConfigSource::Detected,
+    );
     c.project = Some(PathBuf::from("apps/web"));
     c
 }
 
-fn build(runner: TestRunner, manager: PackageManager, filter: Option<&[String]>) -> crate::model::Invocation {
+fn build(
+    runner: TestRunner,
+    manager: PackageManager,
+    filter: Option<&[String]>,
+) -> crate::model::Invocation {
     test_invocation(
         &test_config(),
         Path::new("/repo"),
@@ -143,7 +180,10 @@ fn vitest_qualifies_the_output_file_by_reporter() {
 #[test]
 fn vitest_runs_once_rather_than_watching() {
     let inv = build(TestRunner::Vitest, PackageManager::Npm, None);
-    assert!(inv.args.iter().any(|a| a == "run"), "watch mode would never exit");
+    assert!(
+        inv.args.iter().any(|a| a == "run"),
+        "watch mode would never exit"
+    );
 }
 
 #[test]
@@ -159,15 +199,27 @@ fn report_path_and_format_are_set_for_both_runners() {
         let inv = build(runner, PackageManager::Npm, None);
         let report = inv.report.expect("a test run must produce a report");
         assert_eq!(report.format, crate::model::ReportFormat::JestLike);
-        assert_eq!(report.path.parent().unwrap(), Path::new("/repo/.code-basics/results"));
+        assert_eq!(
+            report.path.parent().unwrap(),
+            Path::new("/repo/.code-basics/results")
+        );
     }
 }
 
 #[test]
 fn each_manager_executes_binaries_its_own_way() {
-    assert_eq!(build(TestRunner::Vitest, PackageManager::Npm, None).program, "npx");
-    assert_eq!(build(TestRunner::Vitest, PackageManager::Pnpm, None).program, "pnpm");
-    assert_eq!(build(TestRunner::Vitest, PackageManager::Bun, None).program, "bunx");
+    assert_eq!(
+        build(TestRunner::Vitest, PackageManager::Npm, None).program,
+        "npx"
+    );
+    assert_eq!(
+        build(TestRunner::Vitest, PackageManager::Pnpm, None).program,
+        "pnpm"
+    );
+    assert_eq!(
+        build(TestRunner::Vitest, PackageManager::Bun, None).program,
+        "bunx"
+    );
 }
 
 #[test]
@@ -221,11 +273,22 @@ fn no_filter_means_no_name_argument() {
 
 #[test]
 fn runs_a_named_script_in_the_project_directory() {
-    let mut c = RunConfig::new("web:dev", "dev", RunKind::App, "node", ConfigSource::Detected);
+    let mut c = RunConfig::new(
+        "web:dev",
+        "dev",
+        RunKind::App,
+        "node",
+        ConfigSource::Detected,
+    );
     c.project = Some(PathBuf::from("apps/web"));
     c.script = Some("dev".into());
 
-    let inv = script_invocation(&c, Path::new("/repo"), Path::new("/repo/apps/web"), PackageManager::Pnpm);
+    let inv = script_invocation(
+        &c,
+        Path::new("/repo"),
+        Path::new("/repo/apps/web"),
+        PackageManager::Pnpm,
+    );
 
     assert_eq!(inv.program, "pnpm");
     assert_eq!(inv.args, vec!["run", "dev"]);
@@ -235,21 +298,43 @@ fn runs_a_named_script_in_the_project_directory() {
 #[test]
 fn npm_needs_a_separator_before_script_arguments() {
     // Without `--`, npm consumes the arguments itself instead of forwarding.
-    let mut c = RunConfig::new("web:dev", "dev", RunKind::App, "node", ConfigSource::Detected);
+    let mut c = RunConfig::new(
+        "web:dev",
+        "dev",
+        RunKind::App,
+        "node",
+        ConfigSource::Detected,
+    );
     c.script = Some("dev".into());
     c.args = vec!["--port".into(), "3001".into()];
 
-    let inv = script_invocation(&c, Path::new("/repo"), Path::new("/repo"), PackageManager::Npm);
+    let inv = script_invocation(
+        &c,
+        Path::new("/repo"),
+        Path::new("/repo"),
+        PackageManager::Npm,
+    );
     assert_eq!(inv.args, vec!["run", "dev", "--", "--port", "3001"]);
 }
 
 #[test]
 fn yarn_forwards_script_arguments_without_a_separator() {
-    let mut c = RunConfig::new("web:dev", "dev", RunKind::App, "node", ConfigSource::Detected);
+    let mut c = RunConfig::new(
+        "web:dev",
+        "dev",
+        RunKind::App,
+        "node",
+        ConfigSource::Detected,
+    );
     c.script = Some("dev".into());
     c.args = vec!["--port".into(), "3001".into()];
 
-    let inv = script_invocation(&c, Path::new("/repo"), Path::new("/repo"), PackageManager::Yarn);
+    let inv = script_invocation(
+        &c,
+        Path::new("/repo"),
+        Path::new("/repo"),
+        PackageManager::Yarn,
+    );
     assert_eq!(inv.args, vec!["dev", "--port", "3001"]);
 }
 
@@ -267,7 +352,10 @@ fn generates_a_test_config_and_one_per_runnable_script() {
 
     let configs = configs_for_project("web", "web", Path::new("apps/web"), &p);
 
-    assert_eq!(configs.iter().filter(|c| c.kind == RunKind::Test).count(), 1);
+    assert_eq!(
+        configs.iter().filter(|c| c.kind == RunKind::Test).count(),
+        1
+    );
     assert!(configs.iter().any(|c| c.script.as_deref() == Some("dev")));
     assert!(configs.iter().any(|c| c.script.as_deref() == Some("build")));
 }
@@ -288,7 +376,11 @@ fn lifecycle_hook_scripts_are_not_offered() {
     let configs = configs_for_project("web", "web", Path::new("."), &p);
     let scripts: Vec<&str> = configs.iter().filter_map(|c| c.script.as_deref()).collect();
 
-    assert_eq!(scripts, vec!["build"], "npm runs pre/post hooks automatically");
+    assert_eq!(
+        scripts,
+        vec!["build"],
+        "npm runs pre/post hooks automatically"
+    );
 }
 
 #[test]

@@ -77,12 +77,16 @@ pub async fn git_write_file(
 
 #[tauri::command]
 pub async fn git_stage_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
-    open(&state)?.stage_file(&path).map_err(|e| format!("{e:#}"))
+    open(&state)?
+        .stage_file(&path)
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 pub async fn git_unstage_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
-    open(&state)?.unstage_file(&path).map_err(|e| format!("{e:#}"))
+    open(&state)?
+        .unstage_file(&path)
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -122,7 +126,9 @@ pub async fn git_revert_lines(
 
 #[tauri::command]
 pub async fn git_discard_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
-    open(&state)?.discard_file(&path).map_err(|e| format!("{e:#}"))
+    open(&state)?
+        .discard_file(&path)
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -178,7 +184,9 @@ pub async fn git_checkout_remote_branch(
 
 #[tauri::command]
 pub async fn git_delete_branch(state: State<'_, AppState>, name: String) -> Result<(), String> {
-    open(&state)?.delete_branch(&name).map_err(|e| format!("{e:#}"))
+    open(&state)?
+        .delete_branch(&name)
+        .map_err(|e| format!("{e:#}"))
 }
 
 /// Merge a branch into the current one.
@@ -191,7 +199,9 @@ pub async fn git_merge_branch(
     state: State<'_, AppState>,
     name: String,
 ) -> Result<MergeReport, String> {
-    open(&state)?.merge_branch(&name).map_err(|e| format!("{e:#}"))
+    open(&state)?
+        .merge_branch(&name)
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]

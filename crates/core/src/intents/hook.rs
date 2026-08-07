@@ -313,7 +313,10 @@ fn first_sentence(message: &str) -> Option<String> {
         .map(str::trim)
         .find(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("```"))?;
 
-    let sentence = line.split_terminator(['.', '!', '?']).next().unwrap_or(line);
+    let sentence = line
+        .split_terminator(['.', '!', '?'])
+        .next()
+        .unwrap_or(line);
     let cleaned = sentence.trim().trim_end_matches(':').trim();
 
     is_usable_label(cleaned).then(|| cleaned.to_string())

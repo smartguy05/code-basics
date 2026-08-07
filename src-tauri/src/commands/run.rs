@@ -101,7 +101,9 @@ async fn start_compound(
             ));
         }
         let mut member = member.clone();
-        member.env.extend(env.iter().flatten().map(|(k, v)| (k.clone(), v.clone())));
+        member
+            .env
+            .extend(env.iter().flatten().map(|(k, v)| (k.clone(), v.clone())));
 
         let invocation = invocation::build(workspace, &member, None)?;
         members.push((member, invocation));

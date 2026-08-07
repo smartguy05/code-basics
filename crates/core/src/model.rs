@@ -363,8 +363,16 @@ mod tests {
         assert_eq!(
             keys(&serde_json::to_value(&case).unwrap()),
             [
-                "durationMs", "fullName", "id", "message", "name", "outcome", "project",
-                "stackTrace", "stdout", "suite"
+                "durationMs",
+                "fullName",
+                "id",
+                "message",
+                "name",
+                "outcome",
+                "project",
+                "stackTrace",
+                "stdout",
+                "suite"
             ]
         );
     }
@@ -387,15 +395,26 @@ mod tests {
         assert_eq!(
             keys(&serde_json::to_value(&project).unwrap()),
             [
-                "configurations", "dir", "ecosystem", "frameworks", "id", "isTestProject", "kind",
-                "manifestPath", "name", "testRunner"
+                "configurations",
+                "dir",
+                "ecosystem",
+                "frameworks",
+                "id",
+                "isTestProject",
+                "kind",
+                "manifestPath",
+                "name",
+                "testRunner"
             ]
         );
     }
 
     #[test]
     fn enum_variants_serialise_in_camel_case() {
-        assert_eq!(serde_json::to_string(&TestOutcome::Passed).unwrap(), "\"passed\"");
+        assert_eq!(
+            serde_json::to_string(&TestOutcome::Passed).unwrap(),
+            "\"passed\""
+        );
         assert_eq!(
             serde_json::to_string(&TestRunner::MicrosoftTestingPlatform).unwrap(),
             "\"microsoftTestingPlatform\""
@@ -434,8 +453,13 @@ mod tests {
 
     #[test]
     fn compound_members_serialise_under_the_key_the_ui_reads() {
-        let mut config =
-            RunConfig::new("id", "name", RunKind::App, "compound", ConfigSource::RiderImport);
+        let mut config = RunConfig::new(
+            "id",
+            "name",
+            RunKind::App,
+            "compound",
+            ConfigSource::RiderImport,
+        );
         config.compound = vec!["member".into()];
         let json = serde_json::to_value(&config).unwrap();
 

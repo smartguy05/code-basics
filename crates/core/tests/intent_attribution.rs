@@ -106,7 +106,10 @@ fn report_attribution_against_this_repository() {
     println!("unattributed: {unattributed}");
 
     let groups = grouping::group(&diffs, &attributions);
-    println!("\n{hunks} hunk(s) collapsed into {} group(s):", groups.len());
+    println!(
+        "\n{hunks} hunk(s) collapsed into {} group(s):",
+        groups.len()
+    );
 
     let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
     for group in &groups {
@@ -128,7 +131,10 @@ fn report_attribution_against_this_repository() {
     }
 
     // The claim the feature makes, restated as a number.
-    let stated = groups.iter().filter(|g| g.kind == GroupKind::Intent).count();
+    let stated = groups
+        .iter()
+        .filter(|g| g.kind == GroupKind::Intent)
+        .count();
     println!(
         "\n{hunks} hunks -> {} decisions ({stated} explained by the agent itself)",
         groups.len()
@@ -153,7 +159,10 @@ fn truncate(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_string();
     }
-    text.chars().take(width.saturating_sub(1)).collect::<String>() + "…"
+    text.chars()
+        .take(width.saturating_sub(1))
+        .collect::<String>()
+        + "…"
 }
 
 /// The same properties on a clean tree, so the invariants are covered by an
@@ -167,7 +176,9 @@ fn grouping_a_repository_with_no_changes_produces_no_groups() {
     drop(repo);
 
     let repo = Repo::open(dir.path()).expect("an empty repository");
-    let diffs = repo.diff_all(ComparisonMode::WorkingToHead).unwrap_or_default();
+    let diffs = repo
+        .diff_all(ComparisonMode::WorkingToHead)
+        .unwrap_or_default();
 
     let attributions = attribution::attribute(&diffs, &Intents::default(), Options::default());
     let groups = grouping::group(&diffs, &attributions);

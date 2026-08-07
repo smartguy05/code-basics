@@ -30,10 +30,7 @@ fn load(root: &std::path::Path) -> Result<Workspace, String> {
 }
 
 #[tauri::command]
-pub async fn open_workspace(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<Workspace, String> {
+pub async fn open_workspace(state: State<'_, AppState>, path: String) -> Result<Workspace, String> {
     let workspace = load(&PathBuf::from(path))?;
     state.set_workspace(workspace.clone())?;
     Ok(workspace)

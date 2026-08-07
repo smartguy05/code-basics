@@ -26,8 +26,19 @@ use crate::model::{Project, ProjectKind, RunConfig, TestRunner};
 /// `bin` and `obj` in particular contain copies of project files that would
 /// otherwise be detected as projects in their own right.
 const SKIP_DIRS: &[&str] = &[
-    ".git", "node_modules", "bin", "obj", "target", "dist", ".next", ".nuxt", ".vs", ".idea",
-    ".vscode", "TestResults", ".code-basics",
+    ".git",
+    "node_modules",
+    "bin",
+    "obj",
+    "target",
+    "dist",
+    ".next",
+    ".nuxt",
+    ".vs",
+    ".idea",
+    ".vscode",
+    "TestResults",
+    ".code-basics",
 ];
 
 /// How deep to descend. Deep enough for a conventional `src/Area/Project`
@@ -214,7 +225,8 @@ pub fn scan_with(root: &Path, options: ScanOptions) -> Result<Workspace> {
                 solutions.push(found);
             }
         } else if is_dotnet_project {
-            if let Some((project, mut project_configs)) = scan_dotnet_project(&root, path, options) {
+            if let Some((project, mut project_configs)) = scan_dotnet_project(&root, path, options)
+            {
                 projects.push(project);
                 configs.append(&mut project_configs);
             }
@@ -265,7 +277,10 @@ fn scan_solution(root: &Path, path: &Path) -> Option<solution::Solution> {
     let content = std::fs::read_to_string(path).ok()?;
     let name = path.file_stem()?.to_string_lossy().into_owned();
     let relative_path = relative(root, path);
-    let relative_dir = relative_path.parent().unwrap_or(Path::new("")).to_path_buf();
+    let relative_dir = relative_path
+        .parent()
+        .unwrap_or(Path::new(""))
+        .to_path_buf();
     let is_xml = path.extension().and_then(|e| e.to_str()) == Some("slnx");
 
     let projects = solution::parse(&name, &content, &relative_dir, is_xml);
@@ -566,7 +581,10 @@ mod tests {
     #[test]
     fn mtp_detection_reads_a_solution_level_dotnet_config() {
         let dir = workspace_with(&[
-            ("dotnet.config", "[dotnet.test:runner]\nname = \"Microsoft.Testing.Platform\"\n"),
+            (
+                "dotnet.config",
+                "[dotnet.test:runner]\nname = \"Microsoft.Testing.Platform\"\n",
+            ),
             ("src/App.Tests/App.Tests.csproj", XUNIT_CSPROJ),
         ]);
         let ws = scan(dir.path()).unwrap();
@@ -593,7 +611,10 @@ mod tests {
         let ws = scan(dir.path()).unwrap();
 
         let tests = ws.projects.iter().find(|p| p.is_test_project).unwrap();
-        assert_eq!(tests.test_runner, Some(TestRunner::MicrosoftTestingPlatform));
+        assert_eq!(
+            tests.test_runner,
+            Some(TestRunner::MicrosoftTestingPlatform)
+        );
     }
 
     #[test]
@@ -607,7 +628,10 @@ mod tests {
         ]);
         let ws = scan(dir.path()).unwrap();
 
-        assert!(ws.configs.iter().any(|c| c.launch_profile.as_deref() == Some("https")));
+        assert!(ws
+            .configs
+            .iter()
+            .any(|c| c.launch_profile.as_deref() == Some("https")));
     }
 
     #[test]
@@ -620,14 +644,20 @@ mod tests {
 
         assert_eq!(ws.projects[0].test_runner, Some(TestRunner::Vitest));
         assert!(ws.configs.iter().any(|c| c.kind == RunKind::Test));
-        assert!(ws.configs.iter().any(|c| c.script.as_deref() == Some("dev")));
+        assert!(ws
+            .configs
+            .iter()
+            .any(|c| c.script.as_deref() == Some("dev")));
     }
 
     #[test]
     fn a_mixed_workspace_yields_both_ecosystems() {
         let dir = workspace_with(&[
             ("api/Api.csproj", EXE_CSPROJ),
-            ("web/package.json", r#"{"name":"web","scripts":{"dev":"vite"}}"#),
+            (
+                "web/package.json",
+                r#"{"name":"web","scripts":{"dev":"vite"}}"#,
+            ),
         ]);
         let ws = scan(dir.path()).unwrap();
 
@@ -638,8 +668,14 @@ mod tests {
     #[test]
     fn a_monorepo_root_without_scripts_is_not_a_project() {
         let dir = workspace_with(&[
-            ("package.json", r#"{"private":true,"workspaces":["apps/*"]}"#),
-            ("apps/web/package.json", r#"{"name":"web","scripts":{"dev":"vite"}}"#),
+            (
+                "package.json",
+                r#"{"private":true,"workspaces":["apps/*"]}"#,
+            ),
+            (
+                "apps/web/package.json",
+                r#"{"name":"web","scripts":{"dev":"vite"}}"#,
+            ),
         ]);
         let ws = scan(dir.path()).unwrap();
 
@@ -679,7 +715,10 @@ report_format = "junitXml"
         assert_eq!(api.kind, ProjectKind::Test);
         assert_eq!(api.test_runner, Some(TestRunner::Custom));
         assert!(api.manifest_path.ends_with("pyproject.toml"));
-        assert!(ws.configs.iter().any(|c| c.ecosystem == "pytest" && c.kind == RunKind::Test));
+        assert!(ws
+            .configs
+            .iter()
+            .any(|c| c.ecosystem == "pytest" && c.kind == RunKind::Test));
     }
 
     #[test]
@@ -692,7 +731,11 @@ report_format = "junitXml"
         let ws = scan(dir.path()).unwrap();
 
         for config in ws.configs.iter().filter(|c| c.ecosystem == "pytest") {
-            assert!(find_project(&ws, config).is_some(), "config {} has no project", config.id);
+            assert!(
+                find_project(&ws, config).is_some(),
+                "config {} has no project",
+                config.id
+            );
         }
     }
 
@@ -703,7 +746,10 @@ report_format = "junitXml"
         // into a pytest one.
         let dir = workspace_with(&[
             (".code-basics/adapters/pytest.toml", PYTEST_ADAPTER),
-            ("app/package.json", r#"{"name":"app","scripts":{"dev":"vite"}}"#),
+            (
+                "app/package.json",
+                r#"{"name":"app","scripts":{"dev":"vite"}}"#,
+            ),
             ("app/pyproject.toml", ""),
         ]);
         let ws = scan(dir.path()).unwrap();
@@ -717,7 +763,10 @@ report_format = "junitXml"
         let dir = workspace_with(&[("services/api/pyproject.toml", "")]);
         let ws = scan(dir.path()).unwrap();
 
-        assert!(ws.projects.is_empty(), "a manifest is required to claim a directory");
+        assert!(
+            ws.projects.is_empty(),
+            "a manifest is required to claim a directory"
+        );
     }
 
     #[test]
@@ -731,8 +780,14 @@ report_format = "junitXml"
         )]);
         let ws = scan(dir.path()).unwrap();
 
-        assert!(ws.configs.iter().any(|c| c.framework.as_deref() == Some("net8.0")));
-        assert!(ws.configs.iter().any(|c| c.framework.as_deref() == Some("net9.0")));
+        assert!(ws
+            .configs
+            .iter()
+            .any(|c| c.framework.as_deref() == Some("net8.0")));
+        assert!(ws
+            .configs
+            .iter()
+            .any(|c| c.framework.as_deref() == Some("net9.0")));
     }
 
     #[test]
@@ -747,8 +802,14 @@ report_format = "junitXml"
         )]);
         let ws = scan(dir.path()).unwrap();
 
-        assert_eq!(ws.projects[0].configurations, vec!["Debug", "Release", "Staging"]);
-        assert!(ws.configs.iter().any(|c| c.build_configuration.as_deref() == Some("Staging")));
+        assert_eq!(
+            ws.projects[0].configurations,
+            vec!["Debug", "Release", "Staging"]
+        );
+        assert!(ws
+            .configs
+            .iter()
+            .any(|c| c.build_configuration.as_deref() == Some("Staging")));
     }
 
     #[test]
@@ -800,7 +861,10 @@ EndGlobal
         let ws = scan(dir.path()).unwrap();
 
         assert!(ws.projects.is_empty());
-        assert!(ws.solutions.is_empty(), "a solution with no projects is not worth reporting");
+        assert!(
+            ws.solutions.is_empty(),
+            "a solution with no projects is not worth reporting"
+        );
     }
 
     #[test]
@@ -809,7 +873,9 @@ EndGlobal
         let ws = scan(dir.path()).unwrap();
 
         assert!(
-            !ws.projects[0].id.contains(&dir.path().display().to_string()),
+            !ws.projects[0]
+                .id
+                .contains(&dir.path().display().to_string()),
             "id must not embed an absolute path"
         );
     }
@@ -818,12 +884,19 @@ EndGlobal
     fn configurations_resolve_back_to_their_project() {
         let dir = workspace_with(&[
             ("src/App/App.csproj", EXE_CSPROJ),
-            ("web/package.json", r#"{"name":"web","scripts":{"dev":"vite"}}"#),
+            (
+                "web/package.json",
+                r#"{"name":"web","scripts":{"dev":"vite"}}"#,
+            ),
         ]);
         let ws = scan(dir.path()).unwrap();
 
         for config in &ws.configs {
-            assert!(find_project(&ws, config).is_some(), "config {} has no project", config.id);
+            assert!(
+                find_project(&ws, config).is_some(),
+                "config {} has no project",
+                config.id
+            );
         }
     }
 
@@ -838,7 +911,10 @@ EndGlobal
     fn relative_paths_resolve_but_ids_do_not() {
         let dir = workspace_with(&[
             ("src/App/App.csproj", EXE_CSPROJ),
-            ("web/package.json", r#"{"name":"web","scripts":{"dev":"vite"}}"#),
+            (
+                "web/package.json",
+                r#"{"name":"web","scripts":{"dev":"vite"}}"#,
+            ),
         ]);
         let ws = scan(dir.path()).unwrap();
 
@@ -925,7 +1001,15 @@ EndGlobal
 
         assert_eq!(
             keys,
-            ["configs", "favorites", "name", "order", "projects", "root", "solutions"]
+            [
+                "configs",
+                "favorites",
+                "name",
+                "order",
+                "projects",
+                "root",
+                "solutions"
+            ]
         );
     }
 
@@ -944,6 +1028,10 @@ EndGlobal
         let ws = scan(dir.path()).unwrap();
 
         let names: Vec<&str> = ws.projects.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, vec!["A", "M", "Z"], "scan order must not depend on the filesystem");
+        assert_eq!(
+            names,
+            vec!["A", "M", "Z"],
+            "scan order must not depend on the filesystem"
+        );
     }
 }

@@ -132,7 +132,12 @@ pub fn failed_names(cases: &[TestCase]) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn case(project: Option<&str>, suite: Option<&str>, name: &str, outcome: TestOutcome) -> TestCase {
+    fn case(
+        project: Option<&str>,
+        suite: Option<&str>,
+        name: &str,
+        outcome: TestOutcome,
+    ) -> TestCase {
         TestCase {
             id: format!("{}::{name}", suite.unwrap_or("")),
             name: name.to_string(),
@@ -153,9 +158,24 @@ mod tests {
     #[test]
     fn groups_by_project_then_suite() {
         let cases = vec![
-            case(Some("Calc.Tests"), Some("CalcTests"), "Adds", TestOutcome::Passed),
-            case(Some("Calc.Tests"), Some("CalcTests"), "Subtracts", TestOutcome::Passed),
-            case(Some("Calc.Tests"), Some("NumTests"), "IsEven", TestOutcome::Passed),
+            case(
+                Some("Calc.Tests"),
+                Some("CalcTests"),
+                "Adds",
+                TestOutcome::Passed,
+            ),
+            case(
+                Some("Calc.Tests"),
+                Some("CalcTests"),
+                "Subtracts",
+                TestOutcome::Passed,
+            ),
+            case(
+                Some("Calc.Tests"),
+                Some("NumTests"),
+                "IsEven",
+                TestOutcome::Passed,
+            ),
         ];
         let tree = build(&cases);
 
@@ -174,8 +194,16 @@ mod tests {
         ];
         let tree = build(&cases);
 
-        assert_eq!(tree[0].outcome, TestOutcome::Failed, "project should show failed");
-        assert_eq!(tree[0].children[0].outcome, TestOutcome::Failed, "suite should show failed");
+        assert_eq!(
+            tree[0].outcome,
+            TestOutcome::Failed,
+            "project should show failed"
+        );
+        assert_eq!(
+            tree[0].children[0].outcome,
+            TestOutcome::Failed,
+            "suite should show failed"
+        );
     }
 
     #[test]
@@ -255,7 +283,10 @@ mod tests {
             case(Some("P"), Some("S"), "bad", TestOutcome::Failed),
             case(Some("P"), Some("S"), "worse", TestOutcome::Failed),
         ];
-        assert_eq!(failed_names(&cases), vec!["S.bad".to_string(), "S.worse".to_string()]);
+        assert_eq!(
+            failed_names(&cases),
+            vec!["S.bad".to_string(), "S.worse".to_string()]
+        );
     }
 
     #[test]

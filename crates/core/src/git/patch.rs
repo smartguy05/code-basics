@@ -121,7 +121,11 @@ pub enum Direction {
 ///
 /// Returns `None` when the selection contains nothing applicable, so callers
 /// can skip running `git apply` entirely rather than feeding it an empty patch.
-pub fn build_patch(file: &FileDiff, selected: &BTreeSet<u32>, direction: Direction) -> Option<String> {
+pub fn build_patch(
+    file: &FileDiff,
+    selected: &BTreeSet<u32>,
+    direction: Direction,
+) -> Option<String> {
     if file.is_binary {
         return None;
     }
@@ -211,8 +215,16 @@ fn build_hunk(hunk: &Hunk, selected: &BTreeSet<u32>, direction: Direction) -> Op
 
     // Counts describe the *filtered* hunk, not the original, or the patch will
     // not line up with the file it is applied to.
-    let old_start = if old_count == 0 { hunk.old_start.saturating_sub(1) } else { hunk.old_start };
-    let new_start = if new_count == 0 { hunk.new_start.saturating_sub(1) } else { hunk.new_start };
+    let old_start = if old_count == 0 {
+        hunk.old_start.saturating_sub(1)
+    } else {
+        hunk.old_start
+    };
+    let new_start = if new_count == 0 {
+        hunk.new_start.saturating_sub(1)
+    } else {
+        hunk.new_start
+    };
 
     let header = if hunk.header.is_empty() {
         String::new()
@@ -234,8 +246,10 @@ mod tests {
             index,
             origin,
             content: content.to_string(),
-            old_lineno: matches!(origin, LineOrigin::Context | LineOrigin::Deletion).then_some(index + 1),
-            new_lineno: matches!(origin, LineOrigin::Context | LineOrigin::Addition).then_some(index + 1),
+            old_lineno: matches!(origin, LineOrigin::Context | LineOrigin::Deletion)
+                .then_some(index + 1),
+            new_lineno: matches!(origin, LineOrigin::Context | LineOrigin::Addition)
+                .then_some(index + 1),
             no_newline: false,
         }
     }
@@ -304,7 +318,10 @@ mod tests {
         let patch = build_patch(&file, &selected, Direction::Forward).unwrap();
 
         assert!(patch.contains("+alpha"));
-        assert!(!patch.contains("beta"), "unselected addition leaked into the patch");
+        assert!(
+            !patch.contains("beta"),
+            "unselected addition leaked into the patch"
+        );
         assert!(patch.contains("@@ -1,1 +1,2 @@"));
     }
 
@@ -318,7 +335,10 @@ mod tests {
         let patch = build_patch(&file, &selected, Direction::Reverse).unwrap();
 
         assert!(patch.contains("+alpha"));
-        assert!(patch.contains(" beta"), "unselected addition must become context");
+        assert!(
+            patch.contains(" beta"),
+            "unselected addition must become context"
+        );
         assert!(!patch.contains("+beta"));
         // Two context lines plus the addition being removed.
         assert!(patch.contains("@@ -1,2 +1,3 @@"));
@@ -346,7 +366,10 @@ mod tests {
         let patch = build_patch(&file, &BTreeSet::from([1]), Direction::Forward).unwrap();
 
         assert!(patch.contains("-gone"));
-        assert!(patch.contains(" staying"), "unselected deletion must become context");
+        assert!(
+            patch.contains(" staying"),
+            "unselected deletion must become context"
+        );
         assert!(!patch.contains("-staying"));
     }
 
@@ -372,7 +395,10 @@ mod tests {
         let patch = build_patch(&file, &BTreeSet::from([1]), Direction::Reverse).unwrap();
 
         assert!(patch.contains("-gone"));
-        assert!(!patch.contains("staying"), "unselected deletion leaked into a reverse patch");
+        assert!(
+            !patch.contains("staying"),
+            "unselected deletion leaked into a reverse patch"
+        );
     }
 
     #[test]
@@ -410,7 +436,11 @@ mod tests {
 
         let patch = build_patch(&file, &BTreeSet::from([1]), Direction::Forward).unwrap();
 
-        assert_eq!(patch.matches("@@").count(), 2, "one hunk header has two @@ markers");
+        assert_eq!(
+            patch.matches("@@").count(),
+            2,
+            "one hunk header has two @@ markers"
+        );
         assert!(!patch.contains("unrelated"));
     }
 

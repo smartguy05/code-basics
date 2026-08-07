@@ -133,7 +133,9 @@ fn diffs_the_working_copy_against_head() {
     write(dir.path(), "f.txt", "one\nTWO\nthree\nfour\nfive\n");
 
     let repo = Repo::open(dir.path()).unwrap();
-    let diff = repo.file_diff("f.txt", ComparisonMode::WorkingToHead).unwrap();
+    let diff = repo
+        .file_diff("f.txt", ComparisonMode::WorkingToHead)
+        .unwrap();
 
     assert_eq!(diff.hunks.len(), 1);
     let changed: Vec<&str> = diff.hunks[0]
@@ -157,9 +159,15 @@ fn the_three_comparison_modes_see_different_things() {
 
     let repo = Repo::open(path).unwrap();
 
-    let to_head = repo.file_diff("f.txt", ComparisonMode::WorkingToHead).unwrap();
-    let to_index = repo.file_diff("f.txt", ComparisonMode::WorkingToIndex).unwrap();
-    let staged = repo.file_diff("f.txt", ComparisonMode::IndexToHead).unwrap();
+    let to_head = repo
+        .file_diff("f.txt", ComparisonMode::WorkingToHead)
+        .unwrap();
+    let to_index = repo
+        .file_diff("f.txt", ComparisonMode::WorkingToIndex)
+        .unwrap();
+    let staged = repo
+        .file_diff("f.txt", ComparisonMode::IndexToHead)
+        .unwrap();
 
     let contents = |d: &cb_core::git::FileDiff| -> Vec<String> {
         d.hunks
@@ -197,11 +205,13 @@ fn baseline_content_follows_the_comparison_mode() {
     let repo = Repo::open(path).unwrap();
 
     assert_eq!(
-        repo.baseline_content("f.txt", ComparisonMode::WorkingToHead).unwrap(),
+        repo.baseline_content("f.txt", ComparisonMode::WorkingToHead)
+            .unwrap(),
         Some("committed\n".to_string())
     );
     assert_eq!(
-        repo.baseline_content("f.txt", ComparisonMode::WorkingToIndex).unwrap(),
+        repo.baseline_content("f.txt", ComparisonMode::WorkingToIndex)
+            .unwrap(),
         Some("staged\n".to_string())
     );
 }
@@ -213,7 +223,8 @@ fn a_new_file_has_no_baseline() {
 
     let repo = Repo::open(dir.path()).unwrap();
     assert_eq!(
-        repo.baseline_content("new.txt", ComparisonMode::WorkingToHead).unwrap(),
+        repo.baseline_content("new.txt", ComparisonMode::WorkingToHead)
+            .unwrap(),
         None
     );
 }
@@ -319,7 +330,9 @@ fn reverting_in_the_unstaged_view_returns_to_the_staged_state() {
     let mode = ComparisonMode::WorkingToIndex;
 
     let diff = repo.file_diff("f.txt", mode).unwrap();
-    assert!(repo.revert_lines("f.txt", mode, &diff.changed_line_indices()).unwrap());
+    assert!(repo
+        .revert_lines("f.txt", mode, &diff.changed_line_indices())
+        .unwrap());
 
     assert_eq!(read(path, "f.txt"), "staged\n");
 }
@@ -356,7 +369,11 @@ fn stages_and_unstages_a_whole_file() {
     assert_eq!(porcelain(path).trim_end(), "M  f.txt", "should be staged");
 
     repo.unstage_file("f.txt").unwrap();
-    assert_eq!(porcelain(path).trim_end(), " M f.txt", "should be unstaged again");
+    assert_eq!(
+        porcelain(path).trim_end(),
+        " M f.txt",
+        "should be unstaged again"
+    );
 }
 
 #[test]
@@ -389,13 +406,21 @@ fn unstages_only_the_selected_lines() {
     run(path, &["add", "f.txt"]);
 
     let repo = Repo::open(path).unwrap();
-    let selection =
-        BTreeSet::from([changed_index_of(&repo, "f.txt", ComparisonMode::IndexToHead, "beta")]);
+    let selection = BTreeSet::from([changed_index_of(
+        &repo,
+        "f.txt",
+        ComparisonMode::IndexToHead,
+        "beta",
+    )]);
     assert!(repo.unstage_lines("f.txt", &selection).unwrap());
 
     let staged = run(path, &["show", ":f.txt"]);
     assert_eq!(staged, "keep\nalpha\n", "beta should no longer be staged");
-    assert_eq!(read(path, "f.txt"), "keep\nalpha\nbeta\n", "working copy untouched");
+    assert_eq!(
+        read(path, "f.txt"),
+        "keep\nalpha\nbeta\n",
+        "working copy untouched"
+    );
 }
 
 #[test]
@@ -427,7 +452,8 @@ fn writing_a_file_from_the_diff_view_persists() {
     let dir = init_repo(&[("f.txt", "original\n")]);
     let repo = Repo::open(dir.path()).unwrap();
 
-    repo.write_working_file("f.txt", "edited in place\n").unwrap();
+    repo.write_working_file("f.txt", "edited in place\n")
+        .unwrap();
 
     assert_eq!(read(dir.path(), "f.txt"), "edited in place\n");
     assert_eq!(
@@ -471,7 +497,10 @@ fn amends_the_previous_commit() {
     let repo = Repo::open(path).unwrap();
     repo.commit("corrected message", true).unwrap();
 
-    assert_eq!(run(path, &["log", "-1", "--pretty=%s"]).trim(), "corrected message");
+    assert_eq!(
+        run(path, &["log", "-1", "--pretty=%s"]).trim(),
+        "corrected message"
+    );
     assert_eq!(run(path, &["rev-list", "--count", "HEAD"]).trim(), "1");
 }
 
@@ -507,7 +536,11 @@ fn creates_a_branch_from_another_branch() {
     repo.create_branch_from("feature", "base", true).unwrap();
 
     assert_eq!(repo.status().unwrap().branch.as_deref(), Some("feature"));
-    assert_eq!(read(path, "g.txt"), "on base\n", "the branch must start at base's tip");
+    assert_eq!(
+        read(path, "g.txt"),
+        "on base\n",
+        "the branch must start at base's tip"
+    );
 }
 
 #[test]
@@ -522,11 +555,16 @@ fn checking_out_a_remote_branch_creates_a_tracking_local() {
     let clone_path = clone_dir.path().join("clone");
     run(
         clone_dir.path(),
-        &["clone", origin.path().to_str().unwrap(), clone_path.to_str().unwrap()],
+        &[
+            "clone",
+            origin.path().to_str().unwrap(),
+            clone_path.to_str().unwrap(),
+        ],
     );
 
     let repo = Repo::open(&clone_path).unwrap();
-    repo.checkout_remote_branch("origin/users/anthony/feature").unwrap();
+    repo.checkout_remote_branch("origin/users/anthony/feature")
+        .unwrap();
 
     let status = repo.status().unwrap();
     assert_eq!(status.branch.as_deref(), Some("users/anthony/feature"));
@@ -537,12 +575,19 @@ fn checking_out_a_remote_branch_creates_a_tracking_local() {
         .into_iter()
         .find(|b| !b.is_remote && b.name == "users/anthony/feature")
         .expect("a local branch must exist");
-    assert_eq!(branch.upstream.as_deref(), Some("origin/users/anthony/feature"));
+    assert_eq!(
+        branch.upstream.as_deref(),
+        Some("origin/users/anthony/feature")
+    );
 
     // Doing it again (local already exists) is a plain switch, not an error.
     repo.checkout_branch("main").unwrap();
-    repo.checkout_remote_branch("origin/users/anthony/feature").unwrap();
-    assert_eq!(repo.status().unwrap().branch.as_deref(), Some("users/anthony/feature"));
+    repo.checkout_remote_branch("origin/users/anthony/feature")
+        .unwrap();
+    assert_eq!(
+        repo.status().unwrap().branch.as_deref(),
+        Some("users/anthony/feature")
+    );
 }
 
 #[test]
@@ -633,7 +678,10 @@ fn network_commands_inherit_the_users_environment() {
     let push = repo.network_command(cb_core::git::repo::NetworkOperation::Push);
     assert_eq!(push.program, "git");
     assert_eq!(push.args, vec!["push"]);
-    assert!(push.env.is_empty(), "network commands must not override the environment");
+    assert!(
+        push.env.is_empty(),
+        "network commands must not override the environment"
+    );
     assert_eq!(push.cwd, repo.workdir());
 }
 
@@ -702,7 +750,10 @@ fn merging_a_branch_ahead_of_head_fast_forwards() {
     assert_eq!(report.outcome, MergeOutcome::FastForward);
     assert_eq!(read(dir.path(), "b.txt"), "from feature\n");
     // A fast-forward must not invent a merge commit.
-    assert_eq!(run(dir.path(), &["rev-list", "--count", "HEAD"]).trim(), "2");
+    assert_eq!(
+        run(dir.path(), &["rev-list", "--count", "HEAD"]).trim(),
+        "2"
+    );
     assert_eq!(repo.status().unwrap().branch.as_deref(), Some("main"));
 }
 
@@ -724,7 +775,12 @@ fn merging_diverged_branches_creates_a_merge_commit() {
     // Both sides' files are present, and the commit has two parents.
     assert_eq!(read(path, "b.txt"), "from feature\n");
     assert_eq!(read(path, "c.txt"), "from main\n");
-    assert_eq!(run(path, &["cat-file", "-p", "HEAD"]).matches("parent ").count(), 2);
+    assert_eq!(
+        run(path, &["cat-file", "-p", "HEAD"])
+            .matches("parent ")
+            .count(),
+        2
+    );
     // The merge must be finished, not left in progress.
     assert_eq!(repo.status().unwrap().in_progress_operation, None);
 }
@@ -765,7 +821,10 @@ fn a_conflicting_merge_is_reported_and_left_in_progress() {
 
     let status = repo.status().unwrap();
     assert_eq!(status.in_progress_operation.as_deref(), Some("merge"));
-    assert!(status.files.iter().any(|f| f.path == "a.txt" && f.is_conflicted()));
+    assert!(status
+        .files
+        .iter()
+        .any(|f| f.path == "a.txt" && f.is_conflicted()));
 }
 
 #[test]
@@ -787,7 +846,10 @@ fn aborting_a_conflicted_merge_restores_the_previous_state() {
     assert_eq!(read(path, "a.txt"), "main version\n");
     let status = repo.status().unwrap();
     assert_eq!(status.in_progress_operation, None);
-    assert!(status.files.is_empty(), "the working tree should be clean again");
+    assert!(
+        status.files.is_empty(),
+        "the working tree should be clean again"
+    );
 }
 
 #[test]
@@ -797,10 +859,17 @@ fn merging_refuses_to_start_with_modified_tracked_files() {
     let dir = repo_with_feature_branch();
     write(dir.path(), "a.txt", "uncommitted edit\n");
 
-    let error = Repo::open(dir.path()).unwrap().merge_branch("feature").unwrap_err().to_string();
+    let error = Repo::open(dir.path())
+        .unwrap()
+        .merge_branch("feature")
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("commit or stash"), "got: {error}");
-    assert!(error.contains("a.txt"), "the error should name a file: {error}");
+    assert!(
+        error.contains("a.txt"),
+        "the error should name a file: {error}"
+    );
     // Nothing may have happened.
     assert_eq!(read(dir.path(), "a.txt"), "uncommitted edit\n");
     assert!(!dir.path().join("b.txt").exists());
@@ -812,7 +881,10 @@ fn untracked_files_do_not_block_a_merge() {
     let dir = repo_with_feature_branch();
     write(dir.path(), "scratch.txt", "not tracked\n");
 
-    let report = Repo::open(dir.path()).unwrap().merge_branch("feature").unwrap();
+    let report = Repo::open(dir.path())
+        .unwrap()
+        .merge_branch("feature")
+        .unwrap();
 
     assert_eq!(report.outcome, MergeOutcome::FastForward);
     assert_eq!(read(dir.path(), "scratch.txt"), "not tracked\n");
@@ -821,7 +893,11 @@ fn untracked_files_do_not_block_a_merge() {
 #[test]
 fn merging_an_unknown_branch_fails_clearly() {
     let dir = repo_with_feature_branch();
-    let error = Repo::open(dir.path()).unwrap().merge_branch("nope").unwrap_err().to_string();
+    let error = Repo::open(dir.path())
+        .unwrap()
+        .merge_branch("nope")
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("nope"), "got: {error}");
 }

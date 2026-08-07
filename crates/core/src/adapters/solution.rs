@@ -303,7 +303,11 @@ fn parse_slnx(content: &str, relative_dir: &Path) -> Vec<SolutionProject> {
 
 fn attribute(e: &quick_xml::events::BytesStart, name: &str) -> Option<String> {
     e.attributes().flatten().find_map(|a| {
-        if a.key.local_name().as_ref().eq_ignore_ascii_case(name.as_bytes()) {
+        if a.key
+            .local_name()
+            .as_ref()
+            .eq_ignore_ascii_case(name.as_bytes())
+        {
             a.unescape_value().ok().map(|v| v.into_owned())
         } else {
             None

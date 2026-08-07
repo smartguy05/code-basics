@@ -147,7 +147,10 @@ pub fn apply_plan(plan: &InstallPlan) -> Result<()> {
         if write.merges_existing && write.path.exists() {
             let backup = write.path.with_extension(backup_extension(&write.path));
             std::fs::copy(&write.path, &backup).with_context(|| {
-                format!("failed to back up {} before changing it", write.path.display())
+                format!(
+                    "failed to back up {} before changing it",
+                    write.path.display()
+                )
             })?;
         }
 

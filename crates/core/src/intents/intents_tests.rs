@@ -49,12 +49,13 @@ fn recording_creates_the_gitignore_entry() {
     let dir = workspace();
     append_edit(dir.path(), &record(0, "a.rs", &[], &["x"])).unwrap();
 
-    let ignore = std::fs::read_to_string(
-        crate::config::config_dir(dir.path()).join(".gitignore"),
-    )
-    .unwrap();
+    let ignore =
+        std::fs::read_to_string(crate::config::config_dir(dir.path()).join(".gitignore")).unwrap();
 
-    assert!(ignore.lines().any(|l| l.trim() == "intents/"), "got: {ignore}");
+    assert!(
+        ignore.lines().any(|l| l.trim() == "intents/"),
+        "got: {ignore}"
+    );
 }
 
 #[test]
@@ -91,7 +92,9 @@ fn an_edit_that_changes_nothing_is_dropped() {
     let dir = workspace();
     append_edit(dir.path(), &record(0, "a.rs", &[], &[])).unwrap();
 
-    assert!(load(dir.path(), &LoadOptions::default()).unwrap().is_empty());
+    assert!(load(dir.path(), &LoadOptions::default())
+        .unwrap()
+        .is_empty());
 }
 
 /// A half-written final line after a crash must not cost the rest of the log.
@@ -124,7 +127,9 @@ fn records_from_another_branch_are_discarded() {
     append_edit(dir.path(), &mine).unwrap();
     append_edit(dir.path(), &theirs).unwrap();
 
-    let options = LoadOptions { branch: Some("feature".into()) };
+    let options = LoadOptions {
+        branch: Some("feature".into()),
+    };
     let intents = load(dir.path(), &options).unwrap();
 
     assert_eq!(intents.records.len(), 1);
@@ -139,7 +144,9 @@ fn a_record_with_no_branch_survives_branch_filtering() {
     let dir = workspace();
     append_edit(dir.path(), &record(0, "a.rs", &[], &["x"])).unwrap();
 
-    let options = LoadOptions { branch: Some("main".into()) };
+    let options = LoadOptions {
+        branch: Some("main".into()),
+    };
 
     assert_eq!(load(dir.path(), &options).unwrap().records.len(), 1);
 }
@@ -162,10 +169,16 @@ fn an_absolute_path_is_made_relative_to_the_workspace() {
 #[test]
 fn an_edit_outside_the_workspace_is_discarded() {
     let dir = workspace();
-    let outside = if cfg!(windows) { "C:/elsewhere/a.rs" } else { "/elsewhere/a.rs" };
+    let outside = if cfg!(windows) {
+        "C:/elsewhere/a.rs"
+    } else {
+        "/elsewhere/a.rs"
+    };
     append_edit(dir.path(), &record(0, outside, &[], &["x"])).unwrap();
 
-    assert!(load(dir.path(), &LoadOptions::default()).unwrap().is_empty());
+    assert!(load(dir.path(), &LoadOptions::default())
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -224,7 +237,10 @@ fn a_turn_wide_label_covers_a_file_it_does_not_name() {
         labels: vec![label("turn-1", "whole turn", &[])],
     };
 
-    assert_eq!(intents.label_for(&intents.records[0]).unwrap().label, "whole turn");
+    assert_eq!(
+        intents.label_for(&intents.records[0]).unwrap().label,
+        "whole turn"
+    );
 }
 
 #[test]
@@ -244,7 +260,10 @@ fn a_label_path_written_with_backslashes_still_matches() {
         labels: vec![label("turn-1", "matched", &["src\\a.rs"])],
     };
 
-    assert_eq!(intents.label_for(&intents.records[0]).unwrap().label, "matched");
+    assert_eq!(
+        intents.label_for(&intents.records[0]).unwrap().label,
+        "matched"
+    );
 }
 
 #[test]
@@ -273,7 +292,9 @@ fn clearing_removes_everything_recorded() {
 
     clear(dir.path()).unwrap();
 
-    assert!(load(dir.path(), &LoadOptions::default()).unwrap().is_empty());
+    assert!(load(dir.path(), &LoadOptions::default())
+        .unwrap()
+        .is_empty());
 }
 
 #[test]

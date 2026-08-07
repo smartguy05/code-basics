@@ -39,7 +39,11 @@ fn reads_projects_from_a_classic_sln() {
     let projects = parse("Repo", SLN, Path::new(""), false);
 
     let names: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, vec!["App", "App.Tests"], "solution folders are not projects");
+    assert_eq!(
+        names,
+        vec!["App", "App.Tests"],
+        "solution folders are not projects"
+    );
 }
 
 #[test]
@@ -60,7 +64,10 @@ fn sln_nested_solution_folders_become_a_path() {
     assert_eq!(app.folder.as_deref(), Some("src/core"));
 
     let tests = projects.iter().find(|p| p.name == "App.Tests").unwrap();
-    assert_eq!(tests.folder, None, "a project at the solution root has no folder");
+    assert_eq!(
+        tests.folder, None,
+        "a project at the solution root has no folder"
+    );
 }
 
 #[test]
@@ -118,7 +125,10 @@ fn both_formats_are_recognised_by_extension() {
     assert!(is_solution_file(Path::new("Repo.sln")));
     assert!(is_solution_file(Path::new("Repo.slnx")));
     assert!(!is_solution_file(Path::new("Repo.csproj")));
-    assert!(!is_solution_file(Path::new("Repo.slnf")), "solution filters are not solutions");
+    assert!(
+        !is_solution_file(Path::new("Repo.slnf")),
+        "solution filters are not solutions"
+    );
 }
 
 #[test]

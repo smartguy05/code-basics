@@ -61,7 +61,13 @@ fn a_file_belongs_to_at_most_one_group() {
     let lists = assign(dir.path(), &["src/a.rs".into()], Some("Second")).unwrap();
 
     assert_eq!(lists.group_of("src/a.rs"), Some("Second"));
-    assert!(lists.groups.iter().find(|g| g.name == "First").unwrap().paths.is_empty());
+    assert!(lists
+        .groups
+        .iter()
+        .find(|g| g.name == "First")
+        .unwrap()
+        .paths
+        .is_empty());
 }
 
 #[test]
@@ -73,7 +79,10 @@ fn assigning_to_no_group_removes_the_file_from_every_group() {
     let lists = assign(dir.path(), &["src/a.rs".into()], None).unwrap();
 
     assert_eq!(lists.group_of("src/a.rs"), None);
-    assert!(lists.groups.iter().any(|g| g.name == "Refactor"), "the group itself survives");
+    assert!(
+        lists.groups.iter().any(|g| g.name == "Refactor"),
+        "the group itself survives"
+    );
 }
 
 #[test]
@@ -124,7 +133,11 @@ fn deleting_a_group_leaves_its_files_ungrouped() {
     let lists = remove(dir.path(), "Refactor").unwrap();
 
     assert!(lists.groups.is_empty());
-    assert_eq!(lists.group_of("src/a.rs"), None, "the file is ungrouped, not lost");
+    assert_eq!(
+        lists.group_of("src/a.rs"),
+        None,
+        "the file is ungrouped, not lost"
+    );
 }
 
 #[test]
@@ -167,8 +180,14 @@ fn the_file_is_gitignored_so_it_stays_personal() {
     let ignore =
         std::fs::read_to_string(crate::config::config_dir(dir.path()).join(".gitignore")).unwrap();
 
-    assert!(ignore.lines().any(|l| l.trim() == CHANGELISTS_FILE), "got: {ignore}");
-    assert!(ignore.lines().any(|l| l.trim() == "results/"), "the existing entry must survive");
+    assert!(
+        ignore.lines().any(|l| l.trim() == CHANGELISTS_FILE),
+        "got: {ignore}"
+    );
+    assert!(
+        ignore.lines().any(|l| l.trim() == "results/"),
+        "the existing entry must survive"
+    );
 }
 
 #[test]
@@ -183,9 +202,16 @@ fn an_existing_gitignore_is_extended_not_replaced() {
     create(dir.path(), "Refactor").unwrap();
 
     let ignore = std::fs::read_to_string(config_dir.join(".gitignore")).unwrap();
-    assert!(ignore.contains("my-own-entry"), "hand-written entries must survive");
+    assert!(
+        ignore.contains("my-own-entry"),
+        "hand-written entries must survive"
+    );
     assert!(ignore.lines().any(|l| l.trim() == CHANGELISTS_FILE));
-    assert_eq!(ignore.matches("results/").count(), 1, "no duplicate entries");
+    assert_eq!(
+        ignore.matches("results/").count(),
+        1,
+        "no duplicate entries"
+    );
 }
 
 #[test]

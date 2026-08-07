@@ -42,7 +42,8 @@ fn requests_every_property_the_shallow_scan_reads() {
     assert!(args.iter().any(|a| a.contains("App.csproj")));
     for property in PROPERTIES {
         assert!(
-            args.iter().any(|a| a == &format!("-getProperty:{property}")),
+            args.iter()
+                .any(|a| a == &format!("-getProperty:{property}")),
             "{property} must be requested"
         );
     }
@@ -63,8 +64,14 @@ fn asks_for_more_than_one_property_so_the_sdk_emits_json() {
 fn reads_the_property_document() {
     let properties = parse_output(OUTPUT);
 
-    assert_eq!(properties.get("OutputType").map(String::as_str), Some("Exe"));
-    assert_eq!(properties.get("TargetFramework").map(String::as_str), Some("net10.0"));
+    assert_eq!(
+        properties.get("OutputType").map(String::as_str),
+        Some("Exe")
+    );
+    assert_eq!(
+        properties.get("TargetFramework").map(String::as_str),
+        Some("net10.0")
+    );
 }
 
 #[test]
@@ -79,7 +86,10 @@ fn unset_properties_are_dropped_rather_than_stored_empty() {
 #[test]
 fn unparseable_output_yields_nothing() {
     assert!(parse_output("").is_empty());
-    assert!(parse_output("Exe").is_empty(), "a bare single-property value is not a document");
+    assert!(
+        parse_output("Exe").is_empty(),
+        "a bare single-property value is not a document"
+    );
     assert!(parse_output(r#"{"NotProperties": {}}"#).is_empty());
 }
 
@@ -110,7 +120,10 @@ fn multi_targeting_wins_over_the_single_framework_property() {
     let mut project = ProjectFile::default();
     apply(
         &mut project,
-        &map(&[("TargetFramework", "net8.0"), ("TargetFrameworks", "net8.0;net9.0")]),
+        &map(&[
+            ("TargetFramework", "net8.0"),
+            ("TargetFrameworks", "net8.0;net9.0"),
+        ]),
     );
 
     assert_eq!(project.target_frameworks, vec!["net8.0", "net9.0"]);
@@ -154,7 +167,10 @@ fn evaluating_a_project_that_does_not_exist_fails_softly() {
 
 #[test]
 fn evaluates_a_real_project_when_the_sdk_is_available() {
-    let Ok(probe) = std::process::Command::new("dotnet").arg("--version").output() else {
+    let Ok(probe) = std::process::Command::new("dotnet")
+        .arg("--version")
+        .output()
+    else {
         eprintln!("skipped: no dotnet on PATH");
         return;
     };
@@ -185,7 +201,10 @@ fn evaluates_a_real_project_when_the_sdk_is_available() {
         return;
     };
 
-    assert_eq!(properties.get("Configurations").map(String::as_str), Some("Debug;Release;Staging"));
+    assert_eq!(
+        properties.get("Configurations").map(String::as_str),
+        Some("Debug;Release;Staging")
+    );
     assert_eq!(
         properties.get("OutputType").map(String::as_str),
         Some("Exe"),
