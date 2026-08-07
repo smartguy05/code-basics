@@ -7,6 +7,7 @@
 
 mod chunker;
 mod kill;
+mod resolve;
 
 pub use chunker::{LineSplitter, Utf8Chunker};
 
@@ -100,7 +101,9 @@ impl Supervisor {
     ) -> Result<Option<i32>> {
         let started = Instant::now();
 
-        let mut cmd = tokio::process::Command::new(&invocation.program);
+        // A bare name like `pnpm` only exists as a `.cmd` shim on Windows,
+        // which CreateProcess will not resolve; see process/resolve.rs.
+        let mut cmd = tokio::process::Command::new(resolve::resolve_program(&invocation.program));
         cmd.args(&invocation.args)
             .current_dir(&invocation.cwd)
             .stdin(Stdio::null())
@@ -413,6 +416,25 @@ mod tests {
 
         assert!(sup.run("test", &inv, tx).await.is_err());
         assert!(matches!(rx.try_recv(), Ok(ProcessEvent::Failed { .. })));
+    }
+
+    /// The reproduction for "failed to start `pnpm` ...: program not found".
+    /// pnpm/npm/yarn install as `.cmd` shims on Windows, which `CreateProcess`
+    /// will not resolve from a bare name. Guarded: only asserts on a machine
+    /// where pnpm is actually installed as a shim.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_package_manager_cmd_shim_spawns_by_bare_name() {
+        use std::path::Path;
+        if resolve::resolve_program("pnpm") == Path::new("pnpm") {
+            return; // no pnpm on this machine - nothing to prove
+        }
+
+        let inv = invocation("pnpm", &["--version"]);
+        let (events, code) = collect(&inv).await;
+
+        assert_eq!(code, Some(0), "pnpm did not spawn; events: {events:?}");
+        assert!(!output_text(&events, Stream::Stdout).trim().is_empty());
     }
 
     #[tokio::test]

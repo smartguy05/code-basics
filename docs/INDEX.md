@@ -70,7 +70,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/model.rs` | 605 | Types shared between the Rust core and the TypeScript frontend. |
 | `crates/core/src/process/chunker.rs` | 188 | Incremental UTF-8 decoding for streamed process output. |
 | `crates/core/src/process/kill.rs` | 87 | Platform-specific process *tree* termination. |
-| `crates/core/src/process/mod.rs` | 575 | Process supervision: spawn, stream, cancel. |
+| `crates/core/src/process/mod.rs` | 597 | Process supervision: spawn, stream, cancel. |
+| `crates/core/src/process/resolve.rs` | 200 | Windows program-name resolution. |
 | `crates/core/src/secrets.rs` | 574 | .NET user secrets: per-project secrets stored *outside* the repository. |
 | `crates/core/src/testing/jest_like.rs` | 327 | Parser for the JSON report shared by Jest and Vitest. |
 | `crates/core/src/testing/junit.rs` | 349 | Parser for JUnit-style XML test reports. |
@@ -194,6 +195,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/process/chunker.rs`: `Utf8Chunker`, `new()`, `push()`, `finish()`, `LineSplitter`, `new()`, `push()`, `finish()`
 - `crates/core/src/process/kill.rs`: `configure_process_group()`, `kill_tree()`
 - `crates/core/src/process/mod.rs`: `Stream`, `ProcessEvent`, `Supervisor`, `new()`, `run()`, `cancel()`, `running_ids()`, `pid()`, `running()`, `is_running()`
+- `crates/core/src/process/resolve.rs`: `resolve_program()`
 - `crates/core/src/secrets.rs`: `ProjectSecrets`, `resolve_project_path()`, `secrets_path()`, `user_secrets_id()`, `read()`, `ensure_id()`, `write()`
 - `crates/core/src/testing/jest_like.rs`: `parse()`
 - `crates/core/src/testing/junit.rs`: `parse()`
