@@ -415,3 +415,237 @@ export interface IntentGroup {
   /** The weakest confidence of any hunk in the group. */
   confidence: Confidence;
 }
+
+// ---------------------------------------------------------------------------
+// Object inspection (`crates/core/src/inspect/model.rs`)
+// ---------------------------------------------------------------------------
+
+export type Bitness = "x64" | "x86";
+
+/** What was inspected: a crash dump on disk, or a running process. */
+export type InspectTarget =
+  | { kind: "dump"; path: string }
+  | { kind: "live"; pid: number };
+
+export interface TargetSummary {
+  target: InspectTarget;
+  bitness?: Bitness;
+  runtimeVersion?: string;
+  processName?: string;
+}
+
+/** How much of the graph the inspector was allowed to walk. */
+export interface Caps {
+  maxDepth: number;
+  maxChildren: number;
+  maxStringLength: number;
+  maxNodes: number;
+}
+
+export type ElidedReason = "depthLimit" | "childLimit" | "nodeLimit";
+
+/**
+ * What a field holds.
+ *
+ * Two variants exist to admit ignorance and must be rendered as such:
+ * `elided` means "there is more here and the walk stopped"; `unavailable`
+ * means "this could not be read". Neither may be shown as a value — a field
+ * displayed as `0` that was never actually read is the failure this whole
+ * feature is designed against, because the user believes it.
+ *
+ * `address` is a hex string, never a number: it is the identity used to expand
+ * a node and to spot a cycle, and a rounded address points at the wrong object.
+ */
+export type ObjectValue =
+  | { kind: "primitive"; text: string }
+  | { kind: "text"; text: string; truncated: boolean }
+  | { kind: "null" }
+  | { kind: "reference"; address: string; typeName: string; expandable: boolean }
+  /** Already shown at `path`; a leaf, so rendering never recurses. */
+  | { kind: "cycle"; address: string; path: string }
+  | { kind: "elided"; reason: ElidedReason }
+  | { kind: "unavailable"; reason: string };
+
+/** One row in the object tree. Shaped like `TestNode`, rendered the same way. */
+export interface InspectNode {
+  /** Path-shaped and stable, e.g. `root.orders[3]._total`. */
+  id: string;
+  label: string;
+  typeName?: string;
+  value: ObjectValue;
+  children: InspectNode[];
+  /** True when `children` is a prefix of what exists. */
+  hasMore: boolean;
+  /** Turns "100 items" into "100 of 5,412" when the inspector could count. */
+  childCountTotal?: number;
+}
+
+export interface InspectGraph {
+  sessionId: string;
+  /**
+   * Identifies this snapshot. Expanding past a cap on a live process yields a
+   * new one, which is the signal to warn that a branch may not agree with the
+   * rest of the tree.
+   */
+  snapshotId: string;
+  capturedAt: string;
+  target: TargetSummary;
+  roots: InspectNode[];
+  caps: Caps;
+  warnings?: string[];
+}
+
+/**
+ * Where to start walking.
+ *
+ * There is deliberately no "find the interesting object" option — a live heap
+ * holds millions, and a heuristic that picked one would mislead often enough
+ * to be worse than asking.
+ */
+export type RootSpec =
+  | { kind: "type"; name: string; limit: number }
+  | { kind: "statics"; name: string }
+  | { kind: "address"; address: string }
+  /** Every live `System.Exception` — the best-effort answer for a caught one. */
+  | { kind: "exceptions" }
+  /** The exception that killed the process. Dump targets only. */
+  | { kind: "crashException" };
+
+export interface InspectRequest {
+  schemaVersion: number;
+  target: InspectTarget;
+  root: RootSpec;
+  caps: Caps;
+  /** Suspends the user's application while capturing. Opt-in. */
+  suspend: boolean;
+}
+
+/** A crash dump under `.code-basics/dumps/`. */
+export interface DumpFile {
+  path: string;
+  /** From `%e` in the filename template; matches a dump to the run. */
+  executable: string;
+  pid: number;
+  /** Unix seconds, from `%t`. */
+  capturedAt: number;
+  bytes: number;
+}
+
+/**
+ * One .NET process the machine is running, as the inspector enumerated it.
+ *
+ * Only `pid` and `name` are guaranteed; the rest is read through APIs that
+ * legitimately fail on another user's process and is omitted rather than
+ * filled in when it could not be.
+ */
+export interface DotnetProcess {
+  pid: number;
+  /** Executable name without its extension. */
+  name: string;
+  path?: string;
+  parentPid?: number;
+  /** ISO-8601, exactly as the enumerator wrote it. */
+  startedAt?: string;
+}
+
+/**
+ * How a process was linked to a run configuration.
+ *
+ * `descendant` is the one that matters: `dotnet run` starts the application as
+ * a child, so the pid code-basics launched is the CLI and the child is where
+ * the user's objects are.
+ */
+export type Attribution = "launched" | "descendant" | "unrelated";
+
+/**
+ * A .NET process that can be attached to, and what is known about whose it is.
+ *
+ * Every published .NET process on the machine appears, including ones
+ * code-basics never started — so `attribution` is what a view must branch on
+ * before it says anything about ownership. An empty list is a normal answer.
+ */
+export interface AttachableProcess {
+  pid: number;
+  name: string;
+  path?: string;
+  attribution: Attribution;
+  /**
+   * The run configuration this process belongs to. Present only when
+   * `attribution` is `launched` or `descendant` — an unrelated process must
+   * never be shown under one of the user's configuration names.
+   */
+  configId?: string;
+  configName?: string;
+  /**
+   * Whether the backend has *evidence* this process holds the application's own
+   * objects: it is the pid code-basics launched and nothing marks it as a
+   * launcher, or it is the single child a launcher could be said to have
+   * started as the application.
+   *
+   * `false` means no evidence, not "this is not the application" — a
+   * `descendant` that could equally be an MSBuild worker node or the compiler
+   * server is false. So a view may preselect a `true` and must never preselect
+   * a `false` as though it were one.
+   */
+  isApplication: boolean;
+  /**
+   * Why this pid is not the process holding the user's objects — absent when
+   * there is no evidence that it is anything but the application itself.
+   *
+   * Present when the process is demonstrably a launcher: something it started
+   * is on this same list, or it is the .NET CLI for a `dotnet run`
+   * configuration whose application has not appeared yet. Capturing it finds
+   * none of the user's types and renders an empty tree that reads like "your
+   * object is not there", so this must be shown wherever the pid is offered.
+   */
+  launcherCaveat?: string;
+}
+
+/**
+ * The attachable processes, and anything that stopped the list being complete.
+ *
+ * A `warnings` entry means the list is real but degraded — most importantly,
+ * that no process's parent could be read, which leaves every row `unrelated`
+ * and so indistinguishable from a machine running nothing of the user's. A list
+ * that could not be produced at all is a rejected promise instead, because
+ * "nothing is attachable" and "I could not look" are different answers.
+ */
+export interface AttachableList {
+  processes: AttachableProcess[];
+  warnings?: string[];
+}
+
+/** A dump a finished run may have written, and whether it is certainly its. */
+export interface RunDump {
+  dump: DumpFile;
+  /**
+   * True only when the dump carries the pid the run reported. False means it is
+   * a candidate written while the run was going — possibly by another
+   * configuration — and must never be described as this run's crash.
+   */
+  certain: boolean;
+}
+
+export interface InspectStatus {
+  available: boolean;
+  unavailableReason?: string;
+  dumpCaptureEnabled: boolean;
+  /** Newest first. */
+  dumps: DumpFile[];
+  caveats?: string[];
+  /**
+   * What attaching to a running process costs it, on its own so a view that
+   * offers an attach button can state it beside that button. Also contained in
+   * `caveats`, which only the Objects tab shows.
+   */
+  attachCaveats?: string[];
+}
+
+/** Per-workspace inspector settings in `.code-basics/config.json`. */
+export interface InspectorConfig {
+  captureDumps: boolean;
+  caps?: Caps;
+  keepDumps?: number;
+  maxDumpMegabytes?: number;
+  env?: Record<string, string>;
+}

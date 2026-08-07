@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "docs:index": "node scripts/generate-index.mjs",
-    "docs:check": "node scripts/check-docs.mjs"
+    "docs:check": "node scripts/check-docs.mjs",
+    "sidecar:build": "node scripts/build-sidecar.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",

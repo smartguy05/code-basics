@@ -1042,3 +1042,196 @@ textarea:focus {
   color: var(--text-dim);
   word-break: break-all;
 }
+
+/* Object inspector (components/ObjectTree.tsx).
+
+   The colours here carry meaning the words alone cannot carry at a glance:
+   `null` is a real value and reads dim and italic, while `unavailable` takes a
+   warning tint, because a user who reads "could not be read" as "was null" has
+   been misled by the one tool that was supposed to tell them the truth. */
+
+.object-tree {
+  --value: #9ec4f0;
+  --value-text: #cf9b6b;
+  --value-warn: var(--skip);
+}
+
+.object-node .label {
+  flex: 0 1 auto;
+}
+
+.object-node .ov {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-node .ov-primitive {
+  color: var(--value);
+}
+
+.object-node .ov-quoted {
+  color: var(--value-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.object-node .ov-truncated {
+  font-family: var(--font);
+  font-size: 10px;
+  color: var(--text-faint);
+  font-style: italic;
+  flex: none;
+}
+
+.object-node .ov-null {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.object-node .ov-type {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.object-node .ov-address {
+  color: var(--text-faint);
+  font-size: 11px;
+  flex: none;
+}
+
+/* A button, not a span: it navigates, and it should look and behave like it. */
+.object-node .ov-cycle {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.object-node .ov-cycle:hover {
+  background: none;
+  text-decoration: underline;
+}
+
+.object-node .ov-path {
+  color: var(--text-dim);
+}
+
+.object-node .ov-elided {
+  color: var(--text-dim);
+  font-family: var(--font);
+  font-style: italic;
+}
+
+.object-node .ov-unavailable {
+  color: var(--value-warn);
+  font-family: var(--font);
+}
+
+.object-node .ov-unavailable .ov-reason {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.object-node .ov-warn {
+  flex: none;
+}
+
+.object-node .ov-expand {
+  font-family: var(--font);
+  font-size: 10px;
+  padding: 0 5px;
+  flex: none;
+}
+
+.capture-header {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.capture-header .capture-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  min-width: 0;
+}
+
+.capture-header .capture-target {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Always visible: these qualify every row below them. */
+.capture-header .capture-warnings {
+  margin: 0;
+  padding: 6px 10px 8px 10px;
+  list-style: none;
+  border-top: 1px solid var(--border);
+  background: rgba(201, 162, 39, 0.12);
+  color: var(--skip);
+  font-size: 12px;
+}
+
+.capture-header .capture-warnings li {
+  display: flex;
+  gap: 6px;
+  padding: 1px 0;
+}
+
+/* Objects tab (views/InspectView.tsx).
+
+   The notices are styled as warnings rather than muted help text on purpose:
+   "the inspector is missing", "capture is off" and "a dump holds all of
+   process memory" are each the difference between a user trusting the tab and
+   being misled by it, and none of them is fine print. */
+
+.inspect-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.inspect-notice strong {
+  font-size: 13px;
+}
+
+.inspect-notice code {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* A branch re-read in a later snapshot. Distinct from an ordinary warning
+   because it qualifies specific rows, which it names. */
+.inspect-stale {
+  font-size: 12px;
+}
+
+.inspect-stale ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.inspect-stale li {
+  font-size: 11px;
+  word-break: break-all;
+}

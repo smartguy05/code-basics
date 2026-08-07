@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A deliberately awkward object graph that then crashes.
+
+    Exists to exercise the inspector against a real heap rather than a
+    hand-written fixture: a reference cycle, a collection far larger than the
+    child cap, nulls, auto-properties, and the value types whose raw fields are
+    unreadable (decimal, DateTime, Guid, TimeSpan).
+
+    Not part of any build. See sidecar/README.md.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Crasher</AssemblyName>
+  </PropertyGroup>
+
+</Project>

@@ -1,6 +1,6 @@
 # The frontend (`src/`)
 
-React 19 + TypeScript, built with Vite, rendered inside the native Tauri window via the platform WebView. No router and no state library — the app is a single window with four tabs, and each view owns its own state. Everything the frontend "does" is an `invoke` call into the [Tauri shell](tauri-shell.md).
+React 19 + TypeScript, built with Vite, rendered inside the native Tauri window via the platform WebView. No router and no state library — the app is a single window with five tabs, and each view owns its own state. Everything the frontend "does" is an `invoke` call into the [Tauri shell](tauri-shell.md).
 
 ## Structure
 
@@ -18,11 +18,15 @@ src/
 │   │                     build actions, secrets
 │   ├── TestsView.tsx     test configs, run / re-run failed, live progress + tree
 │   ├── ChangesView.tsx   git status, comparison modes, side-by-side/inline diff
-│   └── HistoryView.tsx   commit log, per-commit diffs, branches, push/pull/fetch
+│   ├── HistoryView.tsx   commit log, per-commit diffs, branches, push/pull/fetch
+│   └── InspectView.tsx   the Objects tab: crash dumps, root picker, object tree
+│                         over the sidecar's console ([live inspection](live-inspection.md))
 ├── components/
 │   ├── OutputConsole.tsx xterm.js terminal: links, severity colours, search/filter,
 │   │                     copy-on-select, context menu with Copy diagnostics
 │   ├── TestTree.tsx      collapsible outcome tree with text/outcome filters
+│   ├── ObjectTree.tsx    inspected object graph: one distinct rendering per
+│                         ObjectValue, so "null" never looks like "unreadable"
 │   ├── DiffView.tsx      CodeMirror diff (side-by-side MergeView or unified),
 │   │                     per-line selection
 │   ├── ConfigEditor.tsx  RunConfig form (project, launch profile dropdown, args,
@@ -44,6 +48,17 @@ src/
     ├── api.ts            typed wrappers over every Tauri command
     └── types.ts          hand-written mirrors of the Rust model types
 ```
+
+## The one piece of cross-view state
+
+Views do not talk to each other. There is exactly one exception, and it is worth knowing why it was allowed.
+
+A crashed run and a failed test both want an **Inspect** button, and the view that serves it — `InspectView` — is their sibling, not their child. So `App` holds a single `inspectRequest: InspectRequest | null`: the target, the root, and a `reason` string shown above the resulting capture so the user knows what they clicked. `RunView` and `TestsView` receive `onInspect`, which sets it and switches to the Objects tab in one call; `InspectView` takes it as `pendingRequest`, runs the capture, and calls `onRequestConsumed` so a tab switch does not fire the same capture twice.
+
+Two deliberate details:
+
+- The type is `App`'s own, not the backend's `InspectRequest` from `ipc/types.ts`. Caps and suspension are the backend's business — all a red test knows is what to look at and why.
+- It is held **only until consumed**. Nothing accumulates, and no view reads another view's state; the request is a message that happens to be routed through the common parent because that is the only place both siblings can see.
 
 ## The IPC layer
 

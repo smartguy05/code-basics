@@ -1,0 +1,995 @@
+{
+ "schemaVersion": 1,
+ "snapshotId": "snap-recorded",
+ "capturedAt": "2026-08-06T19:39:24.7848285Z",
+ "target": {
+  "target": {
+   "kind": "dump",
+   "path": "C:\\src\\quotes\\.code-basics\\dumps\\Crasher.exe_25764_1786044924.dmp"
+  },
+  "bitness": "x64",
+  "runtimeVersion": "10.0.726.21808",
+  "processName": "C:\\Users\\ANTHON~1\\AppData\\Local\\Temp\\cbdumps\\Crasher.exe_25764_1786044924.dmp"
+ },
+ "caps": {
+  "maxDepth": 5,
+  "maxChildren": 100,
+  "maxStringLength": 512,
+  "maxNodes": 5000
+ },
+ "nodes": [
+  {
+   "id": "thread6852",
+   "label": "exception on thread 6852",
+   "typeName": "System.NullReferenceException",
+   "kind": "reference",
+   "address": "0x1b053cfde20",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852.stackTrace",
+   "parent": "thread6852",
+   "label": "stack trace",
+   "kind": "primitive",
+   "text": "2 frames",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852.stackTrace[0]",
+   "parent": "thread6852.stackTrace",
+   "label": "#0",
+   "kind": "text",
+   "text": "Crasher.Program.Boom",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852.stackTrace[1]",
+   "parent": "thread6852.stackTrace",
+   "label": "#1",
+   "kind": "text",
+   "text": "Crasher.Program.Main",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._exceptionMethod",
+   "parent": "thread6852",
+   "label": "_exceptionMethod",
+   "typeName": "System.Reflection.MethodBase",
+   "kind": "null",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._message",
+   "parent": "thread6852",
+   "label": "_message",
+   "typeName": "System.String",
+   "kind": "text",
+   "text": "Object reference not set to an instance of an object.",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._data",
+   "parent": "thread6852",
+   "label": "_data",
+   "typeName": "System.Collections.IDictionary",
+   "kind": "null",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._innerException",
+   "parent": "thread6852",
+   "label": "_innerException",
+   "typeName": "System.Exception",
+   "kind": "null",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._helpURL",
+   "parent": "thread6852",
+   "label": "_helpURL",
+   "typeName": "System.String",
+   "kind": "null",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace",
+   "parent": "thread6852",
+   "label": "_stackTrace",
+   "typeName": "System.SByte[]",
+   "kind": "reference",
+   "address": "0x1b053cff158",
+   "expandable": false,
+   "truncated": false,
+   "childCountTotal": 80
+  },
+  {
+   "id": "thread6852._watsonBuckets",
+   "parent": "thread6852",
+   "label": "_watsonBuckets",
+   "typeName": "System.Byte[]",
+   "kind": "text",
+   "text": "byte[5616] 01 00 00 00 43 00 4c 00 52 00 32 00 30 00 72 00 33 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+   "address": "0x1b053cff1c0",
+   "expandable": false,
+   "truncated": true,
+   "childCountTotal": 5616
+  },
+  {
+   "id": "thread6852._stackTraceString",
+   "parent": "thread6852",
+   "label": "_stackTraceString",
+   "typeName": "System.String",
+   "kind": "null",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._remoteStackTraceString",
+   "parent": "thread6852",
+   "label": "_remoteStackTraceString",
+   "typeName": "System.String",
+   "kind": "null",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._source",
+   "parent": "thread6852",
+   "label": "_source",
+   "typeName": "System.String",
+   "kind": "null",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._ipForWatsonBuckets",
+   "parent": "thread6852",
+   "label": "_ipForWatsonBuckets",
+   "typeName": "System.UIntPtr",
+   "kind": "primitive",
+   "text": "0x0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._xptrs",
+   "parent": "thread6852",
+   "label": "_xptrs",
+   "typeName": "System.IntPtr",
+   "kind": "primitive",
+   "text": "0x0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._xcode",
+   "parent": "thread6852",
+   "label": "_xcode",
+   "typeName": "System.Int32",
+   "kind": "primitive",
+   "text": "-532462766",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._HResult",
+   "parent": "thread6852",
+   "label": "_HResult",
+   "typeName": "System.Int32",
+   "kind": "primitive",
+   "text": "-2147467261",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[0]",
+   "parent": "thread6852._stackTrace",
+   "label": "[0]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "2",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[1]",
+   "parent": "thread6852._stackTrace",
+   "label": "[1]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[2]",
+   "parent": "thread6852._stackTrace",
+   "label": "[2]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[3]",
+   "parent": "thread6852._stackTrace",
+   "label": "[3]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[4]",
+   "parent": "thread6852._stackTrace",
+   "label": "[4]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[5]",
+   "parent": "thread6852._stackTrace",
+   "label": "[5]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[6]",
+   "parent": "thread6852._stackTrace",
+   "label": "[6]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[7]",
+   "parent": "thread6852._stackTrace",
+   "label": "[7]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[8]",
+   "parent": "thread6852._stackTrace",
+   "label": "[8]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-112",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[9]",
+   "parent": "thread6852._stackTrace",
+   "label": "[9]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-31",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[10]",
+   "parent": "thread6852._stackTrace",
+   "label": "[10]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-25",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[11]",
+   "parent": "thread6852._stackTrace",
+   "label": "[11]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "36",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[12]",
+   "parent": "thread6852._stackTrace",
+   "label": "[12]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-80",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[13]",
+   "parent": "thread6852._stackTrace",
+   "label": "[13]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "1",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[14]",
+   "parent": "thread6852._stackTrace",
+   "label": "[14]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[15]",
+   "parent": "thread6852._stackTrace",
+   "label": "[15]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[16]",
+   "parent": "thread6852._stackTrace",
+   "label": "[16]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "124",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[17]",
+   "parent": "thread6852._stackTrace",
+   "label": "[17]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "86",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[18]",
+   "parent": "thread6852._stackTrace",
+   "label": "[18]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "54",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[19]",
+   "parent": "thread6852._stackTrace",
+   "label": "[19]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "66",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[20]",
+   "parent": "thread6852._stackTrace",
+   "label": "[20]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-8",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[21]",
+   "parent": "thread6852._stackTrace",
+   "label": "[21]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "127",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[22]",
+   "parent": "thread6852._stackTrace",
+   "label": "[22]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[23]",
+   "parent": "thread6852._stackTrace",
+   "label": "[23]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[24]",
+   "parent": "thread6852._stackTrace",
+   "label": "[24]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-64",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[25]",
+   "parent": "thread6852._stackTrace",
+   "label": "[25]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-26",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[26]",
+   "parent": "thread6852._stackTrace",
+   "label": "[26]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-41",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[27]",
+   "parent": "thread6852._stackTrace",
+   "label": "[27]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "95",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[28]",
+   "parent": "thread6852._stackTrace",
+   "label": "[28]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "59",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[29]",
+   "parent": "thread6852._stackTrace",
+   "label": "[29]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[30]",
+   "parent": "thread6852._stackTrace",
+   "label": "[30]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[31]",
+   "parent": "thread6852._stackTrace",
+   "label": "[31]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[32]",
+   "parent": "thread6852._stackTrace",
+   "label": "[32]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-48",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[33]",
+   "parent": "thread6852._stackTrace",
+   "label": "[33]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-24",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[34]",
+   "parent": "thread6852._stackTrace",
+   "label": "[34]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "82",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[35]",
+   "parent": "thread6852._stackTrace",
+   "label": "[35]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "66",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[36]",
+   "parent": "thread6852._stackTrace",
+   "label": "[36]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-8",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[37]",
+   "parent": "thread6852._stackTrace",
+   "label": "[37]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "127",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[38]",
+   "parent": "thread6852._stackTrace",
+   "label": "[38]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[39]",
+   "parent": "thread6852._stackTrace",
+   "label": "[39]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[40]",
+   "parent": "thread6852._stackTrace",
+   "label": "[40]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[41]",
+   "parent": "thread6852._stackTrace",
+   "label": "[41]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[42]",
+   "parent": "thread6852._stackTrace",
+   "label": "[42]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[43]",
+   "parent": "thread6852._stackTrace",
+   "label": "[43]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[44]",
+   "parent": "thread6852._stackTrace",
+   "label": "[44]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "59",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[45]",
+   "parent": "thread6852._stackTrace",
+   "label": "[45]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[46]",
+   "parent": "thread6852._stackTrace",
+   "label": "[46]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[47]",
+   "parent": "thread6852._stackTrace",
+   "label": "[47]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[48]",
+   "parent": "thread6852._stackTrace",
+   "label": "[48]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "48",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[49]",
+   "parent": "thread6852._stackTrace",
+   "label": "[49]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "77",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[50]",
+   "parent": "thread6852._stackTrace",
+   "label": "[50]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "54",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[51]",
+   "parent": "thread6852._stackTrace",
+   "label": "[51]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "66",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[52]",
+   "parent": "thread6852._stackTrace",
+   "label": "[52]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-8",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[53]",
+   "parent": "thread6852._stackTrace",
+   "label": "[53]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "127",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[54]",
+   "parent": "thread6852._stackTrace",
+   "label": "[54]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[55]",
+   "parent": "thread6852._stackTrace",
+   "label": "[55]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[56]",
+   "parent": "thread6852._stackTrace",
+   "label": "[56]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "16",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[57]",
+   "parent": "thread6852._stackTrace",
+   "label": "[57]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-25",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[58]",
+   "parent": "thread6852._stackTrace",
+   "label": "[58]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-41",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[59]",
+   "parent": "thread6852._stackTrace",
+   "label": "[59]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "95",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[60]",
+   "parent": "thread6852._stackTrace",
+   "label": "[60]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "59",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[61]",
+   "parent": "thread6852._stackTrace",
+   "label": "[61]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[62]",
+   "parent": "thread6852._stackTrace",
+   "label": "[62]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[63]",
+   "parent": "thread6852._stackTrace",
+   "label": "[63]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[64]",
+   "parent": "thread6852._stackTrace",
+   "label": "[64]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-80",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[65]",
+   "parent": "thread6852._stackTrace",
+   "label": "[65]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-24",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[66]",
+   "parent": "thread6852._stackTrace",
+   "label": "[66]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "82",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[67]",
+   "parent": "thread6852._stackTrace",
+   "label": "[67]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "66",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[68]",
+   "parent": "thread6852._stackTrace",
+   "label": "[68]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "-8",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[69]",
+   "parent": "thread6852._stackTrace",
+   "label": "[69]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "127",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[70]",
+   "parent": "thread6852._stackTrace",
+   "label": "[70]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[71]",
+   "parent": "thread6852._stackTrace",
+   "label": "[71]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[72]",
+   "parent": "thread6852._stackTrace",
+   "label": "[72]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "2",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[73]",
+   "parent": "thread6852._stackTrace",
+   "label": "[73]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[74]",
+   "parent": "thread6852._stackTrace",
+   "label": "[74]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[75]",
+   "parent": "thread6852._stackTrace",
+   "label": "[75]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[76]",
+   "parent": "thread6852._stackTrace",
+   "label": "[76]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "59",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[77]",
+   "parent": "thread6852._stackTrace",
+   "label": "[77]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[78]",
+   "parent": "thread6852._stackTrace",
+   "label": "[78]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  },
+  {
+   "id": "thread6852._stackTrace[79]",
+   "parent": "thread6852._stackTrace",
+   "label": "[79]",
+   "typeName": "System.SByte",
+   "kind": "primitive",
+   "text": "0",
+   "expandable": false,
+   "truncated": false
+  }
+ ],
+ "warnings": []
+}

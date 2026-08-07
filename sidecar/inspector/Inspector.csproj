@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The object inspector code-basics runs as a one-shot child process.
+
+    It exists because walking a .NET heap means ClrMD, ClrMD is a .NET library,
+    and code-basics is Rust. It reads a request file, writes a result file, and
+    exits — see crates/core/src/inspect/mod.rs for why that shape rather than a
+    long-lived session.
+
+    Deliberately framework-dependent: every machine that would run a .NET dev
+    tool already has the runtime, and a self-contained publish is ~70 MB per
+    architecture against roughly 1 MB for this.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>cb-inspector</AssemblyName>
+    <RootNamespace>CodeBasics.Inspector</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- The result file is the output; nothing should compete with it. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Diagnostics.Runtime" Version="4.0.732401" />
+  </ItemGroup>
+
+</Project>

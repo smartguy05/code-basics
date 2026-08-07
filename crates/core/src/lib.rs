@@ -12,10 +12,8 @@ pub mod config;
 pub mod files;
 pub mod git;
 pub mod importers;
+pub mod inspect;
 pub mod intents;
-
-
-
 pub mod model;
 pub mod process;
 pub mod secrets;

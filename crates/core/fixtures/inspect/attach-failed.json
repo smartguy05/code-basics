@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "snapshotId": "snap-none",
+  "capturedAt": "2026-08-06T14:40:11.0020000Z",
+  "target": {
+    "target": { "kind": "live", "pid": 18244 },
+    "processName": "Quotes.Api"
+  },
+  "caps": { "maxDepth": 5, "maxChildren": 100, "maxStringLength": 512, "maxNodes": 5000 },
+  "nodes": [],
+  "failure": "the target process is 32-bit and this inspector is 64-bit; code-basics will retry with the 32-bit inspector"
+}

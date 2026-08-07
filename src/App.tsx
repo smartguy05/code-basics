@@ -3,18 +3,35 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { BranchMenu } from "./components/BranchMenu";
 import { ChangesView } from "./views/ChangesView";
 import { HistoryView } from "./views/HistoryView";
+import { InspectView } from "./views/InspectView";
 import { RunView } from "./views/RunView";
 import { TestsView } from "./views/TestsView";
 import * as api from "./ipc/api";
-import type { Workspace } from "./ipc/types";
+import type { InspectTarget, RootSpec, Workspace } from "./ipc/types";
 
-type Tab = "tests" | "run" | "changes" | "history";
+type Tab = "tests" | "run" | "changes" | "history" | "inspect";
+
+/**
+ * A jump into the Objects tab raised from somewhere else in the app.
+ *
+ * This is the UI's request, not the wire request the sidecar reads (that is
+ * `InspectRequest` in `ipc/types.ts`): caps and suspension are the backend's
+ * business, and all a crashed run or a red test knows is what to look at and
+ * why.
+ */
+export interface InspectRequest {
+  target: InspectTarget;
+  root: RootSpec;
+  /** Shown above the capture so the user knows what they clicked. */
+  reason: string;
+}
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "run", label: "Run" },
   { id: "tests", label: "Tests" },
   { id: "changes", label: "Changes" },
   { id: "history", label: "History" },
+  { id: "inspect", label: "Objects" },
 ];
 
 /** Workspaces the user has opened before, so reopening is one click. */
@@ -43,6 +60,18 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [recents, setRecents] = useState<string[]>(loadRecents);
   const [loading, setLoading] = useState(true);
+  /**
+   * A contextual Inspect click, held only until the Objects tab has consumed
+   * it. It lives here because the views that raise one and the view that
+   * serves it are siblings.
+   */
+  const [inspectRequest, setInspectRequest] = useState<InspectRequest | null>(null);
+
+  /** Send the user to the Objects tab with something already chosen to read. */
+  function requestInspect(request: InspectRequest) {
+    setInspectRequest(request);
+    setTab("inspect");
+  }
 
   // The backend keeps the open workspace across a window reload.
   useEffect(() => {
@@ -173,14 +202,27 @@ export function App() {
 
       {error && <div className="error">{error}</div>}
 
-      {/* Run and Tests stay mounted while hidden: they own running processes
-          and their consoles, which must survive a tab switch. Changes and
-          History re-mount so they re-read git state on every visit. */}
+      {/* Run, Tests and Objects stay mounted while hidden: they own running
+          processes and their consoles, which must survive a tab switch.
+          Changes and History re-mount so they re-read git state on every
+          visit. */}
       <div className="body" hidden={tab !== "run"}>
-        <RunView workspace={workspace} onWorkspaceChange={setWorkspace} />
+        <RunView
+          workspace={workspace}
+          onWorkspaceChange={setWorkspace}
+          onInspect={requestInspect}
+        />
       </div>
       <div className="body" hidden={tab !== "tests"}>
-        <TestsView workspace={workspace} key={workspace.root} />
+        <TestsView workspace={workspace} key={workspace.root} onInspect={requestInspect} />
+      </div>
+      <div className="body" hidden={tab !== "inspect"}>
+        <InspectView
+          workspace={workspace}
+          key={workspace.root}
+          pendingRequest={inspectRequest}
+          onRequestConsumed={() => setInspectRequest(null)}
+        />
       </div>
       {tab === "changes" && (
         <div className="body">

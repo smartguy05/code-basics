@@ -10,10 +10,12 @@ All per-workspace state lives in one directory at the workspace root:
 ├── adapters/*.toml   declarative ecosystem adapters — check these in
 ├── changelists.json  your change groups — local, gitignored
 ├── intents/          what a coding agent said it was doing — local, gitignored
+├── inspect/          one directory per object capture (request/result) — local, gitignored
+├── dumps/            crash dumps: process memory — local, gitignored, pruned
 └── results/          test report files written by runners — gitignore this
 ```
 
-The app writes `.code-basics/.gitignore` covering everything transient (`results/`, `changelists.json`, `intents/`), appending entries it is missing rather than rewriting the file, so a workspace created before an entry existed still picks it up and hand-written rules survive. The scanner never descends into `.code-basics` itself.
+The app writes `.code-basics/.gitignore` covering everything transient (`results/`, `changelists.json`, `intents/`, `inspect/`, `dumps/`), appending entries it is missing rather than rewriting the file, so a workspace created before an entry existed still picks it up and hand-written rules survive. The scanner never descends into `.code-basics` itself.
 
 ## Agent intent (`intents/`)
 
@@ -31,6 +33,20 @@ intents/
 - Safe to delete at any time; nothing else reads it.
 
 Hook configuration is written **outside** this directory, into the agent's own files (`.claude/settings.json`, `.codex/hooks.json`, or their user-level equivalents). Installation is additive and backed up — see the guide.
+
+## Object captures (`inspect/`) and crash dumps (`dumps/`)
+
+Written by the Objects tab and by dump-capturing runs. Both are gitignored and safe to delete at any time. Full walkthrough: [Inspecting objects](../guides/inspecting-objects.md).
+
+```
+inspect/<session>/request.json   what was asked for
+inspect/<session>/result.json    what the cb-inspector sidecar answered
+dumps/<exe>_<pid>_<unix>.dmp     a heap dump the .NET runtime wrote on a crash
+```
+
+- **Sessions are pruned to the newest 20.** Dumps are pruned by *both* `keepDumps` and `maxDumpMegabytes`, before every .NET run as well as after every capture, so a workspace that crashes repeatedly without ever being inspected is still bounded.
+- **The dump filename is the only attribution there is.** `%e` in the runtime's template expands to the executable name *including its extension* (`Crasher.exe_25764_1786044924.dmp`). The `DOTNET_Dbg*` variables are inherited by the whole process tree, so one `dotnet run` arms its build host too — the name is what tells those apart. Nothing matches a dump to a run automatically.
+- Only files matching that exact pattern are ever deleted; anything else in the directory is left alone. Dumps VSTest's blame collector writes into `results/` under its own names are covered by the same byte budget, since they exist only because this app passed `--blame-crash-collect-always`.
 
 ## Change groups (`changelists.json`)
 
@@ -54,7 +70,8 @@ Named buckets for working-tree files, in the spirit of JetBrains' changelists �
   "configs": [ /* RunConfig objects */ ],
   "favorites": [ /* config ids, optional */ ],
   "order": [ /* config ids, optional */ ],
-  "msbuildEvaluation": false
+  "msbuildEvaluation": false,
+  "inspector": { /* optional, see below */ }
 }
 ```
 
@@ -63,6 +80,26 @@ Named buckets for working-tree files, in the spirit of JetBrains' changelists �
 - Only user-created and imported configurations are written here. Auto-detected ones are re-derived on every scan, which keeps the file small and lets detection keep working as projects change. On open/rescan, saved configs are merged over detected ones.
 - `favorites` holds starred config ids; they sort before everything else in the UI. `order` is the user's preferred ordering — ids listed there sort by position, anything unlisted follows in name order. Both keys are omitted while empty.
 - `msbuildEvaluation` opts this workspace into evaluating .NET projects with `dotnet msbuild -getProperty` during a scan instead of only reading them as XML. Off by default and omitted while false. Turn it on when projects set properties behind MSBuild `Condition`s or in imported `.props` files, which the XML scan cannot see; the cost is one `dotnet` process per project at scan time, and a machine with no SDK simply falls back to the XML scan.
+
+### `inspector`
+
+Per-workspace settings for the object inspector. The whole section is optional and is omitted from the file unless the user configures something — saving a run configuration never introduces it.
+
+```json
+"inspector": {
+  "captureDumps": false,
+  "caps": { "maxDepth": 5, "maxChildren": 100, "maxStringLength": 512, "maxNodes": 5000 },
+  "keepDumps": 3,
+  "maxDumpMegabytes": 2048,
+  "env": { }
+}
+```
+
+- `captureDumps` opts this workspace into writing a crash dump when a run crashes. **Off unless explicitly enabled**, and treated as off whenever the section is absent. A dump is a verbatim copy of process memory — connection strings, tokens, whatever the application had in flight — so nothing infers this setting from anything else. Dumps land in a gitignored directory and never reach the shared history. **This file is checked in**, so enabling it here enables it for everyone who works in the repository; every armed run therefore carries a warning saying so in the Run tab.
+- `caps` bounds how much of an object graph a capture walks. Each key falls back to its built-in default (shown above) on its own, so writing only `{ "maxDepth": 2 }` is valid — a partly written section must never be the reason a workspace will not open.
+- `keepDumps` defaults to `3` — enough to compare a repeated crash against its two predecessors.
+- `maxDumpMegabytes` defaults to `2048`. This is the limit that actually binds: a dump of a trivial console app measured 9.3 MB and a real application's runs to hundreds of megabytes, so bytes run out long before the file count does. It is applied before every .NET run as well as after every capture, so a workspace that crashes repeatedly and is never inspected is still bounded, and it covers both the dumps in `.code-basics/dumps/` and the ones VSTest's blame collector leaves in `.code-basics/results/`.
+- `env` adds environment variables applied only to dump-capturing runs, for the rare project that needs a different dump type. They layer over the built-in `DOTNET_Dbg*` defaults and under the run configuration's own environment.
 
 ### Detected .NET configurations
 

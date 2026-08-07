@@ -148,7 +148,11 @@ pub fn parse_project_file(xml: &str) -> ProjectFile {
 
 fn attr_value(e: &quick_xml::events::BytesStart, name: &str) -> Option<String> {
     e.attributes().flatten().find_map(|a| {
-        if a.key.local_name().as_ref().eq_ignore_ascii_case(name.as_bytes()) {
+        if a.key
+            .local_name()
+            .as_ref()
+            .eq_ignore_ascii_case(name.as_bytes())
+        {
             a.unescape_value().ok().map(|v| v.into_owned())
         } else {
             None
@@ -227,11 +231,13 @@ pub fn parse_dotnet_config(content: &str) -> Option<ConfiguredRunner> {
             if let Some((key, value)) = line.split_once('=') {
                 if key.trim().eq_ignore_ascii_case("name") {
                     let value = value.trim().trim_matches(['"', '\'']);
-                    return Some(if value.eq_ignore_ascii_case("Microsoft.Testing.Platform") {
-                        ConfiguredRunner::MicrosoftTestingPlatform
-                    } else {
-                        ConfiguredRunner::VsTest
-                    });
+                    return Some(
+                        if value.eq_ignore_ascii_case("Microsoft.Testing.Platform") {
+                            ConfiguredRunner::MicrosoftTestingPlatform
+                        } else {
+                            ConfiguredRunner::VsTest
+                        },
+                    );
                 }
             }
         }
@@ -310,10 +316,13 @@ pub fn classify_runner(
     }
 
     // MTP extensions present *and* no VSTest host: only MTP can run this.
-    let has_mtp_packages = layered
+    let has_mtp_packages = layered.iter().any(|p| {
+        p.references_prefix("Microsoft.Testing.Platform")
+            || p.references_prefix("Microsoft.Testing.Extensions")
+    });
+    let has_vstest_host = layered
         .iter()
-        .any(|p| p.references_prefix("Microsoft.Testing.Platform") || p.references_prefix("Microsoft.Testing.Extensions"));
-    let has_vstest_host = layered.iter().any(|p| p.references("Microsoft.NET.Test.Sdk"));
+        .any(|p| p.references("Microsoft.NET.Test.Sdk"));
     if has_mtp_packages && !has_vstest_host {
         return TestRunner::MicrosoftTestingPlatform;
     }
@@ -327,14 +336,12 @@ pub fn classify_runner(
 /// `--report-trx` but produces nothing, so this is worth warning about before
 /// the run rather than diagnosing afterwards.
 pub fn has_trx_extension(project: &ProjectFile, inherited: &[ProjectFile]) -> bool {
-    std::iter::once(project)
-        .chain(inherited.iter())
-        .any(|p| {
-            p.references_prefix("Microsoft.Testing.Extensions.TrxReport")
+    std::iter::once(project).chain(inherited.iter()).any(|p| {
+        p.references_prefix("Microsoft.Testing.Extensions.TrxReport")
                 // xunit.v3 and TUnit bundle TRX reporting in their main package.
                 || p.references_prefix("xunit.v3")
                 || p.references_prefix("TUnit")
-        })
+    })
 }
 
 /// Classify a project, layering `Directory.Build.props` underneath it.
@@ -342,7 +349,11 @@ pub fn has_trx_extension(project: &ProjectFile, inherited: &[ProjectFile]) -> bo
 /// `OutputType` is frequently set once in a `Directory.Build.props` for a whole
 /// folder of tools, so the inherited files are consulted before falling back to
 /// SDK defaults.
-pub fn project_kind(project: &ProjectFile, inherited: &[ProjectFile], is_test: bool) -> ProjectKind {
+pub fn project_kind(
+    project: &ProjectFile,
+    inherited: &[ProjectFile],
+    is_test: bool,
+) -> ProjectKind {
     if is_test {
         return ProjectKind::Test;
     }
@@ -393,7 +404,9 @@ fn sdk_defaults_to_executable(sdk: &str) -> bool {
     let sdk = sdk.to_ascii_lowercase();
     matches!(
         sdk.as_str(),
-        "microsoft.net.sdk.web" | "microsoft.net.sdk.worker" | "microsoft.net.sdk.blazorwebassembly"
+        "microsoft.net.sdk.web"
+            | "microsoft.net.sdk.worker"
+            | "microsoft.net.sdk.blazorwebassembly"
     )
 }
 
@@ -562,12 +575,64 @@ pub struct BuildContext<'a> {
     pub has_launch_settings: bool,
     /// Fully qualified names to restrict the run to, for "re-run failed".
     pub filter: Option<Vec<String>>,
+    /// Where the runtime should write crash dumps, when the workspace has
+    /// opted into capturing them. `None` — the default — arms nothing.
+    ///
+    /// This lives here rather than in [`crate::process`] alongside the colour
+    /// defaults because it is neither ecosystem-agnostic nor cheap: only .NET
+    /// understands `DOTNET_Dbg*`, the path is per-workspace state the
+    /// supervisor has no business knowing, and a single crash writes hundreds
+    /// of megabytes.
+    pub dumps_dir: Option<&'a Path>,
+    /// `inspector.env` from the workspace configuration: extra environment the
+    /// workspace asked to apply to dump-capturing runs, typically to change
+    /// `DOTNET_DbgMiniDumpType`. Ignored unless `dumps_dir` is set, because it
+    /// exists to tune a capture and there is no capture to tune otherwise.
+    pub dump_env: Option<&'a BTreeMap<String, String>>,
+}
+
+/// What a run is told when this workspace has opted into crash dumps.
+///
+/// `.code-basics/config.json` is shared through the repository, so the opt-in
+/// is one person's edit and everyone else's runs. Without this the first a
+/// teammate knows about it is hundreds of megabytes of their process memory on
+/// disk, written by a tab they never opened.
+const CAPTURE_ARMED_WARNING: &str =
+    "Crash dump capture is on for this workspace (inspector.captureDumps in \
+     .code-basics/config.json, which is shared through the repository). If this process dies \
+     from an unhandled exception, the runtime writes a verbatim copy of its memory — \
+     connection strings, tokens, whatever was in flight — into .code-basics/dumps/. Expect \
+     hundreds of megabytes per crash.";
+
+/// Layer the crash-dump variables **underneath** a configuration's own
+/// environment.
+///
+/// The same precedence [`crate::process`] uses for its colour defaults: a user
+/// who sets `DOTNET_DbgMiniDumpType` themselves keeps it. `extend` overwrites,
+/// so inserting the configuration's entries last is what makes the user win.
+///
+/// Three layers, weakest first: the built-in `DOTNET_Dbg*` defaults, then the
+/// workspace's `inspector.env` (which exists precisely to change one of them),
+/// then the run configuration's own environment.
+fn dump_layered_env(config: &RunConfig, ctx: &BuildContext) -> BTreeMap<String, String> {
+    let Some(dir) = ctx.dumps_dir else {
+        return config.env.clone();
+    };
+
+    let mut env = crate::inspect::dumps::dump_env(dir);
+    if let Some(workspace) = ctx.dump_env {
+        env.extend(workspace.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+    env.extend(config.env.iter().map(|(k, v)| (k.clone(), v.clone())));
+    env
 }
 
 /// Build the `dotnet test` command line for a test configuration.
 pub fn test_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
     let runner = ctx.runner.unwrap_or(TestRunner::VsTest);
-    let report_path = ctx.results_dir.join(format!("{}.trx", sanitise(&config.id)));
+    let report_path = ctx
+        .results_dir
+        .join(format!("{}.trx", sanitise(&config.id)));
     let report_name = report_path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -575,6 +640,10 @@ pub fn test_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
 
     let mut args = vec!["test".to_string()];
     let mut warnings = Vec::new();
+
+    if ctx.dumps_dir.is_some() {
+        warnings.push(CAPTURE_ARMED_WARNING.to_string());
+    }
 
     if let Some(project) = &config.project {
         args.push(ctx.workspace_root.join(project).display().to_string());
@@ -625,6 +694,21 @@ pub fn test_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
                     );
                 }
             }
+
+            // MTP ignores every `--blame-*` option, so there is nothing to add
+            // to the command line here. Its crash dumps come from a package
+            // the project has to reference, which is the user's edit to make,
+            // not ours.
+            if ctx.dumps_dir.is_some() {
+                warnings.push(
+                    "Crash dump capture is on, but this project runs on \
+                     Microsoft.Testing.Platform, which ignores VSTest's --blame options. \
+                     To capture a dump when the test host crashes, add the \
+                     Microsoft.Testing.Extensions.CrashDump package to the project and \
+                     pass --crashdump."
+                        .to_string(),
+                );
+            }
         }
         _ => {
             args.push("--logger".into());
@@ -636,6 +720,29 @@ pub fn test_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
             args.push("console;verbosity=normal".into());
             args.push("--results-directory".into());
             args.push(ctx.results_dir.display().to_string());
+
+            // The `DOTNET_Dbg*` variables only fire on an unhandled crash, and
+            // a failing assertion is not one — the test host exits tidily, so
+            // the run that most needs a dump produces none. Blame's crash
+            // collector covers exactly that gap: it "collects a crash dump on
+            // expected as well as unexpected test host exit".
+            if ctx.dumps_dir.is_some() {
+                args.push("--blame-crash-collect-always".into());
+                // Blame writes its dump into `--results-directory`, under a
+                // name of its own, so it never appears in the Objects tab.
+                // Saying so is the difference between a user looking for it and
+                // a user concluding the capture failed. It is still pruned:
+                // `inspect::session` sweeps that directory under the same byte
+                // budget.
+                warnings.push(
+                    "Crash dump capture is on, so this run also passes VSTest's \
+                     --blame-crash-collect-always, which writes a dump when the test host \
+                     exits for any reason. That dump lands in .code-basics/results/ under \
+                     the collector's own name, not in .code-basics/dumps/, so it is not \
+                     listed in the Objects tab — open it with your own debugger."
+                        .to_string(),
+                );
+            }
 
             if let Some(names) = &ctx.filter {
                 if !names.is_empty() {
@@ -652,7 +759,7 @@ pub fn test_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
         program: "dotnet".into(),
         args,
         cwd: resolve_cwd(config, ctx.workspace_root),
-        env: config.env.clone(),
+        env: dump_layered_env(config, ctx),
         report: Some(ReportSpec {
             path: report_path,
             format: ReportFormat::Trx,
@@ -665,6 +772,10 @@ pub fn test_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
 pub fn run_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
     let mut args = vec!["run".to_string()];
     let mut warnings = Vec::new();
+
+    if ctx.dumps_dir.is_some() {
+        warnings.push(CAPTURE_ARMED_WARNING.to_string());
+    }
 
     if let Some(project) = &config.project {
         args.push("--project".into());
@@ -721,7 +832,7 @@ pub fn run_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
         program: "dotnet".into(),
         args,
         cwd: resolve_cwd(config, ctx.workspace_root),
-        env: config.env.clone(),
+        env: dump_layered_env(config, ctx),
         report: None,
         warnings,
     }
@@ -809,7 +920,13 @@ fn resolve_cwd(config: &RunConfig, workspace_root: &Path) -> PathBuf {
 /// Make an id safe to use as a file name.
 fn sanitise(id: &str) -> String {
     id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 

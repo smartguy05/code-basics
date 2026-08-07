@@ -2,14 +2,19 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  AttachableList,
   Branch,
   BuildAction,
   Changelists,
   Commit,
   ComparisonMode,
   DirEntry,
+  ElidedReason,
   FileContents,
   FileDiff,
+  InspectGraph,
+  InspectStatus,
+  InspectTarget,
   InstallPlan,
   InstallScope,
   IntentGroup,
@@ -21,7 +26,9 @@ import type {
   ProviderId,
   ProviderStatus,
   RiderImportPreview,
+  RootSpec,
   RunConfig,
+  RunDump,
   TestRunOutcome,
   WorkingStatus,
   Workspace,
@@ -285,6 +292,69 @@ export const importIntentHistory = () =>
   invoke<number>("import_intent_history");
 
 export const clearIntentHistory = () => invoke<void>("clear_intent_history");
+
+// ---------------------------------------------------------------------------
+// Object inspection
+// ---------------------------------------------------------------------------
+
+/** Whether the inspector can run here, and which dumps are on disk. */
+export const inspectStatus = () => invoke<InspectStatus>("inspect_status");
+
+/**
+ * Capture an object graph, streaming the inspector's own output to `onEvent`.
+ *
+ * Expanding past a cap is this same call with an `address` root: it is a fresh
+ * read of the target, and the graph it returns carries a new `snapshotId` for
+ * exactly that reason.
+ *
+ * `widen` names the cap that stopped the previous read of that branch, and the
+ * backend raises it for this one. Passing `null` re-reads under the same
+ * limits, which for a capped branch returns the identical truncation — so an
+ * expand always passes the reason it is expanding.
+ */
+export function inspectCapture(
+  target: InspectTarget,
+  root: RootSpec,
+  widen: ElidedReason | null,
+  onEvent: (event: ProcessEvent) => void,
+): Promise<InspectGraph> {
+  const channel = new Channel<ProcessEvent>();
+  channel.onmessage = onEvent;
+  return invoke<InspectGraph>("inspect_capture", {
+    target,
+    root,
+    widen,
+    channel,
+  });
+}
+
+/**
+ * Every .NET process on this machine that can be attached to, each labelled
+ * with how it was linked to a run configuration.
+ *
+ * An empty `processes` is a normal answer, not an error. A rejection means the
+ * list could not be read at all, which is a different thing and must be shown
+ * as one; `warnings` sits between the two — a real list that is missing the
+ * evidence attribution depends on.
+ */
+export const inspectAttachable = () => invoke<AttachableList>("inspect_attachable");
+
+/**
+ * The dump a finished run may have written, and whether it is certainly that
+ * run's.
+ *
+ * The attribution rule lives in the backend deliberately: with two
+ * configurations up, the newest dump since a run started belongs to whichever
+ * of them crashed last, so only a matching pid is evidence. `certain: false`
+ * means the dump may be offered but must not be called this run's crash.
+ */
+export const inspectRunDump = (pid: number | null, startedAt: number) =>
+  invoke<RunDump | null>("inspect_run_dump", { pid, startedAt });
+
+/** The most recent capture, so a tab switch does not discard it. */
+export const inspectLast = () => invoke<InspectGraph | null>("inspect_last");
+
+export const inspectClear = () => invoke<void>("inspect_clear");
 
 /** Tauri returns command errors as plain strings. */
 export function errorMessage(error: unknown): string {

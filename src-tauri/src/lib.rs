@@ -12,6 +12,7 @@ mod commands {
     pub mod changelists;
     pub mod files;
     pub mod git;
+    pub mod inspect;
     pub mod intents;
     pub mod run;
     pub mod secrets;
@@ -122,6 +123,12 @@ pub fn run() {
             commands::intents::enable_intent_capture,
             commands::intents::import_intent_history,
             commands::intents::clear_intent_history,
+            commands::inspect::inspect_status,
+            commands::inspect::inspect_attachable,
+            commands::inspect::inspect_run_dump,
+            commands::inspect::inspect_capture,
+            commands::inspect::inspect_last,
+            commands::inspect::inspect_clear,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start code-basics");

@@ -14,6 +14,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 - [The Tauri shell (`src-tauri`)](architecture/tauri-shell.md) — state, adapter dispatch, and the command surface
 - [The frontend (`src/`)](architecture/frontend.md) — views, components, and IPC wrappers
 - [The IPC type contract](architecture/ipc-contract.md) — how Rust and TypeScript types stay in sync
+- [Live inspection](architecture/live-inspection.md) — the object-inspector sidecar, why it is one-shot, and why it is bundled
 
 ## Guides
 
@@ -21,6 +22,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 - [Adding an ecosystem](guides/adding-an-ecosystem.md) — declarative adapter manifests (pytest, cargo-nextest, ...)
 - [Rider import](guides/rider-import.md) — how JetBrains Rider run configurations are converted
 - [Agent intent capture](guides/agent-intent-capture.md) — grouping a diff into the decisions behind it, with Claude Code or Codex
+- [Inspecting objects](guides/inspecting-objects.md) — reading the real heap of a crash dump, and what crash dump capture costs
 
 ## Reference
 

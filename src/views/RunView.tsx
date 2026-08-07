@@ -12,10 +12,15 @@ import {
   type EnvironmentState,
 } from "../components/EnvironmentPicker";
 import * as api from "../ipc/api";
+import { preferApplicationProcess } from "./InspectView";
+import type { InspectRequest } from "../App";
 import type {
+  AttachableProcess,
   BuildAction,
+  InspectStatus,
   ProcessEvent,
   RunConfig,
+  RunDump,
   Workspace,
 } from "../ipc/types";
 
@@ -27,6 +32,32 @@ interface ConsoleSession {
 
 /** What a tab's status icon shows. */
 type SessionStatus = "running" | "ok" | "fail" | "stopped";
+
+/**
+ * What a session knows that the Inspect affordances need.
+ *
+ * The status icon is not enough: it collapses a crash and a failed spawn into
+ * the same red tick, and neither it nor `running` remembers the pid. All of
+ * this is per session, because two configurations can be up at once.
+ */
+interface SessionInspect {
+  /** Unix seconds. Nothing captured before this can belong to the session. */
+  startedAt: number;
+  /** The pid the process reported, when it reported one. */
+  pid?: number;
+  /** How it ended. Absent while it is still running. */
+  exit?: { code: number | null; success: boolean; cancelled: boolean };
+  /**
+   * A dump that turned up for this session, with whether it is certainly this
+   * session's. Attribution is the backend's call — see `inspect_run_dump`.
+   */
+  runDump?: RunDump;
+}
+
+/** How many instances a live type root asks for; the Objects tab's default. */
+const LIVE_TYPE_LIMIT = 50;
+
+const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 /**
  * Output lines that mean a long-running app is *up*, even though its process
@@ -79,9 +110,11 @@ function loadEnvironments(root: string): EnvironmentState {
 export function RunView({
   workspace,
   onWorkspaceChange,
+  onInspect,
 }: {
   workspace: Workspace;
   onWorkspaceChange: (workspace: Workspace) => void;
+  onInspect: (request: InspectRequest) => void;
 }) {
   const appConfigs = workspace.configs.filter((c) => c.kind === "app");
 
@@ -118,6 +151,13 @@ export function RunView({
   const [sessions, setSessions] = useState<ConsoleSession[]>([]);
   const [activeSession, setActiveSession] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
+
+  // What the Inspect affordances need, per session, plus whether the inspector
+  // can do anything at all in this workspace.
+  const [inspectInfo, setInspectInfo] = useState<Record<string, SessionInspect>>({});
+  const [inspectStatus, setInspectStatus] = useState<InspectStatus | null>(null);
+  const [attachable, setAttachable] = useState<AttachableProcess[]>([]);
+  const [liveType, setLiveType] = useState("");
 
   // The editor pane: files opened from the directory tree.
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
@@ -181,12 +221,98 @@ export function RunView({
   }
 
   /**
+   * Mirrors `inspectInfo` so the process-event callbacks can read it.
+   *
+   * Those callbacks are captured once, when the run starts, so the state they
+   * close over never sees the pid the `started` event itself recorded. The ref
+   * is the current value in both directions.
+   */
+  const inspectInfoRef = useRef<Record<string, SessionInspect>>({});
+
+  function writeInspect(next: Record<string, SessionInspect>) {
+    inspectInfoRef.current = next;
+    setInspectInfo(next);
+  }
+
+  function patchInspect(id: string, patch: Partial<SessionInspect>) {
+    const current = inspectInfoRef.current;
+    writeInspect({
+      ...current,
+      [id]: { startedAt: nowSeconds(), ...current[id], ...patch },
+    });
+  }
+
+  /**
+   * Look for a dump this session may have produced, or leave the affordance off.
+   *
+   * The runtime writes the dump as the process dies, so it can land a moment
+   * after the exit event arrives; one retry covers that without leaving a
+   * button that appears seconds late.
+   *
+   * Which dump — and crucially whether it is *this* session's — is decided by
+   * the backend, not here. The dump environment is inherited by every child
+   * process and applies to every other configuration running at the same time,
+   * so "the newest dump since this run started" is a dump, not this run's dump.
+   * Only a matching pid is evidence; anything else comes back with
+   * `certain: false` and is described as a candidate.
+   */
+  async function findDump(id: string, startedAt: number, pid?: number) {
+    for (const delay of [0, 1500]) {
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+
+      let status: InspectStatus;
+      try {
+        status = await api.inspectStatus();
+      } catch {
+        return;
+      }
+      setInspectStatus(status);
+      if (!status.available || !status.dumpCaptureEnabled) return;
+
+      try {
+        const found = await api.inspectRunDump(pid ?? null, startedAt);
+        if (found) {
+          patchInspect(id, { runDump: found });
+          return;
+        }
+      } catch {
+        return;
+      }
+    }
+  }
+
+  /**
+   * Re-read which of our processes are attachable, from the backend.
+   *
+   * The pid alone is not enough to offer an attach: `dotnet run` starts the
+   * application as a child, so the pid this view saw in the `started` event is
+   * the .NET CLI. The backend enumerates the machine's .NET processes and
+   * attributes each one to a configuration, which is the only place the child
+   * can be named; taking the offer from it means the button and the Objects
+   * tab agree about the pid, the process and the caveat on it.
+   *
+   * It costs a sidecar launch, so it is called when the set of running
+   * processes is known to have changed — a start, an exit, and mount — and
+   * never on a timer.
+   */
+  async function refreshAttachable() {
+    try {
+      setAttachable((await api.inspectAttachable()).processes);
+    } catch {
+      /* the Objects tab reports its own failures; nothing to offer here */
+    }
+  }
+
+  /**
    * One terminal per session, all kept mounted (hidden when inactive) so
    * switching tabs never loses scrollback. Events that arrive before a
    * freshly opened tab's terminal has mounted are queued and replayed.
    */
   const consoleRefs = useRef(new Map<string, ConsoleHandle>());
   const pendingEvents = useRef(new Map<string, ProcessEvent[]>());
+
+  /** Sessions whose "application is up" line has already prompted one re-read. */
+  const appUpSeen = useRef(new Set<string>());
 
   function registerConsole(id: string, handle: ConsoleHandle | null) {
     if (!handle) {
@@ -213,9 +339,28 @@ export function RunView({
 
     // Keep the tab's status icon in step with the process.
     switch (event.type) {
-      case "exited":
-        setStatus(id, event.cancelled ? "stopped" : event.success ? "ok" : "fail");
+      case "started":
+        if (event.pid != null) patchInspect(id, { pid: event.pid });
+        // The supervisor has just registered it, so the attach offer can now be
+        // taken from the backend rather than inferred from this event.
+        void refreshAttachable();
         break;
+      case "exited": {
+        setStatus(id, event.cancelled ? "stopped" : event.success ? "ok" : "fail");
+        const { code, success, cancelled } = event;
+        patchInspect(id, { exit: { code, success, cancelled } });
+        // Gone from the supervisor: an attach offer left standing would aim at
+        // a pid the operating system is free to hand to something else.
+        void refreshAttachable();
+        // A cancelled process was force-killed (`taskkill /T /F`), which never
+        // writes a dump, so there is nothing to go looking for. A build that
+        // fails is a compiler saying no, not a crash.
+        if (!success && !cancelled && !id.endsWith(":build")) {
+          const info = inspectInfoRef.current[id];
+          void findDump(id, info?.startedAt ?? nowSeconds(), info?.pid);
+        }
+        break;
+      }
       case "failed":
         setStatus(id, "fail");
         break;
@@ -225,6 +370,16 @@ export function RunView({
           setStatuses((previous) =>
             previous[id] === "running" ? { ...previous, [id]: "ok" } : previous,
           );
+          // `dotnet run` builds first and only then launches the application,
+          // so when the supervisor reported its pid the process holding the
+          // user's objects did not exist yet and could not be listed. This
+          // line is that application saying it is up — the one further moment
+          // the list is known to have changed. Once per session: the read runs
+          // the sidecar, and a server repeats these lines on every restart.
+          if (!appUpSeen.current.has(id)) {
+            appUpSeen.current.add(id);
+            void refreshAttachable();
+          }
         }
         break;
     }
@@ -241,6 +396,12 @@ export function RunView({
     setStatus(id, "running");
     consoleRefs.current.get(id)?.clear();
     pendingEvents.current.delete(id);
+    // A fresh run launches a fresh application: its "up" line must be allowed
+    // to prompt a re-read again.
+    appUpSeen.current.delete(id);
+    // A new run of the same configuration: the previous run's pid, exit and
+    // dump all describe a process that is gone.
+    writeInspect({ ...inspectInfoRef.current, [id]: { startedAt: nowSeconds() } });
   }
 
   function closeSession(id: string) {
@@ -248,10 +409,13 @@ export function RunView({
     setSessions(remaining);
     consoleRefs.current.delete(id);
     pendingEvents.current.delete(id);
+    appUpSeen.current.delete(id);
     setStatuses((previous) => {
       const { [id]: _, ...rest } = previous;
       return rest;
     });
+    const { [id]: _discarded, ...remainingInspect } = inspectInfoRef.current;
+    writeInspect(remainingInspect);
     if (activeSession === id) {
       setActiveSession(remaining[remaining.length - 1]?.id ?? null);
     }
@@ -272,6 +436,20 @@ export function RunView({
       .catch(() => {
         /* nothing running */
       });
+
+    // Whether an Inspect affordance can be honoured at all: no sidecar means
+    // no offer, in either direction.
+    api
+      .inspectStatus()
+      .then(setInspectStatus)
+      .catch(() => {
+        /* the inspector reports its own unavailability in the Objects tab */
+      });
+
+    // Processes outlive a view switch, so what is attachable is read rather
+    // than assumed empty.
+    void refreshAttachable();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // A different workspace has its own environment list.
@@ -412,6 +590,56 @@ export function RunView({
     }
   }
 
+  /**
+   * The Inspect affordances for the tab the user is looking at.
+   *
+   * A build session is excluded from the live offer: attaching to MSBuild
+   * answers no question anyone asked. Both offers require the inspector to
+   * actually be present — `available` is false when the sidecar was never
+   * built, and an offer that can only fail is not an offer.
+   */
+  const activeLabel =
+    sessions.find((s) => s.id === activeSession)?.label ?? activeSession ?? "";
+  const activeInspect = activeSession ? inspectInfo[activeSession] : undefined;
+  const inspectorReady = inspectStatus?.available === true;
+
+  /**
+   * The attach offer for the tab being looked at, taken from the backend.
+   *
+   * Not from this view's own record of the `started` pid: that pid is whatever
+   * the supervisor spawned, which for a .NET application is the `dotnet run`
+   * CLI rather than the application, whose heap holds none of the user's
+   * objects. The backend now lists both — the launcher it started and the
+   * application underneath it — so the offer is the application where one was
+   * found, and the launcher with its caveat where it was not.
+   *
+   * `preferApplicationProcess` is shared with the Objects tab on purpose: two
+   * copies of "which of these is the real one" could disagree, and a button
+   * here that aims somewhere other than the row selected there is the bug this
+   * whole change exists to remove. A build session never appears in the list,
+   * so MSBuild is excluded without a rule here.
+   */
+  const liveProcess =
+    inspectorReady && activeSession != null
+      ? preferApplicationProcess(
+          attachable.filter((process) => process.configId === activeSession),
+        )
+      : null;
+
+  /** Stated beside the button that pays for it, not after the snapshot. */
+  const attachCaveats = inspectStatus?.attachCaveats ?? [];
+
+  // Offered only for a crash: a cancelled exit was force-killed and wrote
+  // nothing, and a successful one has nothing to explain.
+  const crashDump =
+    inspectorReady &&
+    activeInspect?.exit &&
+    !activeInspect.exit.cancelled &&
+    !activeInspect.exit.success
+      ? (activeInspect.runDump ?? null)
+      : null;
+  const crashCode = activeInspect?.exit?.code ?? null;
+
   return (
     <>
       {/* Lives in the titlebar (portal), next to the branch widget. */}
@@ -541,6 +769,133 @@ export function RunView({
             {warning}
           </div>
         ))}
+
+        {/* Deliberately outside `.console-area`: that subtree hosts xterm and
+            its sizing is not to be disturbed. */}
+        {/* A dump is only called *this* run's crash when it carries the pid
+            this run reported. Otherwise it is a dump that was written while
+            this ran — with two configurations up it is as likely to be the
+            other one's — and it is offered named rather than claimed. */}
+        {crashDump && (
+          <div className="toolbar">
+            <span className="muted" style={{ fontSize: 11 }}>
+              {crashDump.certain ? (
+                <>
+                  {activeLabel} crashed
+                  {crashCode != null ? ` (exit ${crashCode})` : ""} and a dump
+                  was captured.
+                </>
+              ) : (
+                <>
+                  {activeLabel} exited
+                  {crashCode != null ? ` (exit ${crashCode})` : ""}. A dump was
+                  written while it was running — nothing confirms it came from
+                  this configuration rather than another one:{" "}
+                  <span className="mono">
+                    {crashDump.dump.executable} · pid {crashDump.dump.pid}
+                  </span>
+                  .
+                </>
+              )}
+            </span>
+            <button
+              className={crashDump.certain ? "primary" : undefined}
+              title={`Read ${crashDump.dump.executable} · pid ${crashDump.dump.pid}`}
+              onClick={() =>
+                onInspect({
+                  target: { kind: "dump", path: crashDump.dump.path },
+                  root: { kind: "crashException" },
+                  reason: crashDump.certain
+                    ? `crash in ${activeLabel}${
+                        crashCode != null ? ` (exit ${crashCode})` : ""
+                      }`
+                    : `${crashDump.dump.executable} · pid ${crashDump.dump.pid}, a dump written while ${activeLabel} was running — not confirmed to be its crash`,
+                })
+              }
+            >
+              {crashDump.certain ? "Inspect crash" : "Inspect this dump"}
+            </button>
+          </div>
+        )}
+
+        {/* What an attach costs, and what the pid actually is, before the
+            click — pressing either button below starts the snapshot in the
+            same commit that the Objects tab first renders its own warning, so
+            a caveat that only lives there arrives after the pause. */}
+        {liveProcess != null &&
+          (attachCaveats.length > 0 || liveProcess.launcherCaveat != null) && (
+            <div className="warning">
+              {liveProcess.launcherCaveat != null && (
+                <div>
+                  <strong>
+                    pid {liveProcess.pid} is not{" "}
+                    {liveProcess.configName ?? activeLabel} itself.
+                  </strong>{" "}
+                  {liveProcess.launcherCaveat}
+                </div>
+              )}
+              {attachCaveats.map((caveat) => (
+                <div key={caveat}>{caveat}</div>
+              ))}
+            </div>
+          )}
+
+        {liveProcess != null && (
+          <div className="toolbar">
+            {/* The process name is stated, not just the pid: for a `dotnet
+                run` configuration the attachable application is a different
+                executable from the one the supervisor launched, and naming it
+                is how the user can tell the offer aims at their code. */}
+            <span
+              className="muted"
+              style={{ fontSize: 11 }}
+              title={liveProcess.path ?? undefined}
+            >
+              {activeLabel} is running — {liveProcess.name} (pid{" "}
+              {liveProcess.pid}).
+            </span>
+            <button
+              title="Attach to the running process and read every exception still on its heap — including ones it caught and logged. This copies the process's memory: expect a brief pause and a memory spike."
+              onClick={() =>
+                onInspect({
+                  target: { kind: "live", pid: liveProcess.pid },
+                  root: { kind: "exceptions" },
+                  reason: `exceptions in ${activeLabel} (pid ${liveProcess.pid})`,
+                })
+              }
+            >
+              Inspect exceptions
+            </button>
+            <input
+              placeholder="Namespace.TypeName"
+              value={liveType}
+              onChange={(e) => setLiveType(e.target.value)}
+              style={{ width: 190 }}
+              title="A type to read instances of. There is no option to guess something interesting — a live heap holds millions of objects."
+            />
+            <button
+              disabled={liveType.trim() === ""}
+              title={
+                liveType.trim() === ""
+                  ? "Enter the type to look for"
+                  : `Read up to ${LIVE_TYPE_LIMIT} live instances of ${liveType.trim()}. This copies the process's memory: expect a brief pause and a memory spike.`
+              }
+              onClick={() =>
+                onInspect({
+                  target: { kind: "live", pid: liveProcess.pid },
+                  root: {
+                    kind: "type",
+                    name: liveType.trim(),
+                    limit: LIVE_TYPE_LIMIT,
+                  },
+                  reason: `${liveType.trim()} in ${activeLabel} (pid ${liveProcess.pid})`,
+                })
+              }
+            >
+              Inspect instances
+            </button>
+          </div>
+        )}
 
         <div className="content console-area">
           <div className="editor-console-split" ref={splitRef}>

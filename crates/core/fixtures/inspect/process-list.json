@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "processes": [
+    {
+      "pid": 18908,
+      "name": "PowerToys.PowerLauncher",
+      "path": "C:\\Users\\dev\\AppData\\Local\\PowerToys\\PowerToys.PowerLauncher.exe",
+      "parentPid": 7544,
+      "startedAt": "2026-08-06T13:49:01.4820193Z"
+    },
+    {
+      "pid": 28300,
+      "name": "VBCSCompiler",
+      "path": "C:\\Program Files\\dotnet\\sdk\\10.0.100\\Roslyn\\bincore\\VBCSCompiler.dll",
+      "parentPid": 16944,
+      "startedAt": "2026-08-06T14:02:44.7710355Z"
+    },
+    {
+      "pid": 11324,
+      "name": "dotnet",
+      "path": "C:\\Program Files\\dotnet\\dotnet.exe",
+      "parentPid": 20824,
+      "startedAt": "2026-08-06T14:07:12.9931204Z"
+    },
+    {
+      "pid": 17448,
+      "name": "Crasher",
+      "path": "C:\\src\\Crasher\\bin\\Debug\\net10.0\\Crasher.exe",
+      "parentPid": 11324,
+      "startedAt": "2026-08-06T14:07:14.1082561Z"
+    },
+    {
+      "pid": 26104,
+      "name": "cb-inspector-win-x64",
+      "path": "C:\\src\\code-basics\\src-tauri\\resources\\inspector\\cb-inspector-win-x64.exe",
+      "parentPid": 20824,
+      "startedAt": "2026-08-06T14:07:20.0113887Z"
+    }
+  ],
+  "warnings": []
+}

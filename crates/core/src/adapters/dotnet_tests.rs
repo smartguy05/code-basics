@@ -4,6 +4,7 @@
 //! coverage: a misclassification does not fail loudly, it produces a run that
 //! exits zero and silently writes no report.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::dotnet::*;
@@ -102,7 +103,8 @@ fn ignores_name_keys_outside_the_runner_section() {
 
 #[test]
 fn tolerates_comments_and_unquoted_values() {
-    let content = "# pick a runner\n[dotnet.test:runner]\n; comment\nname = Microsoft.Testing.Platform\n";
+    let content =
+        "# pick a runner\n[dotnet.test:runner]\n; comment\nname = Microsoft.Testing.Platform\n";
     assert_eq!(
         parse_dotnet_config(content),
         Some(ConfiguredRunner::MicrosoftTestingPlatform)
@@ -115,7 +117,11 @@ fn tolerates_comments_and_unquoted_values() {
 
 #[test]
 fn classic_xunit_project_is_vstest() {
-    let p = with_packages(&["xunit", "xunit.runner.visualstudio", "Microsoft.NET.Test.Sdk"]);
+    let p = with_packages(&[
+        "xunit",
+        "xunit.runner.visualstudio",
+        "Microsoft.NET.Test.Sdk",
+    ]);
     assert_eq!(classify_runner(&p, &[], None), TestRunner::VsTest);
 }
 
@@ -168,7 +174,8 @@ fn property_inherited_from_directory_build_props_applies() {
 
 #[test]
 fn project_property_overrides_the_inherited_one() {
-    let project = csproj("<TestingPlatformDotnetTestSupport>false</TestingPlatformDotnetTestSupport>");
+    let project =
+        csproj("<TestingPlatformDotnetTestSupport>false</TestingPlatformDotnetTestSupport>");
     let props = vec![csproj(
         "<TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>",
     )];
@@ -209,7 +216,10 @@ fn tunit_is_mtp_native() {
 
 #[test]
 fn mtp_extensions_without_a_vstest_host_means_mtp() {
-    let p = with_packages(&["Microsoft.Testing.Platform", "Microsoft.Testing.Extensions.TrxReport"]);
+    let p = with_packages(&[
+        "Microsoft.Testing.Platform",
+        "Microsoft.Testing.Extensions.TrxReport",
+    ]);
     assert_eq!(
         classify_runner(&p, &[], None),
         TestRunner::MicrosoftTestingPlatform
@@ -240,7 +250,10 @@ fn a_project_with_no_evidence_defaults_to_vstest() {
 fn recognises_test_projects_by_framework_package() {
     for package in ["xunit", "NUnit", "MSTest.TestFramework", "TUnit"] {
         let p = with_packages(&[package]);
-        assert!(is_test_project(&p, &[]), "{package} should mark a test project");
+        assert!(
+            is_test_project(&p, &[]),
+            "{package} should mark a test project"
+        );
     }
 }
 
@@ -252,7 +265,10 @@ fn explicit_is_test_project_false_wins_over_packages() {
           <ItemGroup><PackageReference Include="xunit" /></ItemGroup>
         </Project>"#,
     );
-    assert!(!is_test_project(&p, &[]), "a shared test-helper library is not a test project");
+    assert!(
+        !is_test_project(&p, &[]),
+        "a shared test-helper library is not a test project"
+    );
 }
 
 #[test]
@@ -288,7 +304,13 @@ fn plain_mtp_project_lacks_trx_reporting() {
 // ---------------------------------------------------------------------------
 
 fn test_config() -> RunConfig {
-    let mut c = RunConfig::new("proj:test:debug", "tests", RunKind::Test, "dotnet", ConfigSource::Detected);
+    let mut c = RunConfig::new(
+        "proj:test:debug",
+        "tests",
+        RunKind::Test,
+        "dotnet",
+        ConfigSource::Detected,
+    );
     c.project = Some(PathBuf::from("src/Calc.Tests/Calc.Tests.csproj"));
     c.build_configuration = Some("Debug".into());
     c
@@ -302,7 +324,21 @@ fn ctx<'a>(root: &'a Path, results: &'a Path, runner: TestRunner) -> BuildContex
         trx_extension_available: true,
         has_launch_settings: false,
         filter: None,
+        dumps_dir: None,
+        dump_env: None,
     }
+}
+
+fn app_config() -> RunConfig {
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
+    c.project = Some(PathBuf::from("src/App/App.csproj"));
+    c
 }
 
 #[test]
@@ -313,7 +349,11 @@ fn vstest_invocation_uses_the_logger_flag() {
 
     assert_eq!(inv.program, "dotnet");
     assert!(inv.args.contains(&"--logger".to_string()));
-    let logger = inv.args.iter().find(|a| a.starts_with("trx;")).expect("trx logger");
+    let logger = inv
+        .args
+        .iter()
+        .find(|a| a.starts_with("trx;"))
+        .expect("trx logger");
     assert!(logger.contains("LogFileName="));
     // Per-test console lines feed the UI's live progress counter.
     assert!(inv.args.contains(&"console;verbosity=normal".to_string()));
@@ -330,7 +370,11 @@ fn mtp_invocation_passes_report_options_after_the_separator() {
         &ctx(root, results, TestRunner::MicrosoftTestingPlatform),
     );
 
-    let sep = inv.args.iter().position(|a| a == "--").expect("MTP separator");
+    let sep = inv
+        .args
+        .iter()
+        .position(|a| a == "--")
+        .expect("MTP separator");
     let report = inv
         .args
         .iter()
@@ -355,8 +399,16 @@ fn mtp_invocation_asks_for_per_test_output() {
         &ctx(root, results, TestRunner::MicrosoftTestingPlatform),
     );
 
-    let sep = inv.args.iter().position(|a| a == "--").expect("MTP separator");
-    let output = inv.args.iter().position(|a| a == "--output").expect("--output");
+    let sep = inv
+        .args
+        .iter()
+        .position(|a| a == "--")
+        .expect("MTP separator");
+    let output = inv
+        .args
+        .iter()
+        .position(|a| a == "--output")
+        .expect("--output");
 
     assert!(output > sep, "MTP options must follow the separator");
     assert_eq!(inv.args[output + 1], "Detailed");
@@ -415,7 +467,10 @@ fn rerun_filter_lists_each_failing_test() {
     let inv = test_invocation(&test_config(), &c);
     let filter = inv.args[inv.args.iter().position(|a| a == "--filter").unwrap() + 1].clone();
 
-    assert_eq!(filter, "FullyQualifiedName=N.C.Alpha|FullyQualifiedName=N.C.Beta");
+    assert_eq!(
+        filter,
+        "FullyQualifiedName=N.C.Alpha|FullyQualifiedName=N.C.Beta"
+    );
 }
 
 #[test]
@@ -452,7 +507,13 @@ fn run_invocation_leaves_the_default_profile_to_dotnet_run() {
     // and their URLs.
     let root = Path::new("/repo");
     let results = Path::new("/repo/results");
-    let mut c = RunConfig::new("p:run", "app", RunKind::App, "dotnet", ConfigSource::Detected);
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
     c.project = Some(PathBuf::from("src/App/App.csproj"));
 
     let inv = run_invocation(&c, &ctx(root, results, TestRunner::VsTest));
@@ -464,7 +525,13 @@ fn run_invocation_leaves_the_default_profile_to_dotnet_run() {
 fn run_invocation_can_opt_out_of_launch_settings() {
     let root = Path::new("/repo");
     let results = Path::new("/repo/results");
-    let mut c = RunConfig::new("p:run", "app", RunKind::App, "dotnet", ConfigSource::Detected);
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
     c.project = Some(PathBuf::from("src/App/App.csproj"));
     c.ignore_launch_settings = true;
 
@@ -476,12 +543,22 @@ fn run_invocation_can_opt_out_of_launch_settings() {
 fn run_invocation_selects_a_named_launch_profile() {
     let root = Path::new("/repo");
     let results = Path::new("/repo/results");
-    let mut c = RunConfig::new("p:run", "app", RunKind::App, "dotnet", ConfigSource::Detected);
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
     c.project = Some(PathBuf::from("src/App/App.csproj"));
     c.launch_profile = Some("https".into());
 
     let inv = run_invocation(&c, &ctx(root, results, TestRunner::VsTest));
-    let idx = inv.args.iter().position(|a| a == "--launch-profile").unwrap();
+    let idx = inv
+        .args
+        .iter()
+        .position(|a| a == "--launch-profile")
+        .unwrap();
     assert_eq!(inv.args[idx + 1], "https");
     assert!(!inv.args.contains(&"--no-launch-profile".to_string()));
 }
@@ -493,7 +570,13 @@ fn skipping_launch_settings_warns_about_the_environment_it_loses() {
     // strings there fail at startup with no visible reason.
     let root = Path::new("/repo");
     let results = Path::new("/repo/results");
-    let mut c = RunConfig::new("p:run", "app", RunKind::App, "dotnet", ConfigSource::Detected);
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
     c.project = Some(PathBuf::from("src/App/App.csproj"));
     c.ignore_launch_settings = true;
 
@@ -501,14 +584,24 @@ fn skipping_launch_settings_warns_about_the_environment_it_loses() {
     build.has_launch_settings = true;
 
     let inv = run_invocation(&c, &build);
-    assert!(inv.warnings.iter().any(|w| w.contains("user secrets")), "{:?}", inv.warnings);
+    assert!(
+        inv.warnings.iter().any(|w| w.contains("user secrets")),
+        "{:?}",
+        inv.warnings
+    );
 }
 
 #[test]
 fn the_launch_settings_warning_stays_quiet_when_it_does_not_apply() {
     let root = Path::new("/repo");
     let results = Path::new("/repo/results");
-    let mut c = RunConfig::new("p:run", "app", RunKind::App, "dotnet", ConfigSource::Detected);
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
     c.project = Some(PathBuf::from("src/App/App.csproj"));
     c.ignore_launch_settings = true;
 
@@ -532,7 +625,8 @@ fn the_launch_settings_warning_stays_quiet_when_it_does_not_apply() {
     // Opted out but the environment is set explicitly: the user has taken over.
     c.launch_profile = None;
     c.ignore_launch_settings = true;
-    c.env.insert("ASPNETCORE_ENVIRONMENT".into(), "Development".into());
+    c.env
+        .insert("ASPNETCORE_ENVIRONMENT".into(), "Development".into());
     let inv = run_invocation(&c, &build);
     assert!(inv.warnings.is_empty(), "{:?}", inv.warnings);
 }
@@ -540,7 +634,13 @@ fn the_launch_settings_warning_stays_quiet_when_it_does_not_apply() {
 #[test]
 fn build_actions_produce_the_expected_dotnet_verbs() {
     let root = Path::new("/repo");
-    let mut c = RunConfig::new("p:run", "app", RunKind::App, "dotnet", ConfigSource::Detected);
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
     c.project = Some(PathBuf::from("src/App/App.csproj"));
     c.build_configuration = Some("Release".into());
 
@@ -562,7 +662,10 @@ fn build_actions_produce_the_expected_dotnet_verbs() {
 
 #[test]
 fn build_action_names_cross_ipc_in_camel_case() {
-    assert_eq!(serde_json::to_string(&BuildAction::Rebuild).unwrap(), "\"rebuild\"");
+    assert_eq!(
+        serde_json::to_string(&BuildAction::Rebuild).unwrap(),
+        "\"rebuild\""
+    );
     assert_eq!(
         serde_json::from_str::<BuildAction>("\"clean\"").unwrap(),
         BuildAction::Clean
@@ -573,7 +676,13 @@ fn build_action_names_cross_ipc_in_camel_case() {
 fn program_arguments_go_after_the_separator() {
     let root = Path::new("/repo");
     let results = Path::new("/repo/results");
-    let mut c = RunConfig::new("p:run", "app", RunKind::App, "dotnet", ConfigSource::Detected);
+    let mut c = RunConfig::new(
+        "p:run",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
     c.project = Some(PathBuf::from("src/App/App.csproj"));
     c.args = vec!["--verbose".into(), "input.txt".into()];
 
@@ -650,7 +759,10 @@ fn hosting_profiles_this_app_cannot_launch_are_reported_not_dropped() {
         .find(|p| p.name == "IIS Express")
         .expect("the profile must survive parsing");
 
-    assert!(!iis.launchable, "`dotnet run` cannot apply an IISExpress profile");
+    assert!(
+        !iis.launchable,
+        "`dotnet run` cannot apply an IISExpress profile"
+    );
     assert_eq!(iis.command_name.as_deref(), Some("IISExpress"));
 }
 
@@ -668,7 +780,9 @@ fn unlaunchable_profiles_produce_no_run_configuration() {
     );
 
     assert!(
-        !configs.iter().any(|c| c.launch_profile.as_deref() == Some("IIS Express")),
+        !configs
+            .iter()
+            .any(|c| c.launch_profile.as_deref() == Some("IIS Express")),
         "offering a profile we cannot launch would fail at run time"
     );
 }
@@ -682,7 +796,10 @@ fn reads_environment_and_urls_from_a_profile() {
         http.env.get("ASPNETCORE_ENVIRONMENT").map(String::as_str),
         Some("Development")
     );
-    assert_eq!(http.application_url.as_deref(), Some("http://localhost:5051"));
+    assert_eq!(
+        http.application_url.as_deref(),
+        Some("http://localhost:5051")
+    );
 }
 
 #[test]
@@ -696,9 +813,15 @@ fn splits_quoted_command_line_arguments() {
 fn argument_splitting_handles_the_awkward_cases() {
     assert_eq!(split_args(""), Vec::<String>::new());
     assert_eq!(split_args("  a   b  "), vec!["a", "b"]);
-    assert_eq!(split_args(r#"--name "two words" --flag"#), vec!["--name", "two words", "--flag"]);
+    assert_eq!(
+        split_args(r#"--name "two words" --flag"#),
+        vec!["--name", "two words", "--flag"]
+    );
     // A quoted empty string is a real argument and must survive.
-    assert_eq!(split_args(r#"--name "" --flag"#), vec!["--name", "", "--flag"]);
+    assert_eq!(
+        split_args(r#"--name "" --flag"#),
+        vec!["--name", "", "--flag"]
+    );
 }
 
 #[test]
@@ -728,7 +851,10 @@ fn test_projects_get_a_single_debug_configuration() {
     assert_eq!(configs.len(), 1);
     assert_eq!(configs[0].kind, RunKind::Test);
     assert_eq!(configs[0].build_configuration.as_deref(), Some("Debug"));
-    assert_eq!(configs[0].id, "calc-tests:test:debug", "the id existing favourites reference");
+    assert_eq!(
+        configs[0].id, "calc-tests:test:debug",
+        "the id existing favourites reference"
+    );
 }
 
 #[test]
@@ -744,8 +870,12 @@ fn executables_get_a_configuration_per_launch_profile() {
         &profiles,
     );
 
-    assert!(configs.iter().any(|c| c.launch_profile.as_deref() == Some("http")));
-    assert!(configs.iter().any(|c| c.launch_profile.as_deref() == Some("https")));
+    assert!(configs
+        .iter()
+        .any(|c| c.launch_profile.as_deref() == Some("http")));
+    assert!(configs
+        .iter()
+        .any(|c| c.launch_profile.as_deref() == Some("https")));
     // Plus the plain Debug/Release pair.
     assert!(configs.iter().any(|c| c.launch_profile.is_none()));
 }
@@ -769,22 +899,37 @@ fn framework_is_pinned_only_when_a_project_multi_targets() {
     // Passing -f to a single-target project is noise; to a multi-target one it
     // is required, since `dotnet run` refuses to guess.
     let single = configs_for_project(
-        "a", "A", Path::new("a.csproj"), ProjectKind::Test, &["net8.0".into()],
-        &["Debug".into()], &[],
+        "a",
+        "A",
+        Path::new("a.csproj"),
+        ProjectKind::Test,
+        &["net8.0".into()],
+        &["Debug".into()],
+        &[],
     );
     assert!(single.iter().all(|c| c.framework.is_none()));
 
     let multi = configs_for_project(
-        "b", "B", Path::new("b.csproj"), ProjectKind::Test,
-        &["net8.0".into(), "net9.0".into()], &["Debug".into()], &[],
+        "b",
+        "B",
+        Path::new("b.csproj"),
+        ProjectKind::Test,
+        &["net8.0".into(), "net9.0".into()],
+        &["Debug".into()],
+        &[],
     );
     // Every framework gets its own configuration: pinning the first silently
     // hid the others, and `dotnet test -f` runs exactly one.
-    let frameworks: Vec<&str> =
-        multi.iter().filter_map(|c| c.framework.as_deref()).collect();
+    let frameworks: Vec<&str> = multi
+        .iter()
+        .filter_map(|c| c.framework.as_deref())
+        .collect();
     assert_eq!(frameworks, vec!["net8.0", "net9.0"]);
     assert_eq!(multi.len(), 2);
-    assert!(multi.iter().all(|c| c.id.starts_with("b:test:debug:net")), "ids must stay unique");
+    assert!(
+        multi.iter().all(|c| c.id.starts_with("b:test:debug:net")),
+        "ids must stay unique"
+    );
 }
 
 #[test]
@@ -801,14 +946,20 @@ fn custom_build_configurations_become_run_configurations() {
         &[],
     );
 
-    let names: Vec<&str> = configs.iter().filter_map(|c| c.build_configuration.as_deref()).collect();
+    let names: Vec<&str> = configs
+        .iter()
+        .filter_map(|c| c.build_configuration.as_deref())
+        .collect();
     assert_eq!(names, vec!["Debug", "Release", "Staging"]);
 }
 
 #[test]
 fn declared_configurations_replace_the_default_pair() {
     let declared = csproj("<Configurations>Debug;Release;Staging</Configurations>");
-    assert_eq!(configurations(&declared, &[]), vec!["Debug", "Release", "Staging"]);
+    assert_eq!(
+        configurations(&declared, &[]),
+        vec!["Debug", "Release", "Staging"]
+    );
 
     // Nothing declared means the MSBuild default.
     let plain = csproj("<TargetFramework>net9.0</TargetFramework>");
@@ -841,7 +992,10 @@ fn output_type_is_inherited_from_directory_build_props() {
     let props = csproj("<OutputType>Exe</OutputType>");
 
     assert_eq!(project_kind(&plain, &[], false), ProjectKind::Library);
-    assert_eq!(project_kind(&plain, &[props], false), ProjectKind::Executable);
+    assert_eq!(
+        project_kind(&plain, &[props], false),
+        ProjectKind::Executable
+    );
 }
 
 #[test]
@@ -862,7 +1016,10 @@ fn workload_projects_are_executables_without_an_output_type() {
            </Project>"#,
     );
     assert_eq!(sdk_import.sdk_imports, vec!["Aspire.AppHost.Sdk"]);
-    assert_eq!(project_kind(&sdk_import, &[], false), ProjectKind::Executable);
+    assert_eq!(
+        project_kind(&sdk_import, &[], false),
+        ProjectKind::Executable
+    );
 }
 
 #[test]
@@ -877,7 +1034,11 @@ fn web_sdk_projects_are_executables_without_declaring_an_output_type() {
             r#"<Project Sdk="{sdk}"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>"#
         ));
         assert_eq!(p.sdk.as_deref(), Some(sdk));
-        assert_eq!(project_kind(&p, &[], false), ProjectKind::Executable, "{sdk}");
+        assert_eq!(
+            project_kind(&p, &[], false),
+            ProjectKind::Executable,
+            "{sdk}"
+        );
     }
 
     // The plain SDK still defaults to Library.
@@ -888,4 +1049,283 @@ fn web_sdk_projects_are_executables_without_declaring_an_output_type() {
     // Server apps use the Web SDK instead.
     let razor = parse_project_file(r#"<Project Sdk="Microsoft.NET.Sdk.Razor"></Project>"#);
     assert_eq!(project_kind(&razor, &[], false), ProjectKind::Library);
+}
+
+// ---------------------------------------------------------------------------
+// Crash dump capture
+// ---------------------------------------------------------------------------
+
+#[test]
+fn arming_dumps_sets_the_three_runtime_variables() {
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+    let dumps = Path::new("/repo/.code-basics/dumps");
+
+    let mut build = ctx(root, results, TestRunner::VsTest);
+    build.dumps_dir = Some(dumps);
+
+    let inv = run_invocation(&app_config(), &build);
+    assert_eq!(
+        inv.env.get("DOTNET_DbgEnableMiniDump").map(String::as_str),
+        Some("1")
+    );
+    // Heap. Mini and Triage omit the object data the inspector exists to read.
+    assert_eq!(
+        inv.env.get("DOTNET_DbgMiniDumpType").map(String::as_str),
+        Some("2")
+    );
+    // `%e` expands with the extension, so the name carries `App.exe` — that is
+    // what later attributes a dump to the process that was actually run.
+    let name = inv.env.get("DOTNET_DbgMiniDumpName").expect("dump name");
+    assert!(name.contains("%e_%p_%t"), "{name}");
+    assert!(name.ends_with(".dmp"), "{name}");
+}
+
+#[test]
+fn nothing_is_armed_unless_the_workspace_asked() {
+    // Capture is opt-in per workspace: a dump is a verbatim copy of process
+    // memory, and a run must never start writing hundreds of megabytes of it
+    // because a default said so.
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+
+    let app = run_invocation(&app_config(), &ctx(root, results, TestRunner::VsTest));
+    let tests = test_invocation(&test_config(), &ctx(root, results, TestRunner::VsTest));
+
+    for inv in [&app, &tests] {
+        assert!(
+            !inv.env.keys().any(|k| k.starts_with("DOTNET_Dbg")),
+            "{:?}",
+            inv.env
+        );
+    }
+    assert!(!tests
+        .args
+        .contains(&"--blame-crash-collect-always".to_string()));
+}
+
+#[test]
+fn a_configurations_own_dump_settings_win() {
+    // The same precedence `process` uses for its colour defaults: these are
+    // defaults layered underneath, not an override applied on top.
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+    let dumps = Path::new("/repo/.code-basics/dumps");
+
+    let mut config = app_config();
+    config
+        .env
+        .insert("DOTNET_DbgMiniDumpName".into(), "D:/mine/%p.dmp".into());
+    config
+        .env
+        .insert("DOTNET_DbgMiniDumpType".into(), "4".into());
+
+    let mut build = ctx(root, results, TestRunner::VsTest);
+    build.dumps_dir = Some(dumps);
+
+    let inv = run_invocation(&config, &build);
+    assert_eq!(
+        inv.env.get("DOTNET_DbgMiniDumpName").map(String::as_str),
+        Some("D:/mine/%p.dmp")
+    );
+    assert_eq!(
+        inv.env.get("DOTNET_DbgMiniDumpType").map(String::as_str),
+        Some("4")
+    );
+    // Untouched keys still get their default.
+    assert_eq!(
+        inv.env.get("DOTNET_DbgEnableMiniDump").map(String::as_str),
+        Some("1")
+    );
+}
+
+#[test]
+fn vstest_collects_a_dump_even_on_a_tidy_test_host_exit() {
+    // A failed assertion is not an unhandled crash, so the runtime variables
+    // alone produce nothing for the run that most needs a dump.
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+    let dumps = Path::new("/repo/.code-basics/dumps");
+
+    let mut build = ctx(root, results, TestRunner::VsTest);
+    build.dumps_dir = Some(dumps);
+
+    let inv = test_invocation(&test_config(), &build);
+    assert!(inv
+        .args
+        .contains(&"--blame-crash-collect-always".to_string()));
+}
+
+#[test]
+fn a_vstest_run_says_where_the_blame_collectors_dump_lands() {
+    // Blame writes into --results-directory under a name of its own, so the
+    // dump does not appear in the Objects tab. A user who is not told that
+    // reads the empty list as "the capture did not work".
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+    let dumps = Path::new("/repo/.code-basics/dumps");
+
+    let mut build = ctx(root, results, TestRunner::VsTest);
+    build.dumps_dir = Some(dumps);
+
+    let inv = test_invocation(&test_config(), &build);
+
+    assert!(
+        inv.warnings
+            .iter()
+            .any(|w| w.contains(".code-basics/results/")
+                && w.contains("--blame-crash-collect-always")),
+        "{:?}",
+        inv.warnings
+    );
+}
+
+#[test]
+fn every_armed_run_warns_that_its_memory_may_be_written_to_disk() {
+    // `captureDumps` lives in a file that is checked in, so the opt-in is one
+    // person's edit and everybody's runs. The run itself has to say so: a
+    // teammate who never opens the Objects tab would otherwise get hundreds of
+    // megabytes of their process memory on disk with nothing on screen.
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+    let dumps = Path::new("/repo/.code-basics/dumps");
+
+    for runner in [TestRunner::VsTest, TestRunner::MicrosoftTestingPlatform] {
+        let mut build = ctx(root, results, runner);
+        build.dumps_dir = Some(dumps);
+
+        for inv in [
+            run_invocation(&app_config(), &build),
+            test_invocation(&test_config(), &build),
+        ] {
+            assert!(
+                inv.warnings
+                    .iter()
+                    .any(|w| w.contains("captureDumps") && w.contains("copy of its memory")),
+                "{runner:?} produced {:?}",
+                inv.warnings
+            );
+        }
+    }
+}
+
+#[test]
+fn a_run_that_captures_nothing_warns_about_nothing() {
+    // The counterpart of the test above: the warning must be tied to being
+    // armed, not to running .NET.
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+
+    let app = run_invocation(&app_config(), &ctx(root, results, TestRunner::VsTest));
+    let tests = test_invocation(&test_config(), &ctx(root, results, TestRunner::VsTest));
+
+    for inv in [&app, &tests] {
+        assert!(
+            !inv.warnings.iter().any(|w| w.contains("captureDumps")),
+            "{:?}",
+            inv.warnings
+        );
+    }
+}
+
+#[test]
+fn the_workspace_inspector_env_reaches_a_capturing_run() {
+    // `inspector.env` is documented as the way to ask for a different dump
+    // type. Persisting a setting nothing reads is worse than not offering it.
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+    let dumps = Path::new("/repo/.code-basics/dumps");
+
+    let mut workspace_env = BTreeMap::new();
+    workspace_env.insert("DOTNET_DbgMiniDumpType".to_string(), "4".to_string());
+    workspace_env.insert("CB_EXTRA".to_string(), "yes".to_string());
+
+    let mut build = ctx(root, results, TestRunner::VsTest);
+    build.dumps_dir = Some(dumps);
+    build.dump_env = Some(&workspace_env);
+
+    let inv = run_invocation(&app_config(), &build);
+
+    assert_eq!(
+        inv.env.get("DOTNET_DbgMiniDumpType").map(String::as_str),
+        Some("4")
+    );
+    assert_eq!(inv.env.get("CB_EXTRA").map(String::as_str), Some("yes"));
+    // The defaults it did not mention still apply.
+    assert_eq!(
+        inv.env.get("DOTNET_DbgEnableMiniDump").map(String::as_str),
+        Some("1")
+    );
+}
+
+#[test]
+fn a_run_configurations_env_still_beats_the_workspace_inspector_env() {
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+    let dumps = Path::new("/repo/.code-basics/dumps");
+
+    let mut workspace_env = BTreeMap::new();
+    workspace_env.insert("DOTNET_DbgMiniDumpType".to_string(), "4".to_string());
+
+    let mut config = app_config();
+    config
+        .env
+        .insert("DOTNET_DbgMiniDumpType".into(), "1".into());
+
+    let mut build = ctx(root, results, TestRunner::VsTest);
+    build.dumps_dir = Some(dumps);
+    build.dump_env = Some(&workspace_env);
+
+    let inv = run_invocation(&config, &build);
+
+    assert_eq!(
+        inv.env.get("DOTNET_DbgMiniDumpType").map(String::as_str),
+        Some("1")
+    );
+}
+
+#[test]
+fn the_workspace_inspector_env_is_not_applied_to_a_run_that_captures_nothing() {
+    // It exists to tune a capture; with no capture there is nothing to tune,
+    // and leaking `DOTNET_Dbg*` into an unarmed run would arm it by accident.
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+
+    let mut workspace_env = BTreeMap::new();
+    workspace_env.insert("DOTNET_DbgMiniDumpType".to_string(), "4".to_string());
+
+    let mut build = ctx(root, results, TestRunner::VsTest);
+    build.dump_env = Some(&workspace_env);
+
+    let inv = run_invocation(&app_config(), &build);
+
+    assert!(
+        !inv.env.keys().any(|k| k.starts_with("DOTNET_Dbg")),
+        "{:?}",
+        inv.env
+    );
+}
+
+#[test]
+fn mtp_gets_the_package_name_instead_of_a_flag_it_ignores() {
+    // Microsoft.Testing.Platform ignores every `--blame-*` option rather than
+    // rejecting it, so passing one would look like it worked and collect
+    // nothing. The replacement needs a package reference, which is the user's
+    // edit to their project — not ours to make.
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/results");
+    let dumps = Path::new("/repo/.code-basics/dumps");
+
+    let mut build = ctx(root, results, TestRunner::MicrosoftTestingPlatform);
+    build.dumps_dir = Some(dumps);
+
+    let inv = test_invocation(&test_config(), &build);
+    assert!(!inv.args.iter().any(|a| a.starts_with("--blame")));
+    assert!(
+        inv.warnings
+            .iter()
+            .any(|w| w.contains("Microsoft.Testing.Extensions.CrashDump")),
+        "{:?}",
+        inv.warnings
+    );
 }

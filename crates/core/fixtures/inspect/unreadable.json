@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "snapshotId": "snap-11b0e4",
+  "capturedAt": "2026-08-06T15:01:44.9910000Z",
+  "target": {
+    "target": { "kind": "dump", "path": "/tmp/Worker_9931_1786037304.dmp" },
+    "bitness": "x64",
+    "runtimeVersion": "9.0.3",
+    "processName": "Worker"
+  },
+  "caps": { "maxDepth": 5, "maxChildren": 100, "maxStringLength": 512, "maxNodes": 5000 },
+  "warnings": [
+    "this is a Mini dump; most object memory is absent. Capture a Heap dump (DOTNET_DbgMiniDumpType=2) to read field values."
+  ],
+  "nodes": [
+    {
+      "id": "root",
+      "label": "state",
+      "kind": "reference",
+      "typeName": "Worker.JobState",
+      "address": "0x1f4a2c00",
+      "expandable": false
+    },
+    {
+      "id": "root.name",
+      "parent": "root",
+      "label": "<Name>k__BackingField",
+      "kind": "unavailable",
+      "typeName": "System.String",
+      "reason": "the string contents are not present in a Mini dump"
+    },
+    {
+      "id": "root.attempts",
+      "parent": "root",
+      "label": "<Attempts>k__BackingField",
+      "kind": "primitive",
+      "typeName": "System.Int32",
+      "text": "3"
+    },
+    {
+      "id": "root.pending",
+      "parent": "root",
+      "label": "_pending",
+      "kind": "unavailable",
+      "typeName": "System.Lazy<System.Collections.Generic.List<Worker.Job>>",
+      "reason": "the Lazy<T> has not been forced, so there is no value to read"
+    },
+    {
+      "id": "root.mystery",
+      "parent": "root",
+      "label": "_mystery",
+      "kind": "somethingNewerThanThisBuild",
+      "typeName": "Worker.Unknown"
+    },
+    {
+      "id": "root.broken",
+      "parent": "root",
+      "label": "_broken",
+      "kind": "reference",
+      "typeName": "Worker.Job"
+    }
+  ]
+}

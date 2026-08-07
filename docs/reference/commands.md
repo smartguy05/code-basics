@@ -103,8 +103,23 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `import_intent_history` | – | `usize` | Read what the agents already recorded, with no setup; returns the total record count afterwards |
 | `clear_intent_history` | – | `()` | Forget everything recorded for this workspace |
 
+## Object inspection
+
+`src-tauri/src/commands/inspect.rs` — reading the objects out of a running .NET process or a crash dump, via the `cb-inspector` sidecar.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `inspect_status` | – | `InspectStatus` | Whether a sidecar is installed (and if not, how to install it), whether this workspace opted into crash dumps, the dumps on disk newest first, and the caveats to show before any of it is relied on |
+| `inspect_attachable` | – | `AttachableList` | Enumerated by `cb-inspector --list-processes`, then attributed in `cb-core`. Every .NET process on the machine that has published a diagnostics channel, each carrying `attribution` (`launched` \| `descendant` \| `unrelated`), a `configId`/`configName` **only** for the first two, and `isApplication` — whether there is evidence this is the process holding the user's objects. An empty `processes` is a normal answer; a **rejection** means the list could not be read, which is a different statement and is shown as one; `warnings` carries a list that came back degraded, such as a host that would not report any process's parent. Only supervisor ids that *are* a configuration's id qualify as ours, so a build (`<id>:build`), a git fetch (`git:network`) and the inspector's own sidecar (`inspect:<session>`) — and anything they started — never appear. `launcherCaveat` is set when the pid is a launcher rather than the application: `dotnet run` starts the app as a child process, so its pid is the .NET CLI and a capture of it contains none of the user's objects |
+| `inspect_run_dump` | `pid: number \| null, startedAt: number` | `RunDump \| null` | The dump a finished run may have written, and whether it is *certainly* that run's. Only a matching pid is evidence; anything else comes back `certain: false` and must be described as a candidate, because the dump environment is inherited by every child process and applies to every other configuration running at the same time |
+| `inspect_capture` | `target: InspectTarget, root: RootSpec, widen: ElidedReason \| null, channel: Channel<ProcessEvent>` | `InspectGraph` | One capture. Streams the sidecar's output to the console, then parses `result.json`. A reported bitness mismatch is retried once with the x86 build. Registered with the supervisor as `inspect:<session>`, so cancelling works. A combination that cannot work — a crash exception asked of a live process — is refused before anything is spawned, because a live attach copies the target's memory image. A `Live` pid is re-checked immediately before spawning against a **fresh enumeration of the machine's .NET processes** — not against the supervisor, which never knew the `dotnet run` child in the first place. The picker is refreshed on demand, so a pid chosen earlier may belong to a process that has exited and had its number reused. An enumeration that *failed* is refused with its own reason rather than being read as an empty list |
+| `inspect_last` | – | `InspectGraph \| null` | The last capture, so switching views does not re-read a process that may have moved on |
+| `inspect_clear` | – | `()` | Drop the held capture. A graph is a copy of somebody's process memory, so "close it" actually releases it |
+
+Expanding a node past a cap is `inspect_capture` with `RootSpec::Address` and `widen` set to the cap that stopped the previous read — the same operation, under limits raised by `Caps::widened` so the re-read can actually get past that cap. Re-reading with the caps that produced the elision returns the identical truncation, which is why `widen` is not optional in practice. The result carries a new `snapshotId`; the UI treats a differing snapshot as a staleness warning only for a live target, since a dump on disk cannot change between two reads. There is deliberately no separate expand command.
+
 ## Streaming commands
 
-`start_run`, `run_tests`, and `git_network` take a `Channel<ProcessEvent>` and push output events (stdout/stderr chunks, exit) while their promise stays pending. The `api.ts` wrappers hide the channel behind an `onEvent` callback.
+`start_run`, `run_tests`, `git_network`, and `inspect_capture` take a `Channel<ProcessEvent>` and push output events (stdout/stderr chunks, exit) while their promise stays pending. The `api.ts` wrappers hide the channel behind an `onEvent` callback.
 
 Related: [Tauri shell](../architecture/tauri-shell.md) · [adding a command end-to-end](../guides/development.md#adding-a-tauri-command-end-to-end).

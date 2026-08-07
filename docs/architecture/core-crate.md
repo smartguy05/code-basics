@@ -98,6 +98,20 @@ Failing hooks entirely, `providers::history` mines each agent's existing session
 
 The hook itself is this application re-invoked (`src-tauri/src/recorder.rs`), so there is no script to keep in step with the format and no interpreter to depend on. It never fails loudly, never takes long, and does nothing at all in a workspace that has not opted in — a user-level hook fires for every repository on the machine.
 
+## `inspect`
+
+Reading the real objects out of a .NET crash dump or a running process. The heap walk itself needs ClrMD, which is a .NET library, so it happens in the `cb-inspector` sidecar and the answer comes back as a file — which makes this **the same shape as [`testing`](#testing)**: a process streams its output live and writes a structured report, and the tree is built from the report afterwards. `dotnet test` leaves a `.trx`; the inspector leaves a `result.json`. Because the exchange is one file in and one file out, `process/` needed no changes at all: cancellation and process-tree kill work because the sidecar is just another supervised process.
+
+- `model` — the crossing types, including `ObjectValue` (the tagged union a node's value collapses to) and `Caps`.
+- `graph` / `tree` — parse the sidecar's loose wire format, classify each raw node, and assemble flat nodes into rooted trees with warnings for anything that did not fit.
+- `sidecar` — locating an executable (`CB_INSPECTOR_PATH`, then the bundled directory), session paths, failure codes, and the retry rule: a reported bitness mismatch on x64 is the only failure that earns a second attempt.
+- `session` — the decisions around one capture: which bitness to try first, the workspace's caps, arming dumps for a run, pruning, and an honest `InspectStatus` when nothing is installed.
+- `dumps` — the three `DOTNET_Dbg*` variables that make the runtime write a heap dump on an unhandled crash with no tooling at all, plus filename encoding/decoding, listing and retention.
+
+Two rules run through all of it. The governing one is [`grouping`](#git)'s: **a wrong value is much worse than no value**, so anything unreadable becomes an explicit `Unavailable` carrying a sentence and any cap becomes an explicit `Elided` — never a shorter list that looks complete. The second is that this reads *memory*, not an execution context: no method is called and no property is evaluated, which is why a computed property shows as the fields behind it. Both are stated wherever the feature surfaces.
+
+Dump capture is opt-in per workspace and off by default, because a dump is a verbatim copy of process memory. Design note: [live inspection](live-inspection.md). User guide: [inspecting objects](../guides/inspecting-objects.md).
+
 ## `importers::rider`
 
 Best-effort conversion of JetBrains Rider `.run/*.xml` files. JetBrains publishes no stable schema, so the importer **never silently converts**: everything untranslatable lands in `RunConfig::warnings` and the UI shows a review step before saving. See [Rider import](../guides/rider-import.md).

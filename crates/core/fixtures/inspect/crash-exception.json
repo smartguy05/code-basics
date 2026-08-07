@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "snapshotId": "snap-8f2c1a",
+  "capturedAt": "2026-08-06T14:32:07.4180000Z",
+  "target": {
+    "target": { "kind": "dump", "path": "C:\\src\\quotes\\.code-basics\\dumps\\Quotes.Api_18244_1786033927.dmp" },
+    "bitness": "x64",
+    "runtimeVersion": "9.0.3",
+    "processName": "Quotes.Api"
+  },
+  "caps": { "maxDepth": 5, "maxChildren": 100, "maxStringLength": 512, "maxNodes": 5000 },
+  "warnings": [
+    "one region of the heap could not be read; 3 values in this capture are unavailable"
+  ],
+  "nodes": [
+    {
+      "id": "root",
+      "label": "exception",
+      "kind": "reference",
+      "typeName": "System.NullReferenceException",
+      "address": "0x7ff6ad094000",
+      "expandable": false
+    },
+    {
+      "id": "root._message",
+      "parent": "root",
+      "label": "_message",
+      "kind": "text",
+      "typeName": "System.String",
+      "text": "Object reference not set to an instance of an object."
+    },
+    {
+      "id": "root._stackTraceString",
+      "parent": "root",
+      "label": "_stackTraceString",
+      "kind": "text",
+      "typeName": "System.String",
+      "text": "   at Quotes.Domain.Charter.EstimateCost() in C:\\src\\quotes\\src\\Domain\\Charter.cs:line 87\n   at Quotes.Api.QuoteController.Post(QuoteRequest request) in C:\\src\\quotes\\src\\Api\\QuoteCon",
+      "truncated": true
+    },
+    {
+      "id": "root._innerException",
+      "parent": "root",
+      "label": "_innerException",
+      "kind": "null",
+      "typeName": "System.Exception"
+    },
+    {
+      "id": "root.quote",
+      "parent": "root",
+      "label": "quote",
+      "kind": "reference",
+      "typeName": "Quotes.Domain.Quote",
+      "address": "0x7ff6ad094100",
+      "expandable": false
+    },
+    {
+      "id": "root.quote.total",
+      "parent": "root.quote",
+      "label": "<Total>k__BackingField",
+      "kind": "primitive",
+      "typeName": "System.Decimal",
+      "text": "0.00"
+    },
+    {
+      "id": "root.quote.currency",
+      "parent": "root.quote",
+      "label": "<Currency>k__BackingField",
+      "kind": "text",
+      "typeName": "System.String",
+      "text": "USD"
+    },
+    {
+      "id": "root.quote.aircraft",
+      "parent": "root.quote",
+      "label": "<Aircraft>k__BackingField",
+      "kind": "null",
+      "typeName": "Quotes.Domain.AircraftType"
+    },
+    {
+      "id": "root.quote._cachedRate",
+      "parent": "root.quote",
+      "label": "_cachedRate",
+      "kind": "unavailable",
+      "typeName": "System.Decimal",
+      "reason": "the field was optimised into a register and is not present in this dump"
+    },
+    {
+      "id": "root.quote.legs",
+      "parent": "root.quote",
+      "label": "legs",
+      "kind": "reference",
+      "typeName": "System.Collections.Generic.List<Quotes.Domain.Leg>",
+      "address": "0x7ff6ad094200",
+      "expandable": false,
+      "childCountTotal": 5412
+    },
+    {
+      "id": "root.quote.legs[0]",
+      "parent": "root.quote.legs",
+      "label": "[0]",
+      "kind": "reference",
+      "typeName": "Quotes.Domain.Leg",
+      "address": "0x7ff6ad094300",
+      "expandable": false
+    },
+    {
+      "id": "root.quote.legs[0].id",
+      "parent": "root.quote.legs[0]",
+      "label": "<Id>k__BackingField",
+      "kind": "primitive",
+      "typeName": "System.Int32",
+      "text": "1"
+    },
+    {
+      "id": "root.quote.legs[0].quote",
+      "parent": "root.quote.legs[0]",
+      "label": "<Quote>k__BackingField",
+      "kind": "cycle",
+      "typeName": "Quotes.Domain.Quote",
+      "address": "0x7ff6ad094100",
+      "path": "root.quote"
+    },
+    {
+      "id": "root.quote.legs[0].origin",
+      "parent": "root.quote.legs[0]",
+      "label": "<Origin>k__BackingField",
+      "kind": "reference",
+      "typeName": "Quotes.Domain.Airport",
+      "address": "0x7ff6ad094400",
+      "expandable": true
+    },
+    {
+      "id": "root.quote.legs[1]",
+      "parent": "root.quote.legs",
+      "label": "[1…5411]",
+      "kind": "elided",
+      "reason": "childLimit"
+    },
+    {
+      "id": "root.quote.customer",
+      "parent": "root.quote",
+      "label": "<Customer>k__BackingField",
+      "kind": "elided",
+      "typeName": "Quotes.Domain.Customer",
+      "reason": "nodeLimit"
+    }
+  ]
+}

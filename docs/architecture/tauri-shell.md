@@ -14,6 +14,10 @@ Deliberately thin. Every decision lives in [`cb-core`](core-crate.md); what rema
 | `src/commands/run.rs` | Run/test/build execution commands |
 | `src/commands/secrets.rs` | .NET user-secrets commands |
 | `src/commands/git.rs` | Git commands |
+| `src/commands/changelists.rs` | Change-group commands |
+| `src/commands/intents.rs` | Agent intent capture and grouping commands |
+| `src/commands/inspect.rs` | Object-inspection commands; resolves the bundled sidecar directory |
+| `src/recorder.rs` | The one non-window entry point: `record-intent`, re-invoked by an agent hook |
 
 The complete command list with parameters is in the [command reference](../reference/commands.md); it must stay in sync with the `generate_handler!` block in `lib.rs`.
 
@@ -24,10 +28,11 @@ pub struct AppState {
     pub workspace: Mutex<Option<Workspace>>,          // the open workspace
     pub supervisor: Supervisor,                        // running processes
     pub last_test_run: Mutex<HashMap<String, TestRunResult>>, // per-config, for "re-run failed"
+    pub last_inspect: Mutex<Option<InspectGraph>>,     // the most recent object capture
 }
 ```
 
-The workspace survives a window reload because it lives here, not in the frontend. `last_test_run` is what lets `run_tests(only_failed: true)` know which test names to filter to.
+The workspace survives a window reload because it lives here, not in the frontend. `last_test_run` is what lets `run_tests(only_failed: true)` know which test names to filter to. `last_inspect` is one slot rather than a map: there is nothing to key a capture by, and a capture is a copy of somebody's process memory — holding several would be holding more of it than anything needs, which is also why `inspect_clear` genuinely drops it.
 
 ## `invocation::build`
 
@@ -37,9 +42,21 @@ The **only** place that knows which adapter owns which ecosystem. Given a `RunCo
 2. Dispatches on `config.ecosystem`: `"dotnet"` → `adapters::dotnet`, `"node"` → `adapters::node`, anything else → a matching declarative manifest from `.code-basics/adapters/`.
 3. Returns the fully resolved `Invocation` for the supervisor.
 
+`build` also arms crash-dump capture when the workspace opted in (`session::arm_dumps`), which layers the `DOTNET_Dbg*` variables *under* the config's own environment and prunes what is already on disk. A workspace that has not opted in gets nothing, and a dumps directory that cannot be created is never a reason to refuse to start the user's application.
+
+## Bundled resources
+
+`tauri.conf.json` ships one thing the user is not expected to already have:
+
+```json
+"bundle": { "resources": { "resources/inspector/": "inspector/" } }
+```
+
+Everything else code-basics runs (`dotnet`, `node`, `git`) is found on `PATH`. The object-inspector sidecar cannot be, so it is bundled — `commands/inspect.rs` resolves it with `BaseDirectory::Resource`, and `None` is an ordinary answer because `cargo build` does not produce it. Why this departure was unavoidable: [live inspection](live-inspection.md#bundling-a-departure).
+
 ## Streaming output to the UI
 
-Commands that run processes (`start_run`, `run_tests`, `git_network`) accept a Tauri `Channel<ProcessEvent>`. A forwarding task pumps supervisor events onto the channel as they arrive, so console output reaches the UI live rather than in one burst at exit. A closed channel (window went away) just stops forwarding — the process itself is left to finish.
+Commands that run processes (`start_run`, `run_tests`, `git_network`, `inspect_capture`) accept a Tauri `Channel<ProcessEvent>`. A forwarding task pumps supervisor events onto the channel as they arrive, so console output reaches the UI live rather than in one burst at exit. A closed channel (window went away) just stops forwarding — the process itself is left to finish.
 
 `run_tests` additionally waits for exit, parses the report file, records the result in `last_test_run`, and returns a `TestRunOutcome` containing the flat result, the built tree, and any invocation warnings.
 

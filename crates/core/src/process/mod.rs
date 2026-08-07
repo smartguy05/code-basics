@@ -36,7 +36,11 @@ pub enum Stream {
 // `rename_all` covers the variant names only; without `rename_all_fields`,
 // `duration_ms` crosses IPC as snake_case and the UI reads `undefined`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ProcessEvent {
     /// The process is running. Carries the resolved command line for display.
     Started {
@@ -120,7 +124,10 @@ impl Supervisor {
             .env
             .contains_key("Logging__Console__FormatterOptions__ColorBehavior")
         {
-            cmd.env("Logging__Console__FormatterOptions__ColorBehavior", "Enabled");
+            cmd.env(
+                "Logging__Console__FormatterOptions__ColorBehavior",
+                "Enabled",
+            );
         }
 
         kill::configure_process_group(&mut cmd);
@@ -133,17 +140,24 @@ impl Supervisor {
                     invocation.program,
                     invocation.cwd.display()
                 );
-                let _ = events.send(ProcessEvent::Failed { message: message.clone() }).await;
+                let _ = events
+                    .send(ProcessEvent::Failed {
+                        message: message.clone(),
+                    })
+                    .await;
                 return Err(anyhow::anyhow!(message));
             }
         };
 
         let pid = child.id();
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        self.running
-            .lock()
-            .await
-            .insert(id.to_string(), Running { pid, cancel: cancel.clone() });
+        self.running.lock().await.insert(
+            id.to_string(),
+            Running {
+                pid,
+                cancel: cancel.clone(),
+            },
+        );
 
         let _ = events
             .send(ProcessEvent::Started {
@@ -187,7 +201,11 @@ impl Supervisor {
             }
             Err(e) => {
                 let message = format!("failed while waiting for process: {e}");
-                let _ = events.send(ProcessEvent::Failed { message: message.clone() }).await;
+                let _ = events
+                    .send(ProcessEvent::Failed {
+                        message: message.clone(),
+                    })
+                    .await;
                 Err(anyhow::anyhow!(message))
             }
         }
@@ -221,6 +239,33 @@ impl Supervisor {
         self.running.lock().await.keys().cloned().collect()
     }
 
+    /// The pid of a running process, or `None` if it is not running or never
+    /// reported one.
+    ///
+    /// The two `None`s are deliberately not distinguished: both mean there is
+    /// nothing to attach to or signal, and a caller that acted differently on
+    /// "running but pid-less" would be acting on a process that has already
+    /// gone.
+    pub async fn pid(&self, id: &str) -> Option<u32> {
+        self.running.lock().await.get(id).and_then(|r| r.pid)
+    }
+
+    /// Every running process with its pid, for callers that need both.
+    ///
+    /// Sorted by id so a listing is stable between calls — a `HashMap` would
+    /// otherwise reorder a menu under the user's cursor.
+    pub async fn running(&self) -> Vec<(String, Option<u32>)> {
+        let mut all: Vec<(String, Option<u32>)> = self
+            .running
+            .lock()
+            .await
+            .iter()
+            .map(|(id, r)| (id.clone(), r.pid))
+            .collect();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        all
+    }
+
     pub async fn is_running(&self, id: &str) -> bool {
         self.running.lock().await.contains_key(id)
     }
@@ -240,7 +285,10 @@ where
             Ok(n) => {
                 let text = chunker.push(&buf[..n]);
                 if !text.is_empty()
-                    && events.send(ProcessEvent::Output { stream, text }).await.is_err()
+                    && events
+                        .send(ProcessEvent::Output { stream, text })
+                        .await
+                        .is_err()
                 {
                     // Receiver dropped — nothing left to report to.
                     return;
@@ -252,7 +300,9 @@ where
 
     let tail = chunker.finish();
     if !tail.is_empty() {
-        let _ = events.send(ProcessEvent::Output { stream, text: tail }).await;
+        let _ = events
+            .send(ProcessEvent::Output { stream, text: tail })
+            .await;
     }
 }
 
@@ -322,7 +372,11 @@ mod tests {
         assert!(matches!(events.first(), Some(ProcessEvent::Started { .. })));
         assert!(matches!(
             events.last(),
-            Some(ProcessEvent::Exited { success: true, cancelled: false, .. })
+            Some(ProcessEvent::Exited {
+                success: true,
+                cancelled: false,
+                ..
+            })
         ));
     }
 
@@ -343,7 +397,11 @@ mod tests {
         assert_eq!(code, Some(3));
         assert!(matches!(
             events.last(),
-            Some(ProcessEvent::Exited { success: false, code: Some(3), .. })
+            Some(ProcessEvent::Exited {
+                success: false,
+                code: Some(3),
+                ..
+            })
         ));
     }
 
@@ -408,11 +466,17 @@ mod tests {
 
         let mut saw_cancelled_exit = false;
         while let Ok(e) = rx.try_recv() {
-            if let ProcessEvent::Exited { cancelled, success, .. } = e {
+            if let ProcessEvent::Exited {
+                cancelled, success, ..
+            } = e
+            {
                 saw_cancelled_exit = cancelled && !success;
             }
         }
-        assert!(saw_cancelled_exit, "exit should be reported as a cancellation");
+        assert!(
+            saw_cancelled_exit,
+            "exit should be reported as a cancellation"
+        );
         assert!(!sup.is_running("long").await);
     }
 
@@ -448,6 +512,46 @@ mod tests {
             !marker.exists(),
             "grandchild survived the kill — the process group was not terminated"
         );
+    }
+
+    #[tokio::test]
+    async fn a_running_process_can_be_found_by_id_with_its_pid() {
+        // The pid is what makes a running process inspectable: the object
+        // inspector attaches by pid, and until now the supervisor was the only
+        // thing that knew it and would not say.
+        let sup = Supervisor::new();
+        let (tx, _rx) = mpsc::channel(64);
+        let inv = invocation("sh", &["-c", "sleep 60"]);
+
+        let runner = {
+            let sup = sup.clone();
+            tokio::spawn(async move { sup.run("app", &inv, tx).await })
+        };
+        loop {
+            if sup.is_running("app").await {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let pid = sup.pid("app").await.expect("a running process has a pid");
+        assert!(pid > 0);
+        assert_eq!(sup.running().await, vec![("app".to_string(), Some(pid))]);
+
+        sup.cancel("app").await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), runner).await;
+
+        // Nothing to attach to once it has gone, and saying otherwise would
+        // send a capture at a pid the OS may since have reused.
+        assert_eq!(sup.pid("app").await, None);
+        assert!(sup.running().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unknown_id_has_no_pid() {
+        let sup = Supervisor::new();
+        assert_eq!(sup.pid("never-started").await, None);
+        assert!(sup.running().await.is_empty());
     }
 
     #[tokio::test]

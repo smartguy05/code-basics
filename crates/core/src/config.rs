@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+use crate::inspect::model::{Caps, InspectorConfig};
 use crate::model::{ConfigSource, RunConfig};
 use crate::workspace::Workspace;
 
@@ -46,10 +47,73 @@ pub struct WorkspaceConfig {
     /// cannot see. See `crate::adapters::msbuild`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub msbuild_evaluation: bool,
+    /// Object-inspector settings for this workspace.
+    ///
+    /// Absent unless the user configured something, the same way
+    /// `msbuild_evaluation` stays out of the file until it is turned on. The
+    /// section is opt-in because it is the only thing that can enable crash
+    /// dump capture, and a dump is a verbatim copy of process memory —
+    /// connection strings, tokens, customer records — landing in a directory
+    /// next to a repository this file is shared through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inspector: Option<InspectorConfig>,
 }
 
 fn default_version() -> u32 {
     1
+}
+
+/// How many crash dumps to keep when the workspace has not said otherwise.
+///
+/// Three is enough to compare a repeated crash against its two predecessors,
+/// which is the case that actually needs history. The count alone cannot bound
+/// disk use, though: a dump of a trivial console app measured 9.3 MB and a real
+/// application's runs to hundreds of megabytes, so the byte budget below is the
+/// limit that genuinely binds.
+pub const DEFAULT_KEEP_DUMPS: u32 = 3;
+
+/// Total size budget for the dumps directory, in megabytes.
+///
+/// 2 GB is small enough to be an unremarkable amount of a development machine's
+/// disk, and large enough to hold three dumps of a mid-sized service. For any
+/// substantial application this is what prunes first — three 700 MB dumps
+/// already exceed it — which is the intended ordering: bytes are the resource
+/// that runs out, not files.
+pub const DEFAULT_MAX_DUMP_MEGABYTES: u64 = 2048;
+
+impl WorkspaceConfig {
+    /// Whether this workspace has opted into writing crash dumps.
+    ///
+    /// False whenever the section is absent. Nothing infers this from anything
+    /// else: capture only happens because someone asked for it in writing.
+    pub fn dump_capture_enabled(&self) -> bool {
+        self.inspector.as_ref().is_some_and(|i| i.capture_dumps)
+    }
+
+    /// The limits to walk an object graph under: whatever the workspace
+    /// configured, otherwise the built-in defaults.
+    pub fn inspector_caps(&self) -> Caps {
+        self.inspector
+            .as_ref()
+            .and_then(|i| i.caps)
+            .unwrap_or_default()
+    }
+
+    /// How many dumps to retain, newest first.
+    pub fn keep_dumps(&self) -> u32 {
+        self.inspector
+            .as_ref()
+            .and_then(|i| i.keep_dumps)
+            .unwrap_or(DEFAULT_KEEP_DUMPS)
+    }
+
+    /// The dumps directory's size budget, in megabytes.
+    pub fn max_dump_megabytes(&self) -> u64 {
+        self.inspector
+            .as_ref()
+            .and_then(|i| i.max_dump_megabytes)
+            .unwrap_or(DEFAULT_MAX_DUMP_MEGABYTES)
+    }
 }
 
 impl Default for WorkspaceConfig {
@@ -60,6 +124,7 @@ impl Default for WorkspaceConfig {
             favorites: Vec::new(),
             order: Vec::new(),
             msbuild_evaluation: false,
+            inspector: None,
         }
     }
 }
@@ -100,6 +165,12 @@ const IGNORED: &[&str] = &[
     "results/",
     crate::changelists::CHANGELISTS_FILE,
     "intents/",
+    // Object captures: regenerated on demand, full of one machine's absolute
+    // paths, and a verbatim copy of whatever data the process was holding.
+    "inspect/",
+    // Crash dumps are process memory — connection strings, tokens, whatever
+    // the application had in flight. These must never reach a shared history.
+    "dumps/",
 ];
 
 /// Make sure `.code-basics/.gitignore` lists everything local.
@@ -129,15 +200,13 @@ pub fn ensure_gitignore(dir: &Path) -> Result<()> {
         updated.push('\n');
     }
 
-    std::fs::write(&path, updated)
-        .with_context(|| format!("failed to write {}", path.display()))
+    std::fs::write(&path, updated).with_context(|| format!("failed to write {}", path.display()))
 }
 
 /// Write the configuration file, creating the directory if needed.
 pub fn save(root: &Path, config: &WorkspaceConfig) -> Result<()> {
     let dir = config_dir(root);
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
     ensure_gitignore(&dir)?;
 
@@ -171,8 +240,7 @@ pub fn merge(detected: Vec<RunConfig>, saved: Vec<RunConfig>) -> Vec<RunConfig> 
 /// the configs, carry over favourites and ordering, and sort the result the
 /// way the UI lists it.
 pub fn apply(workspace: &mut Workspace, saved: WorkspaceConfig) {
-    workspace.configs =
-        merge(std::mem::take(&mut workspace.configs), saved.configs);
+    workspace.configs = merge(std::mem::take(&mut workspace.configs), saved.configs);
     sort_configs(&mut workspace.configs, &saved.favorites, &saved.order);
     workspace.favorites = saved.favorites;
     workspace.order = saved.order;
@@ -183,8 +251,7 @@ pub fn apply(workspace: &mut Workspace, saved: WorkspaceConfig) {
 /// arranged. The sort is stable, so ids missing from both lists keep the name
 /// order [`merge`] established.
 pub fn sort_configs(configs: &mut [RunConfig], favorites: &[String], order: &[String]) {
-    let position =
-        |id: &str| order.iter().position(|o| o == id).unwrap_or(usize::MAX);
+    let position = |id: &str| order.iter().position(|o| o == id).unwrap_or(usize::MAX);
     let favorite = |id: &str| !favorites.iter().any(|f| f == id);
 
     configs.sort_by(|a, b| {
@@ -255,7 +322,7 @@ pub fn remove(root: &Path, id: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{RunKind, RunConfig};
+    use crate::model::{RunConfig, RunKind};
 
     fn config(id: &str, name: &str, source: ConfigSource) -> RunConfig {
         RunConfig::new(id, name, RunKind::App, "dotnet", source)
@@ -284,7 +351,10 @@ mod tests {
 
         assert_eq!(reloaded.configs.len(), 1);
         assert_eq!(reloaded.configs[0].args, vec!["--verbose"]);
-        assert_eq!(reloaded.configs[0].env.get("KEY").map(String::as_str), Some("value"));
+        assert_eq!(
+            reloaded.configs[0].env.get("KEY").map(String::as_str),
+            Some("value")
+        );
     }
 
     #[test]
@@ -304,7 +374,11 @@ mod tests {
             config("api:run", "Api (detected)", ConfigSource::Detected),
             config("web:run", "Web", ConfigSource::Detected),
         ];
-        let saved = vec![config("api:run", "Api (customised)", ConfigSource::UserFile)];
+        let saved = vec![config(
+            "api:run",
+            "Api (customised)",
+            ConfigSource::UserFile,
+        )];
 
         let merged = merge(detected, saved);
 
@@ -335,8 +409,16 @@ mod tests {
     #[test]
     fn upsert_replaces_rather_than_appending() {
         let dir = tempfile::tempdir().unwrap();
-        upsert(dir.path(), config("api:run", "First", ConfigSource::UserFile)).unwrap();
-        upsert(dir.path(), config("api:run", "Second", ConfigSource::UserFile)).unwrap();
+        upsert(
+            dir.path(),
+            config("api:run", "First", ConfigSource::UserFile),
+        )
+        .unwrap();
+        upsert(
+            dir.path(),
+            config("api:run", "Second", ConfigSource::UserFile),
+        )
+        .unwrap();
 
         let saved = load(dir.path()).unwrap();
         assert_eq!(saved.configs.len(), 1);
@@ -350,7 +432,10 @@ mod tests {
 
         assert!(remove(dir.path(), "api:run").unwrap());
         assert!(load(dir.path()).unwrap().configs.is_empty());
-        assert!(!remove(dir.path(), "api:run").unwrap(), "removing twice is a no-op");
+        assert!(
+            !remove(dir.path(), "api:run").unwrap(),
+            "removing twice is a no-op"
+        );
     }
 
     #[test]
@@ -393,7 +478,11 @@ mod tests {
         sort_configs(&mut configs, &favorites, &order);
 
         let ids: Vec<&str> = configs.iter().map(|c| c.id.as_str()).collect();
-        assert_eq!(ids, ["b", "a"], "the order list decides ties between favourites");
+        assert_eq!(
+            ids,
+            ["b", "a"],
+            "the order list decides ties between favourites"
+        );
     }
 
     #[test]
@@ -430,10 +519,107 @@ mod tests {
     fn empty_favourites_and_order_stay_out_of_the_file() {
         // The config file is checked in; noise keys would show up in diffs.
         let json = serde_json::to_value(WorkspaceConfig::default()).unwrap();
-        let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         keys.sort();
 
         assert_eq!(keys, ["configs", "version"]);
+    }
+
+    #[test]
+    fn an_untouched_inspector_section_stays_out_of_the_file() {
+        // Same reason as favourites — but with teeth: this file is shared with
+        // the team, and a `captureDumps` key appearing in it as a side effect
+        // of saving a run configuration would be an invitation to flip it on.
+        let dir = tempfile::tempdir().unwrap();
+        upsert(dir.path(), config("api:run", "Api", ConfigSource::UserFile)).unwrap();
+
+        let written = std::fs::read_to_string(config_path(dir.path())).unwrap();
+        assert!(!written.contains("inspector"), "got {written}");
+        assert!(!written.contains("captureDumps"), "got {written}");
+    }
+
+    #[test]
+    fn a_config_without_an_inspector_section_has_capture_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(config_dir(dir.path())).unwrap();
+        std::fs::write(config_path(dir.path()), r#"{"version":1,"configs":[]}"#).unwrap();
+
+        let loaded = load(dir.path()).unwrap();
+        assert!(loaded.inspector.is_none());
+        assert!(!loaded.dump_capture_enabled());
+        assert_eq!(loaded.inspector_caps(), Caps::default());
+        assert_eq!(loaded.keep_dumps(), DEFAULT_KEEP_DUMPS);
+        assert_eq!(loaded.max_dump_megabytes(), DEFAULT_MAX_DUMP_MEGABYTES);
+    }
+
+    #[test]
+    fn an_inspector_section_present_but_not_opted_in_still_disables_capture() {
+        // Configuring caps or retention must not imply consent to dump memory.
+        let file = WorkspaceConfig {
+            inspector: Some(InspectorConfig {
+                keep_dumps: Some(10),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(!file.dump_capture_enabled());
+        assert_eq!(file.keep_dumps(), 10);
+    }
+
+    #[test]
+    fn inspector_settings_survive_a_save_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = WorkspaceConfig {
+            inspector: Some(InspectorConfig {
+                capture_dumps: true,
+                caps: Some(Caps {
+                    max_depth: 2,
+                    ..Caps::default()
+                }),
+                max_dump_megabytes: Some(512),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        save(dir.path(), &file).unwrap();
+
+        let reloaded = load(dir.path()).unwrap();
+        assert!(reloaded.dump_capture_enabled());
+        assert_eq!(reloaded.inspector_caps().max_depth, 2);
+        assert_eq!(reloaded.max_dump_megabytes(), 512);
+        // Unset within a present section still falls back, not to zero.
+        assert_eq!(reloaded.keep_dumps(), DEFAULT_KEEP_DUMPS);
+    }
+
+    #[test]
+    fn a_partial_caps_section_does_not_stop_the_workspace_opening() {
+        // `load` failing is not a local failure: `open_workspace` propagates it,
+        // so a hand-written subset of the limits would lock the user out of the
+        // repository until they edited the JSON back.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(config_dir(dir.path())).unwrap();
+        std::fs::write(
+            config_path(dir.path()),
+            r#"{"version":1,"configs":[],"inspector":{"caps":{"maxDepth":2}}}"#,
+        )
+        .unwrap();
+
+        let loaded = load(dir.path()).expect("a partial caps section must still load");
+
+        assert_eq!(loaded.inspector_caps().max_depth, 2);
+        // The keys that were not written keep the built-in defaults rather than
+        // collapsing to zero, which would elide everything.
+        assert_eq!(
+            loaded.inspector_caps().max_children,
+            Caps::default().max_children
+        );
+        assert_eq!(loaded.inspector_caps().max_nodes, Caps::default().max_nodes);
     }
 
     #[test]

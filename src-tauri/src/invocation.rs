@@ -8,6 +8,7 @@ use std::path::Path;
 
 use cb_core::adapters::{dotnet, manifest, node};
 use cb_core::config;
+use cb_core::inspect::session::{self, ArmedDumps};
 use cb_core::model::{Invocation, RunConfig, RunKind, TestRunner};
 use cb_core::workspace::{self, Workspace};
 
@@ -34,7 +35,16 @@ pub fn build(
             "{} is a compound configuration with no command of its own",
             config.name
         )),
-        "dotnet" => Ok(build_dotnet(workspace, config, &results, filter)),
+        "dotnet" => {
+            let dumps = session::arm_dumps(root);
+            Ok(build_dotnet(
+                workspace,
+                config,
+                &results,
+                filter,
+                dumps.as_ref(),
+            ))
+        }
         "node" => build_node(workspace, config, &results, filter),
         // Anything else must come from a declarative manifest.
         other => build_from_manifest(workspace, config, &results, filter, other),
@@ -46,6 +56,7 @@ fn build_dotnet(
     config: &RunConfig,
     results: &Path,
     filter: Option<&[String]>,
+    dumps: Option<&ArmedDumps>,
 ) -> Invocation {
     let root = workspace.root.as_path();
 
@@ -59,7 +70,11 @@ fn build_dotnet(
     let has_launch_settings = config
         .project
         .as_ref()
-        .and_then(|p| root.join(p).parent().map(|d| d.join("Properties").join("launchSettings.json")))
+        .and_then(|p| {
+            root.join(p)
+                .parent()
+                .map(|d| d.join("Properties").join("launchSettings.json"))
+        })
         .is_some_and(|p| p.exists());
 
     let ctx = dotnet::BuildContext {
@@ -69,6 +84,8 @@ fn build_dotnet(
         trx_extension_available: trx_available,
         has_launch_settings,
         filter: filter.map(<[String]>::to_vec),
+        dumps_dir: dumps.map(|d| d.dir.as_path()),
+        dump_env: dumps.map(|d| &d.env),
     };
 
     match config.kind {
@@ -123,25 +140,29 @@ fn build_from_manifest(
     let root = workspace.root.as_path();
     let (manifests, errors) = manifest::load_dir(&manifest::manifest_dir(root));
 
-    let found = manifests.iter().find(|m| m.id == ecosystem).ok_or_else(|| {
-        if errors.is_empty() {
-            format!("no adapter named `{ecosystem}` is defined in .code-basics/adapters")
-        } else {
-            // A manifest that failed to load is the likeliest reason its
-            // adapter appears to be missing, so say so rather than just
-            // reporting it as unknown.
-            format!(
-                "no adapter named `{ecosystem}` could be loaded. \
+    let found = manifests
+        .iter()
+        .find(|m| m.id == ecosystem)
+        .ok_or_else(|| {
+            if errors.is_empty() {
+                format!("no adapter named `{ecosystem}` is defined in .code-basics/adapters")
+            } else {
+                // A manifest that failed to load is the likeliest reason its
+                // adapter appears to be missing, so say so rather than just
+                // reporting it as unknown.
+                format!(
+                    "no adapter named `{ecosystem}` could be loaded. \
                  One or more manifests failed to parse: {}",
-                errors.join("; ")
-            )
-        }
-    })?;
+                    errors.join("; ")
+                )
+            }
+        })?;
 
     let template = match config.kind {
-        RunKind::Test => found.test.as_ref().ok_or_else(|| {
-            format!("the `{ecosystem}` adapter does not define a test command")
-        })?,
+        RunKind::Test => found
+            .test
+            .as_ref()
+            .ok_or_else(|| format!("the `{ecosystem}` adapter does not define a test command"))?,
         RunKind::App => {
             let name = config.script.as_deref().unwrap_or_default();
             found.run.get(name).ok_or_else(|| {

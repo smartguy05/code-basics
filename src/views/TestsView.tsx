@@ -6,9 +6,11 @@ import {
 } from "../components/OutputConsole";
 import { TestTree } from "../components/TestTree";
 import * as api from "../ipc/api";
+import type { InspectRequest } from "../App";
 import type {
   ProcessEvent,
   RunConfig,
+  RunDump,
   TestCase,
   TestNode,
   TestOutcome,
@@ -108,7 +110,13 @@ function applyLiveOutcomes(
   return { ...node, children, outcome, durationMs: null, summary };
 }
 
-export function TestsView({ workspace }: { workspace: Workspace }) {
+export function TestsView({
+  workspace,
+  onInspect,
+}: {
+  workspace: Workspace;
+  onInspect: (request: InspectRequest) => void;
+}) {
   const testConfigs = workspace.configs.filter((c) => c.kind === "test");
 
   const [selectedConfig, setSelectedConfig] = useState<string | null>(
@@ -123,9 +131,43 @@ export function TestsView({ workspace }: { workspace: Workspace }) {
   const [live, setLive] = useState<LiveCounts | null>(null);
   const [liveResults, setLiveResults] = useState<Map<string, TestOutcome>>(new Map());
 
+  /** A dump this run produced, if one turned up. Null means offer nothing. */
+  const [runDump, setRunDump] = useState<RunDump | null>(null);
+
   const consoleRef = useRef<ConsoleHandle>(null);
   /** Output chunks split lines anywhere; the tail carries over. */
   const partialLine = useRef("");
+
+  /**
+   * Look for a dump written while the run that started at `startedAt` was going.
+   *
+   * The test host writes its blame dump as it exits, so a dump older than the
+   * run cannot have come from it; the host is still tearing down when
+   * `runTests` returns, hence one retry. If nothing turns up — capture is off,
+   * the runner writes no dump, or the file is not listed — no affordance is
+   * shown at all.
+   *
+   * Nothing here attributes the dump to the run. A test run reports no pid for
+   * the process that actually crashes (the test host is a grandchild), so the
+   * backend can only ever return `certain: false`, and the affordance is worded
+   * as a candidate rather than as this run's crash.
+   */
+  async function findRunDump(startedAt: number) {
+    for (const delay of [0, 1500]) {
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+      try {
+        const status = await api.inspectStatus();
+        if (!status.available || !status.dumpCaptureEnabled) return;
+        const found = await api.inspectRunDump(null, startedAt);
+        if (found) {
+          setRunDump(found);
+          return;
+        }
+      } catch {
+        return;
+      }
+    }
+  }
 
   function trackLive(event: ProcessEvent) {
     if (event.type !== "output") return;
@@ -195,6 +237,9 @@ export function TestsView({ workspace }: { workspace: Workspace }) {
     partialLine.current = "";
     setLive({ passed: 0, failed: 0, skipped: 0 });
     setLiveResults(new Map());
+    // The previous run's dump describes a process that is gone.
+    setRunDump(null);
+    const startedAt = Math.floor(Date.now() / 1000);
 
     try {
       const result = await api.runTests(selectedConfig, onlyFailed, (event) => {
@@ -203,6 +248,7 @@ export function TestsView({ workspace }: { workspace: Workspace }) {
       });
       setOutcome(result);
       setSelectedNode(null);
+      if (result.result.summary.failed > 0) void findRunDump(startedAt);
     } catch (e) {
       setError(api.errorMessage(e));
     } finally {
@@ -367,6 +413,43 @@ export function TestsView({ workspace }: { workspace: Workspace }) {
           {selectedCase && (
             <div className="failure-detail">
               <h3>{selectedCase.fullName}</h3>
+
+              {/* Only for a failure, and only once a dump written during this
+                  run has been found — see `findRunDump`. Two things are stated
+                  rather than implied: nothing ties this dump to this run (a
+                  test run reports no pid for the process that crashes, and
+                  another configuration running at the same time is armed too),
+                  and the dump is written when the test host exits, which is
+                  after the failing test has finished and its locals have gone. */}
+              {runDump && selectedNode?.outcome === "failed" && (
+                <div className="toolbar">
+                  <button
+                    className="primary"
+                    title={`Read ${runDump.dump.executable} · pid ${runDump.dump.pid}`}
+                    onClick={() =>
+                      onInspect({
+                        target: { kind: "dump", path: runDump.dump.path },
+                        root: { kind: "exceptions" },
+                        reason: `${runDump.dump.executable} · pid ${runDump.dump.pid}, a dump written while this run was going — not confirmed to be ${selectedCase.fullName}'s failure`,
+                      })
+                    }
+                  >
+                    Inspect objects
+                  </button>
+                  <span className="muted" style={{ fontSize: 11 }}>
+                    A dump was written while this run was going —{" "}
+                    <span className="mono">
+                      {runDump.dump.executable} · pid {runDump.dump.pid}
+                    </span>
+                    . Nothing confirms it came from this run rather than from
+                    something else running at the same time. It holds every
+                    exception still on the heap when the test host exited, which
+                    is after this test finished, so anything that only lived
+                    inside it may already have gone.
+                  </span>
+                </div>
+              )}
+
               {selectedCase.message && (
                 <>
                   <div className="muted">Message</div>
