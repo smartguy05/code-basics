@@ -2,10 +2,15 @@
 
 ## Open
 
-- [ ] **Verify in the running app.** Everything is covered by tests, but the
-  feature has not yet been driven through the real UI: enable capture on a
-  scratch repo, confirm `.git/hooks/pre-commit` appears in the install preview,
-  reject a real card, confirm the commit is blocked, then fix and commit.
+- [x] **Reject verified in the running app** (2026-08-10, by Anthony). Rejected
+  the second of two hunks in a `.ts` file on a scratch repo: the kept hunk above
+  it survived, and the note landed above the restored line at the file's own
+  indent — i.e. the anchor shift for a kept earlier hunk is right in practice,
+  not just in `a_kept_earlier_hunk_shifts_the_anchor_by_its_net_line_change`.
+- [ ] **The commit guard is still only verified by tests.** That run did not
+  enable capture, so `.git/hooks/pre-commit` was never installed and the
+  install preview / blocked-commit path has not been seen in the UI. Covered by
+  `tests/reject_markers.rs`, but not clicked through.
 - [ ] `guard::plan_removal` has no caller, exactly like
   `hooks_json::plan_removal` — there is still no `disable_intent_capture`
   command. If one is ever added it should take the guard out too.

@@ -65,8 +65,13 @@
   lines, gate (70) passes. Frontend coverage 99.55% lines.
 - `pnpm docs:check` — 20 files, all under 500 lines, all links resolve.
 
-## Not verified
+## Verified in the running app
 
-The GUI click-through. Everything below the UI is covered by tests against real
-repositories and the real `git`, but nobody has yet pressed **Reject group…**
-in the running app. See todos.md.
+2026-08-10, by Anthony: **Reject group…** driven through the real UI on a
+scratch repo, rejecting the second of two hunks in one `.ts` file. The kept
+hunk survived, and the note landed above the restored line at the file's own
+two-space indent — the anchor shift for a kept earlier hunk holds in practice.
+
+Still only test-verified: the commit guard. That run never enabled capture, so
+no `pre-commit` hook was installed and neither the install preview nor the
+blocked commit has been seen in the UI. See todos.md.
