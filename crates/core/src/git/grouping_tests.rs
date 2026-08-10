@@ -292,6 +292,84 @@ fn a_class_declaration_is_recognised() {
     );
 }
 
+/// The name of a binding is the binding, not the type it was annotated with.
+#[test]
+fn a_let_binding_names_the_variable_not_its_type() {
+    assert_eq!(
+        declaration_name("let total: usize = 0;").as_deref(),
+        Some("total")
+    );
+}
+
+#[test]
+fn a_static_names_the_item_not_its_type() {
+    assert_eq!(
+        declaration_name("static COUNTER: AtomicU64 = AtomicU64::new(0);").as_deref(),
+        Some("COUNTER")
+    );
+}
+
+#[test]
+fn a_typescript_annotated_const_names_the_binding() {
+    assert_eq!(
+        declaration_name("const cache: Map<string, number> = new Map();").as_deref(),
+        Some("cache")
+    );
+}
+
+/// A C# property has no colon, so the last-identifier rule still applies.
+#[test]
+fn a_csharp_property_names_the_property() {
+    assert_eq!(
+        declaration_name("public Bitness Bitness { get; }").as_deref(),
+        Some("Bitness")
+    );
+}
+
+/// `import type { … }` carries the declaring keyword `type`, but it declares
+/// nothing — without this rule every type-only import titles a card "import".
+#[test]
+fn a_type_only_import_is_not_a_declaration() {
+    assert_eq!(
+        declaration_name("import type { IntentGroup } from \"./types\";"),
+        None
+    );
+}
+
+/// `pub use …` carries `pub`, but re-exporting is not declaring: the last
+/// identifier rule would title the card "use".
+#[test]
+fn a_re_export_is_not_a_declaration() {
+    assert_eq!(
+        declaration_name("pub use crate::intents::ProviderId;"),
+        None
+    );
+}
+
+/// An import line is a location nobody wants on a card: "New import" says
+/// nothing. Rejecting it lets the hunk fall through to its file.
+#[test]
+fn an_import_line_in_the_header_is_not_a_symbol() {
+    let d = simple(
+        "a.ts",
+        &["+    doThing();"],
+        "import { useState } from \"react\";",
+    );
+
+    assert_eq!(enclosing_symbol(&d.hunks[0]), None);
+}
+
+#[test]
+fn a_use_statement_header_is_not_a_symbol() {
+    let d = simple(
+        "a.rs",
+        &["+    do_thing();"],
+        "use std::sync::atomic::AtomicU64;",
+    );
+
+    assert_eq!(enclosing_symbol(&d.hunks[0]), None);
+}
+
 /// Without requiring a declaring keyword, every assignment would look like a
 /// symbol and the grouping would be meaningless.
 #[test]
@@ -345,6 +423,101 @@ fn a_hunk_with_no_symbol_falls_back_to_its_file() {
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].kind, GroupKind::Other);
     assert!(groups[0].label.contains("config.json"));
+}
+
+/// The badge on the card already says New/Changed; repeating the verb in the
+/// label just makes it longer.
+#[test]
+fn a_symbol_card_label_is_the_bare_symbol() {
+    let d = simple("a.rs", &["+fn brand_new_thing() {", "+}"], "");
+
+    let groups = group_without_intent(&[d]);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].kind, GroupKind::NewSymbol);
+    assert_eq!(groups[0].label, "brand_new_thing");
+}
+
+// -- collapsing singleton symbol cards --------------------------------------
+
+/// One card per hunk is the failure mode this exists to prevent: a file with a
+/// scattering of one-hunk symbols is one decision, not five.
+#[test]
+fn many_singleton_symbols_in_one_file_collapse_into_one_card_per_file() {
+    let mut index = 0;
+    let d = file(
+        "src/thing.rs",
+        vec![
+            hunk(&["+fn alpha_one() {}"], &mut index, ""),
+            hunk(&["+fn beta_two() {}"], &mut index, ""),
+            hunk(&["+fn gamma_three() {}"], &mut index, ""),
+        ],
+    );
+
+    let groups = group_without_intent(&[d]);
+
+    assert_eq!(
+        groups.len(),
+        1,
+        "got {:?}",
+        groups.iter().map(|g| &g.label).collect::<Vec<_>>()
+    );
+    assert_eq!(groups[0].kind, GroupKind::Other);
+    assert!(groups[0].label.contains("thing.rs"), "{}", groups[0].label);
+    assert_eq!(groups[0].hunk_count(), 3);
+}
+
+/// A symbol touched in two files is a real grouping and must not be dissolved
+/// back into per-file buckets.
+#[test]
+fn a_symbol_spanning_files_survives_the_singleton_collapse() {
+    let first = simple("a.rs", &["+    one();"], "fn shared_name() {");
+    let second = simple("b.rs", &["+    two();"], "fn shared_name() {");
+
+    let groups = group_without_intent(&[first, second]);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].symbol.as_deref(), Some("shared_name"));
+    assert_eq!(groups[0].files.len(), 2);
+}
+
+/// With only one of them, the symbol name is a better label than the file.
+#[test]
+fn a_files_single_symbol_card_keeps_its_symbol_label() {
+    let d = simple("a.rs", &["+fn only_one_thing() {}"], "");
+
+    let groups = group_without_intent(&[d]);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].kind, GroupKind::NewSymbol);
+    assert_eq!(groups[0].label, "only_one_thing");
+}
+
+/// Two groups may never share an id — stage and revert look a group up by it.
+#[test]
+fn singleton_collapse_merges_into_an_existing_other_bucket_for_the_file() {
+    let mut index = 0;
+    let d = file(
+        "a.rs",
+        vec![
+            hunk(&["+fn alpha_one() {}"], &mut index, ""),
+            hunk(&["+fn beta_two() {}"], &mut index, ""),
+            hunk(&["+    plain_call();"], &mut index, ""),
+        ],
+    );
+
+    let groups = group_without_intent(&[d]);
+
+    assert_eq!(
+        groups.len(),
+        1,
+        "got {:?}",
+        groups.iter().map(|g| &g.id).collect::<Vec<_>>()
+    );
+    assert_eq!(groups[0].id, "other:a.rs");
+    assert_eq!(groups[0].kind, GroupKind::Other);
+    assert_eq!(groups[0].hunk_count(), 3);
+    assert_eq!(groups[0].line_count, 3);
 }
 
 // -- recorded intent wins ---------------------------------------------------
@@ -580,7 +753,7 @@ fn a_group_without_a_symbol_omits_the_key_rather_than_sending_null() {
     let group = IntentGroup {
         id: "formatting".into(),
         kind: GroupKind::Formatting,
-        label: "Formatting only".into(),
+        label: "Whitespace only".into(),
         symbol: None,
         files: Vec::new(),
         line_count: 0,

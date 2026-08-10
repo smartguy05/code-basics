@@ -24,6 +24,9 @@ use crate::intents::ProviderId;
 /// Marks our section so a second install can recognise it.
 pub const MARKER: &str = "<!-- code-basics: agent intent -->";
 
+/// Closes the section, bounding what a re-install may rewrite.
+pub const END_MARKER: &str = "<!-- /code-basics -->";
+
 /// What the agent is asked to do.
 ///
 /// Deliberately short. A long instruction competes for attention with the
@@ -34,16 +37,23 @@ const SECTION: &str = r#"
 ## Recording why you changed something
 
 When you finish a turn in which you edited files, end your reply with one line
-per distinct change:
+saying why:
 
 ```
 Intent: <3-5 words describing why>
-Intent(path/to/file.rs): <why, for one file specifically>
 ```
 
-Use the parenthesised form when a single turn made unrelated changes to
-different files. Keep each label short enough to read at a glance — it labels a
-group of hunks in the Changes tab, not a commit message.
+If the turn made unrelated changes, scope each reason to its files instead of
+writing several plain lines — only the first plain line is used. Paths are
+workspace-relative, comma-separated:
+
+```
+Intent(src/api.ts, src/apiLogic.test.ts): <why, for those files>
+```
+
+A scoped line covers the files it names; one plain line may cover the rest.
+Keep each label short enough to read at a glance — it titles a group of hunks
+in the Changes tab, not a commit message.
 <!-- /code-basics -->
 "#;
 
@@ -60,8 +70,9 @@ pub fn is_present(path: &Path) -> bool {
     std::fs::read_to_string(path).is_ok_and(|text| text.contains(MARKER))
 }
 
-/// The file's contents with the request appended, or `None` when it is already
-/// there and nothing needs to change.
+/// The file's contents with the request appended — or, when an earlier
+/// install already left the marked section behind, rewritten in place so a
+/// re-install refreshes stale wording. `None` when nothing needs to change.
 ///
 /// Returns a [`PlannedWrite`] so it renders in the same confirmation dialog as
 /// the hook configuration: the user sees every file that will be touched,
@@ -69,7 +80,7 @@ pub fn is_present(path: &Path) -> bool {
 pub fn planned_write(provider: ProviderId, root: &Path) -> Option<PlannedWrite> {
     let path = path_for(provider, root);
     if is_present(&path) {
-        return None;
+        return refreshed(&path);
     }
 
     let existing = std::fs::read_to_string(&path).ok();
@@ -90,6 +101,33 @@ pub fn planned_write(provider: ProviderId, root: &Path) -> Option<PlannedWrite> 
         path,
         content,
         merges_existing,
+    })
+}
+
+/// Replace the marked span with the current request.
+///
+/// Only what sits between [`MARKER`] and [`END_MARKER`] is ours to rewrite; a
+/// marker whose end is missing bounds nothing, so the file is left alone
+/// rather than guessed at. `None` when the section is already current.
+fn refreshed(path: &Path) -> Option<PlannedWrite> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let start = text.find(MARKER)?;
+    let end = start + text[start..].find(END_MARKER)? + END_MARKER.len();
+
+    let current = SECTION.trim();
+    if &text[start..end] == current {
+        return None;
+    }
+
+    let mut content = String::with_capacity(text.len() + current.len());
+    content.push_str(&text[..start]);
+    content.push_str(current);
+    content.push_str(&text[end..]);
+
+    Some(PlannedWrite {
+        path: path.to_path_buf(),
+        content,
+        merges_existing: true,
     })
 }
 

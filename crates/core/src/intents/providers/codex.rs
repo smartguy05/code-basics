@@ -79,7 +79,7 @@ impl Codex {
         let project = project_hooks_path(root);
         let user = user_hooks_path(home);
 
-        let capture = if hooks_json::is_installed(&project) {
+        let mut capture = if hooks_json::is_installed(&project) {
             Some(InstallScope::Project)
         } else if user.as_deref().is_some_and(hooks_json::is_installed) {
             Some(InstallScope::User)
@@ -90,6 +90,15 @@ impl Codex {
         let sessions = find_sessions_in(home, root).map(|s| s.len()).unwrap_or(0);
 
         let mut caveats = Vec::new();
+        if capture == Some(InstallScope::User) {
+            if let Some(pinned) = user
+                .as_deref()
+                .and_then(|path| hooks_json::pinned_elsewhere(path, root))
+            {
+                capture = None;
+                caveats.push(hooks_json::pinned_caveat(&pinned));
+            }
+        }
         if capture == Some(InstallScope::Project) && !is_trusted_in(home, root) {
             caveats.push(
                 "Codex ignores this repository's .codex/ directory until the project is \
@@ -131,7 +140,10 @@ impl Codex {
                 .ok_or_else(|| anyhow::anyhow!("could not locate the Codex home directory"))?,
         };
 
-        let (content, merges_existing) = hooks_json::plan_merge(&path, root)?;
+        // A user-scope hook fires everywhere, so it names no workspace and
+        // lets the recorder resolve one from the payload.
+        let pin = (scope == InstallScope::Project).then_some(root);
+        let (content, merges_existing) = hooks_json::plan_merge(&path, pin)?;
 
         let mut caveats = Vec::new();
         if scope == InstallScope::Project && !is_trusted_in(home, root) {
@@ -166,8 +178,9 @@ impl Codex {
         // reading a chat rather than as a card title.
         if let Some(write) = instructions::planned_write(ProviderId::Codex, root) {
             caveats.push(format!(
-                "A short section is appended to {} asking the agent to state its \
-                 intent. Capture works without it, but the labels are coarser.",
+                "A short section in {} asks the agent to state its intent; it is \
+                 added or brought up to date. Capture works without it, but the \
+                 labels are coarser.",
                 write.path.display()
             ));
             writes.push(write);
@@ -513,9 +526,9 @@ fn push_record(
     });
 }
 
-/// The hook entries Codex should run for us.
+/// The hook entries Codex should run for us, for a project-scope install.
 pub(super) fn hook_commands(root: &Path) -> Value {
-    hooks_json::commands_for(root, "codex")
+    hooks_json::commands_for(Some(root), "codex")
 }
 
 /// Exposed for the plan renderer, which shows what will be added.

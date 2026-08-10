@@ -397,6 +397,45 @@ fn the_payload_cwd_is_used_when_no_workspace_was_named() {
     );
 }
 
+/// A user-scope hook no longer names a workspace, so the payload's `cwd` is
+/// what decides where a record lands.
+#[test]
+fn resolve_root_falls_back_to_the_payload_cwd_when_no_workspace_is_named() {
+    let dir = workspace();
+    let elsewhere = tempfile::tempdir().unwrap();
+
+    assert_eq!(
+        resolve_enabled_root(None, Some(dir.path())).unwrap(),
+        dir.path()
+    );
+    assert_eq!(resolve_enabled_root(None, Some(elsewhere.path())), None);
+}
+
+/// An agent's `cwd` is wherever it was started, which is routinely a
+/// subdirectory of the repository that enabled capture.
+#[test]
+fn resolve_root_ascends_from_a_subdirectory_to_the_enabled_workspace() {
+    let dir = workspace();
+    let deep = dir.path().join("src").join("deep");
+    std::fs::create_dir_all(&deep).unwrap();
+
+    assert_eq!(resolve_enabled_root(None, Some(&deep)).unwrap(), dir.path());
+}
+
+/// A project-scope hook still names its workspace, and that answer is taken
+/// as given — no ascent, and the enabled check stays with the caller.
+#[test]
+fn a_named_workspace_is_used_verbatim_without_ascending() {
+    let dir = workspace();
+    let deep = dir.path().join("src");
+    std::fs::create_dir_all(&deep).unwrap();
+
+    assert_eq!(
+        resolve_enabled_root(Some(&deep), Some(dir.path())).unwrap(),
+        deep
+    );
+}
+
 #[test]
 fn an_unknown_event_name_is_not_accepted() {
     assert!(HookEvent::parse("PreToolUse").is_none());

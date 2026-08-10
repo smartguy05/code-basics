@@ -106,3 +106,26 @@ Three layers with a strict dependency rule:
 - Per-workspace state (config, declarative adapters, test report output) all lives under `.code-basics/` in the opened workspace.
 - The app accepts a directory argument (`code-basics .`); a bad path logs and still opens the welcome screen.
 - The release profile sets `panic = "abort"` (plus `lto`, `codegen-units = 1`, `opt-level = "s"`, `strip`). Nothing may rely on `catch_unwind` to recover.
+
+<!-- code-basics: agent intent -->
+## Recording why you changed something
+
+When you finish a turn in which you edited files, end your reply with one line
+saying why:
+
+```
+Intent: <3-5 words describing why>
+```
+
+If the turn made unrelated changes, scope each reason to its files instead of
+writing several plain lines — only the first plain line is used. Paths are
+workspace-relative, comma-separated:
+
+```
+Intent(src/api.ts, src/apiLogic.test.ts): <why, for those files>
+```
+
+A scoped line covers the files it names; one plain line may cover the rest.
+Keep each label short enough to read at a glance — it titles a group of hunks
+in the Changes tab, not a commit message.
+<!-- /code-basics -->

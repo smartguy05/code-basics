@@ -414,6 +414,32 @@ pub fn resolve_root(explicit: Option<&str>, payload: &Value) -> Option<PathBuf> 
         .map(PathBuf::from)
 }
 
+/// Which enabled workspace this invocation should record into.
+///
+/// An explicit workspace is taken as given — a project-scope hook lives inside
+/// the repository it names, so there is nothing to search for and no reason to
+/// climb out of it. The caller still checks [`is_enabled`].
+///
+/// With no workspace named — the user-scope case, which fires for every
+/// repository on the machine — the payload's `cwd` decides. It is the
+/// directory the agent was started in, which is routinely *below* the
+/// workspace root, so the ancestors are walked until one has capture enabled.
+/// Nothing enabled anywhere on that chain means this repository never opted
+/// in, and `None` is the correct, silent answer.
+pub fn resolve_enabled_root(
+    explicit: Option<&Path>,
+    payload_cwd: Option<&Path>,
+) -> Option<PathBuf> {
+    if let Some(path) = explicit.filter(|p| !p.as_os_str().is_empty()) {
+        return Some(path.to_path_buf());
+    }
+
+    payload_cwd?
+        .ancestors()
+        .find(|candidate| is_enabled(candidate))
+        .map(Path::to_path_buf)
+}
+
 #[cfg(test)]
 #[path = "hook_tests.rs"]
 mod tests;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { DiffView, type DiffLayout } from "../components/DiffView";
-import { allChangedIndices } from "../components/diffLogic";
+import { allChangedIndices, onlyHunks } from "../components/diffLogic";
 import { buildSections, statusLetter, type FileSection } from "./changesLogic";
 import { Sidebar } from "../components/Sidebar";
 import { IntentPanel } from "../components/IntentPanel";
@@ -11,6 +11,7 @@ import type {
   FileChange,
   FileContents,
   FileDiff,
+  GroupFile,
   InstallScope,
   IntentGroup,
   ProviderId,
@@ -72,6 +73,14 @@ export function ChangesView() {
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   /** Diff lines to preselect, so opening a card lands on its lines. */
   const [highlight, setHighlight] = useState<number[]>([]);
+  /**
+   * The card's hunks in the open file, or `null` for the whole diff.
+   *
+   * In intent mode one file can sit in several cards; opening a file from a
+   * card scopes the diff pane to that card's hunks so the changes shown are
+   * exactly the ones the card claims.
+   */
+  const [groupHunks, setGroupHunks] = useState<number[] | null>(null);
 
   function changeDiffLayout(layout: DiffLayout) {
     setDiffLayout(layout);
@@ -81,6 +90,12 @@ export function ChangesView() {
   function changeGrouping(next: Grouping) {
     setGrouping(next);
     localStorage.setItem(GROUPING_KEY, next);
+    // The files view has no cards, so nothing may stay scoped to one.
+    if (next === "files") {
+      setSelectedGroup(null);
+      setHighlight([]);
+      setGroupHunks(null);
+    }
   }
 
   const refreshStatus = useCallback(async () => {
@@ -192,17 +207,21 @@ export function ChangesView() {
     });
 
   /**
-   * Open a card: show its first file with its lines already selected.
-   *
-   * Only that file's lines are highlighted — a group can span several, and
-   * the diff shows one at a time.
+   * Open one file of a card: the diff pane shows only the card's hunks in it.
    */
+  const selectGroupFile = (group: IntentGroup, file: GroupFile) => {
+    setSelectedGroup(group.id);
+    setSelectedPath(file.path);
+    setHighlight(file.lineIndices);
+    setGroupHunks(file.hunks);
+  };
+
+  /** Open a card: show its first file, scoped to the card. */
   const selectGroup = (group: IntentGroup) => {
     setSelectedGroup(group.id);
     const first = group.files[0];
     if (!first) return;
-    setSelectedPath(first.path);
-    setHighlight(first.lineIndices);
+    selectGroupFile(group, first);
   };
 
   /**
@@ -226,21 +245,38 @@ export function ChangesView() {
       await refreshAll();
     });
 
+  const stageGroupFile = (group: IntentGroup, file: GroupFile) =>
+    withBusy(async () => {
+      const staged = await api.stageIntentGroup(group.id, file.path);
+      if (staged === 0) setError("Nothing in that file's share of the group could be staged.");
+      await refreshAll();
+    });
+
+  const revertGroupFile = (group: IntentGroup, file: GroupFile) =>
+    withBusy(async () => {
+      const reverted = await api.revertIntentGroup(group.id, mode, file.path);
+      if (reverted === 0)
+        setError("Nothing in that file's share of the group could be reverted.");
+      await refreshAll();
+    });
+
   const enableCapture = async (provider: ProviderId, scope: InstallScope) => {
     setProviders(await api.enableIntentCapture(provider, scope));
     await refreshIntent();
   };
 
-  const importHistory = () =>
-    withBusy(async () => {
-      const total = await api.importIntentHistory();
-      setError(
-        total === 0
-          ? "No past agent sessions were found for this workspace."
-          : null,
-      );
+  /**
+   * Import, and hand the count back: the panel reports the outcome inline,
+   * next to the banner that offered the action, rather than as a view error.
+   */
+  const importHistory = async () => {
+    let total = 0;
+    await withBusy(async () => {
+      total = await api.importIntentHistory();
       await refreshAll();
     });
+    return total;
+  };
 
   /** Stage or unstage a whole file, whichever one was right-clicked. */
   const stageFile = (path: string, staged: boolean) =>
@@ -293,7 +329,16 @@ export function ChangesView() {
 
   const files = status?.files ?? [];
   const hasSelection = selectedLines.length > 0;
-  const canRevertAll = diff != null && allChangedIndices(diff).length > 0;
+  /**
+   * What the diff pane shows: the whole diff, or — when a card's file is
+   * open — only that card's hunks in it. The whole-file buttons below act on
+   * this, so "Revert file" reverts what is on screen, never hidden changes.
+   */
+  const shownDiff =
+    grouping === "intent" && groupHunks != null && diff != null
+      ? onlyHunks(diff, groupHunks)
+      : diff;
+  const canRevertAll = shownDiff != null && allChangedIndices(shownDiff).length > 0;
   const sections = buildSections(files, groups);
 
   function toggleSection(key: string) {
@@ -310,6 +355,7 @@ export function ChangesView() {
     setSelectedPath(path);
     setSelectedGroup(null);
     setHighlight([]);
+    setGroupHunks(null);
   }
 
   function renderFileRow(change: FileChange, section: FileSection) {
@@ -370,10 +416,14 @@ export function ChangesView() {
             groups={intentGroups}
             providers={providers}
             selectedGroup={selectedGroup}
+            selectedPath={selectedPath}
             busy={busy}
             onSelect={selectGroup}
+            onSelectFile={selectGroupFile}
             onStage={stageGroup}
             onRevert={revertGroup}
+            onStageFile={stageGroupFile}
+            onRevertFile={revertGroupFile}
             onEnable={enableCapture}
             onImportHistory={importHistory}
           />
@@ -587,10 +637,10 @@ export function ChangesView() {
             Revert selected{hasSelection ? ` (${selectedLines.length})` : ""}
           </button>
           <button
-            onClick={() => diff && revert(allChangedIndices(diff))}
+            onClick={() => shownDiff && revert(allChangedIndices(shownDiff))}
             disabled={busy || !canRevertAll}
           >
-            Revert file
+            Revert {groupHunks != null && grouping === "intent" ? "shown" : "file"}
           </button>
 
           <span style={{ width: 12 }} />
@@ -629,13 +679,13 @@ export function ChangesView() {
             <div className="empty">{selectedPath} is a binary file.</div>
           )}
 
-          {selectedPath && contents && diff && !diff.isBinary && (
+          {selectedPath && contents && shownDiff && !shownDiff.isBinary && (
             contents.working == null ? (
               <div className="empty">
                 {selectedPath} was deleted.
                 {canRevertAll && (
                   <div style={{ marginTop: 12 }}>
-                    <button onClick={() => revert(allChangedIndices(diff))}>
+                    <button onClick={() => revert(allChangedIndices(shownDiff))}>
                       Restore it
                     </button>
                   </div>
@@ -646,7 +696,7 @@ export function ChangesView() {
                 path={selectedPath}
                 baseline={contents.baseline}
                 working={contents.working}
-                diff={diff}
+                diff={shownDiff}
                 layout={diffLayout}
                 editable
                 onSave={save}

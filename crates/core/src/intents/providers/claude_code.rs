@@ -100,20 +100,29 @@ impl Provider for ClaudeCode {
             return ProviderStatus::absent(ProviderId::ClaudeCode);
         };
 
-        let capture = if hooks_json::is_installed(&project_settings_path(root)) {
+        let user = user_settings_path(&home);
+        let mut capture = if hooks_json::is_installed(&project_settings_path(root)) {
             Some(InstallScope::Project)
-        } else if hooks_json::is_installed(&user_settings_path(&home)) {
+        } else if hooks_json::is_installed(&user) {
             Some(InstallScope::User)
         } else {
             None
         };
+
+        let mut caveats = Vec::new();
+        if capture == Some(InstallScope::User) {
+            if let Some(pinned) = hooks_json::pinned_elsewhere(&user, root) {
+                capture = None;
+                caveats.push(hooks_json::pinned_caveat(&pinned));
+            }
+        }
 
         ProviderStatus {
             provider: ProviderId::ClaudeCode,
             detected: true,
             capture,
             sessions: find_sessions(&home, root).len(),
-            caveats: Vec::new(),
+            caveats,
         }
     }
 
@@ -125,7 +134,10 @@ impl Provider for ClaudeCode {
             })?,
         };
 
-        let (content, merges_existing) = hooks_json::plan_merge(&path, root)?;
+        // A user-scope hook fires everywhere, so it names no workspace and
+        // lets the recorder resolve one from the payload.
+        let pin = (scope == InstallScope::Project).then_some(root);
+        let (content, merges_existing) = hooks_json::plan_merge(&path, pin)?;
 
         let mut caveats = Vec::new();
         if scope == InstallScope::Project {
@@ -159,8 +171,9 @@ impl Provider for ClaudeCode {
         // reading a chat rather than as a card title.
         if let Some(write) = instructions::planned_write(ProviderId::ClaudeCode, root) {
             caveats.push(format!(
-                "A short section is appended to {} asking the agent to state its \
-                 intent. Capture works without it, but the labels are coarser.",
+                "A short section in {} asks the agent to state its intent; it is \
+                 added or brought up to date. Capture works without it, but the \
+                 labels are coarser.",
                 write.path.display()
             ));
             writes.push(write);

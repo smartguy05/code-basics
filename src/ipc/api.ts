@@ -262,19 +262,22 @@ export const intentGroups = (mode: ComparisonMode) =>
   invoke<IntentGroup[]>("intent_groups", { mode });
 
 /**
- * Stage everything in one group, returning how many files changed.
+ * Stage everything in one group — or one file's share of it — returning how
+ * many files changed.
  *
  * The group is named rather than its lines sent back: line indices are only
  * valid for one comparison mode, and staging uses a different one from
  * whatever the user is looking at.
  */
-export const stageIntentGroup = (group: string) =>
-  invoke<number>("stage_intent_group", { group });
+export const stageIntentGroup = (group: string, path?: string) =>
+  invoke<number>("stage_intent_group", { group, path });
 
-/** Revert everything in one group, in the mode currently displayed. */
-export const revertIntentGroup = (group: string, mode: ComparisonMode) =>
-  invoke<number>("revert_intent_group", { group, mode });
-
+/**
+ * Revert one group — or one file's share of it — in the mode currently
+ * displayed.
+ */
+export const revertIntentGroup = (group: string, mode: ComparisonMode, path?: string) =>
+  invoke<number>("revert_intent_group", { group, mode, path });
 /** What each agent can currently do for this workspace. */
 export const intentCaptureStatus = () =>
   invoke<ProviderStatus[]>("intent_capture_status");

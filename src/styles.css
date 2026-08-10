@@ -1043,6 +1043,46 @@ textarea:focus {
   word-break: break-all;
 }
 
+/* The files inside an expanded card: each row opens the diff scoped to the
+   group's hunks in that file, so the padding has to read as clickable. */
+.intent-card .group-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.intent-card .group-file:hover {
+  background: var(--border);
+}
+
+.intent-card .group-file.selected {
+  background: var(--accent-dim);
+}
+
+.intent-card .group-file .path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.intent-card .group-file .file-actions {
+  display: none;
+  gap: 4px;
+}
+
+.intent-card .group-file:hover .file-actions,
+.intent-card .group-file.selected .file-actions {
+  display: inline-flex;
+}
 /* Object inspector (components/ObjectTree.tsx).
 
    The colours here carry meaning the words alone cannot carry at a glance:

@@ -77,7 +77,7 @@ fn lines_for(
         .collect())
 }
 
-/// Stage everything in one group.
+/// Stage everything in one group — or, with `path`, just that file's share.
 ///
 /// Returns how many files were changed, so the UI can say nothing happened
 /// rather than silently appearing to succeed.
@@ -85,11 +85,15 @@ fn lines_for(
 pub async fn stage_intent_group(
     state: State<'_, AppState>,
     group: String,
+    path: Option<String>,
 ) -> Result<usize, String> {
     let (root, repo) = open(&state)?;
     // Staging compares the working tree against the index, whatever the user
     // happens to be looking at.
-    let files = lines_for(&repo, &root, &group, ComparisonMode::WorkingToIndex)?;
+    let mut files = lines_for(&repo, &root, &group, ComparisonMode::WorkingToIndex)?;
+    if let Some(path) = path {
+        files.retain(|(p, _)| *p == path);
+    }
 
     let mut staged = 0;
     for (path, lines) in files {
@@ -103,15 +107,20 @@ pub async fn stage_intent_group(
     Ok(staged)
 }
 
-/// Revert everything in one group, in the mode the user is looking at.
+/// Revert one group, in the mode the user is looking at — or, with `path`,
+/// just that file's share of it.
 #[tauri::command]
 pub async fn revert_intent_group(
     state: State<'_, AppState>,
     group: String,
     mode: ComparisonMode,
+    path: Option<String>,
 ) -> Result<usize, String> {
     let (root, repo) = open(&state)?;
-    let files = lines_for(&repo, &root, &group, mode)?;
+    let mut files = lines_for(&repo, &root, &group, mode)?;
+    if let Some(path) = path {
+        files.retain(|(p, _)| *p == path);
+    }
 
     let mut reverted = 0;
     for (path, lines) in files {

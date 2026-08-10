@@ -14,6 +14,7 @@
 //!   repository on the machine; only the ones that opted in are recorded.
 
 use std::io::Read;
+use std::path::Path;
 
 use cb_core::intents::hook;
 
@@ -46,7 +47,15 @@ fn record() -> anyhow::Result<()> {
     std::io::stdin().read_to_string(&mut payload)?;
     let payload: serde_json::Value = serde_json::from_str(&payload)?;
 
-    let Some(root) = hook::resolve_root(invocation.workspace.as_deref(), &payload) else {
+    // A user-scope hook names no workspace, so the payload's `cwd` — or the
+    // first enabled directory above it — is what decides where this lands.
+    let explicit = invocation.workspace.as_deref().map(Path::new);
+    let cwd = payload
+        .get("cwd")
+        .and_then(serde_json::Value::as_str)
+        .map(Path::new);
+
+    let Some(root) = hook::resolve_enabled_root(explicit, cwd) else {
         return Ok(());
     };
 

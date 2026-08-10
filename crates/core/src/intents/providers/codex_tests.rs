@@ -714,7 +714,7 @@ fn codex_home_dir() -> tempfile::TempDir {
 
 fn install_hooks(path: &Path, root: &Path) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let (content, _) = hooks_json::plan_merge(path, root).unwrap();
+    let (content, _) = hooks_json::plan_merge(path, Some(root)).unwrap();
     std::fs::write(path, content).unwrap();
 }
 

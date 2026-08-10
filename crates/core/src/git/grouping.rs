@@ -200,10 +200,31 @@ fn symbol_from_header(header: &str) -> Option<String> {
     }
     declaration_name(header).or_else(|| {
         // Not declaration-shaped, but git thought it was the enclosing
-        // context, so it is still better than nothing.
+        // context, so it is still better than nothing — unless it is one of
+        // the lines that names no symbol at all. An import block or a bare
+        // statement produces titles like "New import", which is noise on a
+        // card; letting the hunk fall through to its file says more.
+        if !header_can_name_a_symbol(header) {
+            return None;
+        }
         let cleaned = header.trim_end_matches(['{', ':']).trim();
         (!cleaned.is_empty() && cleaned.len() <= 80).then(|| cleaned.to_string())
     })
+}
+
+/// Header lines that are definitely not a symbol.
+const NOT_A_SYMBOL: &[&str] = &[
+    "import", "use", "using", "from", "#include", "include", "package",
+];
+
+/// Can this non-declaration header stand in as a name?
+fn header_can_name_a_symbol(header: &str) -> bool {
+    if header.contains(';') || header.contains('"') || header.contains('\'') {
+        return false;
+    }
+
+    let first = header.split_whitespace().next().unwrap_or_default();
+    !NOT_A_SYMBOL.contains(&first)
 }
 
 /// Keywords that introduce something worth naming, across the languages this
@@ -257,8 +278,16 @@ fn declaration_name(line: &str) -> Option<String> {
         .split(['(', '=', '<', '{'])
         .next()
         .unwrap_or(line)
-        .trim_end_matches(':')
         .trim();
+
+    // A colon in the head is a type annotation — `let total: usize`,
+    // `static COUNTER: AtomicU64`, `const cache: Map`. The name is on the
+    // left of it; the last identifier would be the *type*. Without one, the
+    // last identifier is right: `public decimal EstimateCost`.
+    let head = match head.find(':') {
+        Some(colon) => head[..colon].trim(),
+        None => head,
+    };
 
     let words: Vec<&str> = head.split_whitespace().collect();
     if words.is_empty() {
@@ -269,6 +298,13 @@ fn declaration_name(line: &str) -> Option<String> {
     // otherwise every assignment and every call would name a "symbol".
     let has_keyword = words.iter().any(|w| DECLARING.contains(w));
     if !has_keyword {
+        return None;
+    }
+
+    // Import and re-export lines can still carry a declaring keyword —
+    // `import type { … }`, `pub use …` — but they declare nothing, and the
+    // scan below would name the card "import" or "use".
+    if words.iter().any(|w| NOT_A_SYMBOL.contains(w)) {
         return None;
     }
 
@@ -345,7 +381,7 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                 None if is_formatting_only(hunk, &diff.path) => (
                     "formatting".to_string(),
                     GroupKind::Formatting,
-                    "Formatting only".to_string(),
+                    "Whitespace only".to_string(),
                     None,
                     Confidence::High,
                 ),
@@ -359,11 +395,13 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                         } else {
                             GroupKind::ModifiedSymbol
                         };
-                        let verb = if is_new { "New" } else { "Changed" };
+                        // The card's badge already renders New/Changed from
+                        // the kind; repeating it in the label just makes the
+                        // title longer than the name it is showing.
                         (
                             format!("symbol:{}:{symbol}", kind_key(kind)),
                             kind,
-                            format!("{verb} {symbol}"),
+                            symbol.clone(),
                             Some(symbol),
                             Confidence::Low,
                         )
@@ -399,7 +437,8 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
         }
     }
 
-    let mut groups: Vec<IntentGroup> = buckets.into_values().map(Bucket::finish).collect();
+    let groups: Vec<IntentGroup> = buckets.into_values().map(Bucket::finish).collect();
+    let mut groups = collapse_singletons(groups);
 
     // Most substantial first, so the biggest decision is the first one read.
     groups.sort_by(|a, b| {
@@ -410,6 +449,96 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
     });
 
     groups
+}
+
+/// Fold a file's one-hunk symbol cards together.
+///
+/// Pass 3 names each hunk after the symbol it sits in, which is right when a
+/// symbol collects several hunks and wrong when a file is touched in a dozen
+/// unrelated places: the result is one card per hunk, which is the pile the
+/// grouping exists to remove. So when a *single file* produced two or more
+/// cards that are each one hunk of one symbol, they become one card for the
+/// file.
+///
+/// What is deliberately left alone: a card with several hunks, a card spanning
+/// several files (a symbol touched in two places is a real grouping), and a
+/// file's lone symbol card — its name is a better title than the file's.
+/// Nothing is ever merged across files, and intent and formatting cards are
+/// not touched at all.
+fn collapse_singletons(groups: Vec<IntentGroup>) -> Vec<IntentGroup> {
+    let is_singleton = |group: &IntentGroup| {
+        matches!(group.kind, GroupKind::NewSymbol | GroupKind::ModifiedSymbol)
+            && group.files.len() == 1
+            && group.hunk_count() == 1
+    };
+
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for group in groups.iter().filter(|g| is_singleton(g)) {
+        *counts.entry(group.files[0].path.as_str()).or_default() += 1;
+    }
+    let merging: Vec<String> = counts
+        .into_iter()
+        .filter(|(_, count)| *count >= 2)
+        .map(|(path, _)| path.to_string())
+        .collect();
+
+    if merging.is_empty() {
+        return groups;
+    }
+
+    let mut kept: Vec<IntentGroup> = Vec::new();
+    // path -> index in `kept`, so an id is never handed out twice: staging and
+    // reverting look a group up by id, and two cards sharing one would act on
+    // each other's lines.
+    let mut merged: BTreeMap<String, usize> = BTreeMap::new();
+
+    for group in groups {
+        // The file's existing "Other" bucket, if pass 3 made one, is the same
+        // card by another name — merge into it rather than beside it.
+        let one_file = group.files.len() == 1
+            && (is_singleton(&group) || group.kind == GroupKind::Other)
+            && merging.contains(&group.files[0].path);
+
+        if !one_file {
+            kept.push(group);
+            continue;
+        }
+
+        let path = group.files[0].path.clone();
+        match merged.get(&path) {
+            Some(&index) => absorb(&mut kept[index], group),
+            None => {
+                merged.insert(path.clone(), kept.len());
+                kept.push(IntentGroup {
+                    id: format!("other:{path}"),
+                    kind: GroupKind::Other,
+                    label: format!("Several changes in {}", file_name(&path)),
+                    symbol: None,
+                    files: group.files,
+                    line_count: group.line_count,
+                    confidence: Confidence::Low,
+                });
+            }
+        }
+    }
+
+    kept
+}
+
+/// Fold one single-file group's lines into another's.
+fn absorb(into: &mut IntentGroup, other: IntentGroup) {
+    let source = other.files.into_iter().next().expect("one file");
+    let target = &mut into.files[0];
+
+    target.line_indices.extend(source.line_indices);
+    target.line_indices.sort_unstable();
+    target.line_indices.dedup();
+    target.hunks.extend(source.hunks);
+    target.hunks.sort_unstable();
+    target.hunks.dedup();
+
+    into.line_count = target.line_indices.len() as u32;
+    into.confidence = into.confidence.min(other.confidence);
 }
 
 /// Intent first because it is the only kind that explains *why*; formatting

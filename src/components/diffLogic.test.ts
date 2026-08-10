@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allChangedIndices, hunkIndices } from "./diffLogic";
+import { allChangedIndices, hunkIndices, onlyHunks } from "./diffLogic";
 import type { DiffLine, FileDiff, Hunk, LineOrigin } from "../ipc/types";
 
 function line(index: number, origin: LineOrigin): DiffLine {
@@ -68,5 +68,25 @@ describe("hunkIndices", () => {
   it("returns an empty list for an out-of-range hunk", () => {
     expect(hunkIndices(multiHunk, 2)).toEqual([]);
     expect(hunkIndices(multiHunk, -1)).toEqual([]);
+  });
+});
+
+describe("onlyHunks", () => {
+  it("keeps just the named hunks, in diff order", () => {
+    const scoped = onlyHunks(multiHunk, [1]);
+    expect(scoped.hunks).toEqual([multiHunk.hunks[1]]);
+    expect(scoped.path).toBe(multiHunk.path);
+  });
+
+  it("ignores indices the diff does not have", () => {
+    expect(onlyHunks(multiHunk, [1, 99]).hunks).toEqual([multiHunk.hunks[1]]);
+  });
+
+  it("orders by the diff, not by the requested list", () => {
+    expect(onlyHunks(multiHunk, [1, 0]).hunks).toEqual(multiHunk.hunks);
+  });
+
+  it("returns no hunks for an empty request", () => {
+    expect(onlyHunks(multiHunk, []).hunks).toEqual([]);
   });
 });

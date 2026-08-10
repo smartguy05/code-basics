@@ -706,7 +706,7 @@ fn hooks_installed_in_the_workspace_are_reported_as_project_capture() {
     let fixture = Fixture::new();
     let path = project_settings_path(fixture.root());
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let (content, _) = hooks_json::plan_merge(&path, fixture.root()).unwrap();
+    let (content, _) = hooks_json::plan_merge(&path, Some(fixture.root())).unwrap();
     std::fs::write(&path, content).unwrap();
 
     assert_eq!(
@@ -719,7 +719,7 @@ fn hooks_installed_in_the_workspace_are_reported_as_project_capture() {
 fn hooks_installed_in_the_home_directory_are_reported_as_user_capture() {
     let fixture = Fixture::new();
     let path = user_settings_path(fixture.home.path());
-    let (content, _) = hooks_json::plan_merge(&path, fixture.root()).unwrap();
+    let (content, _) = hooks_json::plan_merge(&path, Some(fixture.root())).unwrap();
     std::fs::write(&path, content).unwrap();
 
     assert_eq!(
@@ -738,7 +738,7 @@ fn a_project_install_wins_over_a_user_install() {
         user_settings_path(fixture.home.path()),
     ] {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let (content, _) = hooks_json::plan_merge(&path, fixture.root()).unwrap();
+        let (content, _) = hooks_json::plan_merge(&path, Some(fixture.root())).unwrap();
         std::fs::write(&path, content).unwrap();
     }
 

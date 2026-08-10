@@ -48,7 +48,7 @@ fn installing_preserves_every_existing_hook_entry() {
     let path = dir.path().join("hooks.json");
     std::fs::write(&path, existing_dashboard_hooks()).unwrap();
 
-    let (merged, merges_existing) = hooks_json::plan_merge(&path, dir.path()).unwrap();
+    let (merged, merges_existing) = hooks_json::plan_merge(&path, Some(dir.path())).unwrap();
     std::fs::write(&path, merged).unwrap();
 
     assert!(merges_existing);
@@ -87,7 +87,7 @@ fn installing_into_a_missing_file_creates_it() {
     let dir = workspace();
     let path = dir.path().join(".codex").join("hooks.json");
 
-    let (content, merges_existing) = hooks_json::plan_merge(&path, dir.path()).unwrap();
+    let (content, merges_existing) = hooks_json::plan_merge(&path, Some(dir.path())).unwrap();
 
     assert!(!merges_existing);
     let value: Value = serde_json::from_str(&content).unwrap();
@@ -100,9 +100,9 @@ fn installing_twice_does_not_duplicate_the_entry() {
     let dir = workspace();
     let path = dir.path().join("hooks.json");
 
-    let (first, _) = hooks_json::plan_merge(&path, dir.path()).unwrap();
+    let (first, _) = hooks_json::plan_merge(&path, Some(dir.path())).unwrap();
     std::fs::write(&path, first).unwrap();
-    let (second, _) = hooks_json::plan_merge(&path, dir.path()).unwrap();
+    let (second, _) = hooks_json::plan_merge(&path, Some(dir.path())).unwrap();
     std::fs::write(&path, second).unwrap();
 
     let value = read(&path);
@@ -131,7 +131,7 @@ fn unrelated_settings_in_the_same_file_are_preserved() {
     )
     .unwrap();
 
-    let (merged, _) = hooks_json::plan_merge(&path, dir.path()).unwrap();
+    let (merged, _) = hooks_json::plan_merge(&path, Some(dir.path())).unwrap();
     let value: Value = serde_json::from_str(&merged).unwrap();
 
     assert_eq!(value["model"], "opus");
@@ -146,7 +146,7 @@ fn a_malformed_file_is_reported_and_left_untouched() {
     let path = dir.path().join("hooks.json");
     std::fs::write(&path, "{ not json at all").unwrap();
 
-    let error = hooks_json::plan_merge(&path, dir.path())
+    let error = hooks_json::plan_merge(&path, Some(dir.path()))
         .unwrap_err()
         .to_string();
 
@@ -160,7 +160,7 @@ fn an_empty_file_is_treated_as_no_configuration() {
     let path = dir.path().join("hooks.json");
     std::fs::write(&path, "   \n").unwrap();
 
-    let (content, _) = hooks_json::plan_merge(&path, dir.path()).unwrap();
+    let (content, _) = hooks_json::plan_merge(&path, Some(dir.path())).unwrap();
 
     assert!(serde_json::from_str::<Value>(&content).unwrap()["hooks"]["Stop"].is_array());
 }
@@ -171,7 +171,7 @@ fn a_hooks_key_of_an_unexpected_type_is_not_destroyed() {
     let path = dir.path().join("hooks.json");
     std::fs::write(&path, r#"{ "hooks": "somewhere/else.json" }"#).unwrap();
 
-    let (content, _) = hooks_json::plan_merge(&path, dir.path()).unwrap();
+    let (content, _) = hooks_json::plan_merge(&path, Some(dir.path())).unwrap();
     let value: Value = serde_json::from_str(&content).unwrap();
 
     assert_eq!(value["hooks"], "somewhere/else.json");
@@ -183,7 +183,7 @@ fn a_file_that_is_not_an_object_is_refused() {
     let path = dir.path().join("hooks.json");
     std::fs::write(&path, "[1, 2, 3]").unwrap();
 
-    assert!(hooks_json::plan_merge(&path, dir.path()).is_err());
+    assert!(hooks_json::plan_merge(&path, Some(dir.path())).is_err());
 }
 
 // -- recognising our own installation ---------------------------------------
@@ -201,7 +201,7 @@ fn an_untouched_file_is_not_reported_as_installed() {
 fn a_merged_file_is_reported_as_installed() {
     let dir = workspace();
     let path = dir.path().join("hooks.json");
-    let (content, _) = hooks_json::plan_merge(&path, dir.path()).unwrap();
+    let (content, _) = hooks_json::plan_merge(&path, Some(dir.path())).unwrap();
     std::fs::write(&path, content).unwrap();
 
     assert!(hooks_json::is_installed(&path));
@@ -221,7 +221,7 @@ fn removing_our_hooks_leaves_the_users_own_alone() {
     let dir = workspace();
     let path = dir.path().join("hooks.json");
     std::fs::write(&path, existing_dashboard_hooks()).unwrap();
-    let (merged, _) = hooks_json::plan_merge(&path, dir.path()).unwrap();
+    let (merged, _) = hooks_json::plan_merge(&path, Some(dir.path())).unwrap();
     std::fs::write(&path, merged).unwrap();
 
     let removed = hooks_json::plan_removal(&path).unwrap().unwrap();
@@ -282,12 +282,11 @@ fn applying_a_plan_creates_missing_directories() {
 
 // -- the hook command itself ------------------------------------------------
 
-/// A user-level hook fires for every repository, so the command has to say
-/// which workspace it is for or it cannot know when to do nothing.
+/// A project-scope hook belongs to exactly one workspace, so it says so.
 #[test]
 fn the_hook_command_names_its_workspace_and_carries_the_marker() {
     let dir = workspace();
-    let commands = hooks_json::commands_for(dir.path(), "codex");
+    let commands = hooks_json::commands_for(Some(dir.path()), "codex");
 
     let text = serde_json::to_string(&commands).unwrap();
 
@@ -295,6 +294,186 @@ fn the_hook_command_names_its_workspace_and_carries_the_marker() {
     assert!(text.contains("--provider codex"));
     assert!(text.contains("--event PostToolUse"));
     assert!(text.contains("--event Stop"));
+    assert!(text.contains("--workspace"));
+}
+
+/// A user-level hook fires for every repository, so pinning it to the one that
+/// happened to be open at install time is what made it record nowhere else.
+/// With no workspace named, the payload's `cwd` decides.
+#[test]
+fn a_user_scope_hook_command_omits_the_workspace_flag() {
+    let commands = hooks_json::commands_for(None, "codex");
+
+    let text = serde_json::to_string(&commands).unwrap();
+
+    assert!(text.contains(hooks_json::MARKER));
+    assert!(text.contains("--provider codex"));
+    assert!(
+        !text.contains("--workspace"),
+        "a user-scope hook must not be pinned: {text}"
+    );
+}
+
+#[test]
+fn a_user_scope_install_plan_does_not_pin_a_workspace() {
+    let dir = workspace();
+    let home = workspace();
+
+    let claude = claude_code::ClaudeCode::with_home(home.path())
+        .install_plan(dir.path(), InstallScope::User)
+        .unwrap();
+    let codex = codex::Codex::new()
+        .install_plan_in(Some(home.path()), dir.path(), InstallScope::User)
+        .unwrap();
+
+    for plan in [claude, codex] {
+        let settings = plan
+            .writes
+            .iter()
+            .find(|w| w.content.contains(hooks_json::MARKER))
+            .expect("the hook file");
+        assert!(
+            !settings.content.contains("--workspace"),
+            "{:?} pinned a workspace: {}",
+            plan.provider,
+            settings.content
+        );
+    }
+}
+
+/// Re-running setup is how an instruction section written by an older version
+/// gets its wording updated: the plan must carry the rewrite, not skip the
+/// file because the marker is already there.
+#[test]
+fn re_enabling_refreshes_a_stale_instruction_section() {
+    let dir = workspace();
+    let home = workspace();
+    std::fs::write(
+        dir.path().join("CLAUDE.md"),
+        format!(
+            "# Mine\n\n{}\nStale request wording.\n{}\n",
+            instructions::MARKER,
+            instructions::END_MARKER
+        ),
+    )
+    .unwrap();
+
+    let plan = claude_code::ClaudeCode::with_home(home.path())
+        .install_plan(dir.path(), InstallScope::User)
+        .unwrap();
+
+    let write = plan
+        .writes
+        .iter()
+        .find(|w| w.path.ends_with("CLAUDE.md"))
+        .expect("the instruction rewrite");
+    assert!(write.content.starts_with("# Mine"));
+    assert!(write.content.contains("Intent: "));
+    assert!(!write.content.contains("Stale request wording."));
+}
+
+#[test]
+fn a_project_scope_install_plan_still_names_the_workspace() {
+    let dir = workspace();
+
+    let plan = codex::Codex::new()
+        .install_plan(dir.path(), InstallScope::Project)
+        .unwrap();
+
+    assert!(plan.writes[0].content.contains("--workspace"));
+}
+
+// -- repairing an install pinned to another workspace ------------------------
+
+/// The shape a pinned install left behind on the development machine: a
+/// user-level hook naming a repository the user is no longer in.
+fn pinned_user_settings(path: &Path, pinned_to: &Path) {
+    let (content, _) = hooks_json::plan_merge(path, Some(pinned_to)).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, content).unwrap();
+}
+
+#[test]
+fn pinned_workspace_reads_the_path_out_of_a_pinned_hook() {
+    let dir = workspace();
+    let path = dir.path().join("settings.json");
+    let other = Path::new(r"C:\Users\Someone\Code\ONEflight");
+    pinned_user_settings(&path, other);
+
+    assert_eq!(
+        hooks_json::pinned_workspace(&path).as_deref(),
+        Some(r"C:\Users\Someone\Code\ONEflight")
+    );
+}
+
+#[test]
+fn pinned_workspace_is_none_for_the_unpinned_form() {
+    let dir = workspace();
+    let path = dir.path().join("settings.json");
+    let (content, _) = hooks_json::plan_merge(&path, None).unwrap();
+    std::fs::write(&path, content).unwrap();
+
+    assert_eq!(hooks_json::pinned_workspace(&path), None);
+    assert_eq!(
+        hooks_json::pinned_workspace(&dir.path().join("nothing.json")),
+        None
+    );
+}
+
+#[test]
+fn a_user_hook_pinned_to_another_workspace_reports_not_capturing_with_a_caveat() {
+    let dir = workspace();
+    let home = workspace();
+    let other = workspace();
+    pinned_user_settings(&home.path().join("settings.json"), other.path());
+    pinned_user_settings(&home.path().join("hooks.json"), other.path());
+
+    let claude = claude_code::ClaudeCode::with_home(home.path()).status(dir.path());
+    let codex = codex::Codex::new().status_in(Some(home.path()), dir.path());
+
+    for status in [claude, codex] {
+        assert_eq!(
+            status.capture, None,
+            "{:?} reported capture from a pinned hook",
+            status.provider
+        );
+        assert!(
+            status
+                .caveats
+                .iter()
+                .any(|c| c.contains("pinned to") && c.contains("Enable capture again")),
+            "{:?} said nothing about the pin: {:?}",
+            status.provider,
+            status.caveats
+        );
+    }
+}
+
+/// The repair is just installing again: the marker entry is replaced in place.
+#[test]
+fn re_enabling_user_capture_replaces_the_pinned_hook_entry() {
+    let dir = workspace();
+    let path = dir.path().join("settings.json");
+    pinned_user_settings(&path, Path::new(r"C:\Users\Someone\Code\ONEflight"));
+
+    let (content, _) = hooks_json::plan_merge(&path, None).unwrap();
+    std::fs::write(&path, content).unwrap();
+
+    let value = read(&path);
+    for event in hooks_json::EVENTS {
+        let entries = value["hooks"][*event].as_array().unwrap();
+        let ours = entries
+            .iter()
+            .filter(|e| {
+                serde_json::to_string(e)
+                    .unwrap()
+                    .contains(hooks_json::MARKER)
+            })
+            .count();
+        assert_eq!(ours, 1, "{event} kept a duplicate: {entries:?}");
+    }
+    assert_eq!(hooks_json::pinned_workspace(&path), None);
+    assert!(hooks_json::is_installed(&path));
 }
 
 /// Codex accepts Claude Code's tool names as aliases for `apply_patch`, so one
@@ -309,7 +488,7 @@ fn the_edit_matcher_covers_both_agents_tool_names() {
 #[test]
 fn only_the_edit_event_carries_a_tool_matcher() {
     let dir = workspace();
-    let commands = hooks_json::commands_for(dir.path(), "claudeCode");
+    let commands = hooks_json::commands_for(Some(dir.path()), "claudeCode");
 
     assert_eq!(commands["PostToolUse"][0]["matcher"], EDIT_TOOL_MATCHER);
     assert_eq!(commands["Stop"][0]["matcher"], "");

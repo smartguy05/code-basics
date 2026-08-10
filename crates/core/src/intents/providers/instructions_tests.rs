@@ -71,6 +71,44 @@ fn a_file_without_a_trailing_newline_is_still_separated_properly() {
         .contains("No trailing newline\n\n<!-- code-basics"));
 }
 
+/// Re-running setup after the request's wording changed must bring the file
+/// up to date: the marked span is replaced in place, everything the user
+/// wrote around it untouched.
+#[test]
+fn an_out_of_date_section_is_rewritten_in_place() {
+    let dir = workspace();
+    let path = dir.path().join("CLAUDE.md");
+    std::fs::write(
+        &path,
+        format!(
+            "# My project\n\nDo not use tabs.\n\n{MARKER}\n## Old heading\n\nStale request \
+             wording.\n{END_MARKER}\n\n## After\n\nKeep this too.\n"
+        ),
+    )
+    .unwrap();
+
+    let write = planned_write(ProviderId::ClaudeCode, dir.path()).expect("a rewrite");
+
+    assert!(write.merges_existing);
+    assert!(write.content.starts_with("# My project"));
+    assert!(write.content.contains("Do not use tabs."));
+    assert!(write.content.contains("Keep this too."));
+    assert!(write.content.contains("Intent: "));
+    assert!(!write.content.contains("Stale request wording."));
+    assert_eq!(write.content.matches(MARKER).count(), 1);
+}
+
+/// A marker whose end never arrives marks a span with no known extent.
+/// Rewriting would mean guessing where the user's own text begins — abstain.
+#[test]
+fn a_marker_without_its_end_is_left_alone() {
+    let dir = workspace();
+    let path = dir.path().join("CLAUDE.md");
+    std::fs::write(&path, format!("{MARKER}\nHalf a section, no end.\n")).unwrap();
+
+    assert!(planned_write(ProviderId::ClaudeCode, dir.path()).is_none());
+}
+
 /// Installing twice must not append the request twice.
 #[test]
 fn a_file_that_already_has_the_request_needs_no_write() {
@@ -95,14 +133,31 @@ fn the_request_is_recognised_once_written() {
 }
 
 /// The instruction has to describe both forms, or the parser's file-scoped
-/// variant is unreachable in practice.
+/// variant is unreachable in practice. The scoped example must show a
+/// comma-separated list, or nobody learns the parser accepts one, and the
+/// paths must be called workspace-relative, or an absolute path silently
+/// never joins (`label_for` compares against workspace-relative records).
 #[test]
 fn the_request_describes_both_the_plain_and_file_scoped_forms() {
     let dir = workspace();
     let write = planned_write(ProviderId::Codex, dir.path()).unwrap();
 
     assert!(write.content.contains("Intent: "));
-    assert!(write.content.contains("Intent(path/to/file.rs):"));
+    assert!(write
+        .content
+        .contains("Intent(src/api.ts, src/apiLogic.test.ts):"));
+    assert!(write.content.contains("workspace-relative"));
+}
+
+/// `label_for` falls back to the FIRST plain label for every edit in the
+/// turn, so several plain lines cannot disambiguate anything. The request
+/// must say so, or "one line per distinct change" invites exactly that.
+#[test]
+fn the_request_warns_that_extra_plain_lines_are_ignored() {
+    let dir = workspace();
+    let write = planned_write(ProviderId::Codex, dir.path()).unwrap();
+
+    assert!(write.content.contains("only the first plain line is used"));
 }
 
 /// What the instruction asks for must be what the Stop hook can read back.
@@ -130,5 +185,5 @@ fn the_requested_form_is_one_the_hook_can_parse() {
 
     let scoped = crate::intents::hook::parse_labels(scoped);
     assert_eq!(scoped.len(), 1, "the scoped example must parse");
-    assert_eq!(scoped[0].0, vec!["path/to/file.rs"]);
+    assert_eq!(scoped[0].0, vec!["src/api.ts", "src/apiLogic.test.ts"]);
 }

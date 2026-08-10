@@ -1,7 +1,9 @@
 import { useState } from "react";
 import * as api from "../ipc/api";
+import { importFeedback, intentDataHint } from "./intentPanelLogic";
 import type {
   Confidence,
+  GroupFile,
   GroupKind,
   InstallPlan,
   InstallScope,
@@ -55,31 +57,50 @@ export interface IntentPanelProps {
   groups: IntentGroup[];
   providers: ProviderStatus[];
   selectedGroup: string | null;
+  /** The file open in the diff pane, so the card can mark its row. */
+  selectedPath: string | null;
   busy: boolean;
   onSelect: (group: IntentGroup) => void;
+  /** Open one file of the group, scoped to the group's hunks in it. */
+  onSelectFile: (group: IntentGroup, file: GroupFile) => void;
   onStage: (group: IntentGroup) => void;
   onRevert: (group: IntentGroup) => void;
+  onStageFile: (group: IntentGroup, file: GroupFile) => void;
+  onRevertFile: (group: IntentGroup, file: GroupFile) => void;
   onEnable: (provider: ProviderId, scope: InstallScope) => Promise<void>;
-  onImportHistory: () => Promise<void>;
+  /** Resolves with how many records the import found, so the panel can say so. */
+  onImportHistory: () => Promise<number>;
 }
 
 export function IntentPanel({
   groups,
   providers,
   selectedGroup,
+  selectedPath,
   busy,
   onSelect,
+  onSelectFile,
   onStage,
   onRevert,
+  onStageFile,
+  onRevertFile,
   onEnable,
   onImportHistory,
 }: IntentPanelProps) {
   const stated = groups.filter((g) => g.kind === "intent").length;
   const capturing = providers.some((p) => p.capture != null);
+  const hint = intentDataHint(groups, providers);
 
   // Open by default until capture is set up. The panel is the only way to turn
   // it on, and a feature nobody can find is a feature that does not exist.
   const [setupOpen, setSetupOpen] = useState(!capturing);
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  const runImport = async () => {
+    setFeedback(null);
+    const total = await onImportHistory();
+    setFeedback(importFeedback(total));
+  };
 
   return (
     <>
@@ -100,8 +121,47 @@ export function IntentPanel({
           providers={providers}
           busy={busy}
           onEnable={onEnable}
-          onImportHistory={onImportHistory}
+          onImportHistory={runImport}
         />
+      )}
+
+      {feedback && (
+        <div className="muted" style={{ padding: "6px 8px", fontSize: 11 }}>
+          {feedback}
+        </div>
+      )}
+
+      {hint.kind === "hint" && (
+        <div className="warning" style={{ fontSize: 12 }}>
+          <div>{hint.text}</div>
+
+          {hint.caveats.map((caveat) => (
+            <div key={caveat} style={{ fontSize: 11, marginTop: 4 }}>
+              {caveat}
+            </div>
+          ))}
+
+          <div className="actions" style={{ display: "flex", gap: 4, marginTop: 6 }}>
+            {hint.canEnable && (
+              <button
+                disabled={busy}
+                onClick={() => setSetupOpen(true)}
+                title="Show what turning capture on would write, before writing anything"
+              >
+                Enable capture
+              </button>
+            )}
+            {hint.canImport && (
+              <button
+                disabled={busy}
+                onClick={() => void runImport()}
+                title="Read what the agents already recorded — no setup required"
+              >
+                Import past sessions ({hint.sessions})
+              </button>
+            )}
+          </div>
+        </div>
       )}
 
       <div className="group-label" style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -131,10 +191,14 @@ export function IntentPanel({
           key={group.id}
           group={group}
           selected={group.id === selectedGroup}
+          selectedPath={group.id === selectedGroup ? selectedPath : null}
           busy={busy}
           onSelect={onSelect}
+          onSelectFile={onSelectFile}
           onStage={onStage}
           onRevert={onRevert}
+          onStageFile={onStageFile}
+          onRevertFile={onRevertFile}
         />
       ))}
     </>
@@ -144,17 +208,25 @@ export function IntentPanel({
 function GroupCard({
   group,
   selected,
+  selectedPath,
   busy,
   onSelect,
+  onSelectFile,
   onStage,
   onRevert,
+  onStageFile,
+  onRevertFile,
 }: {
   group: IntentGroup;
   selected: boolean;
+  selectedPath: string | null;
   busy: boolean;
   onSelect: (group: IntentGroup) => void;
+  onSelectFile: (group: IntentGroup, file: GroupFile) => void;
   onStage: (group: IntentGroup) => void;
   onRevert: (group: IntentGroup) => void;
+  onStageFile: (group: IntentGroup, file: GroupFile) => void;
+  onRevertFile: (group: IntentGroup, file: GroupFile) => void;
 }) {
   const hunks = group.files.reduce((total, file) => total + file.hunks.length, 0);
 
@@ -180,7 +252,49 @@ function GroupCard({
 
       {selected && (
         <>
-          <div className="paths">{group.files.map((file) => file.path).join(", ")}</div>
+          <div className="group-files">
+            {group.files.map((file) => (
+              <div
+                key={file.path}
+                className={`group-file ${file.path === selectedPath ? "selected" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectFile(group, file);
+                }}
+                title="Show only this group's changes in this file"
+              >
+                <span className="path">{file.path}</span>
+                <span className="faint" style={{ fontSize: 11, whiteSpace: "nowrap" }}>
+                  {file.hunks.length} hunk{file.hunks.length === 1 ? "" : "s"} ·{" "}
+                  {file.lineIndices.length} line{file.lineIndices.length === 1 ? "" : "s"}
+                </span>
+                {group.files.length > 1 && (
+                  <span className="file-actions">
+                    <button
+                      disabled={busy}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onStageFile(group, file);
+                      }}
+                      title="Stage only this file's share of the group"
+                    >
+                      Stage
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRevertFile(group, file);
+                      }}
+                      title="Revert only this file's share of the group"
+                    >
+                      Revert
+                    </button>
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
           <div className="actions">
             <button
               disabled={busy}
@@ -306,6 +420,18 @@ function CaptureSetup({
                 title="Write the hook into your own configuration, covering every repository"
               >
                 Enable for me…
+              </button>
+            </div>
+          )}
+
+          {status.capture && (
+            <div className="actions">
+              <button
+                disabled={busy}
+                onClick={() => void preview(status.provider, status.capture!)}
+                title="Re-write the hook and the instruction section at the same level — useful after an update changed either"
+              >
+                Re-apply setup…
               </button>
             </div>
           )}
