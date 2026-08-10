@@ -1,7 +1,14 @@
 import { useState } from "react";
 import * as api from "../ipc/api";
-import { importFeedback, intentDataHint } from "./intentPanelLogic";
+import {
+  canRejectInMode,
+  importFeedback,
+  intentDataHint,
+  rejectFeedback,
+  rejectReasonError,
+} from "./intentPanelLogic";
 import type {
+  ComparisonMode,
   Confidence,
   GroupFile,
   GroupKind,
@@ -10,6 +17,7 @@ import type {
   IntentGroup,
   ProviderId,
   ProviderStatus,
+  RejectSummary,
 } from "../ipc/types";
 
 /**
@@ -59,6 +67,8 @@ export interface IntentPanelProps {
   selectedGroup: string | null;
   /** The file open in the diff pane, so the card can mark its row. */
   selectedPath: string | null;
+  /** Which view is displayed — rejecting is only possible in a working-tree one. */
+  mode: ComparisonMode;
   busy: boolean;
   onSelect: (group: IntentGroup) => void;
   /** Open one file of the group, scoped to the group's hunks in it. */
@@ -67,6 +77,18 @@ export interface IntentPanelProps {
   onRevert: (group: IntentGroup) => void;
   onStageFile: (group: IntentGroup, file: GroupFile) => void;
   onRevertFile: (group: IntentGroup, file: GroupFile) => void;
+  /**
+   * Revert the group — or one file's share of it — and leave `reason` in the
+   * code for the agent to read.
+   *
+   * Resolves with what happened, so the panel can report it inline; `null` when
+   * the action failed and the view has already said so.
+   */
+  onReject: (
+    group: IntentGroup,
+    reason: string,
+    file?: GroupFile,
+  ) => Promise<RejectSummary | null>;
   onEnable: (provider: ProviderId, scope: InstallScope) => Promise<void>;
   /** Resolves with how many records the import found, so the panel can say so. */
   onImportHistory: () => Promise<number>;
@@ -77,6 +99,7 @@ export function IntentPanel({
   providers,
   selectedGroup,
   selectedPath,
+  mode,
   busy,
   onSelect,
   onSelectFile,
@@ -84,6 +107,7 @@ export function IntentPanel({
   onRevert,
   onStageFile,
   onRevertFile,
+  onReject,
   onEnable,
   onImportHistory,
 }: IntentPanelProps) {
@@ -100,6 +124,12 @@ export function IntentPanel({
     setFeedback(null);
     const total = await onImportHistory();
     setFeedback(importFeedback(total));
+  };
+
+  const runReject = async (group: IntentGroup, reason: string, file?: GroupFile) => {
+    setFeedback(null);
+    const summary = await onReject(group, reason, file);
+    if (summary) setFeedback(rejectFeedback(summary));
   };
 
   return (
@@ -192,6 +222,7 @@ export function IntentPanel({
           group={group}
           selected={group.id === selectedGroup}
           selectedPath={group.id === selectedGroup ? selectedPath : null}
+          mode={mode}
           busy={busy}
           onSelect={onSelect}
           onSelectFile={onSelectFile}
@@ -199,6 +230,7 @@ export function IntentPanel({
           onRevert={onRevert}
           onStageFile={onStageFile}
           onRevertFile={onRevertFile}
+          onReject={(group, reason, file) => void runReject(group, reason, file)}
         />
       ))}
     </>
@@ -209,6 +241,7 @@ function GroupCard({
   group,
   selected,
   selectedPath,
+  mode,
   busy,
   onSelect,
   onSelectFile,
@@ -216,10 +249,12 @@ function GroupCard({
   onRevert,
   onStageFile,
   onRevertFile,
+  onReject,
 }: {
   group: IntentGroup;
   selected: boolean;
   selectedPath: string | null;
+  mode: ComparisonMode;
   busy: boolean;
   onSelect: (group: IntentGroup) => void;
   onSelectFile: (group: IntentGroup, file: GroupFile) => void;
@@ -227,8 +262,37 @@ function GroupCard({
   onRevert: (group: IntentGroup) => void;
   onStageFile: (group: IntentGroup, file: GroupFile) => void;
   onRevertFile: (group: IntentGroup, file: GroupFile) => void;
+  onReject: (group: IntentGroup, reason: string, file?: GroupFile) => void;
 }) {
   const hunks = group.files.reduce((total, file) => total + file.hunks.length, 0);
+
+  // Which reject is being composed: the whole group, or one file of it. `null`
+  // means no prompt is open.
+  const [rejecting, setRejecting] = useState<{ file: GroupFile | null } | null>(null);
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const canReject = canRejectInMode(mode);
+  const rejectTitle = canReject
+    ? "Revert this and leave the reason in the code for the agent to fix"
+    : "Rejecting works on the working tree — switch out of the staged view";
+
+  const openReject = (file: GroupFile | null) => {
+    setRejecting({ file });
+    setReason("");
+    setError(null);
+  };
+
+  const confirmReject = () => {
+    const problem = rejectReasonError(reason);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    const file = rejecting?.file ?? undefined;
+    setRejecting(null);
+    onReject(group, reason, file);
+  };
 
   return (
     <div
@@ -290,6 +354,16 @@ function GroupCard({
                     >
                       Revert
                     </button>
+                    <button
+                      disabled={busy || !canReject}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openReject(file);
+                      }}
+                      title={rejectTitle}
+                    >
+                      Reject…
+                    </button>
                   </span>
                 )}
               </div>
@@ -316,7 +390,56 @@ function GroupCard({
             >
               Revert group
             </button>
+            <button
+              disabled={busy || !canReject}
+              onClick={(e) => {
+                e.stopPropagation();
+                openReject(null);
+              }}
+              title={rejectTitle}
+            >
+              Reject group…
+            </button>
           </div>
+
+          {rejecting && (
+            <div className="reject-prompt" onClick={(e) => e.stopPropagation()}>
+              <label style={{ fontSize: 11 }}>
+                Why is{" "}
+                {rejecting.file ? <code>{rejecting.file.path}</code> : "this"} wrong?
+              </label>
+              <input
+                autoFocus
+                value={reason}
+                placeholder="e.g. matches a column named limit"
+                onChange={(e) => {
+                  setReason(e.target.value);
+                  setError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") confirmReject();
+                  if (e.key === "Escape") setRejecting(null);
+                }}
+              />
+              {error && (
+                <div className="error" style={{ fontSize: 11 }}>
+                  {error}
+                </div>
+              )}
+              <div className="faint" style={{ fontSize: 11 }}>
+                Reverts the change and leaves the reason as a comment. The commit
+                is blocked until the comment is gone.
+              </div>
+              <div className="actions">
+                <button disabled={busy} onClick={confirmReject}>
+                  Reject
+                </button>
+                <button disabled={busy} onClick={() => setRejecting(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

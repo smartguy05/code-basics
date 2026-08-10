@@ -1083,6 +1083,31 @@ textarea:focus {
 .intent-card .group-file.selected .file-actions {
   display: inline-flex;
 }
+
+/* Composing a rejection. Set apart from the card's other actions because it
+   writes into the file rather than only changing what is staged, and warns that
+   the commit stays blocked until the note is dealt with. */
+.intent-card .reject-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+}
+
+.intent-card .reject-prompt input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 11px;
+}
+
+.intent-card .reject-prompt code {
+  word-break: break-all;
+}
+
 /* Object inspector (components/ObjectTree.tsx).
 
    The colours here carry meaning the words alone cannot carry at a glance:

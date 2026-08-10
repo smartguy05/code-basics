@@ -416,6 +416,21 @@ export interface IntentGroup {
   confidence: Confidence;
 }
 
+/**
+ * What rejecting a group did (`intents/reject.rs`).
+ *
+ * `unmarked` is the field the UI must not swallow: those files were reverted,
+ * but they have no line-comment syntax, so the reason the reviewer typed was
+ * written nowhere and no agent will ever read it.
+ */
+export interface RejectSummary {
+  reverted: number;
+  /** Files that now carry the reason as a comment. */
+  marked: string[];
+  /** Files reverted without a note. */
+  unmarked: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Object inspection (`crates/core/src/inspect/model.rs`)
 // ---------------------------------------------------------------------------

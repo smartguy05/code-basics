@@ -12,12 +12,14 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use cb_core::git::attribution::{self, Options};
-use cb_core::git::grouping::{self, IntentGroup};
+use cb_core::git::grouping::{self, GroupFile, IntentGroup};
 use cb_core::git::{ComparisonMode, Repo};
 use cb_core::intents::providers::{self, InstallPlan, InstallScope, ProviderStatus};
-use cb_core::intents::{self, LoadOptions, ProviderId};
+use cb_core::intents::reject::{self, RejectSummary};
+use cb_core::intents::{self, guard, LoadOptions, ProviderId};
 use tauri::State;
 
 use crate::state::AppState;
@@ -52,12 +54,15 @@ pub async fn intent_groups(
 /// works against the index, reverting against whatever the user is looking at.
 /// Rather than trusting the frontend to keep them straight, every action
 /// re-derives them here from a fresh diff.
+/// Returns the group's own [`GroupFile`]s rather than just line numbers,
+/// because rejecting also needs the hunk indices: a note is placed per hunk,
+/// and line indices alone cannot say where a hunk began.
 fn lines_for(
     repo: &Repo,
     root: &Path,
     group_id: &str,
     mode: ComparisonMode,
-) -> Result<Vec<(String, BTreeSet<u32>)>, String> {
+) -> Result<Vec<GroupFile>, String> {
     let diffs = repo.diff_all(mode).map_err(|e| format!("{e:#}"))?;
     let branch = repo.status().ok().and_then(|s| s.branch);
     let intents = intents::load(root, &LoadOptions { branch }).map_err(|e| format!("{e:#}"))?;
@@ -70,11 +75,11 @@ fn lines_for(
         .find(|g| g.id == group_id)
         .ok_or_else(|| "that group is no longer in the working tree".to_string())?;
 
-    Ok(group
-        .files
-        .into_iter()
-        .map(|f| (f.path, f.line_indices.into_iter().collect()))
-        .collect())
+    Ok(group.files)
+}
+
+fn selected(file: &GroupFile) -> BTreeSet<u32> {
+    file.line_indices.iter().copied().collect()
 }
 
 /// Stage everything in one group — or, with `path`, just that file's share.
@@ -92,13 +97,13 @@ pub async fn stage_intent_group(
     // happens to be looking at.
     let mut files = lines_for(&repo, &root, &group, ComparisonMode::WorkingToIndex)?;
     if let Some(path) = path {
-        files.retain(|(p, _)| *p == path);
+        files.retain(|f| f.path == path);
     }
 
     let mut staged = 0;
-    for (path, lines) in files {
+    for file in files {
         if repo
-            .stage_lines(&path, &lines)
+            .stage_lines(&file.path, &selected(&file))
             .map_err(|e| format!("{e:#}"))?
         {
             staged += 1;
@@ -119,19 +124,72 @@ pub async fn revert_intent_group(
     let (root, repo) = open(&state)?;
     let mut files = lines_for(&repo, &root, &group, mode)?;
     if let Some(path) = path {
-        files.retain(|(p, _)| *p == path);
+        files.retain(|f| f.path == path);
     }
 
     let mut reverted = 0;
-    for (path, lines) in files {
+    for file in files {
         if repo
-            .revert_lines(&path, mode, &lines)
+            .revert_lines(&file.path, mode, &selected(&file))
             .map_err(|e| format!("{e:#}"))?
         {
             reverted += 1;
         }
     }
     Ok(reverted)
+}
+
+/// Reject one group: revert it, and leave the reason where the code was.
+///
+/// Only the working-tree views can be rejected. In the staged view a revert
+/// changes the index, so a note written into the working tree would explain a
+/// change the reviewer is not looking at — and would itself be unstaged.
+#[tauri::command]
+pub async fn reject_intent_group(
+    state: State<'_, AppState>,
+    group: String,
+    mode: ComparisonMode,
+    path: Option<String>,
+    reason: String,
+) -> Result<RejectSummary, String> {
+    if matches!(mode, ComparisonMode::IndexToHead) {
+        return Err(
+            "rejecting works on the working tree — switch out of the staged view first".into(),
+        );
+    }
+
+    let reason = reject::sanitise_reason(&reason);
+    if reason.is_empty() {
+        return Err("a rejection needs a reason: it is the whole point of it".into());
+    }
+
+    let (root, repo) = open(&state)?;
+    let mut files = lines_for(&repo, &root, &group, mode)?;
+    if let Some(path) = path {
+        files.retain(|f| f.path == path);
+    }
+
+    // One clock reading for the whole group, so every note it writes carries
+    // the same date.
+    let at = SystemTime::now();
+
+    let mut summary = RejectSummary::default();
+    for file in files {
+        let outcome = reject::reject_file(
+            &repo,
+            &file.path,
+            mode,
+            &selected(&file),
+            &file.hunks,
+            &reason,
+            at,
+        )
+        .map_err(|e| format!("{e:#}"))?;
+
+        summary.record(outcome);
+    }
+
+    Ok(summary)
 }
 
 /// What each agent can currently do for this workspace.
@@ -177,6 +235,15 @@ pub async fn enable_intent_capture(
         .map_err(|e| format!("{e:#}"))?;
 
     providers::apply_plan(&plan).map_err(|e| format!("{e:#}"))?;
+
+    // The commit guard is a shell script, and on unix git ignores one it cannot
+    // execute. The mode is not part of what the user previewed, so it is set
+    // here rather than carried through the plan.
+    if let Some(hook) = guard::hook_path(&root) {
+        if guard::is_installed(&hook) {
+            guard::ensure_executable(&hook).map_err(|e| format!("{e:#}"))?;
+        }
+    }
 
     // The hook refuses to record into a workspace that never opted in, so the
     // directory has to exist before the next edit lands.

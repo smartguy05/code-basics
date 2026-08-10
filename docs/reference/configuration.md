@@ -34,6 +34,8 @@ intents/
 
 Hook configuration is written **outside** this directory, into the agent's own files (`.claude/settings.json`, `.codex/hooks.json`, or their user-level equivalents). Installation is additive and backed up — see the guide.
 
+Enabling capture also writes a `pre-commit` hook — into `core.hooksPath` when the repository sets one, otherwise `.git/hooks/pre-commit` — that refuses a commit whose staged files still carry a rejection note. Same rules: bounded by its own markers, appended to an existing script rather than replacing it, backed up first, and previewed before anything is written. `CB_ALLOW_REJECTED=1` overrides it for one commit.
+
 ## Object captures (`inspect/`) and crash dumps (`dumps/`)
 
 Written by the Objects tab and by dump-capturing runs. Both are gitignored and safe to delete at any time. Full walkthrough: [Inspecting objects](../guides/inspecting-objects.md).

@@ -46,9 +46,11 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+pub mod guard;
 pub mod hook;
 pub mod patchfmt;
 pub mod providers;
+pub mod reject;
 
 /// Directory under `.code-basics/` holding recorded intent.
 pub const INTENTS_DIR: &str = "intents";

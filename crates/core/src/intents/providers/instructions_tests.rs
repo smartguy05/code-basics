@@ -160,6 +160,21 @@ fn the_request_warns_that_extra_plain_lines_are_ignored() {
     assert!(write.content.contains("only the first plain line is used"));
 }
 
+/// A marker the agent is never told about is a marker it walks past. The
+/// request must name the same token the marker actually carries — a drifted
+/// spelling would send the agent looking for something that never appears —
+/// and must state both halves of the contract, since a note nobody deletes
+/// blocks every later commit.
+#[test]
+fn the_request_explains_what_a_rejection_note_means() {
+    let dir = workspace();
+    let write = planned_write(ProviderId::ClaudeCode, dir.path()).unwrap();
+
+    assert!(write.content.contains(crate::intents::reject::MARKER));
+    assert!(write.content.contains("Delete"));
+    assert!(write.content.contains("pre-commit"));
+}
+
 /// What the instruction asks for must be what the Stop hook can read back.
 #[test]
 fn the_requested_form_is_one_the_hook_can_parse() {

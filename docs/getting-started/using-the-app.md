@@ -45,6 +45,7 @@ Working-copy review:
 - Stage/unstage whole files, hunks, or individually selected lines. **Right-click a file** to stage or unstage it without opening it.
 - The file list is grouped into **Staged**, your own named **change groups**, and **Unstaged**. Groups are for organising work in progress — right-click a file to move it into one, or use "+ New group". They are local to you and never committed; see [change groups](../reference/configuration.md#change-groups-changelistsjson). A partially staged file shows under both Staged and its unstaged group, as `git status` reports it.
 - Revert individual lines — the app builds a reverse patch of just your selection and lets `git apply` do the surgery ([how that works](../architecture/core-crate.md#git)).
+- **Reject** an agent's change instead of silently reverting it: the change goes back *and* the reason you type is left as a comment where the code was, for the agent to read and act on. A `pre-commit` hook then refuses to commit while that comment is still there. See [rejecting a change](../guides/agent-intent-capture.md#rejecting-a-change).
 - Commit (with amend), branches (create/checkout/delete), stash save/pop.
 - Push/pull/fetch shell out to your system `git`, so existing credentials (SSH agent, credential manager) work with no prompts inside the app.
 

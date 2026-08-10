@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { intentDataHint, importFeedback } from "./intentPanelLogic";
+import {
+  canRejectInMode,
+  importFeedback,
+  intentDataHint,
+  rejectFeedback,
+  rejectReasonError,
+} from "./intentPanelLogic";
 import type { IntentGroup, ProviderStatus } from "../ipc/types";
 
 function group(kind: IntentGroup["kind"], id = kind): IntentGroup {
@@ -124,5 +130,60 @@ describe("importFeedback", () => {
 
   it("says plainly when nothing was found", () => {
     expect(importFeedback(0)).toBe("No past agent sessions were found for this workspace.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rejecting
+// ---------------------------------------------------------------------------
+
+describe("canRejectInMode", () => {
+  it("allows the working-tree views", () => {
+    expect(canRejectInMode("workingToHead")).toBe(true);
+    expect(canRejectInMode("workingToIndex")).toBe(true);
+  });
+
+  // Reverting in the staged view changes the index, so a note written into the
+  // working tree would explain a change the reviewer is not looking at.
+  it("refuses the staged view", () => {
+    expect(canRejectInMode("indexToHead")).toBe(false);
+  });
+});
+
+describe("rejectReasonError", () => {
+  it("accepts an ordinary reason", () => {
+    expect(rejectReasonError("regex mis-detects a column named limit")).toBeNull();
+  });
+
+  // The reason is the entire difference between rejecting and reverting.
+  it("requires something to have been typed", () => {
+    expect(rejectReasonError("")).not.toBeNull();
+    expect(rejectReasonError("   \n ")).not.toBeNull();
+  });
+
+  it("requires more than a shrug", () => {
+    expect(rejectReasonError("no")).not.toBeNull();
+    expect(rejectReasonError("bad")).not.toBeNull();
+  });
+});
+
+describe("rejectFeedback", () => {
+  it("says nothing happened when nothing did", () => {
+    const text = rejectFeedback({ reverted: 0, marked: [], unmarked: [] });
+    expect(text).toMatch(/nothing/i);
+  });
+
+  it("reports what was reverted and noted", () => {
+    const text = rejectFeedback({ reverted: 2, marked: ["a.ts", "b.ts"], unmarked: [] });
+    expect(text).toContain("2");
+    expect(text).not.toMatch(/without a note/i);
+  });
+
+  // A reviewer who typed a reason has to be told when it went nowhere,
+  // otherwise they believe the agent was informed.
+  it("names the files that could not carry the reason", () => {
+    const text = rejectFeedback({ reverted: 2, marked: ["a.ts"], unmarked: ["data.json"] });
+    expect(text).toContain("data.json");
+    expect(text).toMatch(/without a note/i);
   });
 });

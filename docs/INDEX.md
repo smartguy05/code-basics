@@ -27,11 +27,11 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/files.rs` | 218 | Workspace file access for the directory tree and file editor. |
 | `crates/core/src/git/attribution.rs` | 816 | Deciding which recorded edit produced which line of a diff. |
 | `crates/core/src/git/attribution_tests.rs` | 1043 | Tests for attributing diff lines to recorded edits. |
-| `crates/core/src/git/grouping.rs` | 487 | Turning hunks into a handful of decisions. |
-| `crates/core/src/git/grouping_tests.rs` | 648 | Tests for collapsing hunks into cards. |
+| `crates/core/src/git/grouping.rs` | 616 | Turning hunks into a handful of decisions. |
+| `crates/core/src/git/grouping_tests.rs` | 821 | Tests for collapsing hunks into cards. |
 | `crates/core/src/git/mod.rs` | 29 | Git operations. |
 | `crates/core/src/git/patch.rs` | 487 | Building unified diff patches restricted to a selection of lines. |
-| `crates/core/src/git/repo.rs` | 1486 | Repository reads and mutations. |
+| `crates/core/src/git/repo.rs` | 1508 | Repository reads and mutations. |
 | `crates/core/src/importers/mod.rs` | 7 | Importing configurations from other tools. |
 | `crates/core/src/importers/rider.rs` | 516 | Importing JetBrains Rider run configurations. |
 | `crates/core/src/importers/rider_tests.rs` | 625 | Tests for the Rider importer. |
@@ -49,21 +49,25 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/inspect/sidecar_tests.rs` | 484 |  |
 | `crates/core/src/inspect/tree.rs` | 204 | Shaping the sidecar's flat node list into the tree the UI renders. |
 | `crates/core/src/inspect/tree_tests.rs` | 247 |  |
-| `crates/core/src/intents/hook.rs` | 419 | Turning a hook payload into a record. |
-| `crates/core/src/intents/hook_tests.rs` | 865 | Tests for ingesting hook payloads. Included by `hook.rs` under `#[cfg(test)]`. |
+| `crates/core/src/intents/guard.rs` | 220 | The pre-commit guard that keeps rejection notes out of history. |
+| `crates/core/src/intents/guard_tests.rs` | 131 | Tests for the pre-commit guard that keeps rejection notes out of history. |
+| `crates/core/src/intents/hook.rs` | 445 | Turning a hook payload into a record. |
+| `crates/core/src/intents/hook_tests.rs` | 904 | Tests for ingesting hook payloads. Included by `hook.rs` under `#[cfg(test)]`. |
 | `crates/core/src/intents/intents_tests.rs` | 525 | Tests for recorded agent intent. Included by `mod.rs` under `#[cfg(test)]`. |
-| `crates/core/src/intents/mod.rs` | 398 | What a coding agent said it was doing, and where it wrote it down. |
+| `crates/core/src/intents/mod.rs` | 400 | What a coding agent said it was doing, and where it wrote it down. |
 | `crates/core/src/intents/patchfmt.rs` | 224 | Reading Codex's patch format. |
 | `crates/core/src/intents/patchfmt_tests.rs` | 223 | Tests for Codex patch parsing. Included by `patchfmt.rs` under `#[cfg(test)]`. |
-| `crates/core/src/intents/providers/claude_code.rs` | 466 | Claude Code: hooks in `settings.json`, history in per-project transcripts. |
+| `crates/core/src/intents/providers/claude_code.rs` | 483 | Claude Code: hooks in `settings.json`, history in per-project transcripts. |
 | `crates/core/src/intents/providers/claude_code_tests.rs` | 845 | Tests for the Claude Code transcript reader. |
-| `crates/core/src/intents/providers/codex.rs` | 528 | Codex: hooks in `hooks.json`, history in dated rollout files. |
+| `crates/core/src/intents/providers/codex.rs` | 545 | Codex: hooks in `hooks.json`, history in dated rollout files. |
 | `crates/core/src/intents/providers/codex_tests.rs` | 1098 | Tests for reading Codex's rollout files and reporting its configuration. |
-| `crates/core/src/intents/providers/hooks_json.rs` | 219 | Merging our hooks into a configuration file the user already owns. |
-| `crates/core/src/intents/providers/instructions.rs` | 98 | Asking the agent for a reason. |
-| `crates/core/src/intents/providers/instructions_tests.rs` | 134 | Tests for the label request appended to an agent's instruction file. |
-| `crates/core/src/intents/providers/mod.rs` | 216 | Per-agent knowledge: where it keeps its history, and how to ask it to |
-| `crates/core/src/intents/providers/providers_tests.rs` | 634 | Tests for provider detection and hook installation. |
+| `crates/core/src/intents/providers/hooks_json.rs` | 309 | Merging our hooks into a configuration file the user already owns. |
+| `crates/core/src/intents/providers/instructions.rs` | 148 | Asking the agent for a reason. |
+| `crates/core/src/intents/providers/instructions_tests.rs` | 204 | Tests for the label request appended to an agent's instruction file. |
+| `crates/core/src/intents/providers/mod.rs` | 234 | Per-agent knowledge: where it keeps its history, and how to ask it to |
+| `crates/core/src/intents/providers/providers_tests.rs` | 813 | Tests for provider detection and hook installation. |
+| `crates/core/src/intents/reject.rs` | 458 | Rejecting a change: undoing it and leaving the reason where it was. |
+| `crates/core/src/intents/reject_tests.rs` | 360 | Tests for rejecting a change — the marker comment left where code was. |
 | `crates/core/src/invocation.rs` | 267 | Turning a run configuration into a command line. |
 | `crates/core/src/invocation_tests.rs` | 455 | Tests for dispatching a configuration to the adapter that owns it. |
 | `crates/core/src/lib.rs` | 28 | Core logic for `code-basics`. |
@@ -81,6 +85,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/workspace.rs` | 1285 | Scanning a workspace for projects and building the configurations that can |
 | `crates/core/tests/git_operations.rs` | 922 | End-to-end git tests against real repositories on disk. |
 | `crates/core/tests/intent_attribution.rs` | 198 | Attribution measured against a real repository, rather than a fixture. |
+| `crates/core/tests/reject_markers.rs` | 350 | Rejection end to end: against a real repository, with the real `git`. |
 | `src/App.tsx` | 223 |  |
 | `src/components/BranchMenu.tsx` | 386 |  |
 | `src/components/ConfigEditor.tsx` | 313 |  |
@@ -89,7 +94,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/ErrorBoundary.tsx` | 65 |  |
 | `src/components/FileEditor.tsx` | 112 |  |
 | `src/components/FileTree.tsx` | 118 |  |
-| `src/components/IntentPanel.tsx` | 364 |  |
+| `src/components/IntentPanel.tsx` | 613 |  |
 | `src/components/ObjectTree.tsx` | 351 |  |
 | `src/components/OutputConsole.tsx` | 428 |  |
 | `src/components/RiderImportDialog.tsx` | 135 |  |
@@ -101,18 +106,20 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/configLogic.ts` | 48 |  |
 | `src/components/consoleLogic.test.ts` | 173 |  |
 | `src/components/consoleLogic.ts` | 92 |  |
-| `src/components/diffLogic.test.ts` | 72 |  |
-| `src/components/diffLogic.ts` | 16 |  |
+| `src/components/diffLogic.test.ts` | 92 |  |
+| `src/components/diffLogic.ts` | 28 |  |
+| `src/components/intentPanelLogic.test.ts` | 189 |  |
+| `src/components/intentPanelLogic.ts` | 160 |  |
 | `src/components/language.test.ts` | 114 |  |
 | `src/components/language.ts` | 113 |  |
 | `src/components/treeLogic.test.ts` | 383 |  |
 | `src/components/treeLogic.ts` | 148 |  |
-| `src/ipc/api.ts` | 364 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 651 |  |
+| `src/ipc/api.ts` | 383 | Typed wrappers over the Tauri command surface. |
+| `src/ipc/types.ts` | 666 |  |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
-| `src/views/ChangesView.tsx` | 662 |  |
+| `src/views/ChangesView.tsx` | 732 |  |
 | `src/views/HistoryView.tsx` | 215 |  |
 | `src/views/InspectView.tsx` | 1062 |  |
 | `src/views/RunView.tsx` | 1078 |  |
@@ -129,13 +136,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/files.rs` | 36 | Workspace file commands, for the Run tab's directory tree and file editor. |
 | `src-tauri/src/commands/git.rs` | 283 | Git commands. |
 | `src-tauri/src/commands/inspect.rs` | 330 | Object-inspection commands. |
-| `src-tauri/src/commands/intents.rs` | 207 | Agent-intent commands. |
+| `src-tauri/src/commands/intents.rs` | 283 | Agent-intent commands. |
 | `src-tauri/src/commands/run.rs` | 286 | Running applications and tests. |
 | `src-tauri/src/commands/secrets.rs` | 43 | .NET user secrets commands. |
 | `src-tauri/src/commands/workspace.rs` | 171 | Workspace and configuration commands. |
-| `src-tauri/src/lib.rs` | 127 | The Tauri shell. |
+| `src-tauri/src/lib.rs` | 128 | The Tauri shell. |
 | `src-tauri/src/main.rs` | 6 | Suppress the extra console window on Windows in release builds. |
-| `src-tauri/src/recorder.rs` | 61 | The `record-intent` mode, which is what the installed hooks actually run. |
+| `src-tauri/src/recorder.rs` | 70 | The `record-intent` mode, which is what the installed hooks actually run. |
 | `src-tauri/src/state.rs` | 178 | Shared application state. |
 | `scripts/build-sidecar.mjs` | 110 |  |
 | `scripts/check-docs.mjs` | 66 |  |
@@ -153,12 +160,12 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **run** (`src-tauri/src/commands/run.rs`): `start_run`, `build_project`, `cancel_run`, `running_ids`, `run_tests`, `last_test_run`
 - **git** (`src-tauri/src/commands/git.rs`): `git_status`, `git_file_diff`, `git_file_contents`, `git_write_file`, `git_stage_file`, `git_unstage_file`, `git_stage_lines`, `git_unstage_lines`, `git_revert_lines`, `git_discard_file`, `git_commit`, `git_branches`, `git_create_branch`, `git_checkout_branch`, `git_checkout_remote_branch`, `git_delete_branch`, `git_merge_branch`, `git_abort_merge`, `git_history`, `git_commit_diff`, `git_stash_save`, `git_stash_pop`, `git_network`
 - **changelists** (`src-tauri/src/commands/changelists.rs`): `git_changelists`, `git_create_changelist`, `git_delete_changelist`, `git_rename_changelist`, `git_assign_to_changelist`
-- **intents** (`src-tauri/src/commands/intents.rs`): `intent_groups`, `stage_intent_group`, `revert_intent_group`, `intent_capture_status`, `intent_install_plan`, `enable_intent_capture`, `import_intent_history`, `clear_intent_history`
+- **intents** (`src-tauri/src/commands/intents.rs`): `intent_groups`, `stage_intent_group`, `revert_intent_group`, `reject_intent_group`, `intent_capture_status`, `intent_install_plan`, `enable_intent_capture`, `import_intent_history`, `clear_intent_history`
 - **inspect** (`src-tauri/src/commands/inspect.rs`): `inspect_status`, `inspect_attachable`, `inspect_run_dump`, `inspect_capture`, `inspect_last`, `inspect_clear`
 
 ## Frontend IPC wrappers (`src/ipc/api.ts`)
 
-`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `runTests`, `lastTestRun`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitStashSave`, `gitStashPop`, `gitNetwork`, `intentGroups`, `stageIntentGroup`, `revertIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `importIntentHistory`, `clearIntentHistory`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `errorMessage`
+`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `runTests`, `lastTestRun`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitStashSave`, `gitStashPop`, `gitNetwork`, `intentGroups`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `importIntentHistory`, `clearIntentHistory`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `errorMessage`
 
 ## Public core API (`cb-core`)
 
@@ -173,7 +180,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/git/attribution.rs`: `MatchLevel`, `Confidence`, `AttributedSpan`, `HunkAttribution`, `FileAttribution`, `is_empty()`, `Options`, `attribute_file()`, `attribute()`
 - `crates/core/src/git/grouping.rs`: `GroupKind`, `GroupFile`, `IntentGroup`, `hunk_count()`, `is_formatting_only()`, `enclosing_symbol()`, `group()`
 - `crates/core/src/git/patch.rs`: `LineOrigin`, `DiffLine`, `Hunk`, `FileDiff`, `changed_line_indices()`, `hunk_line_indices()`, `Direction`, `build_patch()`
-- `crates/core/src/git/repo.rs`: `ComparisonMode`, `ChangeKind`, `FileChange`, `is_conflicted()`, `WorkingStatus`, `Branch`, `Commit`, `MergeOutcome`, `MergeReport`, `StageTarget`, `Repo`, `open()`, `workdir()`, `status()`, `file_diff()`, `diff_all()`, `baseline_content()`, `working_content()`, `write_working_file()`, `stage_file()`, `unstage_file()`, `stage_lines()`, `unstage_lines()`, `revert_lines()`, `discard_file()`, `commit()`, `merge_branch()`, `abort_merge()`, `branches()`, `create_branch()`, `checkout_branch()`, `create_branch_from()`, `checkout_remote_branch()`, `delete_branch()`, `history()`, `commit_diff()`, `stash_save()`, `stash_pop()`, `network_command()`, `NetworkOperation`, `NetworkKind`, `resolve_network()`
+- `crates/core/src/git/repo.rs`: `ComparisonMode`, `ChangeKind`, `FileChange`, `is_conflicted()`, `WorkingStatus`, `Branch`, `Commit`, `MergeOutcome`, `MergeReport`, `StageTarget`, `Repo`, `open()`, `workdir()`, `hooks_dir()`, `status()`, `file_diff()`, `diff_all()`, `baseline_content()`, `working_content()`, `write_working_file()`, `stage_file()`, `unstage_file()`, `stage_lines()`, `unstage_lines()`, `revert_lines()`, `discard_file()`, `commit()`, `merge_branch()`, `abort_merge()`, `branches()`, `create_branch()`, `checkout_branch()`, `create_branch_from()`, `checkout_remote_branch()`, `delete_branch()`, `history()`, `commit_diff()`, `stash_save()`, `stash_pop()`, `network_command()`, `NetworkOperation`, `NetworkKind`, `resolve_network()`
 - `crates/core/src/importers/rider.rs`: `RiderConfiguration`, `parse()`, `expand_macros()`, `convert()`, `resolve_compounds()`, `ImportResult`, `import()`
 - `crates/core/src/inspect/dumps.rs`: `dumps_dir()`, `ParsedDumpName`, `dump_env()`, `parse_dump_name()`, `list()`, `newest_for()`, `prune()`, `prune_unnamed()`
 - `crates/core/src/inspect/graph.rs`: `RawResult`, `RawNode`, `parse()`, `classify()`, `display_label()`
@@ -182,14 +189,16 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/inspect/session.rs`: `new_session_id()`, `request_for()`, `attribute()`, `launcher_caveat()`, `live_target_reason()`, `dump_for_run()`, `unsupported_reason()`, `attach_caveats()`, `first_bitness()`, `AttemptOutcome`, `attempt_outcome()`, `other_bitness()`, `retry_bitness()`, `enumeration_outcome()`, `missing_sidecar_reason()`, `status()`, `arm_dumps()`, `ArmedDumps`, `prune()`
 - `crates/core/src/inspect/sidecar.rs`: `sessions_dir()`, `session_dir()`, `request_path()`, `result_path()`, `command_args()`, `list_command_args()`, `process_list_path()`, `ProcessList`, `parse_process_list()`, `parse_process_list_file()`, `write_request()`, `sidecar_file_name()`, `FailureCode`, `SidecarFailure`, `failure_of()`, `next_attempt()`, `resolve()`, `retain_newest()`
 - `crates/core/src/inspect/tree.rs`: `Built`, `build()`
-- `crates/core/src/intents/hook.rs`: `is_record_invocation()`, `RecorderInvocation`, `parse_recorder_args()`, `HookEvent`, `parse()`, `ingest()`, `parse_labels()`, `is_enabled()`, `resolve_root()`
+- `crates/core/src/intents/guard.rs`: `block()`, `hook_path()`, `plan_for()`, `planned_write()`, `is_installed()`, `plan_removal()`, `ensure_executable()`
+- `crates/core/src/intents/hook.rs`: `is_record_invocation()`, `RecorderInvocation`, `parse_recorder_args()`, `HookEvent`, `parse()`, `ingest()`, `parse_labels()`, `is_enabled()`, `resolve_root()`, `resolve_enabled_root()`
 - `crates/core/src/intents/mod.rs`: `ProviderId`, `as_str()`, `IntentEdit`, `is_empty()`, `IntentRecord`, `IntentLabel`, `Intents`, `is_empty()`, `label_for()`, `for_path()`, `normalise_path()`, `relative_to()`, `intents_dir()`, `edits_path()`, `labels_path()`, `LoadOptions`, `load()`, `append_edit()`, `append_label()`, `next_seq()`, `rebase_seqs()`, `clear()`
 - `crates/core/src/intents/patchfmt.rs`: `PatchedFile`, `parse_envelope()`, `parse_unified_diff()`, `envelope_from_value()`
 - `crates/core/src/intents/providers/claude_code.rs`: `ClaudeCode`, `new()`, `with_home()`, `encode_project_dir()`
 - `crates/core/src/intents/providers/codex.rs`: `Codex`, `new()`, `codex_home()`, `detected_in()`, `status_in()`, `install_plan_in()`, `history_in()`, `planned_entries()`
-- `crates/core/src/intents/providers/hooks_json.rs`: `is_installed()`, `commands_for()`, `plan_merge()`, `plan_removal()`
+- `crates/core/src/intents/providers/hooks_json.rs`: `is_installed()`, `commands_for()`, `pinned_workspace()`, `pinned_elsewhere()`, `pinned_caveat()`, `plan_merge()`, `plan_removal()`
 - `crates/core/src/intents/providers/instructions.rs`: `path_for()`, `is_present()`, `planned_write()`
-- `crates/core/src/intents/providers/mod.rs`: `InstallScope`, `ProviderStatus`, `absent()`, `PlannedWrite`, `InstallPlan`, `SessionFile`, `apply_plan()`, `all()`, `statuses()`, `history()`, `home_dir()`
+- `crates/core/src/intents/providers/mod.rs`: `InstallScope`, `ProviderStatus`, `absent()`, `PlannedWrite`, `InstallPlan`, `SessionFile`, `apply_plan()`, `all()`, `statuses()`, `history()`, `guard_write()`, `home_dir()`
+- `crates/core/src/intents/reject.rs`: `comment_prefix()`, `sanitise_reason()`, `marker_block()`, `is_marker_line()`, `anchors()`, `insert_markers()`, `iso_date()`, `FileRejection`, `RejectSummary`, `record()`, `reject_file()`
 - `crates/core/src/invocation.rs`: `build()`, `rerun_filter()`, `plan_compound()`
 - `crates/core/src/model.rs`: `Project`, `ProjectKind`, `TestRunner`, `RunKind`, `ConfigSource`, `RunConfig`, `new()`, `ReportSpec`, `ReportFormat`, `Invocation`, `TestOutcome`, `TestCase`, `TestSummary`, `from_cases()`, `TestRunResult`, `TestNode`
 - `crates/core/src/process/chunker.rs`: `Utf8Chunker`, `new()`, `push()`, `finish()`, `LineSplitter`, `new()`, `push()`, `finish()`

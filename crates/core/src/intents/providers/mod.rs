@@ -203,6 +203,24 @@ pub fn history(root: &Path) -> (Vec<IntentRecord>, Vec<IntentLabel>) {
     (records, labels)
 }
 
+/// The commit guard, as an extra write on an install plan.
+///
+/// Repository-level rather than per-agent: the note a rejection leaves behind
+/// is the same note whichever agent wrote the code. Both providers append this,
+/// and installing both is harmless — the second plan finds the block already
+/// current and contributes nothing.
+pub(crate) fn guard_write(root: &Path, caveats: &mut Vec<String>) -> Option<PlannedWrite> {
+    let write = super::guard::planned_write(root)?;
+
+    caveats.push(format!(
+        "A guard is added to {} so a commit that still carries a rejection note \
+         is refused. Commit with CB_ALLOW_REJECTED=1 to override it.",
+        write.path.display()
+    ));
+
+    Some(write)
+}
+
 /// The user's home directory, for locating an agent's configuration.
 pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")

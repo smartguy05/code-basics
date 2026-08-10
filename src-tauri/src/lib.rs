@@ -110,6 +110,7 @@ pub fn run() {
             commands::intents::intent_groups,
             commands::intents::stage_intent_group,
             commands::intents::revert_intent_group,
+            commands::intents::reject_intent_group,
             commands::intents::intent_capture_status,
             commands::intents::intent_install_plan,
             commands::intents::enable_intent_capture,

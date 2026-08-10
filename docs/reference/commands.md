@@ -95,11 +95,12 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
 | `intent_groups` | `mode: ComparisonMode` | `IntentGroup[]` | The cards for the whole working tree. Recomputed on every call rather than cached: a stale group would offer to stage lines that have moved |
-| `stage_intent_group` | `group: String` | `usize` | Stage every line in one card; returns how many files changed. Takes the group **id**, not its lines — indices are only valid for one comparison mode, and staging uses a different one from the view, so they are re-derived here |
-| `revert_intent_group` | `group: String, mode: ComparisonMode` | `usize` | Revert every line in one card, in the displayed mode |
+| `stage_intent_group` | `group: String, path: Option<String>` | `usize` | Stage every line in one card; returns how many files changed. Takes the group **id**, not its lines — indices are only valid for one comparison mode, and staging uses a different one from the view, so they are re-derived here |
+| `revert_intent_group` | `group: String, mode: ComparisonMode, path: Option<String>` | `usize` | Revert every line in one card, in the displayed mode; `path` limits either command to that file's share of the card |
+| `reject_intent_group` | `group: String, mode: ComparisonMode, path: Option<String>, reason: String` | `RejectSummary` | Revert one card **and** leave the reason as a marker comment where the code was. Refused in `indexToHead` — a revert there changes the index, so the note would explain something the reviewer is not looking at — and refused without a reason. `unmarked` names files reverted without a note for want of line-comment syntax |
 | `intent_capture_status` | – | `ProviderStatus[]` | Per agent: detected, where hooks are installed, how many past sessions match this workspace, and anything blocking capture |
 | `intent_install_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact final contents of every file an install would write. **Touches nothing** — this is what the confirmation dialog renders |
-| `enable_intent_capture` | `provider: ProviderId, scope: InstallScope` | `ProviderStatus[]` | Perform a confirmed install. Additive: existing hooks are preserved and the file is backed up first |
+| `enable_intent_capture` | `provider: ProviderId, scope: InstallScope` | `ProviderStatus[]` | Perform a confirmed install. Additive: existing hooks are preserved and the file is backed up first. Also installs the `pre-commit` guard and makes it executable |
 | `import_intent_history` | – | `usize` | Read what the agents already recorded, with no setup; returns the total record count afterwards |
 | `clear_intent_history` | – | `()` | Forget everything recorded for this workspace |
 

@@ -186,6 +186,10 @@ impl Codex {
             writes.push(write);
         }
 
+        // A rejection note is a work item written into the source file, so a
+        // commit that still carries one has to be refused.
+        writes.extend(super::guard_write(root, &mut caveats));
+
         Ok(InstallPlan {
             provider: ProviderId::Codex,
             scope,

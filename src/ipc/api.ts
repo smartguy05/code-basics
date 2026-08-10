@@ -25,6 +25,7 @@ import type {
   ProjectSecrets,
   ProviderId,
   ProviderStatus,
+  RejectSummary,
   RiderImportPreview,
   RootSpec,
   RunConfig,
@@ -278,6 +279,21 @@ export const stageIntentGroup = (group: string, path?: string) =>
  */
 export const revertIntentGroup = (group: string, mode: ComparisonMode, path?: string) =>
   invoke<number>("revert_intent_group", { group, mode, path });
+
+/**
+ * Reject one group — or one file's share of it: revert it, and leave the reason
+ * as a comment where the code was, for the agent to find and act on.
+ *
+ * Rejects only in the working-tree modes; the staged view is refused by Rust
+ * rather than silently writing a note the reviewer cannot see.
+ */
+export const rejectIntentGroup = (
+  group: string,
+  mode: ComparisonMode,
+  reason: string,
+  path?: string,
+) => invoke<RejectSummary>("reject_intent_group", { group, mode, path, reason });
+
 /** What each agent can currently do for this workspace. */
 export const intentCaptureStatus = () =>
   invoke<ProviderStatus[]>("intent_capture_status");

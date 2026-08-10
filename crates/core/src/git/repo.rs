@@ -225,6 +225,28 @@ impl Repo {
         &self.workdir
     }
 
+    /// Where git looks for this repository's hooks.
+    ///
+    /// `core.hooksPath` wins when it is set, including from the user's global
+    /// configuration: a hook written to `.git/hooks` in a repository that
+    /// redirected its hooks elsewhere is a hook git will never run. A relative
+    /// value resolves against the working tree, as git resolves it.
+    pub fn hooks_dir(&self) -> PathBuf {
+        let configured = self
+            .inner
+            .config()
+            .ok()
+            .and_then(|config| config.get_string("core.hooksPath").ok())
+            .filter(|path| !path.trim().is_empty())
+            .map(PathBuf::from);
+
+        match configured {
+            Some(path) if path.is_absolute() => path,
+            Some(relative) => self.workdir.join(relative),
+            None => self.inner.path().join("hooks"),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Status
     // -----------------------------------------------------------------------

@@ -16,6 +16,7 @@ import type {
   IntentGroup,
   ProviderId,
   ProviderStatus,
+  RejectSummary,
   WorkingStatus,
 } from "../ipc/types";
 
@@ -260,6 +261,23 @@ export function ChangesView() {
       await refreshAll();
     });
 
+  /**
+   * Reject: revert, and leave the reason in the code where it was.
+   *
+   * The summary is handed back rather than reported here, for the same reason
+   * `importHistory` hands its count back — the panel says what happened next to
+   * the button that was pressed, and `withBusy` clears the view's error on a
+   * successful action.
+   */
+  const rejectGroup = async (group: IntentGroup, reason: string, file?: GroupFile) => {
+    let summary: RejectSummary | null = null;
+    await withBusy(async () => {
+      summary = await api.rejectIntentGroup(group.id, mode, reason, file?.path);
+      await refreshAll();
+    });
+    return summary;
+  };
+
   const enableCapture = async (provider: ProviderId, scope: InstallScope) => {
     setProviders(await api.enableIntentCapture(provider, scope));
     await refreshIntent();
@@ -417,6 +435,7 @@ export function ChangesView() {
             providers={providers}
             selectedGroup={selectedGroup}
             selectedPath={selectedPath}
+            mode={mode}
             busy={busy}
             onSelect={selectGroup}
             onSelectFile={selectGroupFile}
@@ -424,6 +443,7 @@ export function ChangesView() {
             onRevert={revertGroup}
             onStageFile={stageGroupFile}
             onRevertFile={revertGroupFile}
+            onReject={rejectGroup}
             onEnable={enableCapture}
             onImportHistory={importHistory}
           />

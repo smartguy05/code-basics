@@ -1,4 +1,9 @@
-import type { IntentGroup, ProviderStatus } from "../ipc/types";
+import type {
+  ComparisonMode,
+  IntentGroup,
+  ProviderStatus,
+  RejectSummary,
+} from "../ipc/types";
 
 /**
  * Deciding what to say when nothing here is agent-stated.
@@ -99,4 +104,57 @@ export function intentDataHint(
 export function importFeedback(total: number): string {
   if (total === 0) return "No past agent sessions were found for this workspace.";
   return `Imported ${total} recorded intent${total === 1 ? "" : "s"}.`;
+}
+
+/**
+ * Can this comparison mode be rejected in?
+ *
+ * Only the working-tree views. Reverting in the staged view changes the index,
+ * so the note would be written into a working tree the reviewer is not looking
+ * at — and would itself be left unstaged. Rust refuses it too; this is so the
+ * button can be disabled rather than failing on click.
+ */
+export function canRejectInMode(mode: ComparisonMode): boolean {
+  return mode === "workingToHead" || mode === "workingToIndex";
+}
+
+/** Shortest reason worth writing into a file. */
+const MIN_REASON = 4;
+
+/**
+ * Why this reason will not do, or `null` when it is fine.
+ *
+ * The reason is the entire difference between rejecting and reverting: without
+ * one this is just a revert with extra steps, and the agent learns nothing. So
+ * an empty or one-word reason is refused rather than written.
+ */
+export function rejectReasonError(reason: string): string | null {
+  const trimmed = reason.trim();
+
+  if (trimmed.length === 0) {
+    return "A rejection needs a reason — it is what the agent will read.";
+  }
+  if (trimmed.length < MIN_REASON) {
+    return "Too short to be useful. Say what was wrong with it.";
+  }
+  return null;
+}
+
+/** What to say once a rejection has been applied. */
+export function rejectFeedback(summary: RejectSummary): string {
+  if (summary.reverted === 0) {
+    return "Nothing was reverted — the group may have already moved.";
+  }
+
+  const files = `${summary.reverted} file${summary.reverted === 1 ? "" : "s"}`;
+  const noted = `Reverted ${files} and left the reason in ${summary.marked.length}.`;
+
+  if (summary.unmarked.length === 0) return noted;
+
+  // Naming them matters: these have no line comment to write into, so the
+  // reason exists nowhere and no agent will ever see it.
+  return (
+    `${noted} Reverted without a note (no comment syntax): ` +
+    `${summary.unmarked.join(", ")}.`
+  );
 }
