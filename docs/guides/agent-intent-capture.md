@@ -56,6 +56,8 @@ Intent(src/api.ts, src/apiLogic.test.ts): <why, for those files>
 
 A scoped line covers the files it names and one plain line may cover the rest; extra plain lines are ignored — only the first is used.
 
+When a Claude Code turn edits files and ends without an `Intent:` line, the Stop hook asks for one before the turn finishes. It asks **once per turn** — if the agent does not comply, the turn ends anyway and the card falls back to being titled from its changes, so the request can never wedge a session. It applies only to workspaces that enabled capture, only to turns that actually changed something, and only to Claude Code (nothing establishes that Codex honours a blocking stop). Set `askForIntent` to `false` in [`config.json`](../reference/configuration.md#configjson) to turn it off.
+
 The section is marked with `<!-- code-basics: agent intent -->` … `<!-- /code-basics -->`, so installing twice does not repeat it, and it appears in the confirmation dialog like any other file. Delete the section if you would rather not have it — capture still works, but the label falls back to the first sentence of the closing message, which was written for someone reading a chat rather than as a card title.
 
 Once capture is on, the setup panel shows **Re-apply setup…** instead of the enable buttons. Use it after an update changes the hook command or the instruction wording: it previews and re-writes both at the same level — the hook entry is replaced rather than duplicated, and whatever sits between the section's markers is replaced with the current request, leaving the rest of the file untouched. A section whose closing marker has been deleted is left alone rather than guessed at.
@@ -109,10 +111,15 @@ The same abstain rule applies here as to the cards: the banner stays silent when
 
 | Badge | Meaning |
 |---|---|
-| **Stated** | The agent said this is what it was doing |
+| **Stated** | The agent declared this with an `Intent:` line — the only badge that claims a reason |
+| **One turn** | One turn made these changes but never declared why. The hunks really did change together, so they are still grouped; the title describes them rather than explaining them |
 | **Formatting** | Whitespace only — no code changed. The card is titled "Whitespace only" |
 | **New** / **Changed** | A symbol not in the baseline, or one whose body changed |
 | **Unexplained** | Nothing could be determined; grouped by file |
+
+**Only a declared `Intent:` line earns the Stated badge.** Anything the app had to mine out of prose — the first sentence of a closing message, or a sentence lifted from session history — becomes a **One turn** card instead. The sentence is still shown when there is one, because it is the best description available, but the badge says where it came from. When there is no usable sentence at all the card is titled from its own contents: the enclosing symbol if every hunk shares one, otherwise "N files changed together". That title is a description and is never presented as a reason.
+
+Mined sentences are also filtered before they are kept. Prose written for a human reading a chat is full of things that are not labels — status about the tooling or the model, pleasantries, and announcements of what the agent is *about to* do — and a card once ended up titled *"The workflow is running with Opus"* over three files. Those shapes are now refused outright, on the standing rule that no label is better than a wrong one. A declared `Intent:` line is never filtered: it is the agent's own words for the card.
 
 A symbol card is titled with the **bare symbol name** — `EstimateCost`, not "New method EstimateCost()". The badge beside it already says New or Changed, and a declaration that names both a type and a binding is read as the binding: `let total: usize` is `total`, `static COUNTER: AtomicU64` is `COUNTER`, `const cache: Map<…>` is `cache`.
 

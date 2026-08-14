@@ -15,7 +15,7 @@
 | `pnpm coverage` | Frontend tests with coverage; fails under 70% lines on the `*Logic.ts` modules |
 | `cargo test -p cb-core` | All core tests (the entire logic layer) |
 | `cargo test -p cb-core <name>` | Tests whose names contain `<name>` |
-| `cargo llvm-cov --workspace --summary-only --fail-under-lines 70 --ignore-filename-regex "src.tauri.src.main\.rs\|process.kill\.rs"` | Rust coverage gate (install with `cargo install cargo-llvm-cov` + `rustup component add llvm-tools-preview`) |
+| `cargo llvm-cov --workspace --summary-only --fail-under-lines 70 --ignore-filename-regex "src.tauri.src.main\.rs\|process.kill\.rs\|bin.fake_lsp\.rs"` | Rust coverage gate (install with `cargo install cargo-llvm-cov` + `rustup component add llvm-tools-preview`) |
 | `cargo clippy` | Lint the Rust workspace |
 | `cargo fmt` | Format the Rust workspace (stock rustfmt defaults — there is no `rustfmt.toml`) |
 | `pnpm docs:index` | Regenerate [docs/INDEX.md](../INDEX.md) from the source tree |
@@ -27,8 +27,19 @@ Frontend tests use vitest (node environment, no jsdom) and cover only the pure `
 
 Two separate gates, both ≥70% lines:
 
-- **Rust**: `cargo llvm-cov` over the whole workspace. Excluded (whole-file, via `--ignore-filename-regex`): `src-tauri/src/main.rs` (Tauri entry point) and `crates/core/src/process/kill.rs` (`taskkill`/libc platform forks, exercised indirectly by the `process::` tests). Run it from a shell with `sh` on PATH (Git Bash) — the `process::` tests spawn `sh` and fail without it.
+- **Rust**: `cargo llvm-cov` over the whole workspace. Excluded (whole-file, via `--ignore-filename-regex`): `src-tauri/src/main.rs` (Tauri entry point) and `crates/core/src/process/kill.rs` (`taskkill`/libc platform forks, exercised indirectly by the `process::` tests) and `crates/core/src/bin/fake_lsp.rs` (the scripted language-server stand-in — test-only code that ships in no build, so its own coverage would only dilute the product figure). Run it from a shell with `sh` on PATH (Git Bash) — the `process::` tests spawn `sh` and fail without it.
 - **Frontend**: `pnpm coverage`, thresholds configured in `vite.config.ts` over the `*Logic.ts` include list only — rendering components are deliberately outside the metric.
+
+### Build output is enormous — check on it
+
+A single target directory for this workspace runs to **2–6 GB**, and `target/debug/deps` reaches ~39 GB once it has accumulated across many builds. `cargo llvm-cov` keeps its own (`target/llvm-cov-target`, ~5 GB), so a repository that has been built, tested and covered is comfortably 50 GB before anything unusual happens.
+
+Nothing prunes any of it. Worth knowing:
+
+- `target/debug/incremental` is pure rebuild cache and can be deleted at any time.
+- `cargo clean` reclaims everything at the cost of one full rebuild. There is no state in `target/` worth preserving.
+- **Never set `CARGO_TARGET_DIR` to a path inside the repository.** `/target` is gitignored wholesale, so anything parked under it is invisible to `git status` and survives `git clean`. Two sessions have each left tens of gigabytes of per-agent build directories behind this way — once as `target/wf-*`, once under the system temp directory.
+- If you split builds across parallel processes to avoid the shared `target/` lock, reuse a small fixed set of paths outside the repo and delete them when the work is done. The lock serialises builds; it does not break them, and serialised cargo is usually cheaper than tens of gigabytes of parallel cargo.
 
 ## Where code goes
 

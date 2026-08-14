@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
-import { DiffView, type DiffLayout } from "../components/DiffView";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { DiffView, type DiffLayout, type DiffViewHandle } from "../components/DiffView";
 import { allChangedIndices, onlyHunks } from "../components/diffLogic";
 import { buildSections, statusLetter, type FileSection } from "./changesLogic";
 import { Sidebar } from "../components/Sidebar";
 import { IntentPanel } from "../components/IntentPanel";
 import * as api from "../ipc/api";
+import { applyEditorFontSize, loadEditorFontSize, onEditorFontSizeChange } from "../editorFontSize";
+import {
+  MAX_EDITOR_FONT_SIZE,
+  MIN_EDITOR_FONT_SIZE,
+  stepFontSize,
+} from "../editorFontSizeLogic";
 import type {
   Changelist,
   ComparisonMode,
@@ -22,6 +28,8 @@ import type {
 
 const DIFF_LAYOUT_KEY = "code-basics.diffLayout";
 const GROUPING_KEY = "code-basics.changesGrouping";
+const COLLAPSE_KEY = "code-basics.diffCollapseUnchanged";
+const WHITESPACE_KEY = "code-basics.diffIgnoreWhitespace";
 
 /** How the sidebar organises the working tree. */
 type Grouping = "files" | "intent";
@@ -32,6 +40,16 @@ function loadGrouping(): Grouping {
 
 function loadDiffLayout(): DiffLayout {
   return localStorage.getItem(DIFF_LAYOUT_KEY) === "inline" ? "inline" : "sideBySide";
+}
+
+/** Off unless it was explicitly turned on — folding hides code by default. */
+function loadCollapse(): boolean {
+  return localStorage.getItem(COLLAPSE_KEY) === "true";
+}
+
+/** Off by default: the honest comparison is the one git actually made. */
+function loadIgnoreWhitespace(): boolean {
+  return localStorage.getItem(WHITESPACE_KEY) === "true";
 }
 
 const MODE_LABELS: Record<ComparisonMode, string> = {
@@ -52,6 +70,8 @@ export function ChangesView() {
   const [amend, setAmend] = useState(false);
   const [busy, setBusy] = useState(false);
   const [diffLayout, setDiffLayout] = useState<DiffLayout>(loadDiffLayout);
+  const [collapseUnchanged, setCollapseUnchanged] = useState(loadCollapse);
+  const [ignoreWhitespace, setIgnoreWhitespace] = useState(loadIgnoreWhitespace);
   const [groups, setGroups] = useState<Changelist[]>([]);
   /** Right-click target: where the menu sits and which file it acts on. */
   const [context, setContext] = useState<{ x: number; y: number; change: FileChange } | null>(
@@ -67,6 +87,40 @@ export function ChangesView() {
   const [newGroup, setNewGroup] = useState<{ name: string; pendingPath: string | null } | null>(
     null,
   );
+
+  /**
+   * The editor font size, mirrored here only so the buttons can grey out at the
+   * ends of the range.
+   *
+   * `editorFontSize.ts` is the single source of truth — the buttons apply
+   * through it and this state is refreshed from the change event, so pressing
+   * Ctrl+= keeps the buttons honest without this view owning the value.
+   */
+  const [fontSize, setFontSize] = useState(loadEditorFontSize);
+  useEffect(() => onEditorFontSizeChange(() => setFontSize(loadEditorFontSize())), []);
+
+  /** The open diff, for the toolbar arrows and F7. */
+  const diffHandle = useRef<DiffViewHandle | null>(null);
+
+  /**
+   * F7 / Shift+F7 step through the changes, as they do in Rider.
+   *
+   * Window-level and capture phase, matching `SearchEverywhere`: the focus is
+   * usually inside CodeMirror, which would otherwise swallow the key. This view
+   * is only mounted while its tab is showing (see `App.tsx`), so the binding is
+   * scoped to the Changes tab without having to check.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "F7" || event.ctrlKey || event.altKey || event.metaKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      diffHandle.current?.goToChange(event.shiftKey ? -1 : 1);
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, []);
 
   const [grouping, setGrouping] = useState<Grouping>(loadGrouping);
   const [intentGroups, setIntentGroups] = useState<IntentGroup[]>([]);
@@ -86,6 +140,16 @@ export function ChangesView() {
   function changeDiffLayout(layout: DiffLayout) {
     setDiffLayout(layout);
     localStorage.setItem(DIFF_LAYOUT_KEY, layout);
+  }
+
+  function changeIgnoreWhitespace(next: boolean) {
+    setIgnoreWhitespace(next);
+    localStorage.setItem(WHITESPACE_KEY, String(next));
+  }
+
+  function changeCollapse(next: boolean) {
+    setCollapseUnchanged(next);
+    localStorage.setItem(COLLAPSE_KEY, String(next));
   }
 
   function changeGrouping(next: Grouping) {
@@ -358,6 +422,8 @@ export function ChangesView() {
       : diff;
   const canRevertAll = shownDiff != null && allChangedIndices(shownDiff).length > 0;
   const sections = buildSections(files, groups);
+  /** What the marker strip marks and what F7 steps through. */
+  const differences = shownDiff?.hunks.length ?? 0;
 
   function toggleSection(key: string) {
     setCollapsed((previous) => {
@@ -672,6 +738,28 @@ export function ChangesView() {
             Unstage{hasSelection ? " selected" : " file"}
           </button>
 
+          <span style={{ width: 12 }} />
+
+          <button
+            onClick={() => diffHandle.current?.goToChange(-1)}
+            disabled={differences === 0}
+            title="Previous change (Shift+F7)"
+            aria-label="Previous change"
+          >
+            ↑
+          </button>
+          <button
+            onClick={() => diffHandle.current?.goToChange(1)}
+            disabled={differences === 0}
+            title="Next change (F7)"
+            aria-label="Next change"
+          >
+            ↓
+          </button>
+          <span className="faint" style={{ fontSize: 11, whiteSpace: "nowrap" }}>
+            {differences} difference{differences === 1 ? "" : "s"}
+          </span>
+
           <span style={{ flex: 1 }} />
 
           <select
@@ -682,6 +770,46 @@ export function ChangesView() {
             <option value="sideBySide">Side by side</option>
             <option value="inline">Inline</option>
           </select>
+
+          <select
+            value={ignoreWhitespace ? "ignore" : "exact"}
+            onChange={(e) => changeIgnoreWhitespace(e.target.value === "ignore")}
+            title="Whitespace-only differences change how the diff is drawn, never what Stage or Revert act on"
+          >
+            <option value="exact">Do not ignore</option>
+            <option value="ignore">Ignore whitespace</option>
+          </select>
+
+          <label
+            style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 11 }}
+            title="Fold away long runs of unchanged code, keeping a few lines either side of each change"
+          >
+            <input
+              type="checkbox"
+              checked={collapseUnchanged}
+              onChange={(e) => changeCollapse(e.target.checked)}
+            />
+            Collapse unchanged
+          </label>
+
+          <span className="font-size-controls">
+            <button
+              onClick={() => applyEditorFontSize(stepFontSize(fontSize, -1))}
+              disabled={fontSize <= MIN_EDITOR_FONT_SIZE}
+              title="Smaller text (Ctrl+-)"
+              aria-label="Smaller text"
+            >
+              A−
+            </button>
+            <button
+              onClick={() => applyEditorFontSize(stepFontSize(fontSize, 1))}
+              disabled={fontSize >= MAX_EDITOR_FONT_SIZE}
+              title="Larger text (Ctrl+=)"
+              aria-label="Larger text"
+            >
+              A+
+            </button>
+          </span>
 
           <span className="faint" style={{ fontSize: 11 }}>
             Click a line number to select · ⌘S / Ctrl+S to save an edit
@@ -718,10 +846,13 @@ export function ChangesView() {
                 working={contents.working}
                 diff={shownDiff}
                 layout={diffLayout}
+                collapseUnchanged={collapseUnchanged}
+                ignoreWhitespace={ignoreWhitespace}
                 editable
                 onSave={save}
                 onSelectionChange={setSelectedLines}
                 highlight={highlight}
+                handleRef={diffHandle}
               />
             )
           )}

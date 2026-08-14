@@ -650,6 +650,81 @@ fn diffs_the_changes_a_commit_introduced() {
     assert_eq!(changed, vec!["one", "two"]);
 }
 
+// -- both sides of a file at a commit, for the History tab's diff viewer -----
+
+#[test]
+fn reads_both_sides_of_a_file_a_commit_changed() {
+    let dir = init_repo(&[("f.txt", "one\n")]);
+    let path = dir.path();
+    write(path, "f.txt", "two\n");
+    run(path, &["commit", "-am", "second"]);
+
+    let repo = Repo::open(path).unwrap();
+    let head = repo.history(1).unwrap().remove(0);
+    let contents = repo.commit_file_contents(&head.id, "f.txt").unwrap();
+
+    assert_eq!(contents.baseline.as_deref(), Some("one\n"));
+    assert_eq!(contents.working.as_deref(), Some("two\n"));
+}
+
+/// A file the commit added has no previous side. `None` rather than an empty
+/// string, so the viewer shows a plain editor instead of an all-green diff.
+#[test]
+fn a_file_added_by_a_commit_has_no_baseline() {
+    let dir = init_repo(&[("f.txt", "one\n")]);
+    let path = dir.path();
+    write(path, "added.txt", "brand new\n");
+    run(path, &["add", "."]);
+    run(path, &["commit", "-m", "add a file"]);
+
+    let repo = Repo::open(path).unwrap();
+    let head = repo.history(1).unwrap().remove(0);
+    let contents = repo.commit_file_contents(&head.id, "added.txt").unwrap();
+
+    assert_eq!(contents.baseline, None);
+    assert_eq!(contents.working.as_deref(), Some("brand new\n"));
+}
+
+/// Deleted by the commit: the file exists before and not after.
+#[test]
+fn a_file_deleted_by_a_commit_has_no_content_after_it() {
+    let dir = init_repo(&[("f.txt", "one\n"), ("gone.txt", "doomed\n")]);
+    let path = dir.path();
+    run(path, &["rm", "gone.txt"]);
+    run(path, &["commit", "-m", "remove a file"]);
+
+    let repo = Repo::open(path).unwrap();
+    let head = repo.history(1).unwrap().remove(0);
+    let contents = repo.commit_file_contents(&head.id, "gone.txt").unwrap();
+
+    assert_eq!(contents.baseline.as_deref(), Some("doomed\n"));
+    assert_eq!(contents.working, None);
+}
+
+/// The first commit has no parent, so everything in it is new.
+#[test]
+fn a_root_commit_has_no_baseline_for_any_of_its_files() {
+    let dir = init_repo(&[("f.txt", "one\n")]);
+    let path = dir.path();
+
+    let repo = Repo::open(path).unwrap();
+    let root = repo.history(1).unwrap().remove(0);
+    let contents = repo.commit_file_contents(&root.id, "f.txt").unwrap();
+
+    assert_eq!(contents.baseline, None);
+    assert_eq!(contents.working.as_deref(), Some("one\n"));
+}
+
+#[test]
+fn an_unknown_commit_is_an_error_rather_than_empty_contents() {
+    // Silently returning "no content" would render an empty diff that looks
+    // like a commit which changed nothing.
+    let dir = init_repo(&[("f.txt", "one\n")]);
+    let repo = Repo::open(dir.path()).unwrap();
+
+    assert!(repo.commit_file_contents("not-a-commit", "f.txt").is_err());
+}
+
 #[test]
 fn stashes_and_restores_changes() {
     let dir = init_repo(&[("f.txt", "original\n")]);

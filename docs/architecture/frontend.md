@@ -1,6 +1,6 @@
 # The frontend (`src/`)
 
-React 19 + TypeScript, built with Vite, rendered inside the native Tauri window via the platform WebView. No router and no state library — the app is a single window with five tabs, and each view owns its own state. Everything the frontend "does" is an `invoke` call into the [Tauri shell](tauri-shell.md).
+React 19 + TypeScript, built with Vite, rendered inside the native Tauri window via the platform WebView. No router and no state library — the app is a single window with six tabs, and each view owns its own state. Everything the frontend "does" is an `invoke` call into the [Tauri shell](tauri-shell.md).
 
 ## Structure
 
@@ -19,6 +19,22 @@ src/
 │   ├── TestsView.tsx     test configs, run / re-run failed, live progress + tree
 │   ├── ChangesView.tsx   git status, comparison modes, side-by-side/inline diff
 │   ├── HistoryView.tsx   commit log, per-commit diffs, branches, push/pull/fetch
+│   ├── ArchitectureView.tsx  the Architecture tab: diagram list (two built-ins +
+│   │                     saved files), canvas, editor, save-a-copy
+│   ├── architecture/     that tab's parts — see below
+│   │   ├── DiagramCanvas.tsx   lazy-imports mermaid, renders, pans/zooms, and
+│   │   │                 turns a click on a box into an open-file request
+│   │   ├── DiagramEditor.tsx   CodeMirror over one stored diagram, validating
+│   │   │                 the Mermaid as you type
+│   │   ├── architectureLogic.ts  the diagram list, and the derivation/warning
+│   │   │                 labels beside one
+│   │   ├── nodeTargets.ts      which file a clicked node opens — a lookup for a
+│   │   │                 derived diagram, a strict symbol match for a saved one
+│   │   ├── panZoomLogic.ts     the single affine transform, as arithmetic
+│   │   ├── viewportLogic.ts    where each diagram was panned/zoomed to, kept
+│   │   │                 across the tab's remount
+│   │   └── copyLogic.ts        what "save a copy" names the copy, and whether
+│   │                     that name is already taken
 │   └── InspectView.tsx   the Objects tab: crash dumps, root picker, object tree
 │                         over the sidecar's console ([live inspection](live-inspection.md))
 ├── components/
@@ -36,7 +52,26 @@ src/
 │   ├── RunConfigMenu.tsx titlebar run-config dropdown: status dots, favourites,
 │   │                     reorder, new/import items (portal from RunView)
 │   ├── FileTree.tsx      lazy workspace directory tree (one fs_list_dir per expand)
-│   ├── FileEditor.tsx    CodeMirror editor over one file; Ctrl+S saves, reports dirty
+│   ├── FileEditor.tsx    CodeMirror editor over one file; Ctrl+S saves, reports dirty,
+│   │                     reveals a requested line (clamped, token-guarded), and owns
+│   │                     the whole language-server client (didOpen/didChange/didClose,
+│   │                     the inline usages rows, both overlays)
+│   ├── usagesExtension.ts  the CodeMirror half: a block-widget row above each
+│   │                     declaration, a middle-click handler, a viewport notifier —
+│   │                     and no decisions
+│   ├── usagesLogic.ts    every decision the usages feature makes: row text, grouping,
+│   │                     what a middle-click licenses, which anchors to ask about,
+│   │                     the cache key, queue pruning, overlay placement
+│   ├── LspStatus.tsx     titlebar indicator for what the servers are doing — a poll
+│   │                     loop and markup, nothing else
+│   ├── lspStatusLogic.ts when to say something about a server, what to say, and how
+│   │                     often to look again
+│   ├── SearchEverywhere.tsx  the search palette: an overlay over the whole app that
+│   │                     finds a file, a symbol or a run configuration; mounted
+│   │                     whenever a workspace is, because its window-level key
+│   │                     listener is the only way to reach it
+│   ├── searchLogic.ts    the palette's decisions: the keybinding table, arrow-key
+│   │                     index math, label highlighting, line clamping
 │   ├── language.ts       file-extension → CodeMirror language mode, plus the
 │   │                     shared syntax-colour theme and bracket matching
 │   ├── EnvironmentPicker.tsx  ASPNETCORE_ENVIRONMENT dropdown with in-menu add/remove
@@ -49,9 +84,11 @@ src/
     └── types.ts          hand-written mirrors of the Rust model types
 ```
 
-## The one piece of cross-view state
+## The two pieces of cross-view state
 
-Views do not talk to each other. There is exactly one exception, and it is worth knowing why it was allowed.
+Views do not talk to each other. There are exactly two exceptions, and both are the same shape for the same reason, which is worth knowing before a third is added.
+
+### `inspectRequest` — inspect what just crashed
 
 A crashed run and a failed test both want an **Inspect** button, and the view that serves it — `InspectView` — is their sibling, not their child. So `App` holds a single `inspectRequest: InspectRequest | null`: the target, the root, and a `reason` string shown above the resulting capture so the user knows what they clicked. `RunView` and `TestsView` receive `onInspect`, which sets it and switches to the Objects tab in one call; `InspectView` takes it as `pendingRequest`, runs the capture, and calls `onRequestConsumed` so a tab switch does not fire the same capture twice.
 
@@ -59,6 +96,18 @@ Two deliberate details:
 
 - The type is `App`'s own, not the backend's `InspectRequest` from `ipc/types.ts`. Caps and suspension are the backend's business — all a red test knows is what to look at and why.
 - It is held **only until consumed**. Nothing accumulates, and no view reads another view's state; the request is a message that happens to be routed through the common parent because that is the only place both siblings can see.
+
+### `openRequest` / `selectRequest` — what the search palette chose
+
+The search palette is an overlay rendered by `App`, not by any tab, because it is reachable from all of them. The Architecture tab raises the same `openRequest` when a box in a diagram is clicked — a second producer, deliberately, rather than a second mechanism. What either one finds is acted on by the Run tab: a file opens in that tab's editor, and a run configuration is selected in that tab's dropdown. So the palette hands its choice to `App`, which holds `openRequest: OpenFileRequest | null` and `selectRequest: SelectConfigRequest | null` and passes them to `RunView` as `pendingOpen` / `pendingSelect`, exactly as `inspectRequest` is passed to `InspectView` — set it, switch tab, and let the consumer call `onOpenConsumed` / `onSelectConsumed`.
+
+**Why this was allowed rather than lifting the editor.** The alternative is moving `openFiles`, `activeFile` and `openFile` up into `App` so the palette can call them directly. That is a pane's worth of state — tab order, dirty files, focus — lifted out of the view that renders it to serve one keystroke, and `App` would then be the place two components had to agree about all of it. Passing a request keeps the editor's state where the editor is, and it reuses an arrangement that already exists and is already understood.
+
+Three details that differ from `inspectRequest`, all forced by the same fact — the Run tab stays mounted while hidden:
+
+- Each request carries a monotonic **`token`**. Choosing a symbol in a file that is *already open* changes neither the path nor the mount, so an equality check on the fields would decide nothing had happened and leave the user on the line they jumped from. A number that only goes up cannot collide with itself. `FileEditor` takes `revealLine` + `revealToken` and reacts to the token; it also remembers the last token it served, so an unrelated re-render cannot replay an old jump and drag the cursor back.
+- `RunView` consumes each request **by object identity** in a ref, the way `InspectView` does. Without that guard every process event, tab switch or status tick would re-open the file.
+- An action hit **selects** its configuration and never starts it. Starting a process off a fuzzy-matched keystroke is a guess whose cost is a build, a port, or a service talking to something real. `RunView` also checks the id against its own list first — the palette ranks over every configuration, that list is app configurations only, and setting a selection to an id it does not hold would empty the toolbar and look like the app breaking.
 
 ## The IPC layer
 
@@ -74,7 +123,40 @@ Two deliberate details:
 - **ConfigEditor** edits a `RunConfig`. Environment variables are typed as `KEY=value` lines and split on the *first* `=` only, so connection strings, base64, and JWTs survive intact.
 - **RiderImportDialog** shows the conversion preview — including per-config warnings — and writes nothing until the user confirms ([Rider import](../guides/rider-import.md)).
 - **RunConfigMenu** is rendered by `RunView` (which owns selection, favourites and process status) but displayed in the titlebar via `createPortal` into `#run-config-slot` — the state stays in the view without being lifted to `App`.
-- **FileEditor** instances stay mounted while hidden — like console sessions — so undo history and unsaved edits survive switching file tabs. Files load via `fs_read_file` and save with Ctrl+S via `fs_write_file`; the editor/console split fraction persists in `localStorage` (`code-basics.editorSplit`).
+- **SearchEverywhere** is an overlay with one control: an input, four scope buttons, and a ranked list grouped Files / Symbols / Actions. Every decision it looks like it makes is a call into `searchLogic.ts` — `recogniseShortcut` (the whole keybinding table as one expression), `nextIndex` (wrapping arrow-key movement, and normalising a selection left over from a longer list), `highlightSpans` (`SearchHit.positions` are **character** indices, so the label is decomposed with `Array.from` and never sliced as a raw string), `lineToPos` (clamping, because CodeMirror's `doc.line()` throws out of range and the index is a snapshot). The ranking, the scope filtering and the `Foo:123` line suffix are `cb-core`'s and are not re-implemented here; the raw query text is passed through and the line is read off the hit. Keystrokes are debounced 80 ms and each search carries a sequence number, so a slow reply to an older query cannot land on top of a newer one.
+- **FileEditor** instances stay mounted while hidden — like console sessions — so undo history and unsaved edits survive switching file tabs. Files load via `fs_read_file` and save with Ctrl+S via `fs_write_file`; the editor/console split fraction persists in `localStorage` (`code-basics.editorSplit`). It is also the whole client of the language-server surface, because the `didOpen`/`didClose` pair a server is owed is exactly this component's lifetime — see [below](#find-usages-and-go-to-definition).
+
+## Find usages and go to definition
+
+Three files, and the split between them is the whole design: `FileEditor.tsx` owns the lifecycle, `usagesExtension.ts` owns the DOM, and **`usagesLogic.ts` owns every decision** — because vitest runs in the node environment, so an `EditorView`, a `WidgetType` and a `MouseEvent` are all unreachable from a test, and anything that decides something inside the other two files is unmeasured by definition. `usagesExtension.ts` also sits outside `vite.config.ts`'s coverage glob (`src/**/*Logic.ts` plus two named exceptions), which is why even its pure helpers — `toneClass`, `actionDetail` — live in the logic module and are re-exported.
+
+**A count is produced only for `outcome === "ready"`.** `cb-core` keeps six `Availability` variants apart and types `total` as `number | null` so that a number which might still change cannot be rendered at all; `usageRowView` is the single place a result becomes text, and for every other outcome the number is simply not in what it returns. So: `starting`/`loading` say the server is not ready, `notConfigured` shows the backend's own install hint, `failed` shows why, `unsupported` says the server *cannot answer* and never the word "none", and `ready` with `total: 0` says "No usages" in its own tone. The same rule governs the goto picker: an empty group licenses "None." only when `message` is `null` (one message covers three lists and names its group in prose), and a picker built from a non-`ready` outcome carries `partialAnswerNote` saying the list may be short.
+
+**Nothing is asked about text the server has not been told about.** The editor holds two version counters — `docVersion`, bumped on every `docChanged`, and `syncedVersion`, the version a `lspChangeDocument` actually delivered — and `requestVisible` refuses to issue anything while they differ or while the debounce is still owed. The guard is in `requestVisible` itself rather than in its callers: there are three, and a query issued in that window is answered about the previous text while being filed under the current version's key, where nothing would ever correct it. Answers are cached under `usageCacheKey(path, anchorId, docVersion)` — joined with `\0`, written as an escape, because a space separator collides (Windows paths and Roslyn anchor ids both contain spaces) — and the whole cache is dropped when the version moves, since no key of an older version can ever be read again.
+
+**A failure is visible as itself.** If the buffer cannot be sent, the rows are taken *down* rather than left showing their idle text above declarations whose line numbers came from the pre-edit document, and the corner badge says what happened. If the anchors come back `starting`/`loading` they are retried every 2 s for 60 attempts — deliberately past `lsp/client.rs`'s 90 s `READINESS_CEILING`, pinned by a test — and when the retries do run out the badge says waiting has *stopped* and how to restart it, because "loading…" with nothing polling behind it is a false claim in the present tense.
+
+**Middle-click is `preventDefault`ed twice.** Once in the extension's `domEventHandlers` and once on the widget row, because CodeMirror's `eventBelongsToEditor` discards an event whose target lies inside a widget with `ignoreEvent() === true` *before* any registered handler runs — and on Windows a middle mousedown that reaches the browser starts the autoscroll cursor. The row forwards nothing: it is not a document position and guessing one from it would aim a goto request at whatever was nearest.
+
+**`LspStatus`** shows nothing when every server is ready, and keeps re-reading slowly (5 s, via `lspPollDelay`) for as long as a file is open rather than stopping when things settle — a server that was ready and then died would otherwise be invisible on this surface until the open-file set happened to change. The collapsed tooltip carries the headline, the detail *and* the hint, since the hint is the only actionable line.
+
+## The Architecture tab
+
+`views/ArchitectureView.tsx` under the tab id `architecture`. **The id matches the label deliberately** — `inspect`/"Objects" is the one place in `TABS` where they differ, and grepping the tree for "Objects" never finds the view that draws it. One such trap is enough.
+
+It is mounted conditionally, like Changes and History: it owns no process and everything it shows is files on disk, so remounting re-reads them. Nothing is cached on the way in either — every selection re-derives, because the inputs are manifests the user edits while the workspace stays open and a stale arrow asserts a dependency that may since have been deleted (`commands/architecture.rs` refuses to cache for the same reason).
+
+**The list is two named built-ins, not a level selector.** "Project map" and "Component map" are two *questions* rather than two magnifications — what is in this repository, versus what the system consists of at run time — and the second drops every `projectReference` arrow and adds data stores that appear nowhere in the first. Saved diagrams follow underneath. The argument, the ordering and the sentence each carries live in `architectureLogic.ts`, where they are tested.
+
+**Three not-ready states, kept apart** — the `InspectView` pattern, for the same reason. Loading is a spinner; an error is whatever the command said through `api.errorMessage`; and **empty is an answer**: `arch_component_graph` returns nothing when no HIGH-strength signal exists and never falls back to the project map, so a repository of class libraries *has* no components, and that is said in those words with the reason rather than rendered as a failure.
+
+**The warnings are part of the diagram.** `ArchGraph.warnings` collects every reference the deriver read and refused to draw — an unresolvable project reference, a workspace membership it would not infer, a relation no edge kind can express, and on the component map every candidate the signal gate turned down. They previously reached a person only as `%%` comments in the Mermaid source, which Mermaid does not render, so the picture looked complete and was not. `DiagramCanvas` counts them in its toolbar and lists them under the picture — beside the diagram they qualify, not in a band at the top of the tab — and the view's job is only to make sure they arrive, including a stored file's own `DiagramFile.warning` for front matter that could not be read. Duplicating the panel would give the same list two places to disagree.
+
+**Mermaid is loaded with `await import("mermaid")`** and must stay in a lazy chunk — the package is large and the other five tabs must not pay for it. Under the app's CSP (`default-src 'self'`, no `unsafe-eval`, no external hosts) it needs `securityLevel: "strict"` and a **top-level** `htmlLabels: false`; the per-diagram `flowchart.htmlLabels` alone is not enough, and class/ER/state diagrams still emit `foreignObject` without it. Mermaid's `click … call` is never used: it requires `securityLevel: "loose"`, i.e. arbitrary callbacks named by a file an agent or a user wrote.
+
+**Pan and zoom are arithmetic, not a dependency** (`panZoomLogic.ts`): a diagram is one SVG element and everything the user does to it is a single affine transform `{ x, y, k }`. `viewportLogic.ts` persists that per diagram, so leaving the tab and coming back does not throw away a zoom into the one corner that mattered.
+
+**Clicking a box opens the file, and usually refuses to** (`nodeTargets.ts`). For a derived diagram the answer is exact — `cb-core` minted the node ids and a project node's id *is* the scan's `Project.id` — so it is a lookup that either finds the path or says no. For a saved diagram the ids are whatever their author typed, so it matches against the symbol index instead, exactly and uniquely or not at all. The view has no editor of its own: it takes `onOpenFile` and passes `App`'s `requestOpenFile` straight through to the one the Run tab already owns.
 
 ## Conventions
 

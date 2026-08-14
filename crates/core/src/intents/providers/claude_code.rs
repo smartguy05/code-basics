@@ -30,7 +30,9 @@ use super::{
     home_dir, hooks_json, instructions, InstallPlan, InstallScope, PlannedWrite, Provider,
     ProviderStatus,
 };
-use crate::intents::{normalise_path, IntentEdit, IntentLabel, IntentRecord, ProviderId};
+use crate::intents::{
+    normalise_path, IntentEdit, IntentLabel, IntentRecord, LabelSource, ProviderId,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct ClaudeCode {
@@ -347,6 +349,9 @@ fn read_transcript(
                                 label: label.clone(),
                                 paths: Vec::new(),
                                 anchor: None,
+                                // Mined out of prose an agent wrote for a
+                                // human, never offered as a card title.
+                                source: LabelSource::Inferred,
                             });
                         }
                     }
@@ -362,6 +367,11 @@ fn read_transcript(
 /// Only the first sentence is kept, and only if it is short enough to read at
 /// a glance — a paragraph of explanation is worse than no label, because it
 /// makes the card unreadable while looking authoritative.
+///
+/// It also has to read like a reason for a change rather than like chat. The
+/// judgement is `hook::looks_like_narration`, shared with the Stop hook's own
+/// fallback so the live path and the history importer cannot drift apart and
+/// title the same turn differently.
 fn summarise(text: &str) -> Option<String> {
     let first = text
         .lines()
@@ -374,7 +384,10 @@ fn summarise(text: &str) -> Option<String> {
         .unwrap_or(first);
     let cleaned = sentence.trim().trim_end_matches(':').trim();
 
-    (cleaned.len() >= 8 && cleaned.len() <= 120).then(|| cleaned.to_string())
+    (cleaned.len() >= 8
+        && cleaned.len() <= 120
+        && !crate::intents::hook::looks_like_narration(cleaned))
+    .then(|| cleaned.to_string())
 }
 
 /// Turn one `Edit` or `Write` tool call into records.

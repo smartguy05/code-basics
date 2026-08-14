@@ -2,12 +2,16 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  AnchorResult,
+  ArchGraph,
   AttachableList,
   Branch,
   BuildAction,
   Changelists,
   Commit,
   ComparisonMode,
+  DefinitionResult,
+  DiagramFile,
   DirEntry,
   ElidedReason,
   FileContents,
@@ -19,6 +23,7 @@ import type {
   InstallScope,
   IntentGroup,
   LaunchProfile,
+  LspStatus,
   MergeReport,
   NetworkKind,
   ProcessEvent,
@@ -30,7 +35,12 @@ import type {
   RootSpec,
   RunConfig,
   RunDump,
+  SearchHit,
+  SearchScope,
+  SymbolIndexStatus,
   TestRunOutcome,
+  UsageResult,
+  ValidationError,
   WorkingStatus,
   Workspace,
 } from "./types";
@@ -240,6 +250,10 @@ export const gitHistory = (limit: number) =>
 export const gitCommitDiff = (id: string) =>
   invoke<FileDiff[]>("git_commit_diff", { id });
 
+/** Both sides of one file as a commit changed it, for the History diff. */
+export const gitCommitFileContents = (id: string, path: string) =>
+  invoke<FileContents>("git_commit_file_contents", { id, path });
+
 export const gitStashSave = (message: string) =>
   invoke<void>("git_stash_save", { message });
 
@@ -374,6 +388,202 @@ export const inspectRunDump = (pid: number | null, startedAt: number) =>
 export const inspectLast = () => invoke<InspectGraph | null>("inspect_last");
 
 export const inspectClear = () => invoke<void>("inspect_clear");
+
+// ---------------------------------------------------------------------------
+// Search everywhere
+// ---------------------------------------------------------------------------
+
+/**
+ * Rank everything the query could mean, best first.
+ *
+ * `query` is passed through exactly as the user typed it, trailing `:123` and
+ * all: the line suffix is parsed in `cb-core`, and re-deriving it here would be
+ * a second implementation of a rule that decides where the editor jumps. Read
+ * the line off `SearchHit.line` instead.
+ *
+ * A query that matches nothing resolves to an empty array — "nothing is called
+ * that" is an answer, not an error. `limit` is optional and the backend
+ * chooses when it is omitted.
+ */
+export const searchEverywhere = (
+  query: string,
+  scope: SearchScope,
+  limit?: number,
+) => invoke<SearchHit[]>("search_everywhere", { query, scope, limit });
+
+/** What the index holds, and whether a build is in flight over it. */
+export const symbolIndexStatus = () =>
+  invoke<SymbolIndexStatus>("symbol_index_status");
+
+/** Discard the index and walk the workspace again. */
+export const rebuildSymbolIndex = () => invoke<void>("rebuild_symbol_index");
+
+// ---------------------------------------------------------------------------
+// Architecture diagrams
+// ---------------------------------------------------------------------------
+
+/**
+ * The project graph, derived from the manifests as they are on disk right now.
+ *
+ * Nothing is cached on either side of the IPC boundary: the inputs are files
+ * the user edits while the workspace stays open, and a stale arrow asserts a
+ * dependency that may since have been deleted. Call it again rather than
+ * holding one.
+ *
+ * A non-empty `warnings` is normal and must be surfaced — it lists every
+ * reference that could not be turned into an edge, which is the only way a
+ * reader can tell a complete diagram from one that merely looks complete.
+ */
+export const archProjectGraph = () => invoke<ArchGraph>("arch_project_graph");
+
+/** The same graph, rendered to Mermaid source. Renders only; stores nothing. */
+export const archRenderGraph = () => invoke<string>("arch_render_graph");
+
+/**
+ * The component map: the services this workspace runs and the data stores they
+ * declare they speak to.
+ *
+ * A **different question** from `archProjectGraph`, and presenting one as the
+ * other is the worst thing a caller can do with either: the project map is
+ * what is in the repository, this is what the system consists of at run time.
+ * An empty result is a real answer — a repository of class libraries has no
+ * components — and the backend deliberately does not fall back to the project
+ * map to avoid returning one. Label the view accordingly.
+ *
+ * `warnings` matters more here than anywhere else and must be surfaced: it is
+ * where every candidate that was seen and refused ends up, including the
+ * cross-project HTTP calls that were read but may not be drawn as arrows. It
+ * also carries a note when the symbol index was not ready, which costs route
+ * details and nothing else — no box and no arrow comes from a route, so the
+ * map is smaller then, never wrong.
+ */
+export const archComponentGraph = () => invoke<ArchGraph>("arch_component_graph");
+
+/**
+ * The component map as Mermaid source. Renders only; stores nothing.
+ *
+ * Mermaid source is nodes and edges, so the warnings do not survive it. Call
+ * `archComponentGraph` alongside this if you draw the picture, or the reader
+ * has no way to tell what was left off it.
+ */
+export const archRenderComponentGraph = () =>
+  invoke<string>("arch_render_component_graph");
+
+/**
+ * Every stored diagram, committed ones first, each group alphabetical.
+ *
+ * The order is part of the contract, so a list cannot reshuffle under the
+ * user's cursor between calls.
+ */
+export const archListDiagrams = () =>
+  invoke<DiagramFile[]>("arch_list_diagrams");
+
+/** One diagram exactly as it is on disk, front matter included. */
+export const archReadDiagram = (name: string) =>
+  invoke<string>("arch_read_diagram", { name });
+
+/**
+ * Save an edit. Resolves with the problem the saved text carries, or `null`.
+ *
+ * **The file is written either way.** A resolved `ValidationError` means saved
+ * *and* broken — show it beside the editor, do not treat it as a failed save.
+ * Mermaid passes through invalid states on the way to every valid one, so a
+ * save that refused them would be a save the user cannot use while they are
+ * still drawing. Only a rejection means nothing was written.
+ *
+ * Re-list afterwards rather than reusing the path you had: editing a derived
+ * diagram promotes it out of the gitignored regenerated directory, so a save
+ * can move the file. Provenance is taken from the copy already on disk and
+ * never from the text being saved, so typing `derivation: derived` into the
+ * editor cannot pass a drawing off as a fact read out of the manifests.
+ */
+export const archWriteDiagram = (name: string, contents: string) =>
+  invoke<ValidationError | null>("arch_write_diagram", { name, contents });
+
+/**
+ * Check Mermaid source without storing it: `null` means it will render.
+ *
+ * Invalid source resolves rather than rejects — a diagram someone is midway
+ * through typing is an ordinary editing state, not a failed command.
+ */
+export const archValidate = (source: string) =>
+  invoke<ValidationError | null>("arch_validate", { source });
+
+// ---------------------------------------------------------------------------
+// Language servers (`crates/core/src/lsp/`)
+// ---------------------------------------------------------------------------
+
+/**
+ * What every configured server is doing right now.
+ *
+ * Cheap and synchronous behind the scenes — a read of a shared snapshot, not a
+ * round trip to any server — so it is safe to poll for a status row. A language
+ * that has never been asked anything is **absent** from `servers` rather than
+ * listed as starting; only a language that was started, or one that could not be
+ * resolved at all, appears.
+ */
+export const lspStatus = () => invoke<LspStatus>("lsp_status");
+
+/**
+ * Tell the servers the editor now holds `text` for `path`.
+ *
+ * `path` is workspace-relative, as everywhere else in this file. Resolves once
+ * the notification is enqueued; there is nothing to wait for, because a
+ * notification has no reply. Send this before asking anything about a file the
+ * user is editing, or the server answers about what is on disk.
+ */
+export const lspOpenDocument = (path: string, text: string) =>
+  invoke<void>("lsp_open_document", { path, text });
+
+/** The document's contents changed. Whole text, not a delta. */
+export const lspChangeDocument = (path: string, text: string) =>
+  invoke<void>("lsp_change_document", { path, text });
+
+/** The editor closed the document, so the servers go back to disk. */
+export const lspCloseDocument = (path: string) =>
+  invoke<void>("lsp_close_document", { path });
+
+/**
+ * Every use site of the symbol at `line`/`character`.
+ *
+ * **`line` is 1-based** (the editor gutter, `SearchHit.line`,
+ * `DeclarationAnchor.selectionLine`) and **`character` is 0-based UTF-16 code
+ * units** (what CodeMirror hands over). The asymmetry is the IPC contract in both
+ * directions; see `Target.character` in `types.ts`.
+ *
+ * **Never rejects for a missing answer.** A server that is absent, still
+ * starting, still loading, dead or without the capability comes back as a
+ * resolved `UsageResult` whose `outcome` says which of those it was and whose
+ * `total` is `null` — five distinct reasons, none of them an empty list. Only
+ * `outcome: "ready"` licenses showing a count, and `total: 0` under it is the
+ * genuine "no usages". A rejection means the command itself failed.
+ */
+export const lspFindUsages = (path: string, line: number, character: number) =>
+  invoke<UsageResult>("lsp_find_usages", { path, line, character });
+
+/**
+ * Where the symbol at `line`/`character` is declared, implemented and typed.
+ *
+ * Same position convention and same abstain rule as `lspFindUsages`. The three
+ * lists answer three different questions and a symbol may appear in more than
+ * one; an empty list is "none" only when `outcome` is `"ready"`.
+ */
+export const lspGotoDefinition = (
+  path: string,
+  line: number,
+  character: number,
+) =>
+  invoke<DefinitionResult>("lsp_goto_definition", { path, line, character });
+
+/**
+ * Which declarations in `path` deserve an inline "N usages" row.
+ *
+ * Aim the follow-up `lspFindUsages` at each anchor's `selectionLine` and
+ * `character` — not at `line`, which is where the row is *drawn* and can sit
+ * above the identifier when attributes or a wrapped signature intervene.
+ */
+export const lspDeclarationAnchors = (path: string) =>
+  invoke<AnchorResult>("lsp_declaration_anchors", { path });
 
 /** Tauri returns command errors as plain strings. */
 export function errorMessage(error: unknown): string {

@@ -56,6 +56,17 @@ pub struct ProjectFile {
     /// `<UserSecretsId>` — names the secrets store under the user profile.
     pub user_secrets_id: Option<String>,
     pub package_references: Vec<String>,
+    /// `<ProjectReference Include="..." />` — the raw `Include` attribute of
+    /// every project reference, **exactly as written in the file**.
+    ///
+    /// Deliberately not normalised: separators are left as the author typed
+    /// them (`..\Lib\Lib.csproj` on Windows, `../Lib/Lib.csproj` elsewhere),
+    /// `..` segments are not resolved and nothing is made absolute. Resolving
+    /// a reference to a project on disk is a separate stage that needs the
+    /// referencing file's directory, which this parser does not have — and
+    /// when the resolution fails, the only useful thing to show the user is
+    /// the string they actually wrote. Rewriting it here would destroy that.
+    pub project_references: Vec<String>,
 }
 
 impl ProjectFile {
@@ -80,6 +91,35 @@ impl ProjectFile {
 /// This is deliberately a shallow scan rather than an MSBuild evaluation: we
 /// only need enough to classify a project, and evaluating MSBuild properly
 /// would mean shipping MSBuild.
+///
+/// # `Condition` is not evaluated
+///
+/// The scan walks elements and ignores every `Condition` attribute, on the
+/// item and on its enclosing `<ItemGroup>` alike. A `<ProjectReference>` that
+/// applies to only one target framework, or only one configuration, is
+/// therefore reported unconditionally — the same known limitation the
+/// `<PackageReference>` handling above already has. This is not fixable from
+/// here: `adapters/msbuild.rs` explains that `-getProperty` returns evaluated
+/// *properties*, not items, so even the optional MSBuild evaluation pass
+/// cannot supply a conditioned item list. Anything that consumes these
+/// strings must treat them as "declared somewhere in the file", not as "in
+/// effect for the framework you are building".
+///
+/// # References can be declared in `Directory.Build.props`, and are not merged
+///
+/// `workspace.rs::inherited_props` parses each `Directory.Build.props` and
+/// `Directory.Build.targets` above a project through *this same function*, so
+/// an `<ItemGroup><ProjectReference/></ItemGroup>` in a props file does land in
+/// that props file's `project_references`. Nothing merges those into the
+/// project's own list: `workspace.rs::scan_dotnet_project` keeps `parsed` and `props` separate and
+/// only the explicit helpers (`is_test_project`, `project_kind`,
+/// `configurations`, `classify_runner`) consult both. So a reference inherited
+/// from a props file is currently invisible to a caller reading
+/// `parsed.project_references`. That is left alone on purpose — the `Include`
+/// of a props-file reference is relative to the props file's directory, not to
+/// the project's, so merging the two lists without also carrying each one's
+/// base directory would produce paths that resolve to the wrong place, and a
+/// wrong edge is far worse than a missing one.
 pub fn parse_project_file(xml: &str) -> ProjectFile {
     use quick_xml::events::Event;
     use quick_xml::Reader;
@@ -100,6 +140,11 @@ pub fn parse_project_file(xml: &str) -> ProjectFile {
                         out.package_references.push(include);
                     }
                 }
+                if name.eq_ignore_ascii_case("ProjectReference") {
+                    if let Some(include) = attr_value(&e, "Include") {
+                        out.project_references.push(include);
+                    }
+                }
                 if name.eq_ignore_ascii_case("Project") {
                     out.sdk = attr_value(&e, "Sdk");
                 }
@@ -116,6 +161,11 @@ pub fn parse_project_file(xml: &str) -> ProjectFile {
                 if name.eq_ignore_ascii_case("PackageReference") {
                     if let Some(include) = attr_value(&e, "Include") {
                         out.package_references.push(include);
+                    }
+                }
+                if name.eq_ignore_ascii_case("ProjectReference") {
+                    if let Some(include) = attr_value(&e, "Include") {
+                        out.project_references.push(include);
                     }
                 }
                 if name.eq_ignore_ascii_case("Sdk") {

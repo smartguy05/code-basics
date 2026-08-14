@@ -70,6 +70,43 @@ fn recognises_a_monorepo_root() {
 }
 
 #[test]
+fn workspace_globs_reads_the_array_form() {
+    let p = pkg(r#"{"private":true,"workspaces":["packages/*","apps/*"]}"#);
+    assert_eq!(workspace_globs(&p), vec!["packages/*", "apps/*"]);
+}
+
+#[test]
+fn workspace_globs_reads_the_object_form() {
+    // Yarn's object form nests the patterns under `packages` and adds keys
+    // that are not globs at all; only `packages` describes membership.
+    let p = pkg(
+        r#"{"workspaces":{"packages":["packages/*","tools/cli"],"nohoist":["**/react-native"]}}"#,
+    );
+    assert_eq!(workspace_globs(&p), vec!["packages/*", "tools/cli"]);
+}
+
+#[test]
+fn workspace_globs_returns_nothing_for_a_plain_package() {
+    assert!(workspace_globs(&pkg(r#"{"name":"leaf"}"#)).is_empty());
+    assert!(workspace_globs(&pkg(r#"{"workspaces":{}}"#)).is_empty());
+    assert!(workspace_globs(&pkg(r#"{"workspaces":[]}"#)).is_empty());
+    // Hand-edited nonsense must not take down a workspace scan.
+    assert!(workspace_globs(&pkg(r#"{"workspaces":"packages/*"}"#)).is_empty());
+    assert!(workspace_globs(&pkg(r#"{"workspaces":7}"#)).is_empty());
+    assert!(workspace_globs(&pkg(r#"{"workspaces":null}"#)).is_empty());
+    assert!(workspace_globs(&pkg(r#"{"workspaces":{"packages":"packages/*"}}"#)).is_empty());
+}
+
+#[test]
+fn workspace_globs_skips_non_string_entries_rather_than_failing() {
+    let p = pkg(r#"{"workspaces":["packages/*",42,null,{"a":1},"apps/*"]}"#);
+    assert_eq!(workspace_globs(&p), vec!["packages/*", "apps/*"]);
+
+    let y = pkg(r#"{"workspaces":{"packages":["packages/*",false,"apps/*"]}}"#);
+    assert_eq!(workspace_globs(&y), vec!["packages/*", "apps/*"]);
+}
+
+#[test]
 fn classifies_project_kind_from_scripts_and_deps() {
     assert_eq!(
         project_kind(&pkg(r#"{"devDependencies":{"vitest":"^2"}}"#)),

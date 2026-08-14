@@ -1,10 +1,15 @@
 //! Ecosystem adapters.
 
+pub mod cargo;
 pub mod dotnet;
 pub mod manifest;
 pub mod msbuild;
 pub mod node;
 pub mod solution;
+
+#[cfg(test)]
+#[path = "cargo_tests.rs"]
+mod cargo_tests;
 
 #[cfg(test)]
 #[path = "dotnet_tests.rs"]

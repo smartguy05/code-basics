@@ -211,6 +211,7 @@ fn label(turn: &str, text: &str, paths: &[&str]) -> IntentLabel {
         label: text.into(),
         paths: paths.iter().map(|s| s.to_string()).collect(),
         anchor: None,
+        source: LabelSource::Declared,
     }
 }
 
@@ -420,6 +421,80 @@ fn labels_are_kept_separately_from_edits() {
             .count(),
         1
     );
+}
+
+/// The gate at the point of *recording* only helps future turns. A workspace
+/// that has been capturing for weeks already holds narration that predates it,
+/// and those are exactly the labels titling cards today — so the gate has to
+/// run on the way out as well.
+#[test]
+fn an_inferred_label_that_reads_as_narration_is_dropped_on_load() {
+    let dir = workspace();
+    append_edit(dir.path(), &record(0, "a.rs", &[], &["x"])).unwrap();
+    append_label(
+        dir.path(),
+        &IntentLabel {
+            provider: ProviderId::ClaudeCode,
+            turn_id: "turn-1".into(),
+            label: "Workflow running in the background".into(),
+            paths: Vec::new(),
+            anchor: None,
+            source: LabelSource::Inferred,
+        },
+    )
+    .unwrap();
+
+    let intents = load(dir.path(), &LoadOptions::default()).unwrap();
+
+    assert!(intents.labels.is_empty());
+}
+
+/// A declared label is the agent's own words and is never second-guessed, on
+/// the way in or the way out.
+#[test]
+fn a_declared_label_survives_load_whatever_it_says() {
+    let dir = workspace();
+    append_edit(dir.path(), &record(0, "a.rs", &[], &["x"])).unwrap();
+    append_label(
+        dir.path(),
+        &IntentLabel {
+            provider: ProviderId::ClaudeCode,
+            turn_id: "turn-1".into(),
+            label: "let me run the workflow with Opus".into(),
+            paths: Vec::new(),
+            anchor: None,
+            source: LabelSource::Declared,
+        },
+    )
+    .unwrap();
+
+    let intents = load(dir.path(), &LoadOptions::default()).unwrap();
+
+    assert_eq!(intents.labels.len(), 1);
+}
+
+/// A handful of words is not a reason. "Running" was titling a card.
+#[test]
+fn an_inferred_label_too_short_to_say_anything_is_dropped_on_load() {
+    let dir = workspace();
+    append_edit(dir.path(), &record(0, "a.rs", &[], &["x"])).unwrap();
+    append_label(
+        dir.path(),
+        &IntentLabel {
+            provider: ProviderId::ClaudeCode,
+            turn_id: "turn-1".into(),
+            label: "Running".into(),
+            paths: Vec::new(),
+            anchor: None,
+            source: LabelSource::Inferred,
+        },
+    )
+    .unwrap();
+
+    assert!(load(dir.path(), &LoadOptions::default())
+        .unwrap()
+        .labels
+        .is_empty());
 }
 
 // --- importing history ------------------------------------------------------

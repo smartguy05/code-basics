@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::git::patch::{FileDiff, LineOrigin};
-use crate::intents::{IntentRecord, Intents};
+use crate::intents::{IntentRecord, Intents, LabelSource};
 
 /// How far the text had to be bent before it matched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Type)]
@@ -86,6 +86,10 @@ pub struct AttributedSpan {
     pub turn_id: String,
     /// The label, when the turn had one.
     pub label: Option<String>,
+    /// Whether that label was declared by the agent or mined from its prose.
+    /// `None` when there is no label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_source: Option<LabelSource>,
     pub seq: u64,
     /// `DiffLine::index` values, ascending. Never contains a context line.
     pub line_indices: Vec<u32>,
@@ -772,9 +776,11 @@ fn rollup(
             .into_iter()
             .map(|(record, (line_indices, confidence))| {
                 let source = prepared[record].record;
+                let label = intents.label_for(source);
                 AttributedSpan {
                     turn_id: source.turn_id.clone(),
-                    label: intents.label_for(source).map(|l| l.label.clone()),
+                    label: label.map(|l| l.label.clone()),
+                    label_source: label.map(|l| l.source),
                     seq: source.seq,
                     line_indices,
                     confidence,

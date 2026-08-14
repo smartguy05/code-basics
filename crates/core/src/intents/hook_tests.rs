@@ -302,6 +302,317 @@ fn a_message_too_short_to_mean_anything_produces_no_label() {
     assert!(parse_labels("").is_empty());
 }
 
+// -- The narration gate on inferred labels ----------------------------------
+//
+// A mined first sentence was written for a human reading a chat, not as a card
+// title. These are the shapes that were titling cards wrongly. A *declared*
+// `Intent:` line is never subject to this — the agent said what it meant.
+
+/// The reported bug: a closing message about the tooling titled three files.
+#[test]
+fn a_sentence_about_the_tooling_is_not_a_label() {
+    assert!(parse_labels("The workflow is running with Opus. I fixed the parser.").is_empty());
+}
+
+#[test]
+fn other_sentences_about_the_session_rather_than_the_code_are_refused() {
+    for message in [
+        "The subagent finished and reported back",
+        "This session is getting long, so I will summarise",
+        "I am running the agent again with a larger context window",
+        "Claude Code will pick this up on the next turn",
+    ] {
+        assert!(
+            parse_labels(message).is_empty(),
+            "should have been refused: {message}"
+        );
+    }
+}
+
+/// A plural has to count. "Running — 10 agents, 5 phases" was titling a card
+/// because `agents` is not the same string as `agent`.
+#[test]
+fn a_plural_tooling_word_is_still_a_tooling_word() {
+    assert!(looks_like_narration("Running — 10 agents, 5 phases"));
+    assert!(looks_like_narration("Both subagents came back clean"));
+    assert!(looks_like_narration("Two sessions later it still failed"));
+}
+
+/// …but only as a plural, not as any word that merely starts the same way.
+#[test]
+fn a_longer_word_that_merely_starts_the_same_is_not_a_tooling_word() {
+    assert!(!looks_like_narration("Rework the agenda ordering"));
+    assert!(!looks_like_narration("Cache the sessionStorage lookup"));
+}
+
+#[test]
+fn an_opening_pleasantry_is_not_a_label() {
+    for message in [
+        "Perfect! That is the last of them",
+        "Great — the suite is green now",
+        "You are right, that was the wrong file",
+        "Sure, I can do that",
+        "That's everything I needed",
+    ] {
+        assert!(
+            parse_labels(message).is_empty(),
+            "should have been refused: {message}"
+        );
+    }
+}
+
+#[test]
+fn an_announcement_of_what_comes_next_is_not_a_label() {
+    // These describe an intention to act, not a change that was made — and the
+    // edits they precede are usually not the ones they describe.
+    for message in [
+        "Let me check the adapter first",
+        "I'll start by reading the manifest",
+        "Now I will wire the command up",
+        "Here is what I found",
+    ] {
+        assert!(
+            parse_labels(message).is_empty(),
+            "should have been refused: {message}"
+        );
+    }
+}
+
+/// Two or three words cannot name both a thing and what happened to it, and
+/// "N files changed together" says more than "Both done" does.
+#[test]
+fn an_inferred_label_of_only_a_word_or_two_is_refused() {
+    assert!(parse_labels("Both done").is_empty());
+    assert!(parse_labels("Running").is_empty());
+    assert!(parse_labels("Fixed it").is_empty());
+}
+
+/// The floor applies to the *inferred* path only — a declared line is the
+/// agent's own title however terse.
+#[test]
+fn a_short_declared_intent_is_still_kept() {
+    assert_eq!(parse_labels("Intent: fix parse").len(), 1);
+}
+
+#[test]
+fn a_question_is_not_a_label() {
+    assert!(parse_labels("What questions do you have?").is_empty());
+    assert!(parse_labels("Should I also update the docs?").is_empty());
+}
+
+/// The gate must not swallow the ordinary case it exists to preserve.
+#[test]
+fn a_sentence_that_describes_the_change_is_still_a_label() {
+    for message in [
+        "I added retry handling to the token refresh path. Then tests.",
+        "Swapped the cost calculation over to the new API",
+        "Renamed Quote to Estimate across the client",
+        "The parser now rejects a trailing comma",
+    ] {
+        assert!(
+            !parse_labels(message).is_empty(),
+            "should have been kept: {message}"
+        );
+    }
+}
+
+// -- asking the agent for a real intent line ---------------------------------
+//
+// The only place this crate deliberately interrupts an agent. Every condition
+// below is a reason *not* to, and they matter more than the one reason to:
+// a hook that nags in the wrong place is worse than a weak card title.
+
+/// Record an edit for `turn`, so the turn counts as having changed something.
+fn edit_in_turn(root: &Path, turn: &str) {
+    ingest(
+        root,
+        ProviderId::ClaudeCode,
+        HookEvent::PostToolUse,
+        &json!({
+            "turn_id": turn,
+            "tool_name": "Edit",
+            "tool_use_id": format!("tool-{turn}"),
+            "tool_input": {
+                "file_path": root.join("a.rs").to_string_lossy(),
+                "old_string": "let a = 1;",
+                "new_string": "let a = 2;",
+            },
+        }),
+    )
+    .unwrap();
+}
+
+fn stop(turn: &str, message: &str) -> serde_json::Value {
+    json!({ "turn_id": turn, "last_assistant_message": message })
+}
+
+#[test]
+fn a_turn_that_edited_files_without_an_intent_line_is_asked_for_one() {
+    let dir = workspace();
+    edit_in_turn(dir.path(), "turn-1");
+
+    let ask = ask_for_intent(
+        dir.path(),
+        ProviderId::ClaudeCode,
+        HookEvent::Stop,
+        &stop("turn-1", "All done, the parser is fixed."),
+    );
+
+    let ask = ask.expect("a turn that edited files and said no why should be asked");
+    // The message has to name the form the parser accepts, or the next attempt
+    // fails the same way.
+    assert!(ask.contains("Intent:"), "unhelpful request: {ask}");
+}
+
+#[test]
+fn a_turn_that_declared_an_intent_is_not_asked() {
+    let dir = workspace();
+    edit_in_turn(dir.path(), "turn-1");
+
+    assert!(ask_for_intent(
+        dir.path(),
+        ProviderId::ClaudeCode,
+        HookEvent::Stop,
+        &stop("turn-1", "Intent: fix the trailing comma case"),
+    )
+    .is_none());
+}
+
+/// A conversational turn changed nothing, so there is nothing to explain.
+#[test]
+fn a_turn_that_edited_nothing_is_never_asked() {
+    let dir = workspace();
+
+    assert!(ask_for_intent(
+        dir.path(),
+        ProviderId::ClaudeCode,
+        HookEvent::Stop,
+        &stop("turn-1", "Here is how the adapter works."),
+    )
+    .is_none());
+}
+
+/// The loop guard, and the reason it is ours rather than the platform's: if the
+/// agent ignores the request, the turn must still be able to end.
+#[test]
+fn the_same_turn_is_only_asked_once() {
+    let dir = workspace();
+    edit_in_turn(dir.path(), "turn-1");
+
+    let first = ask_for_intent(
+        dir.path(),
+        ProviderId::ClaudeCode,
+        HookEvent::Stop,
+        &stop("turn-1", "All done."),
+    );
+    let second = ask_for_intent(
+        dir.path(),
+        ProviderId::ClaudeCode,
+        HookEvent::Stop,
+        &stop("turn-1", "Still done, still no intent line."),
+    );
+
+    assert!(first.is_some());
+    assert!(second.is_none(), "asking twice can wedge the session");
+}
+
+#[test]
+fn a_later_turn_is_still_asked_after_an_earlier_one_was() {
+    let dir = workspace();
+    edit_in_turn(dir.path(), "turn-1");
+    edit_in_turn(dir.path(), "turn-2");
+
+    ask_for_intent(
+        dir.path(),
+        ProviderId::ClaudeCode,
+        HookEvent::Stop,
+        &stop("turn-1", "All done."),
+    );
+
+    assert!(ask_for_intent(
+        dir.path(),
+        ProviderId::ClaudeCode,
+        HookEvent::Stop,
+        &stop("turn-2", "Also done."),
+    )
+    .is_some());
+}
+
+/// Nothing establishes that Codex honours a blocking stop, and its hook shares
+/// this binary — so it keeps the fire-and-forget behaviour it has always had.
+#[test]
+fn codex_is_never_asked() {
+    let dir = workspace();
+    edit_in_turn(dir.path(), "turn-1");
+
+    assert!(ask_for_intent(
+        dir.path(),
+        ProviderId::Codex,
+        HookEvent::Stop,
+        &stop("turn-1", "All done."),
+    )
+    .is_none());
+}
+
+#[test]
+fn an_edit_event_never_asks() {
+    let dir = workspace();
+    edit_in_turn(dir.path(), "turn-1");
+
+    assert!(ask_for_intent(
+        dir.path(),
+        ProviderId::ClaudeCode,
+        HookEvent::PostToolUse,
+        &stop("turn-1", "All done."),
+    )
+    .is_none());
+}
+
+#[test]
+fn a_workspace_that_never_enabled_capture_is_never_asked() {
+    // No `.code-basics/intents/`, so this repository never opted in — and a
+    // user-level hook fires in every repository on the machine.
+    let dir = tempfile::tempdir().unwrap();
+
+    assert!(ask_for_intent(
+        dir.path(),
+        ProviderId::ClaudeCode,
+        HookEvent::Stop,
+        &stop("turn-1", "All done."),
+    )
+    .is_none());
+}
+
+#[test]
+fn a_workspace_can_turn_the_request_off() {
+    let dir = workspace();
+    edit_in_turn(dir.path(), "turn-1");
+
+    let config = crate::config::WorkspaceConfig {
+        ask_for_intent: false,
+        ..Default::default()
+    };
+    crate::config::save(dir.path(), &config).unwrap();
+
+    assert!(ask_for_intent(
+        dir.path(),
+        ProviderId::ClaudeCode,
+        HookEvent::Stop,
+        &stop("turn-1", "All done."),
+    )
+    .is_none());
+}
+
+/// A declared line is the agent's own words for the card, so it is taken as
+/// given — the gate exists to judge prose that was never meant as a title.
+#[test]
+fn a_declared_intent_bypasses_the_narration_gate() {
+    let labels = parse_labels("Intent: let me check the workflow running with Opus");
+
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels[0].1, "let me check the workflow running with Opus");
+}
+
 #[test]
 fn a_stop_payload_writes_a_label_joined_to_its_turn() {
     let dir = workspace();

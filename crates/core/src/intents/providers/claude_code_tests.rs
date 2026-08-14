@@ -29,9 +29,12 @@ fn a_summary_skips_blank_lines_headings_and_fences() {
 
 #[test]
 fn a_trailing_colon_is_dropped_from_a_summary() {
+    // The sample used to be "Let me read the failing test:", which the
+    // narration gate now refuses as an announcement. The mechanic under test is
+    // the colon, so the sample changed rather than the rule.
     assert_eq!(
-        summarise("Let me read the failing test:").as_deref(),
-        Some("Let me read the failing test")
+        summarise("The failing test reads the manifest twice:").as_deref(),
+        Some("The failing test reads the manifest twice")
     );
 }
 
@@ -58,13 +61,44 @@ fn prose_with_nothing_but_blank_lines_has_no_summary() {
 
 #[test]
 fn a_sentence_ending_in_a_question_or_bang_is_also_terminated() {
+    // "Should the adapter own this?" used to stand in for the `?` terminator
+    // and is now refused as a question, so the `?` case uses a sentence that
+    // survives the gate.
     assert_eq!(
-        summarise("Should the adapter own this? I think not.").as_deref(),
-        Some("Should the adapter own this")
+        summarise("The adapter owns this now? Apparently so.").as_deref(),
+        Some("The adapter owns this now")
     );
     assert_eq!(
         summarise("That was the bug all along! Fixing it now.").as_deref(),
         Some("That was the bug all along")
+    );
+}
+
+// -- The narration gate -----------------------------------------------------
+//
+// Mined history is prose written for a chat, so it carries the same failure
+// mode as the Stop hook's fallback and shares its gate (`hook::looks_like_narration`).
+
+#[test]
+fn mined_prose_about_the_tooling_is_refused() {
+    assert_eq!(summarise("The workflow is running with Opus"), None);
+    assert_eq!(
+        summarise("The subagent came back with three findings"),
+        None
+    );
+}
+
+#[test]
+fn mined_prose_that_only_announces_the_next_step_is_refused() {
+    assert_eq!(summarise("Let me read the failing test"), None);
+    assert_eq!(summarise("I'll wire the command up next"), None);
+}
+
+#[test]
+fn mined_prose_that_describes_the_change_is_still_kept() {
+    assert_eq!(
+        summarise("Move the parser into its own module").as_deref(),
+        Some("Move the parser into its own module")
     );
 }
 

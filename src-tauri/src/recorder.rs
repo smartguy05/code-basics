@@ -8,15 +8,32 @@
 //!
 //! * **It must never fail loudly.** A hook that writes to stderr or exits
 //!   non-zero interrupts the agent mid-task over a feature that is only meant
-//!   to be taking notes. Every failure path returns success.
+//!   to be taking notes. Every *failure* path returns success.
 //! * **It must be quick.** `PostToolUse` fires after every single edit.
 //! * **It must usually do nothing.** A user-level hook fires for every
 //!   repository on the machine; only the ones that opted in are recorded.
+//!
+//! # The one deliberate interruption
+//!
+//! There is exactly one case where this does interrupt the agent, and it is
+//! not a failure: a turn that edited files and ended without saying why is
+//! asked for an `Intent:` line, by exiting 2 with the request on stderr, which
+//! is how a Claude Code `Stop` hook refuses a stop and puts text in front of
+//! the model.
+//!
+//! Every guard on that lives in [`cb_core::intents::hook::ask_for_intent`] —
+//! including the one that matters most, which is that a given turn is only ever
+//! asked once, so a session can always end. Nothing about it is decided here;
+//! this file only turns the answer into an exit code.
 
 use std::io::Read;
 use std::path::Path;
 
 use cb_core::intents::hook;
+
+/// Exit code that makes a Claude Code `Stop` hook block the stop and show the
+/// hook's stderr to the model.
+const BLOCK_STOP: i32 = 2;
 
 /// Did the command line ask for recording rather than for the application?
 pub fn is_record_invocation() -> bool {
@@ -25,22 +42,34 @@ pub fn is_record_invocation() -> bool {
 
 /// Read a hook payload from stdin and record it.
 ///
-/// Always reports success: see the module note.
+/// Reports success for every failure, and for every case where there is
+/// nothing to say. The single exception is the intent request: see the module
+/// note.
 pub fn run() {
-    if let Err(error) = record() {
-        // Diagnosable when someone goes looking, invisible during normal use.
-        if std::env::var_os("CODE_BASICS_DEBUG_HOOKS").is_some() {
-            eprintln!("code-basics: could not record intent: {error:#}");
+    match record() {
+        Ok(Some(request)) => {
+            // stderr plus exit 2 is the Stop-hook contract for "do not stop,
+            // and here is why" — the model reads this text.
+            eprintln!("{request}");
+            std::process::exit(BLOCK_STOP);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            // Diagnosable when someone goes looking, invisible during normal use.
+            if std::env::var_os("CODE_BASICS_DEBUG_HOOKS").is_some() {
+                eprintln!("code-basics: could not record intent: {error:#}");
+            }
         }
     }
 }
 
-fn record() -> anyhow::Result<()> {
+/// Returns the request to put in front of the agent, when there is one.
+fn record() -> anyhow::Result<Option<String>> {
     let args: Vec<String> = std::env::args().collect();
 
     let Some(invocation) = hook::parse_recorder_args(&args) else {
         // Some other event fired. Nothing to do, and not a problem.
-        return Ok(());
+        return Ok(None);
     };
 
     let mut payload = String::new();
@@ -56,15 +85,24 @@ fn record() -> anyhow::Result<()> {
         .map(Path::new);
 
     let Some(root) = hook::resolve_enabled_root(explicit, cwd) else {
-        return Ok(());
+        return Ok(None);
     };
 
     // The directory is created when the user enables capture, so its absence
     // means this repository never asked to be recorded.
     if !hook::is_enabled(&root) {
-        return Ok(());
+        return Ok(None);
     }
 
     hook::ingest(&root, invocation.provider, invocation.event, &payload)?;
-    Ok(())
+
+    // Deliberately after `ingest`: the label this turn *did* produce is written
+    // first, so a turn that gets asked and then complies has both, and one that
+    // never complies still keeps whatever it had.
+    Ok(hook::ask_for_intent(
+        &root,
+        invocation.provider,
+        invocation.event,
+        &payload,
+    ))
 }

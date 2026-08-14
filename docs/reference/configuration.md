@@ -12,10 +12,13 @@ All per-workspace state lives in one directory at the workspace root:
 ├── intents/          what a coding agent said it was doing — local, gitignored
 ├── inspect/          one directory per object capture (request/result) — local, gitignored
 ├── dumps/            crash dumps: process memory — local, gitignored, pruned
+├── symbols.json      the search palette's index — local, gitignored
+├── diagrams/         architecture diagrams — check these in (see below)
+├── lsp-logs/         language-server logs — local, gitignored
 └── results/          test report files written by runners — gitignore this
 ```
 
-The app writes `.code-basics/.gitignore` covering everything transient (`results/`, `changelists.json`, `intents/`, `inspect/`, `dumps/`), appending entries it is missing rather than rewriting the file, so a workspace created before an entry existed still picks it up and hand-written rules survive. The scanner never descends into `.code-basics` itself.
+The app writes `.code-basics/.gitignore` covering everything transient (`results/`, `changelists.json`, `intents/`, `inspect/`, `dumps/`, `symbols.json`, `diagrams/derived/`, `diagrams/.prompts/`, `lsp-logs/`), appending entries it is missing rather than rewriting the file, so a workspace created before an entry existed still picks it up and hand-written rules survive. The scanner never descends into `.code-basics` itself.
 
 ## Agent intent (`intents/`)
 
@@ -50,6 +53,26 @@ dumps/<exe>_<pid>_<unix>.dmp     a heap dump the .NET runtime wrote on a crash
 - **The dump filename is the only attribution there is.** `%e` in the runtime's template expands to the executable name *including its extension* (`Crasher.exe_25764_1786044924.dmp`). The `DOTNET_Dbg*` variables are inherited by the whole process tree, so one `dotnet run` arms its build host too — the name is what tells those apart. Nothing matches a dump to a run automatically.
 - Only files matching that exact pattern are ever deleted; anything else in the directory is left alone. Dumps VSTest's blame collector writes into `results/` under its own names are covered by the same byte budget, since they exist only because this app passed `--blame-crash-collect-always`.
 
+## Diagrams (`diagrams/`)
+
+Architecture diagrams: markdown files whose body is Mermaid and whose head is a small front matter block recording where the diagram came from. Derived by `cb-core`'s `architecture` module — design notes: [the core crate](../architecture/core-crate.md).
+
+```
+diagrams/
+├── *.md          drawn by a person, or inferred and accepted — check these in
+├── derived/*.md  recomputed from the manifests on demand — local, gitignored
+└── .prompts/     text sent to an agent when inferring a diagram — local, gitignored
+```
+
+- **The split is the point.** `diagrams/` is committed like `config.json` and `adapters/`, because a diagram someone drew is a statement of intent the team wants to keep. `derived/` is not, because it is recomputed deterministically from the manifests: committing it would put a regenerated file in everyone's diff after every refactor while saying nothing the manifests do not already say. `.prompts/` is one person's session text.
+- **Which directory a diagram lands in is not a parameter.** It follows from the diagram's derivation, so a derived diagram cannot end up committed and a hand-drawn one cannot be filed where the next regeneration would overwrite it.
+- **Provenance lives in front matter, not in a `%%` comment.** A comment is part of the text a person edits — it can be deleted by accident, reflowed by a formatter, or copied verbatim onto a different diagram. A diagram must *always* be able to say how it was produced, so the block is a separate region with a parser that either understands it or refuses to.
+
+Front matter keys, all optional except the format marker: `code-basics` (currently `v1`), `level`, `derivation` (`derived`, `inferred` or `user`), `agent` (with `inferred`), `generated`, `sourceCommit`, `edited`.
+
+- **Parsed by hand against a fixed key set, with no YAML.** Pulling in a YAML parser to read six keys would buy anchors, block scalars and type coercion this format does not want, and would answer a malformed file with a guess.
+- **A file the parser cannot understand is shown as a `user` diagram with a warning, never rejected** — refusing to show someone their own file is worse than showing it unlabelled. The deliberate cost: a diagram written by a *later* version of this format, carrying a key this version has never heard of, also reads as an unlabelled user diagram, because an unknown key may change the meaning of the ones beside it and this code cannot know that it does not. That is why the key set is kept small.
+
 ## Change groups (`changelists.json`)
 
 Named buckets for working-tree files, in the spirit of JetBrains' changelists — a way to keep a half-finished refactor visibly apart from the fix being committed next. Git has no equivalent, so this is purely local bookkeeping and nothing here changes the repository.
@@ -73,7 +96,9 @@ Named buckets for working-tree files, in the spirit of JetBrains' changelists �
   "favorites": [ /* config ids, optional */ ],
   "order": [ /* config ids, optional */ ],
   "msbuildEvaluation": false,
-  "inspector": { /* optional, see below */ }
+  "askForIntent": true,
+  "inspector": { /* optional, see below */ },
+  "lsp": { /* optional, see below */ }
 }
 ```
 
@@ -81,6 +106,7 @@ Named buckets for working-tree files, in the spirit of JetBrains' changelists �
 - Meant to be **checked in**, sharing run configurations the way Rider's `.run/` directory does.
 - Only user-created and imported configurations are written here. Auto-detected ones are re-derived on every scan, which keeps the file small and lets detection keep working as projects change. On open/rescan, saved configs are merged over detected ones.
 - `favorites` holds starred config ids; they sort before everything else in the UI. `order` is the user's preferred ordering — ids listed there sort by position, anything unlisted follows in name order. Both keys are omitted while empty.
+- `askForIntent` controls whether a Claude Code turn that edited files and ended without an `Intent:` line is asked for one before it stops. **On by default and omitted from the file while true**; set it to `false` to turn it off. It is the only thing the app does that deliberately interrupts an agent mid-session, so it is worth being able to switch off without uninstalling capture — and it only ever fires once per turn, so a session can always end. See [agent intent capture](../guides/agent-intent-capture.md).
 - `msbuildEvaluation` opts this workspace into evaluating .NET projects with `dotnet msbuild -getProperty` during a scan instead of only reading them as XML. Off by default and omitted while false. Turn it on when projects set properties behind MSBuild `Condition`s or in imported `.props` files, which the XML scan cannot see; the cost is one `dotnet` process per project at scan time, and a machine with no SDK simply falls back to the XML scan.
 
 ### `inspector`
@@ -102,6 +128,35 @@ Per-workspace settings for the object inspector. The whole section is optional a
 - `keepDumps` defaults to `3` — enough to compare a repeated crash against its two predecessors.
 - `maxDumpMegabytes` defaults to `2048`. This is the limit that actually binds: a dump of a trivial console app measured 9.3 MB and a real application's runs to hundreds of megabytes, so bytes run out long before the file count does. It is applied before every .NET run as well as after every capture, so a workspace that crashes repeatedly and is never inspected is still bounded, and it covers both the dumps in `.code-basics/dumps/` and the ones VSTest's blame collector leaves in `.code-basics/results/`.
 - `env` adds environment variables applied only to dump-capturing runs, for the rare project that needs a different dump type. They layer over the built-in `DOTNET_Dbg*` defaults and under the run configuration's own environment.
+
+### `lsp`
+
+Per-workspace language-server settings, used by "find usages" and "go to definition". The whole section is optional and is omitted from the file unless the user configures something — saving a run configuration never introduces it, and a workspace with no section at all uses discovery for every server.
+
+```json
+"lsp": {
+  "servers": {
+    "csharp": {
+      "program": "C:/Users/me/.vscode/extensions/ms-dotnettools.csharp-2.140.9-win32-x64/.roslyn/Microsoft.CodeAnalysis.LanguageServer.exe",
+      "args": ["--stdio", "--autoLoadProjects"],
+      "env": { "DOTNET_NOLOGO": "1" },
+      "uriStyle": "plain"
+    },
+    "python": { "enabled": false }
+  }
+}
+```
+
+Keys are server ids: `csharp`, `typescript`, `rust`, `python`. Every field inside one is optional, and every absence means "use the built-in default".
+
+- **Nothing is bundled; a server is located.** The four servers are hundreds of megabytes between them and the licences differ per option, so this app launches the copy already on your machine and redistributes nothing. The cost is that a server can simply be absent, which is reported as such rather than worked around.
+- `program` names an explicit executable, absolute or on `PATH`. **If it does not resolve, that server fails with an error naming this file** — it never falls back to discovery. You asked for one specific build, usually to match a project's SDK, and quietly starting a different one would attribute its usage counts and definition jumps to a server that never ran. Discovery is what an *absent* `program` means. A bare name is resolved through `PATHEXT` on Windows, so npm shims (`typescript-language-server.cmd`) work by name.
+- `args` **replaces** the built-in argument list rather than appending to it, so an unwanted default can be removed. Note the difference between omitting the key (keep the built-in arguments) and `"args": []` (launch with none at all) — the Roslyn server without `--stdio` never says a word, which looks like a hang rather than a mistake.
+- `enabled` switches one server off. Only an explicit `false` counts: an absent flag means enabled, so a block written to set a `program` does not disable the server it just configured.
+- `env` layers over the inherited environment for that server's process only.
+- `uriStyle` (`"encoded"` | `"plain"`) overrides how the drive colon is spelled in the `file:` URIs sent to that server — `file:///C%3A/x` versus `file:///C:/x`. An escape hatch, not a routine knob: the per-server default is what each real server was observed to accept, and file identity is decided on paths rather than on URI strings, so this only matters for a server that rejects a spelling outright.
+- Unknown keys are ignored rather than rejected, since this file is shared: a block written by a newer build must still load for a teammate on an older one.
+- Servers write their own logs into `.code-basics/lsp-logs/`, which is gitignored — a verbose trace of one person's editing session, rewritten on every launch and safe to delete at any time.
 
 ### Detected .NET configurations
 

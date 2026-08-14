@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use walkdir::WalkDir;
 
-use crate::adapters::{dotnet, manifest, msbuild, node, solution};
+use crate::adapters::{cargo, dotnet, manifest, msbuild, node, solution};
 use crate::model::{Project, ProjectKind, RunConfig, TestRunner};
 
 /// Directories never worth descending into.
@@ -71,6 +71,54 @@ pub struct Workspace {
 /// (`files::list_dir`), so what the tree shows matches what the scan sees.
 pub(crate) fn should_skip(name: &str) -> bool {
     SKIP_DIRS.iter().any(|d| d.eq_ignore_ascii_case(name))
+}
+
+/// The one walker over a workspace's source tree.
+///
+/// Every consumer that wants "the files this workspace consists of" goes
+/// through here: the project scan below, and the symbol index in
+/// [`crate::symbols`]. That is the whole point of it being a function rather
+/// than a block inlined at each call site. If the index walked the tree with
+/// its own filter, the two would drift — the index would offer to jump to a
+/// symbol in `bin/` or in a vendored checkout that the project list has never
+/// heard of, or, worse, silently miss files that a scan does see. The rules
+/// are not obvious enough to be re-derived correctly twice: `SKIP_DIRS`,
+/// `MAX_DEPTH` of 10, and the exclusion of any directory carrying its own
+/// `.git` entry.
+///
+/// The iterator is returned unconsumed and unfiltered by file type. Callers
+/// want different things from the entries — the scan looks at directories to
+/// match declarative adapters, an indexer only wants files — and deciding that
+/// here would just push a second predicate into every caller anyway.
+///
+/// The predicate is a named `fn` rather than a closure purely so the return
+/// type can be written down: `filter_entry` bakes its predicate into the type,
+/// and a closure's type is unnameable.
+pub(crate) fn source_walker(root: &Path) -> SourceWalker {
+    WalkDir::new(root)
+        .max_depth(MAX_DEPTH)
+        .into_iter()
+        .filter_entry(is_source_tree_entry as fn(&walkdir::DirEntry) -> bool)
+}
+
+/// The type [`source_walker`] returns.
+pub(crate) type SourceWalker =
+    walkdir::FilterEntry<walkdir::IntoIter, fn(&walkdir::DirEntry) -> bool>;
+
+/// Whether the walk should descend into (and yield) this entry.
+fn is_source_tree_entry(e: &walkdir::DirEntry) -> bool {
+    // Always accept the root itself, or nothing is scanned.
+    if e.depth() == 0 {
+        return true;
+    }
+    if e.file_name().to_str().is_some_and(should_skip) {
+        return false;
+    }
+    // A directory with its own `.git` entry is a separate checkout — a nested
+    // repository, submodule or worktree (worktrees keep `.git` as a file). Its
+    // projects belong to that checkout, not to this workspace, and detecting
+    // them duplicates every project once per copy.
+    !(e.file_type().is_dir() && e.path().join(".git").exists())
 }
 
 /// Project-relative id, stable across machines because it never contains an
@@ -193,24 +241,7 @@ pub fn scan_with(root: &Path, options: ScanOptions) -> Result<Workspace> {
     let mut configs = Vec::new();
     let mut solutions = Vec::new();
 
-    let walker = WalkDir::new(&root)
-        .max_depth(MAX_DEPTH)
-        .into_iter()
-        .filter_entry(|e| {
-            // Always accept the root itself, or nothing is scanned.
-            if e.depth() == 0 {
-                return true;
-            }
-            if e.file_name().to_str().is_some_and(should_skip) {
-                return false;
-            }
-            // A directory with its own `.git` entry is a separate checkout — a
-            // nested repository, submodule or worktree (worktrees keep `.git`
-            // as a file). Its projects belong to that checkout, not to this
-            // workspace, and detecting them duplicates every project once per
-            // copy.
-            !(e.file_type().is_dir() && e.path().join(".git").exists())
-        });
+    let walker = source_walker(&root);
 
     // Declarative adapters are workspace-local, so they are loaded once per
     // scan rather than baked in. A manifest that fails to parse is skipped
@@ -257,15 +288,46 @@ pub fn scan_with(root: &Path, options: ScanOptions) -> Result<Workspace> {
                 projects.push(project);
                 configs.append(&mut project_configs);
             }
+        } else if name == "Cargo.toml" {
+            if let Some((project, mut project_configs)) = scan_cargo_project(&root, path) {
+                projects.push(project);
+                configs.append(&mut project_configs);
+            }
         }
     }
 
     // Declarative adapters extend the built-in ones rather than override them:
     // a directory .NET or Node already claimed keeps its built-in project.
     for (dir, index) in manifest_dirs {
-        if projects.iter().any(|p| p.dir == dir) {
+        let claimants: Vec<&Project> = projects.iter().filter(|p| p.dir == dir).collect();
+
+        if claimants.iter().any(|p| p.ecosystem != "cargo") {
             continue;
         }
+        // Cargo is the one built-in adapter that produces a project and no
+        // configurations at all, so shadowing a manifest with it would leave
+        // the directory with nothing to run. `examples/adapters/
+        // cargo-nextest.toml` detects `Cargo.toml` and is the documented way to
+        // run Rust today; before this branch existed, adding built-in cargo
+        // detection would have silently deleted those configurations from every
+        // workspace using it on the next scan. The crate keeps the project —
+        // the architecture graph needs a node with `ecosystem == "cargo"` — and
+        // the manifest supplies the configurations, which target the directory
+        // and so resolve back to it. An unreadable crate is left alone: it
+        // carries a reason precisely because nothing about it can be trusted.
+        if let Some(existing) = claimants.first() {
+            if existing.unreadable.is_none() {
+                let rel = relative(&root, &dir);
+                configs.append(&mut manifest::configs_for_project(
+                    &manifests[index],
+                    &existing.id,
+                    &existing.name,
+                    &rel,
+                ));
+            }
+            continue;
+        }
+
         if let Some((project, mut project_configs)) =
             scan_manifest_project(&root, &dir, &manifests[index])
         {
@@ -317,14 +379,176 @@ fn scan_solution(root: &Path, path: &Path) -> Option<solution::Solution> {
     })
 }
 
+/// A project that is on disk but could not be read, carrying the reason.
+///
+/// The scan used to answer a broken manifest by returning `None`, which removed
+/// the project from the list with no trace: the user saw a shorter Run tab and
+/// no error, and nothing anywhere named the file that failed. This is the
+/// deliberate opposite — the project keeps its identity (an id, a path, the
+/// name of the file or directory, which are all facts that survive a parse
+/// failure) and loses only the parts that came out of the manifest.
+///
+/// Everything derived is therefore left at its most non-committal value:
+/// [`ProjectKind::Unknown`], no frameworks, no build configurations, not a test
+/// project, and — the point of the exercise — no run configurations. A
+/// configuration assembled from half a parse would be a command line built on
+/// a guess, which is exactly the failure mode the rest of the crate abstains
+/// from.
+fn unreadable_project(
+    id: String,
+    name: String,
+    manifest_path: PathBuf,
+    dir: PathBuf,
+    ecosystem: &str,
+    reason: String,
+) -> (Project, Vec<RunConfig>) {
+    (
+        Project {
+            id,
+            name,
+            manifest_path,
+            dir,
+            ecosystem: ecosystem.into(),
+            kind: ProjectKind::Unknown,
+            frameworks: Vec::new(),
+            configurations: Vec::new(),
+            is_test_project: false,
+            test_runner: None,
+            unreadable: Some(reason),
+        },
+        Vec::new(),
+    )
+}
+
+/// The directory's own name, for a project whose manifest could not supply one.
+fn dir_name(dir: &Path, fallback: &str) -> String {
+    dir.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Why an XML document would not parse, or `None` if it parses.
+///
+/// [`dotnet::parse_project_file`] is deliberately lenient — it stops at the
+/// first error and returns whatever it had read by then, which is the right
+/// behaviour for `Directory.Build.props` files and for a file someone is
+/// halfway through editing. That leniency is also why the scan cannot tell a
+/// well-formed project from a truncated one by looking at the result, so the
+/// document is passed over once more here purely to ask whether it was
+/// well-formed. Reading it twice costs a few microseconds on a file that is
+/// already in the page cache; the alternative — changing the parser's
+/// signature — would push an error case into every one of its other callers,
+/// none of which want it.
+///
+/// The reader's own errors are not enough on their own. quick-xml reaches
+/// `Event::Eof` *cleanly* on a document that simply stops — a half-saved file,
+/// which is the commonest way a user meets this — so asking only "did the
+/// reader error?" caught exactly one malformed shape (a mismatched end tag)
+/// out of six. A file truncated after `<OutputType>Exe</OutputType>` parsed as
+/// a perfectly good executable and produced Debug and Release configurations
+/// from half a document. Three further checks close that:
+///
+/// * **Depth.** Every `Start` opens an element and every `End` closes one, so
+///   reaching `Eof` at non-zero depth means the document stopped mid-element.
+/// * **Attributes.** The reader does not look inside a tag until someone asks
+///   for its attributes, so an unquoted value like `Sdk=Microsoft.NET.Sdk` is
+///   invisible unless they are walked here.
+/// * **A `Project` root.** A well-formed document that is not an MSBuild
+///   project is the same wrong answer wearing a valid hat: it would be read as
+///   a library with no properties and listed as a healthy project. Reporting
+///   it as unreadable keeps it visible with a reason, which is the whole point
+///   of [`unreadable_project`] — returning `None` instead would drop it from
+///   the list silently, the failure mode this module abstains from.
+///
+/// The checks are deliberately about the document's *shape*, never its
+/// contents: comments, processing instructions, doctypes, CDATA, namespaces
+/// and prefixed element names are all left alone, because a valid `.csproj` in
+/// the wild contains all of them and rejecting one would cost a healthy
+/// project its run configurations.
+fn xml_error(xml: &str) -> Option<String> {
+    use quick_xml::events::Event;
+
+    let mut reader = quick_xml::Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut depth: usize = 0;
+    let mut root: Option<String> = None;
+
+    loop {
+        let event = match reader.read_event() {
+            Ok(event) => event,
+            Err(e) => return Some(e.to_string()),
+        };
+        match event {
+            Event::Start(ref e) | Event::Empty(ref e) => {
+                if let Err(err) = e.attributes().try_for_each(|a| a.map(|_| ())) {
+                    return Some(err.to_string());
+                }
+                if depth == 0 && root.is_none() {
+                    root = Some(String::from_utf8_lossy(e.local_name().as_ref()).into_owned());
+                }
+                if matches!(event, Event::Start(_)) {
+                    depth += 1;
+                }
+            }
+            // `check_end_names` is on by default, so an unmatched end tag has
+            // already come back as an error above; this cannot underflow.
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Eof => {
+                if depth > 0 {
+                    return Some(format!(
+                        "unexpected end of file: {depth} unclosed element(s)"
+                    ));
+                }
+                return match root.as_deref() {
+                    Some("Project") => None,
+                    Some(other) => Some(format!(
+                        "root element is <{other}>, not <Project>: not an MSBuild project file"
+                    )),
+                    None => Some("no <Project> root element".into()),
+                };
+            }
+            _ => {}
+        }
+    }
+}
+
 fn scan_dotnet_project(
     root: &Path,
     path: &Path,
     options: ScanOptions,
 ) -> Option<(Project, Vec<RunConfig>)> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let mut parsed = dotnet::parse_project_file(&content);
     let dir = path.parent()?.to_path_buf();
+    // The file stem, not a parsed property: a project that will not parse still
+    // has the name the user sees in their file tree.
+    let name = path.file_stem()?.to_string_lossy().into_owned();
+    let id = project_id(root, path);
+
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) => {
+            return Some(unreadable_project(
+                id,
+                name,
+                path.to_path_buf(),
+                dir,
+                "dotnet",
+                e.to_string(),
+            ))
+        }
+    };
+    if let Some(reason) = xml_error(&content) {
+        return Some(unreadable_project(
+            id,
+            name,
+            path.to_path_buf(),
+            dir,
+            "dotnet",
+            reason,
+        ));
+    }
+
+    let mut parsed = dotnet::parse_project_file(&content);
 
     // The XML scan is always run first: MSBuild returns properties but not
     // items, so package references — which drive test-runner classification —
@@ -342,8 +566,6 @@ fn scan_dotnet_project(
     let test_runner =
         is_test.then(|| dotnet::classify_runner(&parsed, &props, configured_runner(root, &dir)));
 
-    let name = path.file_stem()?.to_string_lossy().into_owned();
-    let id = project_id(root, path);
     let rel = relative(root, path);
     let configurations = dotnet::configurations(&parsed, &props);
 
@@ -369,8 +591,99 @@ fn scan_dotnet_project(
             configurations,
             is_test_project: is_test,
             test_runner,
+            unreadable: None,
         },
         configs,
+    ))
+}
+
+/// Build a project from a `Cargo.toml`.
+///
+/// Detection only: no run or test configurations are produced. The reasoning is
+/// [`cargo`]'s, and the short version is that emitting them would change the
+/// Run and Tests tabs for every Rust repository on the next scan.
+///
+/// The kind is decided here rather than in the parser because half of the
+/// answer is on disk. Cargo infers a binary from `src/main.rs` and a library
+/// from `src/lib.rs` with no manifest section at all, which is how most crates
+/// are written — `cb-core` declares no `[lib]` and is a library. A crate that
+/// is both is reported as an executable, because the executable is the half a
+/// user can act on.
+fn scan_cargo_project(root: &Path, path: &Path) -> Option<(Project, Vec<RunConfig>)> {
+    let dir = path.parent()?.to_path_buf();
+    let id = project_id(root, &dir);
+
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) => {
+            return Some(unreadable_project(
+                id,
+                dir_name(&dir, "crate"),
+                path.to_path_buf(),
+                dir,
+                "cargo",
+                e.to_string(),
+            ))
+        }
+    };
+
+    let Some(manifest) = cargo::parse(&content) else {
+        // `cargo::parse` returns `None` for exactly one reason — the TOML would
+        // not parse — so the message from a second parse describes the same
+        // failure, and it names a line and column the user can go to.
+        let reason = toml::from_str::<toml::Table>(&content)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "Cargo.toml could not be read".to_string());
+
+        return Some(unreadable_project(
+            id,
+            dir_name(&dir, "crate"),
+            path.to_path_buf(),
+            dir,
+            "cargo",
+            reason,
+        ));
+    };
+
+    // A virtual manifest describes where the members are without being a crate
+    // itself — this repository's own root manifest is one. Treating it as a
+    // project puts an empty box at the repository root, the same phantom
+    // `is_workspace_root` already keeps out of the Node scan.
+    if manifest.is_virtual_manifest() {
+        return None;
+    }
+
+    let kind = if manifest.has_bin || dir.join("src").join("main.rs").is_file() {
+        ProjectKind::Executable
+    } else if manifest.has_lib || dir.join("src").join("lib.rs").is_file() {
+        ProjectKind::Library
+    } else {
+        ProjectKind::Unknown
+    };
+
+    // `package_name` is also `None` for `name.workspace = true`, which resolves
+    // against a file the parser was not given. The directory is then the
+    // honest answer rather than a guess at the inherited name.
+    let name = manifest
+        .package_name
+        .unwrap_or_else(|| dir_name(&dir, "crate"));
+
+    Some((
+        Project {
+            id,
+            name,
+            manifest_path: path.to_path_buf(),
+            dir,
+            ecosystem: "cargo".into(),
+            kind,
+            frameworks: Vec::new(),
+            configurations: Vec::new(),
+            is_test_project: false,
+            test_runner: None,
+            unreadable: None,
+        },
+        Vec::new(),
     ))
 }
 
@@ -413,14 +726,49 @@ fn scan_manifest_project(
             is_test_project: is_test,
             // The concrete runner lives in the manifest, not in a Rust enum.
             test_runner: is_test.then_some(TestRunner::Custom),
+            unreadable: None,
         },
         configs,
     ))
 }
 
 fn scan_node_project(root: &Path, path: &Path) -> Option<(Project, Vec<RunConfig>)> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let parsed = node::parse_package_json(&content)?;
+    let dir = path.parent()?.to_path_buf();
+    let id = project_id(root, &dir);
+
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) => {
+            return Some(unreadable_project(
+                id,
+                dir_name(&dir, "package"),
+                path.to_path_buf(),
+                dir,
+                "node",
+                e.to_string(),
+            ))
+        }
+    };
+
+    let Some(parsed) = node::parse_package_json(&content) else {
+        // Re-parsing as a bare value is what turns "it did not deserialise"
+        // into a sentence with a line and column in it. The fallback covers
+        // JSON that is valid but not an object — `parse_package_json` refuses
+        // that too, and serde_json has no complaint to offer about it.
+        let reason = serde_json::from_str::<serde_json::Value>(&content)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "package.json is not a JSON object".to_string());
+
+        return Some(unreadable_project(
+            id,
+            dir_name(&dir, "package"),
+            path.to_path_buf(),
+            dir,
+            "node",
+            reason,
+        ));
+    };
 
     // A monorepo root describes where the packages are rather than being a
     // project itself. Its own scripts are still worth offering when it has
@@ -429,16 +777,13 @@ fn scan_node_project(root: &Path, path: &Path) -> Option<(Project, Vec<RunConfig
         return None;
     }
 
-    let dir = path.parent()?.to_path_buf();
     let kind = node::project_kind(&parsed);
     let test_runner = node::detect_runner(&parsed);
 
-    let name = parsed.name.clone().unwrap_or_else(|| {
-        dir.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "package".into())
-    });
-    let id = project_id(root, &dir);
+    let name = parsed
+        .name
+        .clone()
+        .unwrap_or_else(|| dir_name(&dir, "package"));
     let rel = relative(root, &dir);
 
     let configs = node::configs_for_project(&id, &name, &rel, &parsed);
@@ -455,6 +800,7 @@ fn scan_node_project(root: &Path, path: &Path) -> Option<(Project, Vec<RunConfig
             configurations: Vec::new(),
             is_test_project: test_runner.is_some(),
             test_runner,
+            unreadable: None,
         },
         configs,
     ))
@@ -535,6 +881,36 @@ mod tests {
         <TargetFramework>net8.0</TargetFramework>
       </PropertyGroup>
     </Project>"#;
+
+    /// The symbol index and the project scan must see exactly the same files,
+    /// so the walker they share is tested directly rather than only through
+    /// `scan`.
+    #[test]
+    fn the_source_walker_skips_build_output_and_nested_checkouts() {
+        let dir = workspace_with(&[
+            ("src/a.rs", "fn a() {}"),
+            ("node_modules/x.js", "export const x = 1;"),
+            ("vendored/.git/HEAD", "ref: refs/heads/main\n"),
+            ("vendored/b.rs", "fn b() {}"),
+        ]);
+
+        let seen: Vec<String> = source_walker(dir.path())
+            .flatten()
+            .filter(|e| e.file_type().is_file())
+            .map(|e| {
+                relative(dir.path(), e.path())
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+
+        assert!(seen.contains(&"src/a.rs".to_string()), "saw {seen:?}");
+        assert!(
+            !seen.contains(&"node_modules/x.js".to_string()),
+            "saw {seen:?}"
+        );
+        assert!(!seen.contains(&"vendored/b.rs".to_string()), "saw {seen:?}");
+    }
 
     #[test]
     fn finds_dotnet_projects_and_classifies_them() {
@@ -703,6 +1079,392 @@ mod tests {
 
         assert_eq!(ws.projects.len(), 1);
         assert_eq!(ws.projects[0].name, "web");
+    }
+
+    // -- cargo ---------------------------------------------------------------
+
+    #[test]
+    fn cargo_crates_are_detected_and_classified_from_manifest_and_layout() {
+        // `has_bin`/`has_lib` only report what the manifest *declares*; the
+        // conventional `src/main.rs` and `src/lib.rs` are facts about the
+        // directory, which is why the scan — not the parser — decides the kind.
+        let dir = workspace_with(&[
+            ("cli/Cargo.toml", "[package]\nname = \"cli\"\n"),
+            ("cli/src/main.rs", "fn main() {}"),
+            ("lib/Cargo.toml", "[package]\nname = \"the-lib\"\n"),
+            ("lib/src/lib.rs", "pub fn f() {}"),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        let cli = ws.projects.iter().find(|p| p.name == "cli").unwrap();
+        assert_eq!(cli.ecosystem, "cargo");
+        assert_eq!(cli.kind, ProjectKind::Executable);
+
+        let lib = ws.projects.iter().find(|p| p.name == "the-lib").unwrap();
+        assert_eq!(lib.ecosystem, "cargo");
+        assert_eq!(lib.kind, ProjectKind::Library);
+        assert_eq!(
+            lib.name, "the-lib",
+            "the crate name, not the directory, names the project"
+        );
+    }
+
+    #[test]
+    fn a_declared_bin_makes_a_crate_executable_without_a_main_rs_on_disk() {
+        let dir = workspace_with(&[
+            (
+                "app/Cargo.toml",
+                "[package]\nname = \"app\"\n\n[[bin]]\nname = \"app\"\npath = \"other.rs\"\n",
+            ),
+            ("app/other.rs", "fn main() {}"),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        assert_eq!(ws.projects[0].kind, ProjectKind::Executable);
+    }
+
+    /// A crate that is both a library and a binary is offered as the thing that
+    /// can be launched, because that is the only one of the two a user can act
+    /// on. `src-tauri` in this repository is exactly this shape.
+    #[test]
+    fn a_crate_with_both_a_lib_and_a_bin_is_executable() {
+        let dir = workspace_with(&[
+            ("both/Cargo.toml", "[package]\nname = \"both\"\n"),
+            ("both/src/lib.rs", "pub fn f() {}"),
+            ("both/src/main.rs", "fn main() {}"),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        assert_eq!(ws.projects[0].kind, ProjectKind::Executable);
+    }
+
+    #[test]
+    fn a_virtual_cargo_manifest_is_a_workspace_root_rather_than_a_project() {
+        // This repository's own root manifest is exactly this shape; treating
+        // it as a project puts a phantom, empty box at the repository root.
+        let dir = workspace_with(&[
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"crates/core\"]\nresolver = \"2\"\n",
+            ),
+            ("crates/core/Cargo.toml", "[package]\nname = \"core\"\n"),
+            ("crates/core/src/lib.rs", "pub fn f() {}"),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        let names: Vec<&str> = ws.projects.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["core"]);
+    }
+
+    /// A root crate that is itself a package is both a workspace root and a
+    /// real crate, so it stays.
+    #[test]
+    fn a_root_crate_that_is_also_a_workspace_root_is_still_a_project() {
+        let dir = workspace_with(&[
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"sub\"]\n\n[package]\nname = \"root-crate\"\n",
+            ),
+            ("src/lib.rs", "pub fn f() {}"),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        assert!(ws.projects.iter().any(|p| p.name == "root-crate"));
+    }
+
+    /// Detection only. Emitting `cargo run`/`cargo test` configurations would
+    /// change the Run and Tests tabs for every Rust repository on the next
+    /// scan — a product decision nobody has made; see `adapters::cargo`.
+    #[test]
+    fn a_cargo_crate_contributes_no_run_or_test_configurations() {
+        let dir = workspace_with(&[
+            ("cli/Cargo.toml", "[package]\nname = \"cli\"\n"),
+            ("cli/src/main.rs", "fn main() {}"),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        assert_eq!(ws.projects.len(), 1);
+        assert!(
+            ws.configs.is_empty(),
+            "cargo detection must add no configurations: {:?}",
+            ws.configs.iter().map(|c| &c.id).collect::<Vec<_>>()
+        );
+        assert!(!ws.projects[0].is_test_project);
+        assert_eq!(ws.projects[0].test_runner, None);
+    }
+
+    #[test]
+    fn cargo_build_output_is_not_scanned_for_crates() {
+        // `target/` holds vendored and generated manifests; SKIP_DIRS already
+        // excludes it, which this pins rather than assumes.
+        let dir = workspace_with(&[
+            ("app/Cargo.toml", "[package]\nname = \"app\"\n"),
+            ("app/src/main.rs", "fn main() {}"),
+            (
+                "app/target/debug/build/dep/Cargo.toml",
+                "[package]\nname = \"generated\"\n",
+            ),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        let names: Vec<&str> = ws.projects.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["app"]);
+    }
+
+    #[test]
+    fn a_cargo_config_resolves_back_to_its_project_by_directory() {
+        let dir = workspace_with(&[
+            ("app/Cargo.toml", "[package]\nname = \"app\"\n"),
+            ("app/src/main.rs", "fn main() {}"),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        let project = &ws.projects[0];
+        let by_path = RunConfig {
+            project: Some(relative(&ws.root, &project.dir)),
+            ..RunConfig::new("x", "X", RunKind::App, "cargo", ConfigSource::UserFile)
+        };
+        assert_eq!(
+            find_project(&ws, &by_path).map(|p| &p.id),
+            Some(&project.id)
+        );
+    }
+
+    const CARGO_NEXTEST_ADAPTER: &str = r#"
+id = "cargo-nextest"
+name = "cargo nextest"
+detect = ["Cargo.toml"]
+
+[test]
+program = "cargo"
+args = ["nextest", "run"]
+report_format = "junitXml"
+"#;
+
+    /// `examples/adapters/cargo-nextest.toml` is the documented way to get Rust
+    /// runs today, and it detects `Cargo.toml` — the very file the built-in
+    /// adapter now claims. Since the built-in one emits no configurations,
+    /// letting it shadow the manifest would silently delete the user's only
+    /// Rust run and test configurations on the next scan.
+    #[test]
+    fn a_declarative_adapter_still_supplies_configurations_for_a_cargo_crate() {
+        let dir = workspace_with(&[
+            (
+                ".code-basics/adapters/cargo-nextest.toml",
+                CARGO_NEXTEST_ADAPTER,
+            ),
+            ("app/Cargo.toml", "[package]\nname = \"app\"\n"),
+            ("app/src/main.rs", "fn main() {}"),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        assert_eq!(ws.projects.len(), 1, "still one project, not two");
+        assert_eq!(
+            ws.projects[0].ecosystem, "cargo",
+            "the built-in adapter keeps the project, so the architecture graph still sees a crate"
+        );
+        assert!(
+            ws.configs.iter().any(|c| c.kind == RunKind::Test),
+            "the manifest's test configuration must survive: {:?}",
+            ws.configs.iter().map(|c| &c.id).collect::<Vec<_>>()
+        );
+        for config in &ws.configs {
+            assert!(
+                find_project(&ws, config).is_some(),
+                "config {} has no project",
+                config.id
+            );
+        }
+    }
+
+    // -- manifests that will not parse ---------------------------------------
+    //
+    // Every one of these builds the broken tree *before* scanning. An earlier
+    // round corrupted a file after scanning a healthy tree, so the assertions
+    // passed while the case a user actually hits — opening a workspace that is
+    // already broken — went unexercised.
+
+    /// The reported reason, for a project the scan could not fully read.
+    fn unreadable_reason<'a>(ws: &'a Workspace, name: &str) -> &'a str {
+        let project = ws
+            .projects
+            .iter()
+            .find(|p| p.name == name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{name} must still be listed; got {:?}",
+                    ws.projects.iter().map(|p| &p.name).collect::<Vec<_>>()
+                )
+            });
+        project
+            .unreadable
+            .as_deref()
+            .unwrap_or_else(|| panic!("{name} must carry a reason"))
+    }
+
+    #[test]
+    fn a_package_json_that_will_not_parse_is_listed_with_its_reason() {
+        let dir = workspace_with(&[("web/package.json", "{ \"name\": \"web\", oops }")]);
+        let ws = scan(dir.path()).unwrap();
+
+        let reason = unreadable_reason(&ws, "web");
+        assert!(!reason.is_empty(), "the reason must say something");
+
+        let project = &ws.projects[0];
+        assert_eq!(project.ecosystem, "node");
+        assert_eq!(project.kind, ProjectKind::Unknown);
+        assert!(project.manifest_path.ends_with("package.json"));
+        assert!(ws.configs.is_empty(), "an unreadable project cannot be run");
+    }
+
+    #[test]
+    fn a_cargo_toml_that_will_not_parse_is_listed_with_its_reason() {
+        let dir = workspace_with(&[("app/Cargo.toml", "[package\nname = \"app\"\n")]);
+        let ws = scan(dir.path()).unwrap();
+
+        assert!(!unreadable_reason(&ws, "app").is_empty());
+        assert_eq!(ws.projects[0].ecosystem, "cargo");
+        assert_eq!(ws.projects[0].kind, ProjectKind::Unknown);
+        assert!(ws.configs.is_empty());
+    }
+
+    /// Assert the one guarantee `unreadable_project` makes, over a `.csproj`
+    /// whose text is broken in some particular way: the project is still
+    /// listed, it carries a reason, it claims nothing about itself, and — the
+    /// point — it contributes no run configurations.
+    ///
+    /// quick-xml reports only one of the six malformed shapes below as an
+    /// error; the other five reached `Event::Eof` cleanly, so the single test
+    /// that existed here passed over a guarantee that held in one case out of
+    /// six. Each shape therefore gets its own test rather than a loop, so a
+    /// regression names the shape that regressed.
+    fn assert_csproj_is_unreadable(contents: &str) {
+        let dir = workspace_with(&[("src/App/App.csproj", contents)]);
+        let ws = scan(dir.path()).unwrap();
+
+        assert!(
+            !unreadable_reason(&ws, "App").is_empty(),
+            "the reason must say something"
+        );
+        assert_eq!(ws.projects[0].ecosystem, "dotnet");
+        assert_eq!(
+            ws.projects[0].kind,
+            ProjectKind::Unknown,
+            "a document that did not parse cannot have told us its kind"
+        );
+        assert!(
+            ws.configs.is_empty(),
+            "a project read from broken XML must not offer configurations \
+             built out of half of it; got {:?}",
+            ws.configs.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_csproj_with_a_mismatched_end_tag_is_listed_with_its_reason() {
+        assert_csproj_is_unreadable("<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup></Project>");
+    }
+
+    #[test]
+    fn a_csproj_truncated_after_an_opening_property_group_is_listed_with_its_reason() {
+        assert_csproj_is_unreadable("<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>");
+    }
+
+    /// The commonest way a user meets this state: a half-saved file. Enough of
+    /// it parsed to look like an executable targeting net8.0, which is exactly
+    /// enough to build `App (Debug)` and `App (Release)` out of a guess.
+    #[test]
+    fn a_csproj_truncated_mid_property_is_listed_rather_than_yielding_run_configurations() {
+        assert_csproj_is_unreadable(
+            "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    \
+             <OutputType>Exe</OutputType>\n    <TargetFramework>net8.0",
+        );
+    }
+
+    #[test]
+    fn a_csproj_that_is_only_an_unclosed_root_element_is_listed_with_its_reason() {
+        assert_csproj_is_unreadable("<Project>");
+    }
+
+    #[test]
+    fn a_csproj_with_an_unquoted_attribute_value_is_listed_with_its_reason() {
+        assert_csproj_is_unreadable("<Project Sdk=Microsoft.NET.Sdk></Project>");
+    }
+
+    /// Not XML at all. Whatever this file is, it is not the project we would be
+    /// building a command line for.
+    #[test]
+    fn a_csproj_holding_binary_junk_is_listed_with_its_reason() {
+        assert_csproj_is_unreadable("\u{1}\u{2}not xml at all <<< >>>");
+    }
+
+    /// Well-formed XML that is not an MSBuild project. Silently treating it as
+    /// an empty library would be the same wrong answer wearing a valid hat.
+    #[test]
+    fn a_csproj_whose_root_element_is_not_project_is_listed_with_its_reason() {
+        assert_csproj_is_unreadable("<Solution><Item Name=\"App\" /></Solution>");
+    }
+
+    /// The other half of the bargain: real `.csproj` files carry comments,
+    /// processing instructions, CDATA, namespaces and prefixes, and none of
+    /// those may cost a project its configurations.
+    #[test]
+    fn a_csproj_with_comments_declarations_cdata_and_namespaces_stays_healthy() {
+        let dir = workspace_with(&[(
+            "src/App/App.csproj",
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+             <!-- a comment, and a <not-a-tag> inside it -->\n\
+             <Project Sdk=\"Microsoft.NET.Sdk\" \
+             xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n  \
+             <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    \
+             <TargetFramework>net8.0</TargetFramework>\n    \
+             <PostBuild><![CDATA[echo <hi> && echo done]]></PostBuild>\n  \
+             </PropertyGroup>\n</Project>\n",
+        )]);
+        let ws = scan(dir.path()).unwrap();
+
+        assert_eq!(ws.projects[0].unreadable, None, "this file is well-formed");
+        assert_eq!(ws.projects[0].kind, ProjectKind::Executable);
+        assert_eq!(
+            ws.configs.len(),
+            2,
+            "Debug and Release; got {:?}",
+            ws.configs.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+    }
+
+    /// The broken project costs the scan that project and nothing else.
+    #[test]
+    fn one_broken_manifest_does_not_cost_the_workspace_its_healthy_projects() {
+        let dir = workspace_with(&[
+            ("web/package.json", "{ nope"),
+            (
+                "api/package.json",
+                r#"{"name":"api","scripts":{"dev":"vite"}}"#,
+            ),
+        ]);
+        let ws = scan(dir.path()).unwrap();
+
+        let api = ws.projects.iter().find(|p| p.name == "api").unwrap();
+        assert_eq!(api.unreadable, None);
+        assert!(ws
+            .configs
+            .iter()
+            .any(|c| c.script.as_deref() == Some("dev")));
+    }
+
+    /// `skip_serializing_if` means a healthy project has no `unreadable` key at
+    /// all, which is what `src/ipc/types.ts` mirrors as an optional field.
+    #[test]
+    fn a_healthy_project_serialises_without_an_unreadable_key() {
+        let dir = workspace_with(&[("src/App/App.csproj", EXE_CSPROJ)]);
+        let ws = scan(dir.path()).unwrap();
+
+        let json = serde_json::to_value(&ws.projects[0]).unwrap();
+        assert!(
+            !json.as_object().unwrap().contains_key("unreadable"),
+            "got {json}"
+        );
     }
 
     const PYTEST_ADAPTER: &str = r#"

@@ -47,6 +47,20 @@ export interface Project {
   configurations: string[];
   isTestProject: boolean;
   testRunner: TestRunner | null;
+  /**
+   * Why this project could not be fully read — a manifest that will not parse,
+   * or a file that could not be opened.
+   *
+   * **Optional, not nullable**: the Rust side is `#[serde(default,
+   * skip_serializing_if = "Option::is_none")]`, so a healthy project has no
+   * `unreadable` key at all rather than `unreadable: null`.
+   *
+   * A project carrying a reason is listed but inert — no configurations, no
+   * frameworks, `kind` is `"unknown"` — and should be shown greyed out with the
+   * reason rather than hidden. Dropping it is what the scan used to do, and a
+   * shorter list looks exactly like a correct one.
+   */
+  unreadable?: string;
 }
 
 /**
@@ -383,6 +397,12 @@ export interface InstallPlan {
 /** Why a set of hunks belongs together (`git/grouping.rs`). */
 export type GroupKind =
   | "intent"
+  /**
+   * One turn made these hunks but never said why. Grouped because they really
+   * did change together; the label is derived from the changes, so it is a
+   * description and must not be read as a reason.
+   */
+  | "sameTurn"
   | "formatting"
   | "newSymbol"
   | "modifiedSymbol"
@@ -663,4 +683,609 @@ export interface InspectorConfig {
   keepDumps?: number;
   maxDumpMegabytes?: number;
   env?: Record<string, string>;
+}
+
+// ---------------------------------------------------------------------------
+// Search everywhere
+// ---------------------------------------------------------------------------
+
+/**
+ * What a line of source appeared to declare
+ * (`crates/core/src/symbols/declarations.rs`).
+ *
+ * The Rust enum derives `serde(rename_all = "camelCase")`, so each variant
+ * crosses as its own name lowercased — every variant here is a single word, so
+ * that is simply the lowercase spelling. Deliberately coarse: it is a badge in
+ * a palette, not a type system, and `other` is the honest answer for everything
+ * a one-line word scan cannot place. A row with `other` should draw **no**
+ * badge rather than the word "other" — the scan abstained, and dressing an
+ * abstention up as a classification is the wrong answer that module exists to
+ * refuse.
+ */
+export type SymbolKind =
+  | "function"
+  | "class"
+  | "struct"
+  | "enum"
+  | "interface"
+  | "trait"
+  | "type"
+  | "namespace"
+  | "constant"
+  | "variable"
+  | "other";
+
+/**
+ * Which populations a query is allowed to match
+ * (`crates/core/src/symbols/search.rs`).
+ *
+ * A scope filters and never reweights, so the rows of a scoped list appear in
+ * the same relative order they would inside an `all` list.
+ */
+export type SearchScope = "all" | "files" | "symbols" | "actions";
+
+/** Which of the three questions a hit answers. */
+export type HitKind = "file" | "symbol" | "action";
+
+/**
+ * One row of the palette (`SearchHit` in `crates/core/src/symbols/search.rs`).
+ *
+ * **Every key is present on every hit**, `null` where a kind has no answer —
+ * the Rust struct deliberately carries no `skip_serializing_if`, so these are
+ * `T | null` and not optional `?`. The reason is stated in the Rust doc and
+ * pinned by `search_hit_serialises_with_the_keys_the_ui_reads`: an absent key
+ * would make "this kind has no line" indistinguishable from "the backend did
+ * not send a line", and the second of those is a bug that would then be
+ * invisible.
+ *
+ * A trailing `:123` on the query text means "line 123" and is parsed off in
+ * Rust, once, by `split_line_suffix`. **Do not re-implement that here** — pass
+ * the raw text through and read `line` off the hit. Two implementations of a
+ * parse always disagree eventually, and this one decides where the editor
+ * jumps.
+ */
+export interface SearchHit {
+  kind: HitKind;
+  /**
+   * What the row shows, and the only string `positions` refers to: a file's
+   * name, a symbol's name, a configuration's name.
+   */
+  label: string;
+  /**
+   * The secondary line: the workspace-relative path for a file or symbol, the
+   * configuration's project for an action.
+   */
+  detail: string;
+  /**
+   * Workspace-relative with forward slashes (a Rust `PathBuf`, which crosses
+   * as a plain string). `null` for an action, which opens nothing.
+   */
+  path: string | null;
+  /**
+   * 1-based, matching an editor's gutter. A symbol's declaration line, or the
+   * line the query named explicitly, which wins. `null` on a file hit whose
+   * query named no line, and always `null` on an action.
+   */
+  line: number | null;
+  /** Present only on a symbol hit; the badge the UI draws. */
+  symbolKind: SymbolKind | null;
+  /** The `RunConfig` id to launch, present only on an action hit. */
+  actionId: string | null;
+  /**
+   * **Character** indices into `label`, for highlighting — not byte offsets
+   * and not UTF-16 code unit offsets. Rust counts them with `chars()`, which
+   * walks Unicode scalar values, so `Array.from(label)` — which iterates code
+   * points — indexes by exactly the same units and is the only correct way to
+   * read them here. `searchLogic.ts`'s `highlightSpans` does that.
+   *
+   * Two wrong ways to read them, both of which look fine until a name is not
+   * ASCII: a byte view (`TextEncoder`, a `Buffer`) shifts on any non-ASCII
+   * character at all, and raw string indexing or `slice` shifts by one per
+   * astral character (an emoji, some CJK extensions) and can cut a surrogate
+   * pair in half, which renders as a replacement glyph. Decomposed properly
+   * there is no residual skew of either kind: a Rust scalar value and a
+   * JavaScript code point are the same unit, so emoji, CJK, combining marks
+   * and ZWJ sequences all align exactly. Each side is pinned against a
+   * non-ASCII label — `positions_are_char_indices_not_byte_indices` in
+   * `symbols/fuzzy_tests.rs`, and the emoji case in `searchLogic.test.ts`.
+   *
+   *
+   * Empty when the match was found somewhere the label does not show — a file
+   * matched only on its path carries no positions rather than positions into a
+   * string the row is not drawing.
+   */
+  positions: number[];
+  /** Comparable only against other hits for the same query. */
+  score: number;
+}
+
+/**
+ * What the backend's symbol index currently holds.
+ *
+ * `ready` and `building` are separate booleans rather than one state, because
+ * a rebuild happens over an index that is still answerable: `ready: true,
+ * building: true` is the normal state during a refresh and the palette should
+ * keep serving from what it has. `ready: false, building: true` is the only
+ * state that justifies showing a spinner instead of results.
+ *
+ * `truncated` means a cap was hit and the counts below are therefore
+ * incomplete. A view must say so — presenting a clipped index as if it were the
+ * whole workspace is the wrong answer `cb-core` refuses to give, and this flag
+ * is the only way the frontend can tell.
+ *
+ * `files` and `symbols` are Rust `usize`, which crosses as a JSON number.
+ */
+export interface SymbolIndexStatus {
+  ready: boolean;
+  building: boolean;
+  files: number;
+  symbols: number;
+  truncated: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Architecture diagrams (`crates/core/src/architecture/`)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a box in the diagram stands for.
+ *
+ * `external` is something referenced from inside the workspace that lives
+ * outside it — there is no `Project` behind it, because the scan never saw it.
+ * `solutionFolder` exists only inside a `.sln` file and nowhere on disk, which
+ * is why such a node carries no `path`.
+ *
+ * `service` and `dataStore` only ever appear in a *component* map
+ * (`architecture::components`), never in a project map. A `service` is a
+ * project that also declares it serves HTTP, and carries the same `id`,
+ * `projectId`, `path` and `ecosystem` a `project` node would — code that does
+ * not care about the distinction can treat the two alike. A `dataStore` is a
+ * database, cache or broker some project declares a client for; it carries no
+ * `projectId`, no `path` and no `ecosystem`, because it is not in this
+ * workspace and there is nothing to open.
+ */
+export type ArchKind =
+  | "project"
+  | "solution"
+  | "solutionFolder"
+  | "external"
+  | "service"
+  | "dataStore";
+
+/**
+ * What an arrow asserts about its two endpoints.
+ *
+ * `contains` is membership and nothing else: a solution, a solution folder or
+ * an npm workspace root holding a project. It says which things ship together
+ * and is deliberately silent about which needs which — reading a dependency
+ * out of a `.sln` would be inventing one out of filing.
+ *
+ * `dataAccess` runs project → `dataStore` and appears only in a component map.
+ * It asserts that the project's manifest names a client library for that
+ * technology — capability, not runtime use, and never a shared instance.
+ */
+export type EdgeKind =
+  | "projectReference"
+  | "packageDependency"
+  | "contains"
+  | "dataAccess";
+
+/**
+ * Where a graph came from, and therefore how much of it can be trusted.
+ *
+ * A Rust enum with data, which serde tags **externally**: the two variants
+ * that carry a payload cross as a single-key object, and the one that does not
+ * crosses as a bare string. Pinned by
+ * `an_arch_graph_serialises_with_the_keys_the_ui_reads` in
+ * `architecture/graph_tests.rs`, which asserts exactly:
+ *
+ * ```json
+ * { "derived": { "scanner": 1 } }
+ * { "inferred": { "agent": "claude" } }
+ * "user"
+ * ```
+ *
+ * Narrow it with `typeof d === "string"` first, then `"derived" in d` — there
+ * is no discriminant field to switch on, and assuming one (`kind`, `type`) is
+ * the shape this comment exists to stop being assumed.
+ *
+ * The three cases are kept apart because they fail differently. `derived` is
+ * reproducible and can only be wrong if the rules are; `inferred` came from a
+ * language model and may be confidently wrong; `user` is authoritative about
+ * intent and says nothing about what the code does. Collapsing them into one
+ * source string would lose exactly the distinction a reader needs.
+ */
+export type Derivation =
+  /** `scanner` is the rule version that produced it (`SCANNER_VERSION`). */
+  | { derived: { scanner: number } }
+  | { inferred: { agent: string } }
+  | "user";
+
+/**
+ * One box.
+ *
+ * Every field is present on the wire. None of the Rust `Option`s carries
+ * `skip_serializing_if`, so an absent value arrives as an explicit `null`
+ * rather than a missing key — `"projectId" in node` is always true and tells
+ * you nothing.
+ */
+export interface ArchNode {
+  /**
+   * Unique within a graph. A project node reuses the scan's `Project.id`, so
+   * it can be traced back to something runnable; containers and externals use
+   * a prefixed id (`solution:`, `workspace:`, `external:`) that cannot collide
+   * with one.
+   */
+  id: string;
+  label: string;
+  kind: ArchKind;
+  /** The `Project.id`, or `null` for containers and anything external. */
+  projectId: string | null;
+  /**
+   * Relative to the workspace root, forward slashes on every platform, so a
+   * stored diagram survives being moved or opened on another machine.
+   * Externals carry a `../`-prefixed path. `null` for solution folders, which
+   * exist only inside a solution file.
+   */
+  path: string | null;
+  /** Which adapter found it; `null` for containers and externals. */
+  ecosystem: string | null;
+}
+
+/** One arrow. */
+export interface ArchEdge {
+  /** `ArchNode.id` of the source. */
+  from: string;
+  /** `ArchNode.id` of the target. */
+  to: string;
+  kind: EdgeKind;
+  /**
+   * Always `null` on a derived edge — the facts available to the deriver are
+   * already carried by `kind`, and anything further would be commentary it
+   * cannot substantiate. The field exists for inferred and user graphs, where
+   * the label *is* the content.
+   */
+  label: string | null;
+}
+
+/** A whole diagram. */
+export interface ArchGraph {
+  /** Sorted by `ArchNode.id`. */
+  nodes: ArchNode[];
+  /** Sorted by endpoint, then kind. */
+  edges: ArchEdge[];
+  /**
+   * Everything found that could not be turned into an edge, in the deriver's
+   * own words. Never populated because the tool went wrong — always because
+   * something in the workspace does not line up. A view that hides these is
+   * showing a diagram that looks complete and is not.
+   */
+  warnings: string[];
+  derivation: Derivation;
+}
+
+/**
+ * Where a *stored* diagram came from.
+ *
+ * Deliberately not `Derivation`: this one has no `scanner` payload, because a
+ * file on disk records that it was derived and the rule version belongs to the
+ * graph, not the filing. Same external tagging — `"derived"` and `"user"` are
+ * bare strings, `inferred` is an object. Pinned by
+ * `a_diagram_file_serialises_with_the_keys_the_frontend_reads` and
+ * `a_derived_or_user_derivation_serialises_as_a_bare_string` in
+ * `architecture/store_tests.rs`.
+ */
+export type DiagramDerivation = "derived" | { inferred: { agent: string } } | "user";
+
+/**
+ * One diagram file, as `arch_list_diagrams` reports it.
+ *
+ * All seven keys are always present; the `Option` fields cross as `null`.
+ */
+export interface DiagramFile {
+  /** File name including `.md`. */
+  name: string;
+  /** Relative to the workspace root, forward slashes. */
+  path: string;
+  /** Free-text level from the front matter, or `null`. */
+  level: string | null;
+  derivation: DiagramDerivation;
+  /** When it was generated, as the front matter recorded it. */
+  generated: string | null;
+  /**
+   * An inferred diagram a person has since changed. Both halves matter to a
+   * reader: the arrows still came from that agent, and a person edited them.
+   */
+  edited: boolean;
+  /**
+   * Why this file could not be fully understood — unreadable front matter, or
+   * an unreadable file. It is still listed, and it is presented as a user
+   * diagram, because refusing to show a person a file that is plainly on disk
+   * is worse than showing it unlabelled.
+   */
+  warning: string | null;
+}
+
+/** Which rule a piece of Mermaid source broke. */
+export type ValidationRule =
+  | "fenceCount"
+  | "diagramType"
+  | "forbiddenDirective"
+  | "unbalancedSubgraph"
+  | "undeclaredNode";
+
+/**
+ * Why a piece of Mermaid source was rejected, and where.
+ *
+ * `line` is 1-based and counted **in the source as given**, fence and
+ * surrounding prose included, so it can be pointed at directly in an editor
+ * holding the whole document.
+ */
+export interface ValidationError {
+  rule: ValidationRule;
+  line: number;
+  /** One sentence naming what was found. */
+  detail: string;
+}
+
+// ---------------------------------------------------------------------------
+// Language servers (`crates/core/src/lsp/model.rs`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Why there is, or is not, an answer from a language server.
+ *
+ * **Never collapse two of these into one when rendering.** A server that was
+ * never configured, one still starting, one still loading its projects, one that
+ * died, and one that does not advertise the capability are five different things
+ * to tell somebody, and only `"ready"` licenses a count. Every other outcome
+ * carries a `message`, and that message is what the user gets instead of a
+ * number — an empty list drawn for any of them reads as "there are none", which
+ * is the one answer the backend refused to give.
+ *
+ * Pinned against these exact spellings by
+ * `every_availability_variant_serialises_to_its_exact_string` and
+ * `availability_has_exactly_six_variants` in `crates/core/src/lsp/model_tests.rs`.
+ */
+export type Availability =
+  | "notConfigured"
+  | "starting"
+  | "loading"
+  | "ready"
+  | "failed"
+  | "unsupported";
+
+/**
+ * Every use site of one symbol, or the reason there is no list.
+ *
+ * **Every key is present on every result**, `null` where there is no value: the
+ * Rust struct deliberately carries no `skip_serializing_if`, so these are
+ * `T | null` and never optional `?`. Written with `?` instead, `tsc` accepts
+ * code that then reads `undefined` at runtime, and "the backend has no answer"
+ * becomes indistinguishable from "the backend forgot to send one".
+ */
+export interface UsageResult {
+  outcome: Availability;
+  /**
+   * The **true** number of distinct use sites.
+   *
+   * `null` unless `outcome` is `"ready"`; `0` genuinely means "no usages", which
+   * is a real answer and not the same thing — so branch on `total === null`, not
+   * on falsiness. When `truncated` is set this is still the full count, larger
+   * than `usages.length`.
+   */
+  total: number | null;
+  /** At most the backend's cap. Always empty when `total` is `null`. */
+  usages: Usage[];
+  /** Whether `usages` is shorter than `total`. Say so wherever the rows show. */
+  truncated: boolean;
+  /**
+   * Why, in the user's terms, when `outcome` is not `"ready"` — **and the
+   * qualification when it is.**
+   *
+   * A `"ready"` answer is usually `null` here. It is not always: a server that
+   * was promoted at the backend's readiness ceiling (90 s, because a project load
+   * never finished) answers with the rows it really has and says here that the
+   * count may be low. So render this whenever it is non-null, not only for
+   * non-`"ready"` outcomes — that message is the difference between a count and a
+   * count you can trust.
+   */
+  message: string | null;
+  /** Which server answered, for a status line. `null` when none did. */
+  server: string | null;
+}
+
+/** One row of the usages list. */
+export interface Usage {
+  /**
+   * Workspace-relative with forward slashes (a Rust `PathBuf`, which crosses as
+   * a plain string), ready for `fsReadFile` and the open-a-file chain.
+   *
+   * `null` when the location is outside the workspace or in a non-`file:`
+   * document — Roslyn really does answer with `source-generated:` and metadata
+   * URIs. The row still exists and is still counted; it just cannot be opened,
+   * so render it unclickable rather than dropping it, which would contradict
+   * `total`.
+   */
+  path: string | null;
+  /** The relative path, or the raw URI when there is no path. */
+  label: string;
+  /**
+   * **1-based**, matching the editor gutter, `SearchHit.line` and everything in
+   * the existing open-a-file-at-a-line chain. Its asymmetry with the `character`
+   * fields elsewhere in this section is deliberate; see {@link Target.character}.
+   */
+  line: number;
+  /** One trimmed line of context. */
+  snippet: string;
+  /**
+   * Where to underline inside `snippet`. `null` when the match did not survive
+   * trimming — no underline is honest, an underline over the wrong characters is
+   * a claim.
+   */
+  highlight: Highlight | null;
+}
+
+/**
+ * A span to underline, as **UTF-16 code-unit** offsets into a `snippet`.
+ *
+ * UTF-16 because the reader is JavaScript: these are the units `String.length`,
+ * `slice`, `substring` and CodeMirror all count in, so slicing the snippet with
+ * them directly is correct. The Rust side holds the same span in **bytes** and
+ * `lsp::positions::byte_to_utf16` converts — a byte offset read as if it were
+ * this would shift the underline on any non-ASCII character earlier in the line
+ * and can cut a surrogate pair in half.
+ *
+ * Note the contrast with `SearchHit.positions`, which are **character** (code
+ * point) indices and must be read with `Array.from`. The two are different units
+ * on purpose and are not interchangeable.
+ */
+export interface Highlight {
+  start: number;
+  end: number;
+}
+
+/**
+ * Where a symbol is declared, implemented and typed.
+ *
+ * Three lists rather than one because they answer three different questions, and
+ * a symbol legitimately appears in more than one — an interface method is a
+ * declaration from one angle and an implementation from another.
+ *
+ * **There is one `outcome` for three lists, so an empty list on a `"ready"`
+ * answer does not by itself mean "none".** A server that advertises
+ * `definitionProvider` but not `implementationProvider` answers the first group
+ * and refuses the second; the outcome stays `"ready"` and the reason is in
+ * `message`, naming the group ("No implementations: …"). Only a refusal of **all
+ * three** changes `outcome` (to the most severe of the three reasons — `"failed"`
+ * over `"loading"` over `"unsupported"`). So: an empty group licenses "none" only
+ * when `message` is `null`; otherwise show the message beside it, or a UI states
+ * "no implementations" about a question nobody could ask. Pinned by
+ * `an_unadvertised_implementation_capability_empties_that_group_and_says_so` and
+ * `a_goto_answer_nobody_could_be_asked_for_is_not_ready_with_three_empty_lists`
+ * in `crates/core/tests/lsp_session.rs`.
+ */
+export interface DefinitionResult {
+  outcome: Availability;
+  declarations: Target[];
+  implementations: Target[];
+  typeDefinitions: Target[];
+  /**
+   * Why a group is empty, or the qualification a `"ready"` answer needs — see
+   * {@link UsageResult.message}. The group is named in English prose, so this is
+   * for showing, not for parsing.
+   */
+  message: string | null;
+}
+
+/** Somewhere to jump to. */
+export interface Target {
+  /** Workspace-relative, forward slashes. `null` as on {@link Usage.path}. */
+  path: string | null;
+  /** The relative path, or the raw URI when there is no path. */
+  label: string;
+  /** **1-based**, matching the editor gutter. See {@link Target.character}. */
+  line: number;
+  /**
+   * **0-based UTF-16 code units**, which is exactly what CodeMirror hands over
+   * and takes back.
+   *
+   * The asymmetry with `line` is deliberate and holds in **both** directions
+   * across this IPC surface: there is a 1-based line convention everywhere in
+   * this app (gutters, `SymbolIndex`, `SearchHit.line`) and no 1-based column
+   * convention anywhere at all, so inventing one to match would mean converting
+   * at every call site instead of none. Rust converts in
+   * `lsp::positions::{to_editor_line, to_lsp_line}` and nowhere else. Stated on
+   * every field it touches because an undocumented mixed convention is how an
+   * off-by-one ships.
+   */
+  character: number;
+  snippet: string;
+  /** The enclosing declaration, when the answer carried one; else `null`. */
+  container: string | null;
+}
+
+/** The inline usage rows one file should show, or the reason there are none. */
+export interface AnchorResult {
+  outcome: Availability;
+  anchors: DeclarationAnchor[];
+  /**
+   * Why there are no anchors, or the qualification a `"ready"` answer needs — see
+   * {@link UsageResult.message}.
+   *
+   * Note that `"failed"` here includes "the file could not be read, so no server
+   * could be told about it": `documentSymbol` is a question about an open buffer,
+   * and an unopened one is a failure rather than a file that declares nothing.
+   */
+  message: string | null;
+}
+
+/** One declaration in a file that deserves an inline "N usages" row. */
+export interface DeclarationAnchor {
+  /**
+   * Stable within one file across calls, and distinct for two same-named
+   * overloads — so a widget can be keyed on it without remounting on every
+   * refresh.
+   */
+  id: string;
+  /** The bare identifier; Roslyn sends a whole signature, this is the name. */
+  name: string;
+  kind: SymbolKind;
+  /** Where the inline row is drawn: the declaration's first line, **1-based**. */
+  line: number;
+  /**
+   * Where a usages request must be aimed — the identifier's column, not the
+   * body's. **0-based UTF-16 code units**, and an offset into `selectionLine`
+   * rather than into `line`. See {@link Target.character} for the asymmetry.
+   */
+  character: number;
+  /**
+   * The identifier's own line, **1-based**. Differs from `line` whenever
+   * attributes, doc comments or a wrapped signature push the name below the
+   * start of the declaration — so pass this line, not `line`, to
+   * `lspFindUsages` alongside `character`.
+   */
+  selectionLine: number;
+}
+
+/** What every configured server is doing, for the status surface. */
+export interface LspStatus {
+  servers: ServerStatus[];
+}
+
+/**
+ * One server's state, and what to do about it.
+ *
+ * A language appears here once it has been started, or immediately and
+ * permanently if it could not be resolved — there is no `Availability` for
+ * "found, idle", so an absent row means "nothing has asked this language
+ * anything yet" and not "no server exists".
+ */
+export interface ServerStatus {
+  id: string;
+  /** Human-readable, for the row's label. */
+  language: string;
+  state: Availability;
+  /** The version line, the exit code, the error — whatever there is to say. */
+  detail: string | null;
+  /**
+   * Why this server's answers may be incomplete, when they may be.
+   *
+   * Non-null only for a server promoted at the backend's 90 s readiness ceiling,
+   * whose `state` is `ready` because requests do proceed and whose counts arrive
+   * carrying `UsageResult.message`. A field of its own rather than prose in
+   * `detail` — `detail` is the program path for a plain ready server, so a caveat
+   * delivered there cannot be told from a healthy server without parsing English,
+   * and the indicator (which says nothing about a ready server) dropped it.
+   */
+  caveat: string | null;
+  /**
+   * Everywhere that was searched for the program; empty once one was found.
+   *
+   * A list rather than a sentence because "not found" is only actionable if the
+   * user can see *where* we looked, so show all of it rather than the first.
+   */
+  lookedFor: string[];
+  /** What the user could do about it, when there is something. */
+  hint: string | null;
 }

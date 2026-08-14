@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { OutputConsole, type ConsoleHandle } from "../components/OutputConsole";
 import { ConfigEditor } from "../components/ConfigEditor";
+import { projectTarget } from "../components/configLogic";
 import { FileEditor } from "../components/FileEditor";
 import { FileTree } from "../components/FileTree";
+import { LspStatusIndicator } from "../components/LspStatus";
 import { RiderImportDialog } from "../components/RiderImportDialog";
 import { RunConfigMenu } from "../components/RunConfigMenu";
 import { SecretsEditor } from "../components/SecretsEditor";
@@ -12,8 +14,14 @@ import {
   type EnvironmentState,
 } from "../components/EnvironmentPicker";
 import * as api from "../ipc/api";
+import {
+  loadCollapsed,
+  loadSplit,
+  saveCollapsed,
+  saveSplit,
+} from "./consolePanelLogic";
 import { preferApplicationProcess } from "./InspectView";
-import type { InspectRequest } from "../App";
+import type { InspectRequest, OpenFileRequest, SelectConfigRequest } from "../App";
 import type {
   AttachableProcess,
   BuildAction,
@@ -88,14 +96,6 @@ interface OpenFile {
   name: string;
 }
 
-/** Editor pane height as a fraction of the main area, shared across workspaces. */
-const SPLIT_KEY = "code-basics.editorSplit";
-
-function loadSplit(): number {
-  const stored = Number(localStorage.getItem(SPLIT_KEY));
-  return Number.isFinite(stored) && stored > 0.1 && stored < 0.9 ? stored : 0.55;
-}
-
 function loadEnvironments(root: string): EnvironmentState {
   try {
     const raw = localStorage.getItem(environmentsKey(root));
@@ -111,10 +111,34 @@ export function RunView({
   workspace,
   onWorkspaceChange,
   onInspect,
+  pendingOpen,
+  onOpenConsumed,
+  pendingSelect,
+  onSelectConsumed,
+  onNavigate,
 }: {
   workspace: Workspace;
   onWorkspaceChange: (workspace: Workspace) => void;
   onInspect: (request: InspectRequest) => void;
+  /** A file the search palette chose; see `OpenFileRequest` in `App.tsx`. */
+  pendingOpen?: OpenFileRequest | null;
+  onOpenConsumed?: () => void;
+  /**
+   * An editor asking to open another file at a line — Go to definition, or a
+   * usage row.
+   *
+   * Deliberately routed *up* to `App.requestOpenFile` and back down as
+   * `pendingOpen`, rather than calling this view's own `openFile` directly. The
+   * reveal is keyed on `OpenFileRequest.token`, and that token is `App`'s
+   * monotonic counter: a jump into the file the user is already looking at
+   * changes no other field, so anything short of a fresh token would open the
+   * tab that is already open and leave the cursor where it was. One counter,
+   * one path in — see the comment on `OpenFileRequest`.
+   */
+  onNavigate?: (path: string, name: string, line?: number) => void;
+  /** A configuration the search palette chose. Selected, never started. */
+  pendingSelect?: SelectConfigRequest | null;
+  onSelectConsumed?: () => void;
 }) {
   const appConfigs = workspace.configs.filter((c) => c.kind === "app");
 
@@ -134,6 +158,39 @@ export function RunView({
         s.projects.some((p) => p.path.replace(/\\/g, "/") === target),
       )?.name ?? null
     );
+  };
+
+  /**
+   * Projects the scan listed but could not read.
+   *
+   * `unreadable` is **optional, not nullable** — a healthy project has no such
+   * key — so the test is a plain truthiness check and a missing key means
+   * healthy. These used to be dropped from the scan entirely, which is why
+   * they are shown rather than filtered again here: a shorter list looks
+   * exactly like a correct one, and the developer whose manifest will not
+   * parse is the one person who needs to be told.
+   */
+  const unreadableProjects = workspace.projects.filter((p) => p.unreadable);
+
+  /**
+   * Why the project a configuration targets could not be read, if that is the
+   * situation.
+   *
+   * Only a saved configuration can be in this state: a detected one is derived
+   * from a project the scan read, and a project it could not read produces
+   * none. The comparison is `projectTarget`'s — the same workspace-relative
+   * string `ConfigEditor` writes into `config.project` — with separators
+   * normalised, because the saved file can carry whichever separator wrote it.
+   * An exact match on that path is the project, so this cannot grey out a
+   * configuration that points somewhere else.
+   */
+  const unreadableTarget = (config: RunConfig | null): string | null => {
+    if (!config?.project) return null;
+    const target = config.project.replace(/\\/g, "/");
+    const project = workspace.projects.find(
+      (p) => projectTarget(p, workspace.root).replace(/\\/g, "/") === target,
+    );
+    return project?.unreadable ?? null;
   };
 
   const [selectedId, setSelectedId] = useState<string | null>(
@@ -163,8 +220,26 @@ export function RunView({
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [dirtyFiles, setDirtyFiles] = useState<Set<string>>(new Set());
-  const [split, setSplit] = useState(loadSplit);
+  const [split, setSplit] = useState(() => loadSplit(localStorage, workspace.root));
+  const [consoleCollapsed, setConsoleCollapsed] = useState(() =>
+    loadCollapsed(localStorage, workspace.root),
+  );
   const splitRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Put the console away, or bring it back.
+   *
+   * Collapsing hides `.console-sessions` rather than unmounting it: every
+   * session's terminal stays mounted while hidden, exactly as switching between
+   * session tabs already leaves them, so scrollback and a running process
+   * survive. `OutputConsole`'s `ResizeObserver` refits on the way back out.
+   */
+  function toggleConsole() {
+    setConsoleCollapsed((collapsed) => {
+      saveCollapsed(localStorage, workspace.root, !collapsed);
+      return !collapsed;
+    });
+  }
 
   function openFile(path: string, name: string) {
     setOpenFiles((previous) =>
@@ -172,6 +247,70 @@ export function RunView({
     );
     setActiveFile(path);
   }
+
+  /**
+   * Where an editor has been asked to jump, and under which request.
+   *
+   * Held as state rather than pushed into the editor directly because the
+   * `FileEditor` for a freshly opened file does not exist yet at the moment the
+   * request arrives — it is created by the render this same update causes. The
+   * token travels with it so the editor can tell a new instruction from a
+   * re-render of the old one; see `FileEditor`'s reveal effect.
+   */
+  const [reveal, setReveal] = useState<{
+    path: string;
+    line: number;
+    token: number;
+  } | null>(null);
+
+  /**
+   * Serve a file the palette chose, exactly once.
+   *
+   * Consumed by object identity in a ref, the way `InspectView` consumes its
+   * request: this view stays mounted while hidden, so without the guard every
+   * unrelated re-render — a process event, a tab switch, a status tick — would
+   * re-open the file and yank the user's cursor back to the line they had since
+   * scrolled away from.
+   */
+  const openConsumed = useRef<OpenFileRequest | null>(null);
+  useEffect(() => {
+    if (!pendingOpen || openConsumed.current === pendingOpen) return;
+    openConsumed.current = pendingOpen;
+    openFile(pendingOpen.path, pendingOpen.name);
+    setReveal(
+      pendingOpen.line == null
+        ? null
+        : { path: pendingOpen.path, line: pendingOpen.line, token: pendingOpen.token },
+    );
+    onOpenConsumed?.();
+  }, [pendingOpen, onOpenConsumed]);
+
+  /**
+   * Select a configuration the palette chose. It is not started: see
+   * `SelectConfigRequest`.
+   *
+   * The id is checked against this view's own list before it is used. That list
+   * is app configurations only, and setting the selection to an id it does not
+   * hold would empty `selected` and disable the whole toolbar, which looks like
+   * the app breaking rather than like a row that does not belong on this tab.
+   *
+   * The palette no longer offers a row this cannot serve — `dropUnactionable`
+   * in `searchLogic.ts` filters action hits down to application configurations
+   * before drawing them, precisely because a row that closed the palette and
+   * then did nothing was indistinguishable from a broken one. What can still
+   * arrive is a configuration a rescan removed between the ranking and the
+   * keystroke, so the check stays.
+   */
+  const selectConsumed = useRef<SelectConfigRequest | null>(null);
+  useEffect(() => {
+    if (!pendingSelect || selectConsumed.current === pendingSelect) return;
+    selectConsumed.current = pendingSelect;
+    onSelectConsumed?.();
+    if (appConfigs.some((c) => c.id === pendingSelect.configId)) {
+      setSelectedId(pendingSelect.configId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSelect, onSelectConsumed]);
 
   function closeFile(path: string) {
     const remaining = openFiles.filter((f) => f.path !== path);
@@ -210,7 +349,7 @@ export function RunView({
     const onUp = (up: MouseEvent) => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      localStorage.setItem(SPLIT_KEY, String(fractionAt(up.clientY)));
+      saveSplit(localStorage, workspace.root, fractionAt(up.clientY));
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -422,6 +561,17 @@ export function RunView({
   }
   const selected = appConfigs.find((c) => c.id === selectedId) ?? null;
   const favorites = new Set(workspace.favorites);
+
+  /**
+   * Why the selected configuration cannot be started, when its project is one
+   * the scan could not read.
+   *
+   * Starting it would spawn a runner over the same manifest and fail with the
+   * runner's own wording somewhere in a console, several seconds later. The
+   * reason is already known here, so it is said here and the buttons that
+   * would produce that failure are disabled instead.
+   */
+  const selectedUnreadable = unreadableTarget(selected);
 
   /** Secrets only exist for .NET, and only when a project file is targeted. */
   const canEditSecrets = (config: RunConfig | null) =>
@@ -672,6 +822,26 @@ export function RunView({
       />
 
       <Sidebar>
+        {/* Above the tree, not below it: the tree is as long as the repository
+            and this would never be seen under it. Rows here are text, not
+            controls — there is nothing to run, and the reason is on the row
+            and in the tooltip so it is readable without opening a console. */}
+        {unreadableProjects.length > 0 && (
+          <>
+            <div className="group-label">Could not be read</div>
+            {unreadableProjects.map((project) => (
+              <div
+                key={project.id}
+                className="row project-unreadable"
+                title={`${project.manifestPath}\n${project.unreadable}`}
+              >
+                <div className="project-unreadable-name">{project.name}</div>
+                <div className="faint">{project.unreadable}</div>
+              </div>
+            ))}
+          </>
+        )}
+
         <div className="group-label">Files</div>
         <FileTree
           refreshToken={workspace}
@@ -685,7 +855,8 @@ export function RunView({
           <button
             className="primary"
             onClick={() => selected && start(selected)}
-            disabled={!selected || running.has(selected.id)}
+            disabled={!selected || running.has(selected.id) || selectedUnreadable !== null}
+            title={selectedUnreadable ?? undefined}
           >
             Run
           </button>
@@ -697,8 +868,8 @@ export function RunView({
           </button>
           <button
             onClick={() => selected && start(selected)}
-            disabled={!selected}
-            title="Stop and start again"
+            disabled={!selected || selectedUnreadable !== null}
+            title={selectedUnreadable ?? "Stop and start again"}
           >
             Restart
           </button>
@@ -714,22 +885,28 @@ export function RunView({
 
           <button
             onClick={() => selected && runBuild(selected, "build")}
-            disabled={selected?.ecosystem !== "dotnet" || building}
-            title="Build the project"
+            disabled={
+              selected?.ecosystem !== "dotnet" || building || selectedUnreadable !== null
+            }
+            title={selectedUnreadable ?? "Build the project"}
           >
             🔨
           </button>
           <button
             onClick={() => selected && runBuild(selected, "rebuild")}
-            disabled={selected?.ecosystem !== "dotnet" || building}
-            title="Rebuild the project (full, non-incremental)"
+            disabled={
+              selected?.ecosystem !== "dotnet" || building || selectedUnreadable !== null
+            }
+            title={selectedUnreadable ?? "Rebuild the project (full, non-incremental)"}
           >
             ⟳
           </button>
           <button
             onClick={() => selected && runBuild(selected, "clean")}
-            disabled={selected?.ecosystem !== "dotnet" || building}
-            title="Clean the project's build output"
+            disabled={
+              selected?.ecosystem !== "dotnet" || building || selectedUnreadable !== null
+            }
+            title={selectedUnreadable ?? "Clean the project's build output"}
           >
             🧹
           </button>
@@ -753,6 +930,10 @@ export function RunView({
           )}
 
           <span style={{ flex: 1 }} />
+          {/* Silent unless a server is starting, missing or dead. The key is
+              the open-file set because opening a file is what starts a server:
+              a `didOpen` from `FileEditor`, not anything this component does. */}
+          <LspStatusIndicator pollKey={openFiles.map((f) => f.path).join("\0")} />
           {selected && (
             <span className="muted mono" style={{ fontSize: 11 }}>
               {selected.ecosystem}
@@ -764,6 +945,17 @@ export function RunView({
         </div>
 
         {error && <div className="error">{error}</div>}
+        {selectedUnreadable && (
+          <div className="warning inspect-notice">
+            <strong>This configuration's project could not be read.</strong>
+            <div>{selectedUnreadable}</div>
+            <div className="muted">
+              Running it would start the same runner over the same file and fail
+              several seconds later with the runner's wording, so Run, Restart
+              and the build buttons are disabled until the manifest parses.
+            </div>
+          </div>
+        )}
         {selected?.warnings?.map((warning) => (
           <div className="warning" key={warning}>
             {warning}
@@ -903,7 +1095,14 @@ export function RunView({
               <>
                 <div
                   className="editor-pane"
-                  style={{ flex: `0 1 ${Math.round(split * 100)}%` }}
+                  // Collapsed, the editor takes everything the tab strip below
+                  // it does not want, rather than holding its stored fraction
+                  // and leaving a gap where the console used to be.
+                  style={
+                    consoleCollapsed
+                      ? { flex: "1 1 auto" }
+                      : { flex: `0 1 ${Math.round(split * 100)}%` }
+                  }
                 >
                   <div className="console-tabs">
                     {openFiles.map((file) => (
@@ -955,22 +1154,46 @@ export function RunView({
                         <FileEditor
                           path={file.path}
                           onDirtyChange={(dirty) => setFileDirty(file.path, dirty)}
+                          revealLine={reveal?.path === file.path ? reveal.line : null}
+                          revealToken={reveal?.path === file.path ? reveal.token : 0}
+                          onNavigate={(target, name, line) =>
+                            onNavigate?.(target, name, line)
+                          }
                         />
                       </div>
                     ))}
                   </div>
                 </div>
-                <div
-                  className="split-resizer"
-                  onMouseDown={startSplitDrag}
-                  title="Drag to resize"
-                />
+                {!consoleCollapsed && (
+                  <div
+                    className="split-resizer"
+                    onMouseDown={startSplitDrag}
+                    title="Drag to resize"
+                  />
+                )}
               </>
             )}
 
-            <div className="console-pane">
-              {sessions.length > 0 && (
+            <div className={consoleCollapsed ? "console-pane collapsed" : "console-pane"}>
+              {(sessions.length > 0 || openFiles.length > 0) && (
                 <div className="console-tabs">
+                  {/*
+                    The collapse control, and — collapsed — the whole of the
+                    panel that remains on screen. Offered only with a file open:
+                    with no editor above it this pane is the entire view, so
+                    putting it away would leave a strip and nothing else.
+                  */}
+                  {openFiles.length > 0 && (
+                    <button
+                      className="pane-toggle"
+                      onClick={toggleConsole}
+                      title={consoleCollapsed ? "Show the terminal" : "Hide the terminal"}
+                      aria-expanded={!consoleCollapsed}
+                    >
+                      <span className="twisty">{consoleCollapsed ? "▸" : "▾"}</span>
+                      {sessions.length === 0 && "Terminal"}
+                    </button>
+                  )}
                   {sessions.map((session) => (
                     <button
                       key={session.id}

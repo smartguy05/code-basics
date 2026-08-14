@@ -8,13 +8,16 @@
 mod state;
 
 mod commands {
+    pub mod architecture;
     pub mod changelists;
     pub mod files;
     pub mod git;
     pub mod inspect;
     pub mod intents;
+    pub mod lsp;
     pub mod run;
     pub mod secrets;
+    pub mod symbols;
     pub mod workspace;
 }
 
@@ -57,6 +60,26 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(state)
+        // A workspace named on the command line is open before there is an app
+        // to hang a background thread off, so its index — and its language-server
+        // session — are started here instead of in `open_workspace`. Without
+        // this, `code-basics .` would leave the palette empty until the user
+        // happened to trigger a rescan, which is the one entry point where
+        // nothing else would ever kick the build off.
+        .setup(|app| {
+            use tauri::Manager;
+            if let Ok(workspace) = app.state::<AppState>().workspace() {
+                commands::symbols::spawn_build(
+                    app.handle().clone(),
+                    workspace,
+                    commands::symbols::Rebuild::Cached,
+                );
+                // Spawned rather than called: `session::start` needs a Tokio
+                // runtime for its actor, and `setup` is synchronous.
+                commands::lsp::spawn_session(app.handle().clone());
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::workspace::open_workspace,
             commands::workspace::current_workspace,
@@ -104,6 +127,7 @@ pub fn run() {
             commands::changelists::git_assign_to_changelist,
             commands::git::git_history,
             commands::git::git_commit_diff,
+            commands::git::git_commit_file_contents,
             commands::git::git_stash_save,
             commands::git::git_stash_pop,
             commands::git::git_network,
@@ -122,6 +146,24 @@ pub fn run() {
             commands::inspect::inspect_capture,
             commands::inspect::inspect_last,
             commands::inspect::inspect_clear,
+            commands::architecture::arch_project_graph,
+            commands::architecture::arch_render_graph,
+            commands::architecture::arch_component_graph,
+            commands::architecture::arch_render_component_graph,
+            commands::architecture::arch_list_diagrams,
+            commands::architecture::arch_read_diagram,
+            commands::architecture::arch_write_diagram,
+            commands::architecture::arch_validate,
+            commands::symbols::search_everywhere,
+            commands::symbols::symbol_index_status,
+            commands::symbols::rebuild_symbol_index,
+            commands::lsp::lsp_status,
+            commands::lsp::lsp_open_document,
+            commands::lsp::lsp_change_document,
+            commands::lsp::lsp_close_document,
+            commands::lsp::lsp_find_usages,
+            commands::lsp::lsp_goto_definition,
+            commands::lsp::lsp_declaration_anchors,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start code-basics");

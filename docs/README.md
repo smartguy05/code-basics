@@ -23,6 +23,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 - [Rider import](guides/rider-import.md) — how JetBrains Rider run configurations are converted
 - [Agent intent capture](guides/agent-intent-capture.md) — grouping a diff into the decisions behind it, with Claude Code or Codex
 - [Inspecting objects](guides/inspecting-objects.md) — reading the real heap of a crash dump, and what crash dump capture costs
+- [Language servers](guides/language-servers.md) — which server per language, how to install each, and how to point config at one
 
 ## Reference
 

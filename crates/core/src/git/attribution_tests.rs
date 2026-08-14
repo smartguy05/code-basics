@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::git::patch::{DiffLine, Hunk};
-use crate::intents::{IntentEdit, IntentLabel, IntentRecord, ProviderId};
+use crate::intents::{IntentEdit, IntentLabel, IntentRecord, LabelSource, ProviderId};
 
 // -- builders ---------------------------------------------------------------
 
@@ -85,6 +85,7 @@ fn labelled(record: IntentRecord, text: &str) -> Intents {
         label: text.to_string(),
         paths: Vec::new(),
         anchor: None,
+        source: LabelSource::Declared,
     };
     Intents {
         records: vec![record],

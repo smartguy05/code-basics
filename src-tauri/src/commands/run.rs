@@ -257,12 +257,19 @@ pub async fn run_tests(
     let result = testing::parse_file(report.format, &report.path).map_err(|e| format!("{e:#}"))?;
     let tree = testing::tree::build(&result.cases);
 
-    state.record_test_run(&config_id, result.clone());
+    let mut warnings = invocation.warnings;
+    if !state.record_test_run(&workspace.root, &config_id, result.clone()) {
+        warnings.push(
+            "another workspace was opened while these tests were running, so this result was \
+             not kept: \"re-run failed\" has nothing to filter by and will run the whole suite."
+                .to_string(),
+        );
+    }
 
     Ok(TestRunOutcome {
         result,
         tree,
-        warnings: invocation.warnings,
+        warnings,
         exit_code,
     })
 }

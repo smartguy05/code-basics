@@ -25,6 +25,22 @@ regex = "1"
 specta = { version = "2.0.0-rc.20", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
 
+# Full debuginfo is what makes `target/debug` grow without bound: every test
+# target links its own binary carrying it, cargo never prunes `deps/`, and this
+# workspace has eight test targets. One session of ordinary work took
+# `target/debug/deps` to 45 GB.
+#
+# `line-tables-only` keeps exactly the part this repository actually reads — the
+# `file:line` in a panic message and a backtrace — and drops the variable and
+# type information only an interactive debugger uses. If you need to step through
+# code in a debugger, raise this to `true` locally and lower it again afterwards;
+# do not commit that.
+#
+# `profile.test` and `profile.bench` inherit from `dev`, so this one setting
+# covers `cargo test` too, which is where the artifacts actually come from.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 codegen-units = 1
 lto = true

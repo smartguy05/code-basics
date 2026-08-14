@@ -1,9 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
 import { Decoration, EditorView, keymap, lineNumbers, type DecorationSet } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { MergeView, unifiedMergeView } from "@codemirror/merge";
+import { Change, MergeView, presentableDiff, unifiedMergeView } from "@codemirror/merge";
 import { editorColors, languageFor } from "./language";
+import {
+  changeMarks,
+  mapOffset,
+  nextChangeLine,
+  normaliseWhitespace,
+  scrollLeftForThumb,
+  scrollThumb,
+  type ScrollMetrics,
+} from "./diffLogic";
+import { onEditorFontSizeChange } from "../editorFontSize";
 import type { FileDiff } from "../ipc/types";
 
 /** Highlight for lines the user has picked for revert or staging. */
@@ -33,6 +51,40 @@ const selectedLineField = StateField.define<DecorationSet>({
 /** How to render the comparison. */
 export type DiffLayout = "inline" | "sideBySide";
 
+/**
+ * Diff both sides with whitespace ignored, reporting the result in the *real*
+ * documents' coordinates.
+ *
+ * `@codemirror/merge` has no ignore-whitespace option, but it will take a diff
+ * function (`DiffConfig.override`). So the comparison runs over normalised
+ * copies and every offset is mapped back, which is what lets the highlight land
+ * on the actual text while the decision was made about the stripped version.
+ *
+ * This is a **display** filter and nothing more. Staging and reverting act on
+ * the exact `FileDiff` from Rust, because a whitespace-only hunk this hides is
+ * still a real change on disk.
+ */
+function whitespaceInsensitiveDiff(a: string, b: string): readonly Change[] {
+  const left = normaliseWhitespace(a);
+  const right = normaliseWhitespace(b);
+
+  return presentableDiff(left.text, right.text).map(
+    (change) =>
+      new Change(
+        mapOffset(left.map, change.fromA),
+        mapOffset(left.map, change.toA),
+        mapOffset(right.map, change.fromB),
+        mapOffset(right.map, change.toB),
+      ),
+  );
+}
+
+/** What a parent view can ask the diff to do. */
+export interface DiffViewHandle {
+  /** Jump to the next (`1`) or previous (`-1`) change, wrapping at the ends. */
+  goToChange: (direction: 1 | -1) => void;
+}
+
 export interface DiffViewProps {
   path: string;
   /** The state being compared against. `null` for a new file. */
@@ -43,6 +95,18 @@ export interface DiffViewProps {
   diff: FileDiff;
   layout: DiffLayout;
   editable: boolean;
+  /**
+   * Fold away long stretches of unchanged code, leaving a few lines of context
+   * around each change. Off by default: a review of a small change reads
+   * faster folded, but a review that needs the surrounding code does not.
+   */
+  collapseUnchanged?: boolean;
+  /**
+   * Compare with whitespace ignored. A **display** filter: staging and
+   * reverting still act on the exact diff, so a hunk hidden here is still a
+   * real change on disk.
+   */
+  ignoreWhitespace?: boolean;
   /** Called when the user saves an edit made in place. */
   onSave: (content: string) => void;
   /** Called with the diff line indices the user selected. */
@@ -53,6 +117,8 @@ export interface DiffViewProps {
    * afterwards; this only seeds it.
    */
   highlight?: number[];
+  /** Imperative handle for the toolbar's and F7's jump-to-change. */
+  handleRef?: RefObject<DiffViewHandle | null>;
 }
 
 /**
@@ -71,14 +137,38 @@ export function DiffView({
   diff,
   layout,
   editable,
+  collapseUnchanged = false,
+  ignoreWhitespace = false,
   onSave,
   onSelectionChange,
   highlight,
+  handleRef,
 }: DiffViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  /**
+   * Every live editor: one in the inline layout, both panes side by side.
+   *
+   * `viewRef` above stays the *working copy* — the one selection and saving act
+   * on — but scrolling, re-measuring and jumping to a change have to reach both
+   * sides, and the merge view's baseline pane is otherwise unreachable once the
+   * effect has returned.
+   */
+  const panesRef = useRef<EditorView[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [editorError, setEditorError] = useState<string | null>(null);
+  /** The scrollbar's track, measured for the thumb arithmetic. */
+  const trackRef = useRef<HTMLDivElement>(null);
+  /** Where the thumb is dragged from, or `null` when nothing is being dragged. */
+  const dragRef = useRef<{ pointerX: number; thumbLeft: number } | null>(null);
+  const [metrics, setMetrics] = useState<ScrollMetrics>({
+    contentWidth: 0,
+    viewportWidth: 0,
+    scrollLeft: 0,
+    trackWidth: 0,
+  });
+  /** The working document's line count, the scale the marker strip is drawn on. */
+  const [docLines, setDocLines] = useState(1);
 
   // Callbacks are read through a ref so changing them does not tear down and
   // rebuild the editor, which would lose scroll position and the cursor.
@@ -155,6 +245,11 @@ export function DiffView({
 
     const extensions: Extension[] = [
       lineNumbers(),
+      // `@codemirror/merge` ships both a light and a dark palette and picks
+      // between them with CodeMirror's `&dark` selector, which only matches when
+      // a theme declares itself dark. Nothing in this app ever did, so the
+      // light-theme diff colours were being painted onto a dark background.
+      EditorView.darkTheme.of(true),
       history(),
       keymap.of([
         {
@@ -173,6 +268,11 @@ export function DiffView({
       ...editorColors,
     ];
 
+    // `margin` is the lines left visible either side of a change; `minSize` is
+    // how long an unchanged run has to be before folding it earns its keep.
+    const collapse = collapseUnchanged ? { margin: 3, minSize: 8 } : undefined;
+    const diffConfig = ignoreWhitespace ? { override: whitespaceInsensitiveDiff } : undefined;
+
     // A CodeMirror failure must degrade to a message for this one file, not
     // take down the whole UI (an effect error unmounts the React tree).
     try {
@@ -184,6 +284,7 @@ export function DiffView({
             doc: baseline,
             extensions: [
               lineNumbers(),
+              EditorView.darkTheme.of(true),
               EditorView.editable.of(false),
               ...languageFor(path),
               ...editorColors,
@@ -206,12 +307,16 @@ export function DiffView({
           },
           highlightChanges: true,
           gutter: true,
+          collapseUnchanged: collapse,
+          diffConfig,
         });
         setEditorError(null);
         viewRef.current = merge.b;
+        panesRef.current = [merge.a, merge.b];
         return () => {
           merge.destroy();
           viewRef.current = null;
+          panesRef.current = [];
         };
       }
 
@@ -222,6 +327,8 @@ export function DiffView({
             mergeControls: true,
             highlightChanges: true,
             gutter: true,
+            collapseUnchanged: collapse,
+            diffConfig,
           }),
         );
       }
@@ -233,15 +340,138 @@ export function DiffView({
       });
       setEditorError(null);
       viewRef.current = view;
+      panesRef.current = [view];
       return () => {
         view.destroy();
         viewRef.current = null;
+        panesRef.current = [];
       };
     } catch (e) {
       setEditorError(e instanceof Error ? `${e.message}\n${e.stack ?? ""}` : String(e));
       return;
     }
-  }, [path, baseline, working, layout, editable]);
+  }, [path, baseline, working, layout, editable, collapseUnchanged, ignoreWhitespace]);
+
+  /**
+   * Re-read what the scrollbar and the marker strip describe.
+   *
+   * Both are drawn from the editors' current geometry rather than from React
+   * state the editors do not have, so anything that can change that geometry —
+   * a rebuild, a resize, a font-size change, scrolling — calls this.
+   */
+  const measure = useCallback(() => {
+    const panes = panesRef.current;
+    if (panes.length === 0) return;
+
+    const scrollers = panes.map((view) => view.scrollDOM);
+    const first = scrollers.at(0);
+    if (!first) return;
+
+    setMetrics({
+      // Widest content across the panes against narrowest viewport: the bar is
+      // shared, so it has to be able to reach the far end of either side.
+      contentWidth: Math.max(...scrollers.map((el) => el.scrollWidth)),
+      viewportWidth: Math.min(...scrollers.map((el) => el.clientWidth)),
+      scrollLeft: first.scrollLeft,
+      trackWidth: trackRef.current?.clientWidth ?? 0,
+    });
+    setDocLines(viewRef.current?.state.doc.lines ?? 1);
+  }, []);
+
+  /** Scroll every pane to the same horizontal offset. */
+  const applyScrollLeft = useCallback((next: number) => {
+    const clamped = Math.max(0, Math.round(next));
+    for (const view of panesRef.current) {
+      // Guarded: assigning an unchanged value still fires `scroll` in some
+      // engines, and the scroll handler calls back into here.
+      if (view.scrollDOM.scrollLeft !== clamped) view.scrollDOM.scrollLeft = clamped;
+    }
+    setMetrics((previous) => ({ ...previous, scrollLeft: clamped }));
+  }, []);
+
+  // CodeMirror caches character metrics, so a font size applied through CSS
+  // leaves every open editor laying out at the old one until it is told to
+  // measure again. The widths the scrollbar reads change with it.
+  useEffect(
+    () =>
+      onEditorFontSizeChange(() => {
+        for (const view of panesRef.current) view.requestMeasure();
+        requestAnimationFrame(measure);
+      }),
+    [measure],
+  );
+
+  /**
+   * Keep the two panes' horizontal offsets equal however they were moved.
+   *
+   * CodeMirror scrolls a pane by itself when the cursor leaves the viewport, so
+   * this cannot only listen to the app's own scrollbar — without it the panes
+   * drift apart and the side-by-side comparison stops lining up, which was the
+   * whole point of the request.
+   */
+  useEffect(() => {
+    const panes = panesRef.current;
+    if (panes.length === 0) return;
+
+    const onScroll = (event: Event) => {
+      const source = event.target as HTMLElement;
+      applyScrollLeft(source.scrollLeft);
+    };
+
+    for (const view of panes) view.scrollDOM.addEventListener("scroll", onScroll);
+    return () => {
+      for (const view of panes) view.scrollDOM.removeEventListener("scroll", onScroll);
+    };
+    // Re-bound whenever the editors are rebuilt, which replaces every scroller.
+  }, [applyScrollLeft, path, baseline, working, layout, editable]);
+
+  // A freshly built editor has no layout yet, so the widths are only readable
+  // on the frame after it was created.
+  useEffect(() => {
+    const frame = requestAnimationFrame(measure);
+    return () => cancelAnimationFrame(frame);
+  }, [measure, path, baseline, working, layout, editable, diff]);
+
+  // The panes' widths follow the window and the sidebar splitter.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || typeof ResizeObserver !== "function") return;
+
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, [measure]);
+
+  /** Put a document line in view in every pane. */
+  const revealLine = useCallback((lineNumber: number) => {
+    for (const view of panesRef.current) {
+      const clamped = Math.min(Math.max(lineNumber, 1), view.state.doc.lines);
+      const line = view.state.doc.line(clamped);
+      view.dispatch({ effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
+    }
+    // Only the working copy takes the cursor: moving it in the read-only
+    // baseline would put a caret in a pane that cannot be edited, and the next
+    // jump reads its position from here.
+    const working = viewRef.current;
+    if (!working) return;
+    const clamped = Math.min(Math.max(lineNumber, 1), working.state.doc.lines);
+    working.dispatch({ selection: { anchor: working.state.doc.line(clamped).from } });
+  }, []);
+
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      goToChange: (direction: 1 | -1) => {
+        const view = viewRef.current;
+        if (!view) return;
+
+        const from = view.state.doc.lineAt(view.state.selection.main.head).number;
+        const target = nextChangeLine(diff, from, direction);
+        if (target !== null) revealLine(target);
+      },
+    }),
+    [diff, revealLine],
+  );
 
   // Push the highlight into the editor whenever the selection changes.
   useEffect(() => {
@@ -318,5 +548,89 @@ export function DiffView({
     );
   }
 
-  return <div className="diff-host" ref={hostRef} />;
+  const marks = changeMarks(diff, docLines);
+  const thumb = scrollThumb(metrics);
+
+  /** Drag the thumb, or click the track to jump to that offset. */
+  const startDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    const track = trackRef.current;
+    if (!track || !thumb.scrollable) return;
+
+    const trackLeft = track.getBoundingClientRect().left;
+    const onThumb =
+      event.clientX >= trackLeft + thumb.left &&
+      event.clientX <= trackLeft + thumb.left + thumb.width;
+
+    // Clicking the bare track centres the thumb where it was clicked; grabbing
+    // the thumb keeps the offset under the pointer so it does not jump.
+    const thumbLeft = onThumb ? thumb.left : event.clientX - trackLeft - thumb.width / 2;
+    if (!onThumb) applyScrollLeft(scrollLeftForThumb(metrics, thumbLeft));
+
+    dragRef.current = { pointerX: event.clientX, thumbLeft };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const continueDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    applyScrollLeft(
+      scrollLeftForThumb(metrics, drag.thumbLeft + (event.clientX - drag.pointerX)),
+    );
+  };
+
+  const endDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  return (
+    <div className="diff-frame">
+      <div
+        className="diff-host"
+        ref={hostRef}
+        // Shift+wheel and horizontal trackpad gestures would otherwise reach a
+        // native scrollbar that is thousands of pixels below the viewport.
+        onWheel={(event) => {
+          const delta = event.deltaX !== 0 ? event.deltaX : event.shiftKey ? event.deltaY : 0;
+          if (delta === 0 || !thumb.scrollable) return;
+          event.preventDefault();
+          applyScrollLeft(metrics.scrollLeft + delta);
+        }}
+      />
+
+      <div
+        className="diff-markers"
+        role="presentation"
+        title={`${marks.length} change${marks.length === 1 ? "" : "s"} — click a mark to jump to it`}
+      >
+        {marks.map((mark, index) => (
+          <button
+            key={index}
+            className={`mark ${mark.kind}`}
+            style={{ top: `${mark.top * 100}%`, height: `${mark.height * 100}%` }}
+            // The strip is drawn from the working document's line count, so a
+            // mark's own position is the line to go to.
+            onClick={() => revealLine(Math.round(mark.top * docLines) + 1)}
+            title={`Jump to this ${mark.kind}`}
+            aria-label={`Jump to ${mark.kind} at ${Math.round(mark.top * 100)}% of the file`}
+          />
+        ))}
+      </div>
+
+      <div
+        className={`diff-hscroll ${thumb.scrollable ? "" : "idle"}`}
+        ref={trackRef}
+        onPointerDown={startDrag}
+        onPointerMove={continueDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
+        {thumb.scrollable && (
+          <div className="thumb" style={{ left: thumb.left, width: thumb.width }} />
+        )}
+      </div>
+    </div>
+  );
 }

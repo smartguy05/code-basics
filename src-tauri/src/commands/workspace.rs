@@ -10,6 +10,7 @@ use cb_core::workspace::{self, Workspace};
 use serde::Serialize;
 use tauri::State;
 
+use crate::commands::symbols::{spawn_build, Rebuild};
 use crate::state::AppState;
 
 /// Scan a workspace and layer saved configurations on top of detected ones.
@@ -29,10 +30,33 @@ fn load(root: &std::path::Path) -> Result<Workspace, String> {
     Ok(scanned)
 }
 
+/// Open a workspace and return it, without waiting for its symbol index.
+///
+/// The index build is spawned and abandoned. That is deliberate and is the
+/// reason it is not built inline: a cold build is 20 ms on this repository but
+/// 637 ms on the 2,864-file .NET solution this application was written for, and
+/// 9.4 s against a cold filesystem cache. None of that may sit between the user
+/// choosing a folder and seeing what is in it — the palette can be empty for a
+/// second, the project list cannot.
+///
+/// `app` is injected by Tauri and is not part of the arguments the frontend
+/// sends. The background thread needs an owned, `'static` handle on the state,
+/// which `State<'_, _>` cannot give it.
 #[tauri::command]
-pub async fn open_workspace(state: State<'_, AppState>, path: String) -> Result<Workspace, String> {
+pub async fn open_workspace(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Workspace, String> {
     let workspace = load(&PathBuf::from(path))?;
     state.set_workspace(workspace.clone())?;
+    // Started here as well as on demand, for the same reason as the index: the
+    // status surface should already be able to say "no Python server is
+    // installed" when the user first looks, and Roslyn's project load should
+    // already be under way when they first ask a question. Both are spawned and
+    // abandoned, so neither sits between choosing a folder and seeing it.
+    crate::commands::lsp::spawn_session(app.clone());
+    spawn_build(app, workspace.clone(), Rebuild::Cached);
     Ok(workspace)
 }
 
@@ -46,11 +70,33 @@ pub async fn current_workspace(state: State<'_, AppState>) -> Result<Option<Work
 }
 
 /// Re-detect projects, picking up files added since the workspace was opened.
+///
+/// Re-indexes too, in the background and on the cache, since a rescan is
+/// exactly when files have appeared or a project has moved — and a project
+/// moving changes what every symbol is attributed to, which the per-file
+/// fingerprint cannot see. `build_cached` recognises that itself and discards
+/// the cache when the project list has changed, so this stays the cheap call
+/// even though it sometimes does the expensive thing.
+///
+/// The other commands in this file also re-scan and set the workspace, and
+/// deliberately do not re-index: saving, deleting, starring or reordering a
+/// configuration cannot move a single declaration. Rebuilding on every star
+/// would spend the better part of a second for nothing.
 #[tauri::command]
-pub async fn rescan_workspace(state: State<'_, AppState>) -> Result<Workspace, String> {
+pub async fn rescan_workspace(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Workspace, String> {
     let root = state.workspace_root()?;
     let workspace = load(&root)?;
     state.set_workspace(workspace.clone())?;
+    // A rescan does not change the root, so `set_workspace` keeps the existing
+    // session and this is a no-op against it — deliberately. Restarting Roslyn on
+    // every configuration save would cost tens of seconds of "still loading" over
+    // a solution that did not change. It matters on the path where there is no
+    // session yet, which a rescan is as good a moment to notice as any.
+    crate::commands::lsp::spawn_session(app.clone());
+    spawn_build(app, workspace.clone(), Rebuild::Cached);
     Ok(workspace)
 }
 

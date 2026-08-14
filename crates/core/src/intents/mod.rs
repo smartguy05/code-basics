@@ -129,6 +129,26 @@ pub struct IntentRecord {
     pub branch: Option<String>,
 }
 
+/// Where a label's words came from.
+///
+/// The distinction the Changes tab rests on: only a label the agent *offered*
+/// as a label may title a card as a stated intent. Anything mined out of prose
+/// is a guess about which sentence belongs to which edit, however plausible it
+/// reads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum LabelSource {
+    /// An explicit `Intent:` line in the agent's closing message.
+    Declared,
+    /// The first sentence of prose, mined live or out of session history.
+    ///
+    /// The default, so records written before this field existed — which came
+    /// overwhelmingly from the first-sentence fallback — read as what they are
+    /// rather than being promoted to declared.
+    #[default]
+    Inferred,
+}
+
 /// A reason, recorded once per turn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -144,6 +164,9 @@ pub struct IntentLabel {
     /// several unrelated changes to the same file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor: Option<String>,
+    /// Whether the agent offered this as a label or it was mined from prose.
+    #[serde(default)]
+    pub source: LabelSource,
 }
 
 /// Everything recorded for a workspace, already filtered and joined.
@@ -262,9 +285,30 @@ pub struct LoadOptions {
 /// after a crash must not cost the user the rest of their history.
 pub fn load(root: &Path, options: &LoadOptions) -> Result<Intents> {
     let records = load_edits(root, options)?;
-    let labels = read_jsonl::<IntentLabel>(&labels_path(root))?;
+    let labels = load_labels(root)?;
 
     Ok(Intents { records, labels })
+}
+
+/// Read the labels, dropping inferred ones that do not read like a reason.
+///
+/// The gate has to run **here** as well as at the point of recording. Recording
+/// only protects future turns, and a workspace that has been capturing for a
+/// while already holds hundreds of first sentences written long before any of
+/// this existed — those are precisely the ones titling cards today. Judging
+/// them on the way out costs one pass over a small file and needs no migration.
+///
+/// A *declared* label is never second-guessed, in either direction: the agent
+/// offered those words as the title.
+fn load_labels(root: &Path) -> Result<Vec<IntentLabel>> {
+    let mut labels = read_jsonl::<IntentLabel>(&labels_path(root))?;
+
+    labels.retain(|label| match label.source {
+        LabelSource::Declared => true,
+        LabelSource::Inferred => hook::is_usable_inferred_label(&label.label),
+    });
+
+    Ok(labels)
 }
 
 fn load_edits(root: &Path, options: &LoadOptions) -> Result<Vec<IntentRecord>> {

@@ -104,6 +104,19 @@ pub enum ChangeKind {
     Unknown,
 }
 
+/// Both sides of a file, for the diff editor.
+///
+/// `None` means the file does not exist on that side: new, deleted, or — for a
+/// commit's baseline — introduced by a root commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FileContents {
+    /// What the file is being compared against.
+    pub baseline: Option<String>,
+    /// The file as it exists on the other side of the comparison.
+    pub working: Option<String>,
+}
+
 /// One file appearing in `git status`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -1111,6 +1124,48 @@ impl Repo {
             .context("failed to diff commit")?;
 
         collect_file_diffs(&diff)
+    }
+
+    /// Both sides of one file as a commit changed it.
+    ///
+    /// What the History tab's diff viewer needs: the file as the commit's first
+    /// parent had it, and as the commit left it. `None` on either side means
+    /// the file did not exist there — added by the commit, deleted by it, or
+    /// present in a root commit, which has no parent at all. That is
+    /// deliberately not an empty string: the viewer shows a plain editor rather
+    /// than an all-green diff when there is no baseline to compare against.
+    ///
+    /// The first parent only. A merge's second parent would make "what this
+    /// commit changed" ambiguous, and `commit_diff` above already made the same
+    /// choice — the two must agree or the file list and the contents would
+    /// disagree about what is being shown.
+    pub fn commit_file_contents(&self, id: &str, path: &str) -> Result<FileContents> {
+        let oid = git2::Oid::from_str(id).with_context(|| format!("invalid commit id {id}"))?;
+        let commit = self.inner.find_commit(oid).context("unknown commit")?;
+
+        let after = commit.tree().context("failed to read commit tree")?;
+        let before = commit.parent(0).ok().and_then(|p| p.tree().ok());
+
+        Ok(FileContents {
+            baseline: before
+                .map(|tree| self.blob_in_tree(&tree, path))
+                .transpose()?
+                .flatten(),
+            working: self.blob_in_tree(&after, path)?,
+        })
+    }
+
+    /// One file's contents in a tree, or `None` if the tree does not have it.
+    fn blob_in_tree(&self, tree: &git2::Tree<'_>, path: &str) -> Result<Option<String>> {
+        let Ok(entry) = tree.get_path(Path::new(path)) else {
+            return Ok(None);
+        };
+        let blob = self
+            .inner
+            .find_blob(entry.id())
+            .context("failed to read blob")?;
+
+        Ok(Some(String::from_utf8_lossy(blob.content()).into_owned()))
     }
 
     pub fn stash_save(&mut self, message: &str) -> Result<()> {

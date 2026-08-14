@@ -126,8 +126,56 @@ pub fn detect_runner(pkg: &PackageJson) -> Option<TestRunner> {
 }
 
 /// Whether a package.json describes a monorepo root rather than a project.
+///
+/// Deliberately keyed off the *presence* of the `workspaces` key rather than
+/// off `workspace_globs` returning anything. An author who writes
+/// `"workspaces": {}` — or a Yarn root whose `packages` list is momentarily
+/// empty — has still declared "this file is the root of a monorepo", and the
+/// only thing this predicate feeds is the scan's decision to skip a
+/// script-less root. Tying it to the glob list would silently turn such a root
+/// back into a scanned project, which is a behaviour change nothing here asked
+/// for and which no test demands. Emptiness is a statement about how many
+/// members are declared, not about whether the file is a root.
 pub fn is_workspace_root(pkg: &PackageJson) -> bool {
     pkg.workspaces.is_some()
+}
+
+/// The workspace member patterns a `package.json` declares, in file order.
+///
+/// Two spellings are in wide use and both are returned identically: npm and
+/// pnpm's plain array (`"workspaces": ["packages/*"]`), and Yarn's object form
+/// (`"workspaces": { "packages": [...], "nohoist": [...] }`). Only `packages`
+/// is read out of the object — `nohoist` and its neighbours describe hoisting
+/// behaviour, not membership, and treating them as member patterns would
+/// invent monorepo structure that does not exist.
+///
+/// Every shape that is not one of those two yields an empty vector, and so
+/// does every non-string entry inside an otherwise valid array. `package.json`
+/// files are hand-edited constantly and a workspace scan walks whatever it
+/// finds on disk; a malformed `workspaces` value must cost the caller the
+/// structure information it describes and nothing more, never a panic that
+/// takes the whole scan down. This is the same abstain rule the rest of the
+/// crate follows: no answer beats a wrong one.
+///
+/// The patterns are returned verbatim and are **not** expanded against the
+/// filesystem. Matching them onto real directories needs the list of projects
+/// the scan has already discovered, which this adapter does not have and
+/// should not go looking for — that join belongs to the caller that holds both
+/// sides.
+pub fn workspace_globs(pkg: &PackageJson) -> Vec<String> {
+    let patterns = match pkg.workspaces.as_ref() {
+        Some(serde_json::Value::Array(entries)) => entries,
+        Some(serde_json::Value::Object(map)) => match map.get("packages") {
+            Some(serde_json::Value::Array(entries)) => entries,
+            _ => return Vec::new(),
+        },
+        _ => return Vec::new(),
+    };
+
+    patterns
+        .iter()
+        .filter_map(|entry| entry.as_str().map(str::to_string))
+        .collect()
 }
 
 pub fn project_kind(pkg: &PackageJson) -> ProjectKind {

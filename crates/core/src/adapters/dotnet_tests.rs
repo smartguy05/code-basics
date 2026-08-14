@@ -71,6 +71,49 @@ fn package_matching_ignores_case() {
 }
 
 #[test]
+fn project_references_are_parsed_from_include() {
+    let xml = r#"<Project Sdk="Microsoft.NET.Sdk">
+      <ItemGroup>
+        <ProjectReference Include="..\Lib\Lib.csproj" />
+      </ItemGroup>
+    </Project>"#;
+    let p = parse_project_file(xml);
+    assert_eq!(p.project_references, vec![r"..\Lib\Lib.csproj".to_string()]);
+}
+
+#[test]
+fn a_project_reference_written_as_an_open_element_is_also_parsed() {
+    // `parse_project_file` handles Start and Empty elements in two independent
+    // arms, so a fix applied to only one of them silently misses half of the
+    // project files in the wild.
+    let xml = r#"<Project Sdk="Microsoft.NET.Sdk">
+      <ItemGroup>
+        <ProjectReference Include="..\Lib\Lib.csproj"></ProjectReference>
+      </ItemGroup>
+    </Project>"#;
+    let p = parse_project_file(xml);
+    assert_eq!(p.project_references, vec![r"..\Lib\Lib.csproj".to_string()]);
+}
+
+#[test]
+fn a_project_reference_without_an_include_is_ignored() {
+    let xml = r#"<Project Sdk="Microsoft.NET.Sdk">
+      <ItemGroup>
+        <ProjectReference Update="..\Lib\Lib.csproj" />
+        <ProjectReference />
+      </ItemGroup>
+    </Project>"#;
+    let p = parse_project_file(xml);
+    assert_eq!(p.project_references, Vec::<String>::new());
+}
+
+#[test]
+fn a_project_with_no_references_has_none() {
+    let p = csproj("<TargetFramework>net8.0</TargetFramework>");
+    assert_eq!(p.project_references, Vec::<String>::new());
+}
+
+#[test]
 fn malformed_project_file_yields_empty_rather_than_panicking() {
     let p = parse_project_file("<Project><PropertyGroup>");
     assert_eq!(p.target_frameworks, Vec::<String>::new());

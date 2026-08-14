@@ -35,6 +35,7 @@ import type {
 
 const KIND_LABEL: Record<GroupKind, string> = {
   intent: "Stated",
+  sameTurn: "One turn",
   formatting: "Formatting",
   newSymbol: "New",
   modifiedSymbol: "Changed",
@@ -44,6 +45,8 @@ const KIND_LABEL: Record<GroupKind, string> = {
 /** Only a stated intent is a real reason; the rest are locations. */
 const KIND_TITLE: Record<GroupKind, string> = {
   intent: "The agent said this is what it was doing",
+  sameTurn:
+    "One turn made these changes, but never said why — the title describes them rather than explaining them",
   formatting: "Whitespace only — no code changed",
   newSymbol: "A symbol that is not in the baseline",
   modifiedSymbol: "An existing symbol whose body changed",

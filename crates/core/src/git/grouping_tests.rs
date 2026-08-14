@@ -4,7 +4,7 @@
 use super::*;
 use crate::git::attribution::{self, Options};
 use crate::git::patch::{DiffLine, FileDiff};
-use crate::intents::{IntentEdit, IntentLabel, IntentRecord, Intents, ProviderId};
+use crate::intents::{IntentEdit, IntentLabel, IntentRecord, Intents, LabelSource, ProviderId};
 
 fn hunk(lines: &[&str], start: &mut u32, header: &str) -> Hunk {
     let mut built = Vec::new();
@@ -528,6 +528,10 @@ fn with_intent(diffs: &[FileDiff], intents: &Intents) -> Vec<IntentGroup> {
 }
 
 fn record_with_label(path: &str, lines: &[&str], label: &str) -> Intents {
+    labelled_record(path, lines, label, LabelSource::Declared)
+}
+
+fn labelled_record(path: &str, lines: &[&str], label: &str, source: LabelSource) -> Intents {
     let record = IntentRecord {
         provider: ProviderId::ClaudeCode,
         turn_id: "turn-1".into(),
@@ -549,7 +553,155 @@ fn record_with_label(path: &str, lines: &[&str], label: &str) -> Intents {
             label: label.to_string(),
             paths: Vec::new(),
             anchor: None,
+            source,
         }],
+    }
+}
+
+// -- a card only claims a stated intent when there was one -------------------
+
+/// An inferred label is a sentence mined out of chat prose that happened to sit
+/// near the edit. It may well be right, but the agent never offered it as a
+/// title, so the card must not present it as one.
+#[test]
+fn an_inferred_label_does_not_produce_an_intent_card() {
+    let d = simple(
+        "a.rs",
+        &["+    let retry_limit = read_configured_retry_limit();"],
+        "fn refresh_token() {",
+    );
+    let intents = labelled_record(
+        "a.rs",
+        &["    let retry_limit = read_configured_retry_limit();"],
+        "the retry limit now comes from configuration",
+        LabelSource::Inferred,
+    );
+
+    let groups = with_intent(&[d], &intents);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].kind, GroupKind::SameTurn);
+    // The sentence is still shown — it is the best description available — but
+    // the kind says where it came from.
+    assert_eq!(
+        groups[0].label,
+        "the retry limit now comes from configuration"
+    );
+}
+
+#[test]
+fn a_declared_label_still_produces_an_intent_card() {
+    let d = simple(
+        "a.rs",
+        &["+    let retry_limit = read_configured_retry_limit();"],
+        "fn refresh_token() {",
+    );
+    let intents = labelled_record(
+        "a.rs",
+        &["    let retry_limit = read_configured_retry_limit();"],
+        "add retry to token refresh",
+        LabelSource::Declared,
+    );
+
+    let groups = with_intent(&[d], &intents);
+
+    assert_eq!(groups[0].kind, GroupKind::Intent);
+}
+
+/// The grouping is the valuable part and survives having no reason at all: the
+/// files still changed together in one turn, and saying so is honest.
+#[test]
+fn a_turn_with_no_label_still_groups_its_files_into_one_card() {
+    let first = simple(
+        "a.rs",
+        &["+    let alpha = a_distinctive_first_call();"],
+        "",
+    );
+    let second = simple(
+        "b.rs",
+        &["+    let beta = a_distinctive_second_call();"],
+        "",
+    );
+
+    let intents = Intents {
+        records: vec![
+            unlabelled_record("a.rs", &["    let alpha = a_distinctive_first_call();"], 1),
+            unlabelled_record("b.rs", &["    let beta = a_distinctive_second_call();"], 2),
+        ],
+        labels: Vec::new(),
+    };
+
+    let groups = with_intent(&[first, second], &intents);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].kind, GroupKind::SameTurn);
+    assert_eq!(groups[0].files.len(), 2);
+    // Titled from what changed, never from a reason nobody gave.
+    assert!(
+        groups[0].label.contains("2 files"),
+        "unexpected label: {}",
+        groups[0].label
+    );
+}
+
+#[test]
+fn a_turn_with_no_label_in_one_symbol_is_titled_with_that_symbol() {
+    let d = simple(
+        "a.rs",
+        &["+    let retry_limit = read_configured_retry_limit();"],
+        "fn refresh_token() {",
+    );
+    let intents = Intents {
+        records: vec![unlabelled_record(
+            "a.rs",
+            &["    let retry_limit = read_configured_retry_limit();"],
+            1,
+        )],
+        labels: Vec::new(),
+    };
+
+    let groups = with_intent(&[d], &intents);
+
+    assert_eq!(groups[0].kind, GroupKind::SameTurn);
+    assert_eq!(groups[0].label, "refresh_token");
+}
+
+/// A derived title is a description, not a reason, and the card should not look
+/// as certain as one the agent explained.
+#[test]
+fn a_card_titled_from_its_own_changes_is_not_high_confidence() {
+    let d = simple(
+        "a.rs",
+        &["+    let alpha = a_distinctive_first_call();"],
+        "",
+    );
+    let intents = Intents {
+        records: vec![unlabelled_record(
+            "a.rs",
+            &["    let alpha = a_distinctive_first_call();"],
+            1,
+        )],
+        labels: Vec::new(),
+    };
+
+    let groups = with_intent(&[d], &intents);
+
+    assert_eq!(groups[0].confidence, Confidence::Low);
+}
+
+fn unlabelled_record(path: &str, lines: &[&str], seq: u64) -> IntentRecord {
+    IntentRecord {
+        provider: ProviderId::ClaudeCode,
+        turn_id: "turn-1".into(),
+        tool_use_id: format!("tool-{seq}"),
+        seq,
+        path: path.to_string(),
+        edit: IntentEdit {
+            old_lines: Vec::new(),
+            new_lines: lines.iter().map(|s| s.to_string()).collect(),
+            whole_file: false,
+        },
+        branch: None,
     }
 }
 
@@ -620,6 +772,7 @@ fn one_intent_spanning_two_files_becomes_a_single_card() {
             label: "one change, two files".into(),
             paths: Vec::new(),
             anchor: None,
+            source: LabelSource::Declared,
         }],
     };
 
@@ -767,6 +920,7 @@ fn a_group_without_a_symbol_omits_the_key_rather_than_sending_null() {
 fn group_kinds_serialise_in_camel_case() {
     let json = serde_json::to_string(&[
         GroupKind::Intent,
+        GroupKind::SameTurn,
         GroupKind::Formatting,
         GroupKind::NewSymbol,
         GroupKind::ModifiedSymbol,
@@ -776,8 +930,32 @@ fn group_kinds_serialise_in_camel_case() {
 
     assert_eq!(
         json,
-        r#"["intent","formatting","newSymbol","modifiedSymbol","other"]"#
+        r#"["intent","sameTurn","formatting","newSymbol","modifiedSymbol","other"]"#
     );
+}
+
+/// `LabelSource` never crosses IPC, but it is persisted in `labels.jsonl` and
+/// so has the same compatibility obligation: records written before the field
+/// existed must load, and must load as *inferred* — they came overwhelmingly
+/// from the first-sentence fallback and must not be promoted to declared.
+#[test]
+fn a_label_recorded_before_the_source_field_existed_reads_as_inferred() {
+    let json = r#"{
+        "provider": "claudeCode",
+        "turnId": "turn-1",
+        "label": "an older record"
+    }"#;
+
+    let label: IntentLabel = serde_json::from_str(json).unwrap();
+
+    assert_eq!(label.source, LabelSource::Inferred);
+}
+
+#[test]
+fn label_sources_serialise_in_camel_case() {
+    let json = serde_json::to_string(&[LabelSource::Declared, LabelSource::Inferred]).unwrap();
+
+    assert_eq!(json, r#"["declared","inferred"]"#);
 }
 
 #[test]

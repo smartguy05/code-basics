@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::inspect::model::{Caps, InspectorConfig};
+use crate::lsp::settings::LspConfig;
 use crate::model::{ConfigSource, RunConfig};
 use crate::workspace::Workspace;
 
@@ -21,6 +22,14 @@ pub const CONFIG_FILE: &str = "config.json";
 /// Where test report files are written. Inside the config directory so a
 /// single `.gitignore` entry covers everything.
 pub const RESULTS_DIR: &str = "results";
+/// Where language servers are told to write their own logs
+/// (`--extensionLogDirectory` and its equivalents).
+///
+/// Inside the config directory for the same reason as [`RESULTS_DIR`] — one
+/// `.gitignore` entry covers every server — and it *must* be listed in
+/// [`IGNORED`]: a server log is a verbose trace of one person's editing session
+/// and is rewritten on every launch.
+pub const LSP_LOG_DIR: &str = "lsp-logs";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +56,15 @@ pub struct WorkspaceConfig {
     /// cannot see. See `crate::adapters::msbuild`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub msbuild_evaluation: bool,
+    /// Ask the agent for an `Intent:` line when it ends a turn that edited
+    /// files without one.
+    ///
+    /// On by default, and the only thing in this crate that deliberately
+    /// interrupts an agent mid-session — so it is worth being able to turn off
+    /// without uninstalling capture. Written to the file only when it is
+    /// `false`, so the default stays invisible.
+    #[serde(default = "enabled", skip_serializing_if = "is_enabled")]
+    pub ask_for_intent: bool,
     /// Object-inspector settings for this workspace.
     ///
     /// Absent unless the user configured something, the same way
@@ -57,10 +75,29 @@ pub struct WorkspaceConfig {
     /// next to a repository this file is shared through.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inspector: Option<InspectorConfig>,
+    /// Language-server settings for this workspace.
+    ///
+    /// Absent unless the user configured something, exactly like `inspector`
+    /// above: nothing here has a default worth writing down, and this file is
+    /// shared with the team, so a `servers` key appearing as a side effect of
+    /// saving a run configuration would imply somebody had chosen a server.
+    /// Details and the reason an explicit `program` that does not resolve is an
+    /// error rather than a fall back: [`crate::lsp::settings`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lsp: Option<LspConfig>,
 }
 
 fn default_version() -> u32 {
     1
+}
+
+fn enabled() -> bool {
+    true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_enabled(value: &bool) -> bool {
+    *value
 }
 
 /// How many crash dumps to keep when the workspace has not said otherwise.
@@ -124,7 +161,9 @@ impl Default for WorkspaceConfig {
             favorites: Vec::new(),
             order: Vec::new(),
             msbuild_evaluation: false,
+            ask_for_intent: enabled(),
             inspector: None,
+            lsp: None,
         }
     }
 }
@@ -139,6 +178,11 @@ pub fn config_path(root: &Path) -> PathBuf {
 
 pub fn results_dir(root: &Path) -> PathBuf {
     config_dir(root).join(RESULTS_DIR)
+}
+
+/// Where language servers write their logs for this workspace.
+pub fn lsp_log_dir(root: &Path) -> PathBuf {
+    config_dir(root).join(LSP_LOG_DIR)
 }
 
 /// Load the configuration file, returning an empty configuration when absent.
@@ -171,6 +215,24 @@ const IGNORED: &[&str] = &[
     // Crash dumps are process memory — connection strings, tokens, whatever
     // the application had in flight. These must never reach a shared history.
     "dumps/",
+    // The symbol index: derived from the working tree, fingerprinted against
+    // one machine's file timestamps, and meaningless — worse, misleading — in
+    // anybody else's checkout.
+    crate::symbols::cache::CACHE_FILE,
+    // Diagrams split in two on purpose. `diagrams/` holds what a person drew or
+    // accepted and is committed like `adapters/`; only these two are local.
+    // `diagrams/derived/` is recomputed from the manifests on demand, so
+    // committing it would put a regenerated file in everyone's diff for every
+    // refactor while saying nothing the manifests do not already say, and
+    // `diagrams/.prompts/` is the text sent to an agent during one person's
+    // session.
+    "diagrams/derived/",
+    "diagrams/.prompts/",
+    // Language-server logs: a verbose trace of one person's editing session,
+    // rewritten on every launch. Servers are pointed here explicitly
+    // (`--extensionLogDirectory`), so without this entry the app would be
+    // writing uncommittable files into a committed directory.
+    "lsp-logs/",
 ];
 
 /// Make sure `.code-basics/.gitignore` lists everything local.
@@ -322,6 +384,7 @@ pub fn remove(root: &Path, id: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lsp::settings::ServerOverride;
     use crate::model::{RunConfig, RunKind};
 
     fn config(id: &str, name: &str, source: ConfigSource) -> RunConfig {
@@ -400,6 +463,26 @@ mod tests {
         assert!(lines.contains(&"intents/"));
         assert!(lines.contains(&"results/"));
         assert!(lines.contains(&crate::changelists::CHANGELISTS_FILE));
+        assert!(lines.contains(&crate::symbols::cache::CACHE_FILE));
+    }
+
+    /// The regenerated diagrams and the prompts that produced them are local;
+    /// the diagrams a person drew or accepted are the whole point of keeping
+    /// them under `.code-basics/` and must stay committable. Ignoring
+    /// `diagrams/` wholesale would silently drop a team's architecture
+    /// documentation, so the narrower entries are pinned by name.
+    #[test]
+    fn the_ignore_file_covers_regenerated_diagrams_but_not_the_kept_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_gitignore(dir.path()).unwrap();
+
+        let ignore = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        let lines: Vec<&str> = ignore.lines().map(str::trim).collect();
+
+        assert!(lines.contains(&"diagrams/derived/"));
+        assert!(lines.contains(&"diagrams/.prompts/"));
+        assert!(!lines.contains(&"diagrams/"), "got: {ignore}");
+        assert!(!lines.contains(&"diagrams"), "got: {ignore}");
     }
 
     /// Entries are appended, never rewritten: anything a person added by hand
@@ -719,6 +802,121 @@ mod tests {
             Caps::default().max_children
         );
         assert_eq!(loaded.inspector_caps().max_nodes, Caps::default().max_nodes);
+    }
+
+    // -- language servers ----------------------------------------------------
+
+    /// Same reason as the inspector section: `config.json` is shared with the
+    /// team, and a `servers` key appearing as a side effect of saving a run
+    /// configuration would suggest somebody configured a language server.
+    #[test]
+    fn an_untouched_lsp_section_stays_out_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        upsert(dir.path(), config("api:run", "Api", ConfigSource::UserFile)).unwrap();
+
+        let written = std::fs::read_to_string(config_path(dir.path())).unwrap();
+        assert!(!written.contains("lsp"), "got {written}");
+        assert!(!written.contains("servers"), "got {written}");
+    }
+
+    #[test]
+    fn a_config_without_an_lsp_section_loads_with_no_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(config_dir(dir.path())).unwrap();
+        std::fs::write(config_path(dir.path()), r#"{"version":1,"configs":[]}"#).unwrap();
+
+        let loaded = load(dir.path()).unwrap();
+        assert!(loaded.lsp.is_none());
+    }
+
+    #[test]
+    fn lsp_settings_survive_a_save_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lsp = LspConfig::default();
+        lsp.servers.insert(
+            "csharp".into(),
+            ServerOverride {
+                program: Some("C:/tools/roslyn.exe".into()),
+                ..ServerOverride::default()
+            },
+        );
+        lsp.servers.insert(
+            "python".into(),
+            ServerOverride {
+                enabled: Some(false),
+                ..ServerOverride::default()
+            },
+        );
+        save(
+            dir.path(),
+            &WorkspaceConfig {
+                lsp: Some(lsp.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let reloaded = load(dir.path()).unwrap();
+        assert_eq!(reloaded.lsp, Some(lsp));
+        let servers = reloaded.lsp.unwrap();
+        assert_eq!(
+            servers.server("csharp").and_then(|s| s.program.as_deref()),
+            Some("C:/tools/roslyn.exe")
+        );
+        assert!(servers.server("python").unwrap().is_disabled());
+    }
+
+    #[test]
+    fn a_partial_lsp_section_does_not_stop_the_workspace_opening() {
+        // `load` failing locks the user out of the repository, so a hand-written
+        // subset of the block — or a key from a newer build — must still load.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(config_dir(dir.path())).unwrap();
+        std::fs::write(
+            config_path(dir.path()),
+            r#"{"version":1,"configs":[],"lsp":{"servers":{"rust":{"traceLevel":"off"}}}}"#,
+        )
+        .unwrap();
+
+        let loaded = load(dir.path()).expect("a partial lsp section must still load");
+        let rust = loaded.lsp.unwrap();
+        assert!(rust.server("rust").is_some());
+        assert!(!rust.server("rust").unwrap().is_disabled());
+    }
+
+    /// A language server's log is a verbose trace of one person's editing
+    /// session — file paths, project contents, timings — regenerated on every
+    /// launch and useful to nobody else. It is pinned by name for the same
+    /// reason `dumps/` is: the app points `--extensionLogDirectory` inside
+    /// `.code-basics/`, so without this entry the logs land in a directory that
+    /// is otherwise committed.
+    #[test]
+    fn the_ignore_file_covers_the_language_server_log_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_gitignore(dir.path()).unwrap();
+
+        let ignore = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        let lines: Vec<&str> = ignore.lines().map(str::trim).collect();
+
+        assert!(lines.contains(&"lsp-logs/"), "got: {ignore}");
+        // The entry and the directory the app actually writes to have to stay in
+        // step. `IGNORED` holds a literal because it lists a *pattern*, so a
+        // rename of `LSP_LOG_DIR` alone would leave logs committable with every
+        // other test still green.
+        assert!(
+            lines.contains(&format!("{LSP_LOG_DIR}/").as_str()),
+            "got: {ignore}"
+        );
+    }
+
+    #[test]
+    fn language_server_logs_live_inside_the_config_directory() {
+        let root = Path::new("/repo");
+        assert_eq!(
+            lsp_log_dir(root),
+            Path::new("/repo/.code-basics/lsp-logs"),
+            "a single .gitignore entry has to cover them"
+        );
     }
 
     #[test]

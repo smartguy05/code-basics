@@ -10,6 +10,24 @@ mod kill;
 mod resolve;
 
 pub use chunker::{LineSplitter, Utf8Chunker};
+/// Re-exported as a **pair**, because using either alone is a bug.
+///
+/// [`kill_tree`]'s Unix body signals a process *group*, which only reaches
+/// descendants if [`configure_process_group`] put the child into one at spawn
+/// time. [`crate::lsp::transport`] needs both: it does not go through
+/// [`Supervisor`] (that spawns with `stdin` null and blocks until exit, neither
+/// of which suits a long-lived duplex protocol), and a language server that is
+/// killed one process at a time orphans Roslyn's `BuildHost-netcore` /
+/// `BuildHost-net472` children for the life of the user's session.
+pub use kill::{configure_process_group, kill_tree};
+/// Re-exported rather than making the module public, matching how `chunker`'s
+/// two useful items are surfaced: the PATHEXT walk is the whole of `resolve`'s
+/// interest to anyone else, and its helpers are not.
+///
+/// [`crate::lsp`] needs it because `typescript-language-server` and
+/// `pyright-langserver` install as npm `.cmd` shims, which `CreateProcess`
+/// cannot resolve from a bare name — the same reason `spawn` below uses it.
+pub use resolve::resolve_program;
 
 use std::collections::HashMap;
 use std::process::Stdio;

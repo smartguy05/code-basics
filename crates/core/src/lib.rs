@@ -7,6 +7,7 @@
 //! webview.
 
 pub mod adapters;
+pub mod architecture;
 pub mod changelists;
 pub mod config;
 pub mod files;
@@ -15,9 +16,11 @@ pub mod importers;
 pub mod inspect;
 pub mod intents;
 pub mod invocation;
+pub mod lsp;
 pub mod model;
 pub mod process;
 pub mod secrets;
+pub mod symbols;
 pub mod testing;
 pub mod workspace;
 

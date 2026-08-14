@@ -43,6 +43,23 @@ pub struct Project {
     pub is_test_project: bool,
     /// Which test runner this project uses, when it is a test project.
     pub test_runner: Option<TestRunner>,
+    /// Why this project could not be fully read — a manifest that will not
+    /// parse, or a file that could not be opened. `None` for a healthy project.
+    ///
+    /// A project carrying a reason is listed but inert: no configurations, no
+    /// framework list, [`ProjectKind::Unknown`]. It exists because the
+    /// alternative the scan used to take — dropping the project entirely — is
+    /// the one outcome a user cannot act on. A shorter list looks exactly like
+    /// a correct list, so a typo in a `package.json` silently removed a project
+    /// from the Run tab with no error anywhere. The same rule is already
+    /// applied to a missing sidecar (reports itself unavailable, with a reason)
+    /// and to an object the inspector cannot read (`Unavailable`, carrying a
+    /// sentence): the app abstains out loud rather than quietly.
+    ///
+    /// `skip_serializing_if` keeps the key **absent** rather than null for a
+    /// healthy project, which is what `src/ipc/types.ts` mirrors as optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -390,8 +407,11 @@ mod tests {
             configurations: vec![],
             is_test_project: true,
             test_runner: Some(TestRunner::VsTest),
+            unreadable: None,
         };
 
+        // A healthy project has no `unreadable` key at all — `types.ts` mirrors
+        // it as optional, not as `string | null`.
         assert_eq!(
             keys(&serde_json::to_value(&project).unwrap()),
             [
@@ -407,6 +427,17 @@ mod tests {
                 "testRunner"
             ]
         );
+
+        let broken = Project {
+            unreadable: Some("expected value at line 1 column 3".into()),
+            ..project
+        };
+        let json = serde_json::to_value(&broken).unwrap();
+        assert!(
+            keys(&json).contains(&"unreadable".to_string()),
+            "got {json}"
+        );
+        assert_eq!(json["unreadable"], "expected value at line 1 column 3");
     }
 
     #[test]

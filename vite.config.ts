@@ -30,7 +30,11 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     coverage: {
       provider: "v8",
-      include: ["src/**/*Logic.ts", "src/components/language.ts"],
+      include: [
+        "src/**/*Logic.ts",
+        "src/components/language.ts",
+        "src/views/architecture/nodeTargets.ts",
+      ],
       thresholds: { lines: 70 },
     },
   },

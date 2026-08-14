@@ -36,7 +36,8 @@ use serde_json::Value;
 
 use super::patchfmt;
 use super::{
-    append_edit, append_label, next_seq, IntentEdit, IntentLabel, IntentRecord, ProviderId,
+    append_edit, append_label, intents_dir, next_seq, IntentEdit, IntentLabel, IntentRecord,
+    LabelSource, ProviderId,
 };
 
 /// Did the command line ask for recording rather than for the application?
@@ -130,6 +131,125 @@ pub fn ingest(
         HookEvent::PostToolUse => ingest_edit(root, provider, payload),
         HookEvent::Stop => ingest_label(root, provider, payload),
     }
+}
+
+/// The one file that records which turns have already been asked.
+fn asked_path(root: &Path) -> PathBuf {
+    intents_dir(root).join("asked.jsonl")
+}
+
+/// Should the agent be asked for an `Intent:` line before it stops?
+///
+/// `Some(message)` means yes, and the caller is expected to put the message in
+/// front of the agent and refuse the stop. This is the only place the project
+/// deliberately interrupts somebody else's tool, so every condition below is a
+/// reason **not** to, and calling it also *records* that the turn was asked —
+/// see the loop guard.
+///
+/// # Why the loop guard is ours
+///
+/// A `Stop` hook that always blocks makes a session impossible to end
+/// gracefully. The platform may or may not expose a flag for this; the two
+/// descriptions of the contract I could find disagree about whether it exists.
+/// So the guard does not depend on one: the turn id is written here the first
+/// time, and a second `Stop` for the same turn is never asked, whatever the
+/// agent did or did not do in between. The worst case is one unlabelled turn.
+///
+/// # Why Claude Code only
+///
+/// Codex's hooks are a close relative and run this same binary, but nothing
+/// establishes that Codex honours a blocking stop — and a hook that fails to
+/// block but writes to stderr is pure noise in someone's session.
+pub fn ask_for_intent(
+    root: &Path,
+    provider: ProviderId,
+    event: HookEvent,
+    payload: &Value,
+) -> Option<String> {
+    if event != HookEvent::Stop || provider != ProviderId::ClaudeCode {
+        return None;
+    }
+    // A user-level hook fires in every repository on the machine.
+    if !is_enabled(root) {
+        return None;
+    }
+    if !crate::config::load(root)
+        .map(|c| c.ask_for_intent)
+        .unwrap_or(true)
+    {
+        return None;
+    }
+
+    let message = payload
+        .get("last_assistant_message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    // The agent already said why. Nothing to ask for.
+    if !parse_declared_labels(message).is_empty() {
+        return None;
+    }
+
+    let turn = turn_id(payload);
+
+    // Only a turn that actually changed something has anything to explain; a
+    // conversational turn must never be nagged.
+    if !turn_edited_anything(root, &turn) {
+        return None;
+    }
+
+    if already_asked(root, &turn) {
+        return None;
+    }
+    record_asked(root, &turn);
+
+    Some(INTENT_REQUEST.to_string())
+}
+
+/// What the agent is told. Names the exact form [`parse_declared_labels`]
+/// accepts, so complying actually works — the same wording
+/// `providers::instructions` writes into `CLAUDE.md`.
+const INTENT_REQUEST: &str = "\
+This turn edited files but did not say why. Add one line to your reply so the \
+change can be labelled in review:\n\
+\n\
+    Intent: <3-5 words describing why>\n\
+\n\
+Scope it to particular files if the turn did unrelated things:\n\
+\n\
+    Intent(src/api.ts, src/apiLogic.test.ts): <why, for those files>\n\
+\n\
+Keep it short enough to read at a glance — it titles a group of hunks in the \
+Changes tab, not a commit message.";
+
+/// Did this turn record any edit?
+fn turn_edited_anything(root: &Path, turn: &str) -> bool {
+    let Ok(intents) = super::load(root, &super::LoadOptions::default()) else {
+        return false;
+    };
+    intents.records.iter().any(|r| r.turn_id == turn)
+}
+
+fn already_asked(root: &Path, turn: &str) -> bool {
+    let Ok(contents) = std::fs::read_to_string(asked_path(root)) else {
+        return false;
+    };
+    contents.lines().any(|line| line.trim() == turn)
+}
+
+/// Remember that this turn was asked.
+///
+/// A write failure is deliberately ignored: the cost of not remembering is one
+/// extra request, and returning an error here would push a failure into a hook
+/// whose whole contract is to stay quiet.
+fn record_asked(root: &Path, turn: &str) {
+    use std::io::Write;
+
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(asked_path(root))
+        .and_then(|mut file| writeln!(file, "{turn}"));
 }
 
 /// The turn identifier, under whichever name this agent uses for it.
@@ -287,12 +407,12 @@ fn ingest_label(root: &Path, provider: ProviderId, payload: &Value) -> Result<us
     };
 
     let turn = turn_id(payload);
-    let labels = parse_labels(message);
+    let labels = parse_labels_with_source(message);
     if labels.is_empty() {
         return Ok(0);
     }
 
-    for (paths, text) in &labels {
+    for (paths, text, source) in &labels {
         append_label(
             root,
             &IntentLabel {
@@ -301,6 +421,7 @@ fn ingest_label(root: &Path, provider: ProviderId, payload: &Value) -> Result<us
                 label: text.clone(),
                 paths: paths.clone(),
                 anchor: None,
+                source: *source,
             },
         )?;
     }
@@ -311,8 +432,24 @@ fn ingest_label(root: &Path, provider: ProviderId, payload: &Value) -> Result<us
 /// Read the labels an agent declared in its closing message.
 ///
 /// Explicit `Intent:` lines are preferred. Failing those, the first sentence
-/// stands in — coarse, but an unexplained change is worse.
-pub fn parse_labels(message: &str) -> Vec<(Vec<String>, String)> {
+/// stands in — coarse, but an unexplained change is worse. The two are not
+/// interchangeable and the caller is told which it got: see [`LabelSource`].
+pub fn parse_labels_with_source(message: &str) -> Vec<(Vec<String>, String, LabelSource)> {
+    let declared = parse_declared_labels(message);
+    if !declared.is_empty() {
+        return declared
+            .into_iter()
+            .map(|(paths, text)| (paths, text, LabelSource::Declared))
+            .collect();
+    }
+
+    first_sentence(message)
+        .map(|text| vec![(Vec::new(), text, LabelSource::Inferred)])
+        .unwrap_or_default()
+}
+
+/// Only the explicitly declared `Intent:` lines.
+pub fn parse_declared_labels(message: &str) -> Vec<(Vec<String>, String)> {
     let mut found = Vec::new();
 
     for line in message.lines() {
@@ -348,13 +485,19 @@ pub fn parse_labels(message: &str) -> Vec<(Vec<String>, String)> {
         }
     }
 
-    if !found.is_empty() {
-        return found;
-    }
+    found
+}
 
-    first_sentence(message)
-        .map(|text| vec![(Vec::new(), text)])
-        .unwrap_or_default()
+/// Declared lines, or the first sentence when there are none.
+///
+/// Kept as the plain view for callers that only want the words; anything that
+/// records a label wants [`parse_labels_with_source`] instead, because a card
+/// may only claim a *stated* intent for a declared one.
+pub fn parse_labels(message: &str) -> Vec<(Vec<String>, String)> {
+    parse_labels_with_source(message)
+        .into_iter()
+        .map(|(paths, text, _)| (paths, text))
+        .collect()
 }
 
 fn strip_prefix_ignoring_case<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
@@ -367,6 +510,163 @@ fn is_usable_label(text: &str) -> bool {
     (3..=120).contains(&text.len()) && text.chars().any(char::is_alphanumeric)
 }
 
+/// Words that name the tooling rather than the code.
+///
+/// A sentence built around one of these is about the session — which model ran,
+/// which agent reported back, how much context is left — and titling a set of
+/// hunks with it says nothing about what changed. This is the shape that
+/// produced *"The workflow is running with Opus"* over three files.
+const TOOLING_WORDS: &[&str] = &[
+    "workflow",
+    "subagent",
+    "sub-agent",
+    "agent",
+    "session",
+    "context window",
+    "token budget",
+    "opus",
+    "sonnet",
+    "haiku",
+    "claude",
+    "codex",
+];
+
+/// Openers that acknowledge rather than describe.
+const PLEASANTRIES: &[&str] = &[
+    "perfect",
+    "great",
+    "excellent",
+    "sure",
+    "okay",
+    "ok",
+    "right",
+    "absolutely",
+    "certainly",
+    "thanks",
+    "thank you",
+    "sorry",
+    "done",
+    "yes",
+    "no",
+    "exactly",
+    "indeed",
+    "understood",
+    "correct",
+    "good",
+    "nice",
+    "you are right",
+    "you're right",
+    // Sign-offs: "That's everything I needed", "That is done".
+    "that's",
+    "thats",
+    "that is",
+    "all done",
+    "both done",
+];
+
+/// Openers that announce the next action instead of reporting a change.
+///
+/// These matter more than they look: the prose an agent writes before a tool
+/// call describes what it is *about to* do, and the edits that follow are
+/// frequently not the ones the sentence names.
+const ANNOUNCEMENTS: &[&str] = &[
+    "let me",
+    "let us",
+    "let's",
+    "i'll",
+    "i will",
+    "i am going to",
+    "i'm going to",
+    "now i",
+    "next i",
+    "first i",
+    "here is",
+    "here's",
+    "looking at",
+    "starting with",
+];
+
+/// Words that open a question.
+const INTERROGATIVES: &[&str] = &[
+    "what", "why", "how", "when", "where", "which", "who", "should", "could", "would", "shall",
+    "do ", "does ", "did ", "is ", "are ", "can ", "was ", "were ",
+];
+
+/// Would this sentence be narration rather than a description of the change?
+///
+/// Only ever applied to an **inferred** label — a first sentence mined out of
+/// prose that was written for a human reading a chat. A declared `Intent:` line
+/// is the agent's own words for the card and is taken as given.
+///
+/// Deliberately blunt. Every rule here can refuse a sentence that would have
+/// been fine — "record what the agent said" names this repository's own domain
+/// and would be refused as tooling talk. That trade is the project's standing
+/// one: a card titled *"The workflow is running with Opus"* is worse than a
+/// card that admits it has no stated reason, and the hunks are still grouped
+/// and still reviewable either way.
+pub fn looks_like_narration(text: &str) -> bool {
+    let lower = text.trim().to_lowercase();
+
+    // A tooling word anywhere is enough: these sentences are about the run.
+    if TOOLING_WORDS.iter().any(|word| contains_word(&lower, word)) {
+        return true;
+    }
+
+    let opens_with = |candidates: &[&str]| {
+        candidates.iter().any(|candidate| {
+            lower.strip_prefix(candidate).is_some_and(|rest| {
+                // A prefix only counts at a word boundary, so "index" is not
+                // read as the pleasantry "in".
+                rest.is_empty() || !rest.starts_with(|c: char| c.is_alphanumeric())
+            })
+        })
+    };
+
+    opens_with(PLEASANTRIES) || opens_with(ANNOUNCEMENTS) || opens_with(INTERROGATIVES)
+}
+
+/// Whole-word containment, so "management" does not match "agent".
+///
+/// A trailing `s` is allowed, because the plural is the same word and missing
+/// it let *"Running — 10 agents, 5 phases"* through. Nothing longer is: that
+/// would make "agenda" and "sessionStorage" match, and refusing a real label is
+/// the cost this gate is trying to keep small.
+fn contains_word(haystack: &str, needle: &str) -> bool {
+    let boundary = |c: char| !c.is_alphanumeric();
+
+    haystack.match_indices(needle).any(|(at, _)| {
+        let before_ok = at == 0 || haystack[..at].chars().next_back().is_some_and(boundary);
+
+        let after = &haystack[at + needle.len()..];
+        let after = after.strip_prefix('s').unwrap_or(after);
+        let after_ok = after.is_empty() || after.starts_with(boundary);
+
+        before_ok && after_ok
+    })
+}
+
+/// The shortest inferred label that can mean anything.
+///
+/// Eight characters was the bar `providers::claude_code::summarise` used and
+/// the live hook did not apply at all, which is how cards came to be titled
+/// *"Running"* and *"Both done"*. Twelve is about three words — under that a
+/// sentence cannot name both a thing and what happened to it, and "N files
+/// changed together" is the more useful title.
+const MIN_INFERRED_LABEL: usize = 12;
+
+/// Is this a label worth showing, given that nobody offered it as one?
+///
+/// The single place inferred labels are judged, so the hook that records them
+/// and the loader that reads back everything recorded before this existed
+/// cannot disagree.
+pub fn is_usable_inferred_label(text: &str) -> bool {
+    let trimmed = text.trim();
+    is_usable_label(trimmed)
+        && trimmed.len() >= MIN_INFERRED_LABEL
+        && !looks_like_narration(trimmed)
+}
+
+/// The first sentence of a message, when it reads like a reason for a change.
 fn first_sentence(message: &str) -> Option<String> {
     let line = message
         .lines()
@@ -379,7 +679,7 @@ fn first_sentence(message: &str) -> Option<String> {
         .unwrap_or(line);
     let cleaned = sentence.trim().trim_end_matches(':').trim();
 
-    is_usable_label(cleaned).then(|| cleaned.to_string())
+    is_usable_inferred_label(cleaned).then(|| cleaned.to_string())
 }
 
 /// The branch a workspace is on, so records from elsewhere can be filtered.

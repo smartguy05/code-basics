@@ -18,6 +18,23 @@
   --add-bg: rgba(79, 181, 115, 0.14);
   --del-bg: rgba(224, 85, 97, 0.14);
 
+  /* Diff colours. `@codemirror/merge` tints changed lines at 8% alpha, which is
+     close to invisible here; a whole-line wash needs to be quiet enough to read
+     code through but loud enough to see at a glance, and the word-level marks
+     within it need to be unmistakably louder. */
+  --diff-add-line: rgba(79, 181, 115, 0.16);
+  --diff-add-word: rgba(79, 181, 115, 0.4);
+  --diff-del-line: rgba(224, 85, 97, 0.16);
+  --diff-del-word: rgba(224, 85, 97, 0.4);
+  --diff-add-edge: #4fb573;
+  --diff-del-edge: #e05561;
+  --diff-mod-edge: #5a78dc;
+
+  /* Every CodeMirror editor reads this. Set on the document element at
+     runtime by `editorFontSize.ts`; the value here is only the fallback for
+     the first paint, before that runs. */
+  --editor-font-size: 12.5px;
+
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
   --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
@@ -309,6 +326,29 @@ textarea:focus {
   background: var(--accent-dim);
 }
 
+/* A project the scan listed but could not read: present, and plainly inert.
+   `.row` is a clickable shape, so both halves of that are undone here — no
+   pointer, no hover — because there is nothing to select and offering the
+   affordance would be a lie. The reason sits under the name in `--text-faint`
+   and repeats in the row's tooltip with the manifest path, so it is readable
+   without opening a console. No colour is introduced: dimming is
+   `--text-dim`, which is what every other "present but unavailable" surface
+   in this app uses. */
+.row.project-unreadable {
+  display: block;
+  cursor: default;
+  color: var(--text-dim);
+  white-space: normal;
+}
+
+.row.project-unreadable:hover {
+  background: transparent;
+}
+
+.project-unreadable-name {
+  text-decoration: line-through;
+}
+
 /* --------------------------------------------------------------------- */
 /* Dropdown menu (environment picker)                                     */
 /* --------------------------------------------------------------------- */
@@ -524,6 +564,39 @@ textarea:focus {
   overflow: hidden;
 }
 
+/*
+ * Put away: the pane shrinks to its own tab strip, which becomes the thin
+ * header bar the toggle lives on.
+ *
+ * The terminals are hidden rather than unmounted, so scrollback and any running
+ * process survive being put away. `display: none` takes them to zero size, which
+ * `OutputConsole`'s ResizeObserver already tolerates (it swallows the throw from
+ * fitting a detached terminal) and which it hears about again on the way back
+ * out — the same path a hidden session tab already takes.
+ */
+.console-pane.collapsed {
+  flex: 0 0 auto;
+}
+
+.console-pane.collapsed .console-sessions {
+  display: none;
+}
+
+/* The disclosure control in a pane's tab strip, not itself a tab. */
+.console-tabs .pane-toggle {
+  color: var(--text-faint);
+  padding-left: 4px;
+}
+
+.console-tabs .pane-toggle:hover {
+  color: var(--text);
+}
+
+.console-pane .twisty {
+  width: 12px;
+  color: var(--text-faint);
+}
+
 .dirty-dot {
   color: var(--skip);
   font-size: 9px;
@@ -714,9 +787,109 @@ textarea:focus {
   text-align: left;
 }
 
-.diff-host {
+/* The diff pane: code, a change-marker strip down the right edge, and a
+   horizontal scrollbar across the bottom that drives both panes at once. */
+.diff-frame {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: 1fr auto;
   height: 100%;
+  min-height: 0;
+}
+
+.diff-host {
+  grid-row: 1;
+  grid-column: 1;
+  min-height: 0;
   overflow: auto;
+}
+
+/* The panes' own horizontal scrollbars sit at the bottom of the *document*,
+   which `@codemirror/merge` makes full height — thousands of pixels below the
+   viewport. They are unreachable, so they are hidden and .diff-hscroll below
+   replaces them. Vertical scrolling still belongs to .diff-host. */
+.diff-host .cm-scroller {
+  scrollbar-width: none;
+}
+
+.diff-host .cm-scroller::-webkit-scrollbar {
+  display: none;
+}
+
+/* Rider's marker bar: where the changes are, at a glance, without scrolling. */
+.diff-markers {
+  grid-row: 1;
+  grid-column: 2;
+  position: relative;
+  width: 12px;
+  flex: 0 0 auto;
+  background: var(--bg-inset);
+  border-left: 1px solid var(--border);
+}
+
+.diff-markers .mark {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  cursor: pointer;
+  /* A one-line change in a large file rounds to a hairline; the fraction stays
+     honest (see `changeMarks`) and the floor is applied here, where it is a
+     question of what a pointer can hit. */
+  min-height: 3px;
+}
+
+.diff-markers .mark:hover {
+  left: 0;
+  right: 0;
+}
+
+.diff-markers .mark.addition { background: var(--diff-add-edge); }
+.diff-markers .mark.deletion { background: var(--diff-del-edge); }
+.diff-markers .mark.modification { background: var(--diff-mod-edge); }
+
+.diff-hscroll {
+  grid-row: 2;
+  grid-column: 1 / span 2;
+  position: relative;
+  height: 12px;
+  background: var(--bg-inset);
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  touch-action: none;
+}
+
+/* Nothing to scroll: keep the row so the code does not jump when a wide file
+   is opened after a narrow one. */
+.diff-hscroll.idle {
+  cursor: default;
+}
+
+.diff-hscroll .thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 4px;
+  background: var(--border-strong);
+}
+
+.diff-hscroll .thumb:hover,
+.diff-hscroll:active .thumb {
+  background: var(--text-faint);
+}
+
+/* The A− / A+ pair reads as one control, so it is spaced tighter than the
+   toolbar's own gap. */
+.font-size-controls {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.font-size-controls button {
+  min-width: 28px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Side-by-side merge view: the editors auto-size and .diff-host scrolls —
@@ -745,7 +918,7 @@ textarea:focus {
 .cm-editor {
   height: 100%;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--editor-font-size);
 }
 
 .cm-editor .cm-scroller {
@@ -762,11 +935,84 @@ textarea:focus {
   background: rgba(224, 85, 97, 0.3);
 }
 
-/* Selected-for-revert lines, driven by a CodeMirror decoration. */
+/* Selected-for-revert lines, driven by a CodeMirror decoration.
+
+   Deliberately blue and outlined, so it never reads as "this line changed" —
+   it means "you picked this line", which is a different claim. */
 .cb-line-selected {
   background: rgba(90, 120, 220, 0.22) !important;
   outline: 1px solid var(--accent);
   outline-offset: -1px;
+}
+
+/* Diff colours.
+   ----------------------------------------------------------------------
+   `@codemirror/merge` picks its palette with CodeMirror's `&dark` selector,
+   which needs `EditorView.darkTheme` (set in DiffView.tsx). Its dark palette is
+   still far too quiet — whole-line tints at 8% alpha and word-level changes
+   drawn as a 2px underline — so the parts that carry the meaning are restated
+   here.
+
+   Specificity note: the library's rules compile to `.<dark-id>.cm-merge-a
+   .cm-changedText`, three classes. Every selector below carries four, so it
+   wins without `!important` and without depending on stylesheet order. */
+
+/* Whole changed lines: the baseline pane reads as removed, the working pane as
+   added. */
+.diff-host .cm-editor.cm-merge-a .cm-changedLine {
+  background-color: var(--diff-del-line);
+}
+
+.diff-host .cm-editor.cm-merge-b .cm-changedLine {
+  background-color: var(--diff-add-line);
+}
+
+/* The unified view puts removed lines in a widget and marks changed lines
+   in place. */
+.diff-host .cm-editor .cm-deletedChunk {
+  background-color: var(--diff-del-line);
+}
+
+.diff-host .cm-editor .cm-inlineChangedLine {
+  background-color: var(--diff-add-line);
+}
+
+/* Word-level changes within a changed line — a solid block rather than the
+   library's hairline underline, since this is the part a reviewer is looking
+   for. */
+.diff-host .cm-editor.cm-merge-a .cm-changedText,
+.diff-host .cm-editor .cm-deletedChunk .cm-deletedText,
+.diff-host .cm-editor.cm-merge-b .cm-deletedText {
+  background: var(--diff-del-word);
+  border-radius: 2px;
+}
+
+.diff-host .cm-editor.cm-merge-b .cm-changedText {
+  background: var(--diff-add-word);
+  border-radius: 2px;
+}
+
+/* The 3px stripe in the change gutter, and the collapsed-region separator. */
+.diff-host .cm-editor.cm-merge-a .cm-changedLineGutter,
+.diff-host .cm-editor .cm-deletedLineGutter {
+  background: var(--diff-del-edge);
+}
+
+.diff-host .cm-editor.cm-merge-b .cm-changedLineGutter,
+.diff-host .cm-editor .cm-inlineChangedLineGutter {
+  background: var(--diff-add-edge);
+}
+
+.diff-host .cm-editor .cm-collapsedLines {
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-host .cm-editor .cm-collapsedLines:hover {
+  color: var(--text);
+  background: var(--bg-inset);
 }
 
 .commit-box {
@@ -804,6 +1050,60 @@ textarea:focus {
   background: var(--accent-dim);
 }
 
+/* The lower pane of the History tab: message, the commit's files, and the same
+   diff viewer the Changes tab uses. */
+.commit-detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.commit-message {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.commit-message pre {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  max-height: 6em;
+  overflow: auto;
+}
+
+.commit-files {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+  padding: 4px 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.commit-files .row {
+  width: auto;
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.commit-files .row.selected {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+.commit-diff {
+  flex: 1;
+  min-height: 0;
+}
+
 .commit-row .summary {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -815,6 +1115,16 @@ textarea:focus {
   color: var(--text-faint);
   display: flex;
   gap: 8px;
+}
+
+/* `--text-faint` on `--accent-dim` measures 1.19:1 — the same pairing that made
+   the selected diagram's description unreadable. Here it hides the short id,
+   the author and the time on the commit the user just clicked, which is the
+   commit whose metadata they are most likely reading. Nothing between the two
+   helps (`--text-dim` on the selection is 2.20:1), so the selected row's meta
+   takes `--text` at 4.85:1 and stays subordinate by size. */
+.commit-row.selected .meta {
+  color: var(--text);
 }
 
 /* --------------------------------------------------------------------- */
@@ -1015,6 +1325,15 @@ textarea:focus {
   background: rgba(90, 120, 220, 0.18);
   border-color: var(--accent-dim);
   color: #9db2f0;
+}
+
+/* Grouped by turn but unexplained: related to a stated intent, and visibly
+   quieter than one, because it is a description rather than a reason. */
+.intent-card .kind.sameTurn {
+  background: rgba(90, 120, 220, 0.08);
+  border-style: dashed;
+  border-color: var(--accent-dim);
+  color: var(--text-dim);
 }
 
 .intent-card .kind.formatting {
@@ -1299,4 +1618,496 @@ textarea:focus {
 .inspect-stale li {
   font-size: 11px;
   word-break: break-all;
+}
+
+/* --------------------------------------------------------------------------
+   Search palette: one overlay for files, symbols and configurations
+   -------------------------------------------------------------------------- */
+
+/* Pinned near the top rather than centred: the list grows downwards as the
+   query narrows, and a vertically centred box moves the input under the
+   user's fingers on every keystroke. */
+.palette-backdrop {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+.palette {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  width: 680px;
+  max-width: 92vw;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.palette-scopes {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.palette-scopes button {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+
+.palette-scopes button.active {
+  color: var(--text);
+  border-color: var(--accent-dim);
+  background: var(--bg-inset);
+}
+
+.palette-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.palette-input {
+  font: inherit;
+  font-size: 16px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+  outline: none;
+}
+
+.palette-input::placeholder {
+  color: var(--text-faint);
+}
+
+.palette-note {
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 12px;
+}
+
+.palette-results {
+  overflow: auto;
+  padding: 4px 0 6px;
+}
+
+.palette-empty {
+  color: var(--text-faint);
+  font-size: 12px;
+  padding: 14px 12px;
+}
+
+.palette-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 4px 12px;
+}
+
+/* One highlight only, driven by the selection index, so the keyboard and the
+   pointer can never both look selected at once — the row under the mouse
+   becomes the selection rather than lighting up separately. */
+.palette-row:hover:not(:disabled) {
+  background: transparent;
+}
+
+.palette-row.selected {
+  background: var(--accent-dim);
+}
+
+.palette-label {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-label mark {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.palette-row.selected .palette-label mark {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.palette-line {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.palette-kind {
+  flex: 0 0 auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.palette-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* The interesting end of a path is the right-hand one. */
+  direction: rtl;
+}
+
+.palette-row.selected .palette-detail {
+  color: var(--text-dim);
+}
+
+/* The `:123` suffix on the row the palette is about to open. `--text-faint` on
+   the selection is 1.19:1, and this is the one row whose line number the user
+   is about to act on. */
+.palette-row.selected .palette-line {
+  color: var(--text);
+}
+
+.palette-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* --------------------------------------------------------------------- */
+/* Architecture                                                           */
+/* --------------------------------------------------------------------- */
+
+/* Everything below is scoped to `.diagram-canvas` or `.diagram-list`.
+   `.badge`, `.warning` and `.file-list .row` are worn by six other views, and
+   restyling any of them here would change the Changes tab from the
+   Architecture tab. No colour literal appears in this section: the palette at
+   the top of this file is the whole palette. */
+
+/* The drawing surface. Inset like the editor and the diff, so the picture sits
+   in a well rather than on the chrome — the mermaid output has its own light
+   backgrounds and needs a darker ground to read against. `overflow: hidden` is
+   not the xterm rule: the canvas pans and zooms itself, and a scrollbar would
+   offer a second, unrelated way to move the same drawing. */
+.cb-diagram-host {
+  background: var(--bg-inset);
+  border-top: 1px solid var(--border);
+}
+
+/* Grabbing is the primary gesture here, so the pointer must not be able to
+   start a text selection in the labels and drag a ghost image across it. */
+.cb-diagram-host svg {
+  user-select: none;
+}
+
+.diagram-canvas .toolbar {
+  gap: 6px;
+}
+
+/* The zoom controls: fixed width so the row does not shuffle sideways as the
+   percentage next to them changes from 40% to 100%. */
+.diagram-canvas .toolbar > button {
+  min-width: 28px;
+}
+
+/* The derivation badge — the one caption a diagram cannot carry for itself,
+   and the reason it is drawn by the app rather than written into the source: a
+   `%%` comment can be deleted. Given the raised background so it reads as the
+   app speaking, not as part of the picture. */
+.diagram-canvas .badge {
+  background: var(--bg-raised);
+  border-color: var(--border-strong);
+}
+
+/* The warning list under the picture. This is the part of the feature that is
+   a requirement and not decoration: every reference the deriver read and
+   refused to draw arrives here, and nowhere else a person will look. It gets
+   the caution border it shares with every other warning in the app, and a
+   flat top edge so it reads as attached to the diagram it qualifies rather
+   than as a floating notice. */
+.diagram-canvas .warning {
+  margin: 0;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 0;
+  font-size: 12px;
+}
+
+/* The disclosure line. The button carries its own inline reset for background
+   and border; what it needs from here is to look like text you can click. */
+.diagram-canvas .warning > button {
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+.diagram-canvas .warning > button:hover {
+  color: var(--accent);
+}
+
+.diagram-canvas .warning ul {
+  color: var(--text-dim);
+}
+
+.diagram-canvas .warning li::marker {
+  color: var(--skip);
+}
+
+/* The list of diagrams. It borrows `.file-list` for the row metrics and then
+   parts company with it twice, because these are names and not paths. */
+.diagram-list .row {
+  /* Two-line rows (a built-in carries the sentence that says which question it
+     answers), so the marks stay with the first line rather than centring
+     against the whole block. */
+  align-items: flex-start;
+}
+
+.diagram-list .path {
+  /* `.file-list .path` is `direction: rtl` to keep the interesting end of a
+     long path visible. A diagram name is short and its interesting end is the
+     front, and rtl would move a trailing bracket or dot to the wrong side. */
+  direction: ltr;
+  text-align: left;
+}
+
+/* The description under a built-in's name: allowed to wrap, unlike everything
+   else in a sidebar row, because a sentence truncated to one ellipsis-ended
+   line says nothing at all.
+
+   It is also the one thing in this list that has to be *read*. The two derived
+   maps are presented as two named diagrams rather than as zoom levels precisely
+   because they answer different questions, and this sentence is the only place
+   the difference is stated — a name like "Project map" does not carry it. So it
+   is lifted out of `--text-faint`, which never reaches 4.5:1 anywhere it is
+   used here: 2.86:1 on the sidebar's `--bg-raised`, and 1.19:1 once
+   `.row.selected` paints `--accent-dim` behind it, which made the selected
+   row's description — the one the user is looking at — the least readable text
+   in the app. `--text-dim` on the sidebar is 5.34:1 and `--text` on the
+   selection is 4.85:1, so the sentence clears AA in both states, and the
+   hierarchy against the name above it is carried by the 11px size rather than
+   by a colour that cannot afford it. */
+.diagram-list .row .faint {
+  white-space: normal;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+
+.diagram-list .row.selected .faint {
+  color: var(--text);
+}
+
+/* The warning mark on a stored diagram whose front matter could not be read.
+   Kept out of the flow of the name so it cannot be pushed off the end of a
+   long one — the whole point of it is to be seen. */
+.diagram-list .row > span[title] {
+  flex: 0 0 auto;
+  color: var(--skip);
+}
+
+/* ---------------------------------------------------------------------------
+ * Find Usages: the inline row above a declaration, and the dropdown it opens.
+ *
+ * The class names come from `components/usagesExtension.ts`, which exports them
+ * as constants (`ROW_CLASS`, `LABEL_CLASS`, `CLICKABLE_CLASS`, `toneClass`) so
+ * that this stylesheet and the widget cannot drift apart silently. That file
+ * sets only `user-select` and `cursor`, via `EditorView.baseTheme` — the lowest
+ * precedence layer — so every visual choice below wins over it.
+ * ------------------------------------------------------------------------- */
+
+/* The positioned host `FileEditor` wraps the editor in, so the dropdown can be
+   placed against the row that opened it. `overflow: hidden` keeps the pane's
+   contract from `.editor-area`: the CodeMirror scroller scrolls, this does not,
+   and a menu clamped to the pane's height scrolls inside itself. */
+.editor-frame {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* The row must read as metadata about the code and not as code: the app's UI
+   font rather than `--mono`, a size below the editor's own, and no background —
+   a filled band would look like a comment the file does not contain. */
+.cb-usages-row {
+  font-family: var(--font);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 1px 0 0 2px;
+}
+
+.cb-usages-label {
+  /* Inline-block so the hover underline and the click target are the width of
+     the text, not of the line. */
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* Nothing has been asked yet, and nothing is being waited for. The quietest
+   thing in the app — it is on screen for every declaration in the file. */
+.cb-usages-idle {
+  color: var(--text-faint);
+}
+
+/* A request is out, or a server is still coming up. Italic rather than a
+   different colour, because the distinction being drawn is "not yet" and not
+   "worse". */
+.cb-usages-waiting {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* A real count. The only tone that is brighter than the file's comments,
+   because it is the only one carrying an answer. */
+.cb-usages-count {
+  color: var(--text-dim);
+}
+
+/* A real zero. Deliberately not styled like `reason`: "there are none" is a
+   fact about the code, and the two must not look alike (see `UsageTone`). */
+.cb-usages-empty {
+  color: var(--text-faint);
+}
+
+/* No server, a dead server, or a server that cannot answer this question. The
+   dotted rule is the affordance for the `title`, which carries the actionable
+   text — for `notConfigured` that is the install hint. */
+.cb-usages-reason {
+  color: var(--text-dim);
+  border-bottom: 1px dotted var(--border-strong);
+}
+
+.cb-usages-clickable:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* Wider than the standard `.dropdown-menu` because every row carries a line of
+   source. `max-height` is set inline, from the pane's measured height. */
+.usages-menu {
+  width: min(560px, calc(100% - 8px));
+  font-size: 12px;
+}
+
+.usages-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 8px 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.usages-count {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* Every sentence the backend sent, and every one this app owes the user: a
+   truncation warning, a readiness caveat, a goto message, "no definition
+   found". Wraps, because these are prose and cutting them off would lose the
+   half that says what to do. */
+.usages-message {
+  padding: 2px 8px 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.usages-group + .usages-group {
+  margin-top: 4px;
+}
+
+/* The file, or the goto group's name. Sticky so a long list still says which
+   file the row under the cursor is in. */
+.usages-file {
+  position: sticky;
+  top: 0;
+  background: var(--bg-raised);
+  padding: 2px 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.usages-row-item {
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+/* Present, counted, and not openable — a metadata or generated document. Shown
+   because dropping it would contradict the count in the heading, and given the
+   default cursor so the row does not promise a jump it cannot make. */
+.usages-row-item.inert {
+  cursor: default;
+  color: var(--text-faint);
+}
+
+.usages-row-item.inert:hover {
+  background: transparent;
+}
+
+.usages-line {
+  flex: 0 0 auto;
+  min-width: 3ch;
+  text-align: right;
+  color: var(--text-faint);
+}
+
+/* One line of source, clipped rather than wrapped: the rows are a list to scan
+   down, and a wrapping snippet makes the line numbers stop lining up. */
+.usages-snippet {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.usages-match {
+  color: var(--text);
+  background: var(--accent-dim);
+  border-radius: 2px;
+}
+
+/* Why this file has no inline rows, in the corner rather than over the code.
+   Faint and small: on a file whose language has no server it is on screen the
+   whole time, so it has to be ignorable — and its `title` is where the
+   actionable detail (the install hint, the server's error) lives. */
+.usages-note {
+  position: absolute;
+  right: 8px;
+  bottom: 4px;
+  max-width: 45ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-inset);
+  color: var(--text-faint);
+  font-size: 11px;
+  z-index: 2;
 }

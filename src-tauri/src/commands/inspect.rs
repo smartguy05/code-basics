@@ -157,10 +157,18 @@ pub async fn inspect_attachable(
     // No workspace means no cwd to run the enumerator in and no configurations
     // to attribute against — an empty answer rather than a failure, because
     // nothing is wrong: no repository is open.
-    let (Ok(root), Ok(workspace)) = (state.workspace_root(), state.workspace()) else {
+    //
+    // One acquisition, and the root taken from what it returned. This used to be
+    // `(state.workspace_root(), state.workspace())`, which is two separate takes
+    // of one mutex and so a tuple that could be assembled out of two different
+    // workspaces. The window is narrow and the consequence mild — the root is
+    // only the enumerator's working directory and the configurations only name
+    // rows — but it is the same defect as the two caches below, and the fix is
+    // to not have a second read to disagree with the first.
+    let Ok(workspace) = state.workspace() else {
         return Ok(AttachableList::default());
     };
-    let listed = enumerate(&app, &state, &root).await?;
+    let listed = enumerate(&app, &state, &workspace.root).await?;
     let running = state.supervisor.running().await;
     Ok(AttachableList {
         processes: session::attribute(&listed.processes, &running, &workspace.configs),
@@ -203,7 +211,13 @@ pub async fn inspect_capture(
     widen: Option<ElidedReason>,
     channel: Channel<ProcessEvent>,
 ) -> Result<InspectGraph, String> {
-    let workspace_root = state.workspace_root()?;
+    // Read once, here, and used for the enumerator's cwd, the request and result
+    // paths, the attribution below and the root this capture is finally recorded
+    // under. Taking the workspace again further down would be a second read that
+    // could disagree with this one, and every one of those uses is meant to be
+    // about the same repository.
+    let workspace = state.workspace()?;
+    let workspace_root = workspace.root.clone();
     let bundled = bundled_dir(&app);
 
     // Checked before anything is spawned: a live capture clones the target's
@@ -226,7 +240,6 @@ pub async fn inspect_capture(
     // "the list could not be read". The capture could not have run either way —
     // it is the same sidecar — so nothing is lost by saying which happened.
     if let InspectTarget::Live { .. } = target {
-        let workspace = state.workspace()?;
         let listed = enumerate(&app, &state, &workspace_root)
             .await
             .map_err(|e| {
@@ -310,7 +323,14 @@ pub async fn inspect_capture(
         note(&channel, problem);
     }
 
-    state.record_inspect(graph.clone());
+    if !state.record_inspect(&workspace_root, graph.clone()) {
+        note(
+            &channel,
+            "another workspace was opened while this capture was running, so it was not kept; \
+             the tree below is this read and will not come back after a view switch"
+                .to_string(),
+        );
+    }
     Ok(graph)
 }
 

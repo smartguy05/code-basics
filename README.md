@@ -7,7 +7,8 @@ Built as a native desktop application (Tauri 2): a compiled Rust core does all t
 ## What it does
 
 - **Run** — discovers runnable projects, `launchSettings.json` profiles, and `package.json` scripts; launches them with streamed output in per-run console tabs, and kills the whole process tree on cancel. Configurations live in a titlebar dropdown (status dots, favourites, custom ordering); an `ASPNETCORE_ENVIRONMENT` picker, build/rebuild/clean actions, and a .NET user-secrets editor round out the tab.
-- **Edit** — a directory tree of the workspace sits beside the Run tab's console; files open in a syntax-highlighted CodeMirror editor above it (Ctrl+S saves, split is resizable), covering the quick fix-and-rerun loop without switching tools.
+- **Edit** — a directory tree of the workspace sits beside the Run tab's console; files open in a syntax-highlighted CodeMirror editor above it (Ctrl+S saves, the split is resizable, and the console collapses to a strip when you want the screen for code), covering the quick fix-and-rerun loop without switching tools.
+- **Trace a method** — an inline row above every declaration says how many places use it, and drops down the list; clicking one opens that file at that line. Middle-click a symbol to go to its definition, with a grouped picker when there is more than one place to go. The answers come from real [language servers](docs/guides/language-servers.md) already on your machine (Roslyn for C#, `rust-analyzer`, `typescript-language-server`, a Python server) — nothing is bundled, and a count is never guessed: while a server is still loading, or when none is installed, the row says so instead of showing a number.
 - **Tests** — discovers test projects (VSTest, Microsoft.Testing.Platform, Vitest, Jest — plus anything added via a [declarative adapter](docs/guides/adding-an-ecosystem.md)), runs them with live output and live per-test progress, parses the report into a project → suite → test tree, and can re-run only the failures.
 - **Changes** — git working-copy review with side-by-side or inline diffs, staging, unstaging, and revert down to the individual line, plus commit operations. A diff can also be grouped into the [decisions behind it](docs/guides/agent-intent-capture.md), captured from a coding agent as it works — and a change you disagree with can be **rejected**: reverted with your reason left in the code for the agent to fix, and a `pre-commit` hook that refuses to commit until it has been.
 - **History** — commit log with per-commit diffs, branches, stash, and push/pull/fetch.
@@ -32,7 +33,8 @@ Open a workspace from the welcome screen, or pass it on the command line: `code-
 Full documentation lives in [`docs/`](docs/README.md):
 
 - [Getting started](docs/getting-started/installation.md) — install, run, build
-- [Using the app](docs/getting-started/using-the-app.md) — the four views
+- [Using the app](docs/getting-started/using-the-app.md) — the six views
+- [Language servers](docs/guides/language-servers.md) — what to install per language for find-usages and go-to-definition
 - [Architecture overview](docs/architecture/overview.md) — the three layers and the dependency rule
 - [Adding an ecosystem](docs/guides/adding-an-ecosystem.md) — support a new language/test runner with a TOML file, no code
 - [Development guide](docs/guides/development.md) — commands, tests, conventions

@@ -25,5 +25,6 @@ pub use attribution::{AttributedSpan, Confidence, FileAttribution, HunkAttributi
 pub use grouping::{GroupFile, GroupKind, IntentGroup};
 pub use patch::{DiffLine, Direction, FileDiff, Hunk, LineOrigin};
 pub use repo::{
-    Branch, ChangeKind, Commit, ComparisonMode, FileChange, Repo, StageTarget, WorkingStatus,
+    Branch, ChangeKind, Commit, ComparisonMode, FileChange, FileContents, Repo, StageTarget,
+    WorkingStatus,
 };

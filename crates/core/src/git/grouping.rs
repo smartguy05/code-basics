@@ -30,13 +30,17 @@
 //! similarity-based rather than exact, and a wrongly claimed rename reads as a
 //! much stronger statement than "these two hunks are near each other".
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::git::attribution::{Confidence, FileAttribution};
 use crate::git::patch::{FileDiff, Hunk, LineOrigin};
+use crate::intents::LabelSource;
+// The declaration heuristic lives in `symbols` because it is a property of
+// source text, not of a repository; what stays here is the hunk-header half.
+use crate::symbols::declarations::{declaration_name, NOT_A_SYMBOL};
 
 /// Why a set of hunks belongs together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -44,6 +48,9 @@ use crate::git::patch::{FileDiff, Hunk, LineOrigin};
 pub enum GroupKind {
     /// The agent said what it was doing.
     Intent,
+    /// One turn made these hunks, but never said why. Grouped because they
+    /// really did change together; titled from the changes, not from a reason.
+    SameTurn,
     /// Whitespace only — no code changed.
     Formatting,
     /// A symbol that does not exist in the baseline.
@@ -212,11 +219,6 @@ fn symbol_from_header(header: &str) -> Option<String> {
     })
 }
 
-/// Header lines that are definitely not a symbol.
-const NOT_A_SYMBOL: &[&str] = &[
-    "import", "use", "using", "from", "#include", "include", "package",
-];
-
 /// Can this non-declaration header stand in as a name?
 fn header_can_name_a_symbol(header: &str) -> bool {
     if header.contains(';') || header.contains('"') || header.contains('\'') {
@@ -225,103 +227,6 @@ fn header_can_name_a_symbol(header: &str) -> bool {
 
     let first = header.split_whitespace().next().unwrap_or_default();
     !NOT_A_SYMBOL.contains(&first)
-}
-
-/// Keywords that introduce something worth naming, across the languages this
-/// application already knows how to build and test.
-const DECLARING: &[&str] = &[
-    "fn",
-    "func",
-    "function",
-    "def",
-    "class",
-    "struct",
-    "enum",
-    "interface",
-    "trait",
-    "impl",
-    "type",
-    "record",
-    "namespace",
-    "module",
-    "const",
-    "let",
-    "var",
-    "public",
-    "private",
-    "protected",
-    "internal",
-    "static",
-    "async",
-    "export",
-    "default",
-    "abstract",
-    "override",
-    "virtual",
-    "sealed",
-    "partial",
-    "readonly",
-    "unsafe",
-    "extern",
-    "pub",
-];
-
-/// Pull a plausible symbol name out of one line of source.
-fn declaration_name(line: &str) -> Option<String> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with("//") || line.starts_with('#') {
-        return None;
-    }
-
-    // Everything before a parameter list or an assignment.
-    let head: &str = line
-        .split(['(', '=', '<', '{'])
-        .next()
-        .unwrap_or(line)
-        .trim();
-
-    // A colon in the head is a type annotation — `let total: usize`,
-    // `static COUNTER: AtomicU64`, `const cache: Map`. The name is on the
-    // left of it; the last identifier would be the *type*. Without one, the
-    // last identifier is right: `public decimal EstimateCost`.
-    let head = match head.find(':') {
-        Some(colon) => head[..colon].trim(),
-        None => head,
-    };
-
-    let words: Vec<&str> = head.split_whitespace().collect();
-    if words.is_empty() {
-        return None;
-    }
-
-    // A declaration is only claimed when a declaring keyword is present:
-    // otherwise every assignment and every call would name a "symbol".
-    let has_keyword = words.iter().any(|w| DECLARING.contains(w));
-    if !has_keyword {
-        return None;
-    }
-
-    // Import and re-export lines can still carry a declaring keyword —
-    // `import type { … }`, `pub use …` — but they declare nothing, and the
-    // scan below would name the card "import" or "use".
-    if words.iter().any(|w| NOT_A_SYMBOL.contains(w)) {
-        return None;
-    }
-
-    let name = words
-        .iter()
-        .rev()
-        .find(|w| !DECLARING.contains(*w) && is_identifier(w))?;
-
-    Some((*name).to_string())
-}
-
-fn is_identifier(word: &str) -> bool {
-    !word.is_empty()
-        && word
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '$')
-        && word.chars().next().is_some_and(|c| !c.is_numeric())
 }
 
 /// Did this hunk introduce the symbol, or change one that already existed?
@@ -360,21 +265,55 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
 
             let hunk_attribution = attribution.and_then(|a| a.hunks.get(hunk_index));
 
-            // 1. What the agent said, when it said anything.
-            let labelled = hunk_attribution.and_then(|h| {
+            // 1. The turn that made this hunk, when one turn made most of it.
+            //
+            // Grouping by turn is worth having on its own — the files really
+            // did change together — so this branch is taken whether or not the
+            // turn came with a reason. What the reason *is* decides the kind:
+            // only a label the agent declared may be presented as a stated
+            // intent, and a card with no declared reason is titled from its own
+            // changes further down rather than borrowing one.
+            let turn = hunk_attribution.and_then(|h| {
                 let dominant = h.dominant.as_ref()?;
                 let span = h.spans.iter().find(|s| &s.turn_id == dominant)?;
-                let label = span.label.clone()?;
-                Some((dominant.clone(), label, span.confidence))
+                Some((
+                    dominant.clone(),
+                    span.label.clone(),
+                    span.label_source,
+                    span.confidence,
+                ))
             });
 
-            let (key, kind, label, symbol, confidence) = match labelled {
-                Some((turn, label, confidence)) => (
+            let (key, kind, label, symbol, confidence) = match turn {
+                Some((turn, Some(label), Some(LabelSource::Declared), confidence)) => (
                     format!("intent:{turn}"),
                     GroupKind::Intent,
                     label,
                     None,
                     confidence,
+                ),
+
+                // A sentence mined out of prose. Still the best description
+                // available, so it is shown — but as a description of a turn,
+                // not as a reason the agent gave.
+                Some((turn, Some(label), _, confidence)) => (
+                    format!("turn:{turn}"),
+                    GroupKind::SameTurn,
+                    label,
+                    None,
+                    confidence,
+                ),
+
+                // A turn with no reason at all. The grouping still holds; the
+                // title is derived from the changes once the bucket is whole
+                // (see `Bucket::derived`), because "2 files" is not knowable
+                // from one hunk.
+                Some((turn, None, _, _)) => (
+                    format!("turn:{turn}"),
+                    GroupKind::SameTurn,
+                    String::new(),
+                    enclosing_symbol(hunk),
+                    Confidence::Low,
                 ),
 
                 // 2. Formatting, which is decidable rather than guessed.
@@ -416,14 +355,27 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                 },
             };
 
+            // A same-turn card with no reason has no title yet — one hunk
+            // cannot know how many files the turn touched.
+            let needs_title = kind == GroupKind::SameTurn && label.is_empty();
+
             let bucket = buckets.entry(key.clone()).or_insert_with(|| Bucket {
                 id: key,
                 kind,
                 label,
-                symbol,
+                symbol: symbol.clone(),
                 confidence,
                 files: BTreeMap::new(),
+                needs_title,
+                symbols: BTreeSet::new(),
             });
+
+            // Every symbol the card touches, so a derived title names one only
+            // when the whole card sits in the same place. A hunk with no
+            // identifiable symbol contributes the empty string, which is what
+            // stops a card that is half in `foo` and half nowhere from being
+            // titled "foo".
+            bucket.symbols.insert(symbol.unwrap_or_default());
 
             // A card is only as trustworthy as its weakest member.
             bucket.confidence = bucket.confidence.min(confidence);
@@ -546,10 +498,11 @@ fn absorb(into: &mut IntentGroup, other: IntentGroup) {
 fn kind_order(kind: GroupKind) -> u8 {
     match kind {
         GroupKind::Intent => 0,
-        GroupKind::NewSymbol => 1,
-        GroupKind::ModifiedSymbol => 2,
-        GroupKind::Other => 3,
-        GroupKind::Formatting => 4,
+        GroupKind::SameTurn => 1,
+        GroupKind::NewSymbol => 2,
+        GroupKind::ModifiedSymbol => 3,
+        GroupKind::Other => 4,
+        GroupKind::Formatting => 5,
     }
 }
 
@@ -558,6 +511,7 @@ fn kind_key(kind: GroupKind) -> &'static str {
         GroupKind::NewSymbol => "new",
         GroupKind::ModifiedSymbol => "modified",
         GroupKind::Intent => "intent",
+        GroupKind::SameTurn => "sameTurn",
         GroupKind::Formatting => "formatting",
         GroupKind::Other => "other",
     }
@@ -575,10 +529,45 @@ struct Bucket {
     confidence: Confidence,
     /// path -> (line indices, hunk indices)
     files: BTreeMap<String, (Vec<u32>, Vec<usize>)>,
+    /// A same-turn card with no declared reason: `label` is filled in from the
+    /// changes themselves once every hunk has been collected.
+    needs_title: bool,
+    /// Enclosing symbols across the card's hunks, empty string for "none".
+    symbols: BTreeSet<String>,
 }
 
 impl Bucket {
-    fn finish(self) -> IntentGroup {
+    /// Title a card that has no reason to show, from what it actually contains.
+    ///
+    /// Never a reason — only a description. The card exists because those hunks
+    /// came from one turn, and that is all it is allowed to say.
+    fn derived_title(&self) -> String {
+        if self.files.len() > 1 {
+            return format!("{} files changed together", self.files.len());
+        }
+
+        let single = (self.symbols.len() == 1)
+            .then(|| self.symbols.iter().next())
+            .flatten()
+            .filter(|name| !name.is_empty());
+
+        match (single, self.files.keys().next()) {
+            (Some(symbol), _) => symbol.clone(),
+            (None, Some(path)) => format!("Changes in {}", file_name(path)),
+            // Unreachable: a bucket only exists once a hunk went into it.
+            (None, None) => "Changes in one turn".to_string(),
+        }
+    }
+
+    fn finish(mut self) -> IntentGroup {
+        if self.needs_title {
+            self.label = self.derived_title();
+            self.symbol = (self.symbols.len() == 1)
+                .then(|| self.symbols.iter().next().cloned())
+                .flatten()
+                .filter(|name| !name.is_empty());
+        }
+
         let mut line_count = 0u32;
 
         let files: Vec<GroupFile> = self
