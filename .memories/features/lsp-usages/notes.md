@@ -641,3 +641,137 @@ testable).
 start and nothing pruned it. It is now created only when `registry::takes_caller_args`
 says the flag will be used, and pruned oldest-first by count and bytes like
 `inspect::dumps`.
+
+---
+
+# The real-server oracle, and the five things it disproved (2026-08-14)
+
+`crates/core/tests/lsp_oracle.rs` starts each language's **real** server over a
+fixture it writes itself and asserts the one usage it knows is there. Writing it
+was supposed to be a formality. Every claim in `registry.rs` that had been
+derived from documentation rather than from a run turned out to be wrong, and
+each one produced the exact failure this subsystem exists to prevent: a
+confident, prompt, wrong zero.
+
+Captures below are from this machine. Keep them — they are the evidence the
+tests cite, and none of it is recoverable without re-running the probes.
+
+## 1. rust-analyzer was promoted ten seconds early
+
+`Readiness::Progress { token_prefix: "rustAnalyzer" }` matched the **first** end
+under the namespace. The namespace is not the signal:
+
+```text
+ 3.8s  rustAnalyzer/Fetching              end   <- the old prefix matched here
+ 3.9s  rustAnalyzer/Building CrateGraph   end
+ 4.9s  rustAnalyzer/Roots Scanned         end
+ 6.0s  rustAnalyzer/Fetching              end   <- and it is not even one-shot
+10.3s  rustAnalyzer/cachePriming          begin (title "Indexing")
+13.9s  rustAnalyzer/cachePriming          end   <- usable here
+```
+
+Note `rustAnalyzer/cachePriming` is spelled nothing like the "Indexing" title it
+displays under — which is exactly why guessing it from the UI got it wrong. Also
+note `rust-analyzer/flycheck/0`, hyphenated: a different namespace again.
+
+Now `token_prefix: "rustAnalyzer/cachePriming"`. The doc comment on
+`Readiness::Progress` had predicted this and said "narrow the prefix if that is
+ever observed"; it has been observed.
+
+## 2. TypeScript's readiness token is a UUID, so no prefix can ever match
+
+```text
+0.2s  initialize result
+0.5s  $/progress begin  token "41f6b03a-c261-42d6-b5a6-676ce8b664b1"
+                        title "Initializing JS/TS language features…"
+1.3s  $/progress end    (the end value carries the token and nothing else)
+2.2s  textDocument/references -> the one real call site
+```
+
+`Immediate` published `Ready` at 0.2s and `references` in that window answers
+`[]`. The only identifying information is the `begin`'s **title**, so matching it
+requires remembering the token at `begin` and recognising it at `end` — hence
+`Readiness::ProgressTitle` and the stateful `TitledProgress` filter in
+`client.rs`. `readiness_filter` builds **one** `Arc` shared by the transport's
+sticky sink and the live stream, because two matchers would each see only part
+of the stream.
+
+## 3. `npm i -g typescript` now installs a package with no tsserver
+
+TypeScript **7.0.2** ships `lib/tsc.js` and nothing else — no `tsserver.js`.
+`typescript-language-server` starts anyway, logs
+`$/typescriptVersion {"version":"1.0.0","source":"bundled"}`, and answers every
+query with an empty list. Our own install hint produced this. The hint and the
+docs now say `typescript@5` and explain why. Verified working on 5.9.3.
+
+(Ignore `Invalid languageId "typescript" … Correcting to "typescript"` in the
+log — it is cosmetic and self-correcting.)
+
+## 4. basedpyright lies for about six hundred milliseconds, and announces nothing
+
+```text
+0.7s  initialize result
+1.3s  textDocument/references -> []                      <- a wrong zero
+1.3s  window/logMessage "Found 2 source files"
+1.3s  textDocument/publishDiagnostics                    <- correct from here on
+1.3s  textDocument/references -> the real call site
+```
+
+No progress, no custom notification. The temptation is the log line, which states
+the truth in English — **prose is never read for meaning here**. Diagnostics are
+a protocol signal and are causally downstream of the same work: the server cannot
+analyse the file without resolving its imports, which is what makes `references`
+correct. Published even when there are none. Hence `Readiness::FirstDiagnostics`.
+
+## 5. Two Python servers cannot answer a count at all, and are now not candidates
+
+Both were reachable until they were run.
+
+| Server | `--stdio` | Answer for a fixture with exactly one call site |
+|---|---|---|
+| `basedpyright-langserver` | required | 1 — correct |
+| `pyright-langserver` | required | 1 — correct |
+| `pylsp` | **exits 2**, `unrecognized arguments: --stdio` | **0** once launched correctly |
+| `jedi-language-server` | **exits 2**, same | **2** — ignores `includeDeclaration: false` |
+
+`jedi` counting the declaration means every count is one too high, so "1 usage"
+appears above a method nothing calls. Both removed from `candidates`, following
+the `ruff` precedent exactly.
+
+That table also produced a second fix: `default_args` chose by **language**, so
+`--stdio` went to whatever program a user named in `lsp.servers.python.program`.
+Arguments and readiness are properties of the *program*, so `candidates` now
+carries both and `default_args` / `default_readiness` look up by file stem.
+
+## Two environmental traps that cost real time
+
+- **`%TEMP%` here is the 8.3 short path** (`C:\Users\ANTHON~1\...`), and **Roslyn
+  cannot load a project underneath one**. It starts, answers `documentSymbol`
+  happily, never sends `projectInitializationComplete`, is promoted at the 90s
+  ceiling and answers `references` with `[]`. The identical fixture under a long
+  path loads in ~7s and is correct. The oracle therefore writes fixtures into
+  `CARGO_TARGET_TMPDIR`, never `tempfile::tempdir()`. Do not "simplify" that.
+  (Related: a `\?\`-prefixed verbatim path crashes the server outright, so
+  `fs::canonicalize` is not the fix.)
+- **`dotnet restore` is required** before Roslyn can resolve anything, and the
+  fixture needs its own `NuGet.config` with `<clear />` because a machine-wide
+  `packageSources` entry here points at a directory that does not exist. The
+  target framework is chosen from `dotnet --list-sdks` rather than hardcoded —
+  an SDK ships its own band's targeting pack, so `net<major>.0` restores offline,
+  and a hardcoded `net8.0` failed on a box carrying only the 9 and 10 SDKs.
+- **`rust-analyzer` on PATH was a rustup shim for an uninstalled component.**
+  Discovery found it, the launch failed with
+  `Unknown binary 'rust-analyzer.exe' in official toolchain`. Reported as
+  `Failed` rather than `NotConfigured`, so the row does not carry the
+  `rustup component add rust-analyzer` hint that would fix it. Not addressed —
+  detecting it would mean executing every candidate at probe time.
+
+## Running it
+
+```sh
+cargo test -p cb-core --test lsp_oracle -- --ignored --nocapture --test-threads=1
+```
+
+`--test-threads=1` is not optional: four servers indexing at once plus a
+`dotnet restore` starved Roslyn past the readiness ceiling and failed the C#
+oracle on a machine where it passes in seven seconds. Serially: ~25s for all five.

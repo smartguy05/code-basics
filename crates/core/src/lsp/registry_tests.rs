@@ -250,6 +250,23 @@ fn rust_analyzer_is_not_ready_until_it_says_so_because_an_early_answer_is_wrong(
     // rust-analyzer answers `references` while still priming its caches, and a
     // low count is a *wrong* answer rather than a partial one. So readiness is
     // a progress token, not "the process started".
+    //
+    // The prefix is the **whole** token and not the `rustAnalyzer` namespace,
+    // which is what it used to be. Captured from rust-analyzer 1.94 against a
+    // two-file crate (`tests/lsp_oracle.rs` is the harness):
+    //
+    // ```text
+    //  3.8s  rustAnalyzer/Fetching              end     <- the old prefix matched here
+    //  3.9s  rustAnalyzer/Building CrateGraph   end
+    //  4.9s  rustAnalyzer/Roots Scanned         end
+    //  6.0s  rustAnalyzer/Fetching              end     <- and it is not even one-shot
+    // 10.3s  rustAnalyzer/cachePriming          begin   (title "Indexing")
+    // 13.9s  rustAnalyzer/cachePriming          end     <- the index is usable here
+    // ```
+    //
+    // The first `end` under the prefix wins and is recorded permanently, so the
+    // old prefix published `Ready`, with no caveat, ten seconds early — the
+    // "confident wrong zero" shape this subsystem exists to prevent.
     let probe = Fake::new().program("rust-analyzer", "C:/cargo/bin/rust-analyzer.exe");
 
     let found = spec(resolve(Language::Rust, None, &probe));
@@ -257,7 +274,7 @@ fn rust_analyzer_is_not_ready_until_it_says_so_because_an_early_answer_is_wrong(
     assert_eq!(
         found.readiness,
         Readiness::Progress {
-            token_prefix: "rustAnalyzer"
+            token_prefix: "rustAnalyzer/cachePriming"
         }
     );
 }
@@ -278,7 +295,7 @@ fn a_missing_rust_analyzer_names_what_was_tried_and_how_to_install_it() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn the_typescript_server_is_launched_over_stdio_and_is_ready_at_once() {
+fn the_typescript_server_is_launched_over_stdio_and_waits_for_its_project() {
     let probe = Fake::new().program(
         "typescript-language-server",
         "C:/npm/typescript-language-server.cmd",
@@ -293,7 +310,31 @@ fn the_typescript_server_is_launched_over_stdio_and_is_ready_at_once() {
         PathBuf::from("C:/npm/typescript-language-server.cmd")
     );
     assert_eq!(found.args, vec!["--stdio".to_string()]);
-    assert_eq!(found.readiness, Readiness::Immediate);
+    // Not `Immediate`, which is what this said before anybody ran the server.
+    // Captured from typescript-language-server 5.3.0 over TypeScript 5.9.3
+    // (`tests/lsp_oracle.rs`):
+    //
+    // ```text
+    // 0.2s  initialize result
+    // 0.5s  window/workDoneProgress/create  token "41f6b03a-c261-…"
+    // 0.5s  $/progress  begin  "Initializing JS/TS language features…"
+    // 1.3s  $/progress  end
+    // 2.2s  textDocument/references -> the one real call site
+    // ```
+    //
+    // `Immediate` published `Ready` at 0.2s, and a `references` asked in that
+    // window is answered `[]` — the wrong answer, delivered faster than the
+    // right one. The token is a fresh UUID, so the title is the only thing
+    // there is to match on.
+    assert_eq!(
+        found.readiness,
+        Readiness::ProgressTitle {
+            title_prefix: "Initializing JS/TS language features"
+        }
+    );
+    // Confirmed by the same capture: it emits `file:///c%3A/…`. Only the drive
+    // letter's case differs from what we send, and file identity is decided on
+    // paths rather than on URI strings, so that difference cannot matter.
     assert_eq!(found.uri_style, UriStyle::Encoded);
 }
 
@@ -322,8 +363,6 @@ fn the_python_candidates_are_tried_in_order_with_their_own_arguments() {
     let cases = [
         ("basedpyright-langserver", vec!["--stdio".to_string()]),
         ("pyright-langserver", vec!["--stdio".to_string()]),
-        ("pylsp", Vec::new()),
-        ("jedi-language-server", Vec::new()),
     ];
 
     for (name, args) in &cases {
@@ -331,15 +370,62 @@ fn the_python_candidates_are_tried_in_order_with_their_own_arguments() {
         let found = spec(resolve(Language::Python, None, &probe));
         assert_eq!(found.program, PathBuf::from(format!("C:/py/{name}.exe")));
         assert_eq!(&found.args, args, "{name}");
-        assert_eq!(found.readiness, Readiness::Immediate);
+        // Readiness is looked up per *program*, not per language — see
+        // `default_readiness`. Both pyright builds answer `references` with `[]`
+        // for about six hundred milliseconds after `initialize` returns and mark
+        // the end of that window only by publishing diagnostics.
+        assert_eq!(found.readiness, Readiness::FirstDiagnostics, "{name}");
         assert_eq!(found.uri_style, UriStyle::Encoded);
     }
 }
 
 #[test]
+fn a_configured_python_program_gets_the_arguments_that_program_accepts() {
+    // Verified by running all four (`tests/lsp_oracle.rs`):
+    //
+    // ```text
+    // basedpyright-langserver --stdio   ok
+    // pyright-langserver      --stdio   ok
+    // pylsp                   --stdio   pylsp.EXE: error: unrecognized arguments: --stdio
+    // jedi-language-server    --stdio   error: unrecognized arguments: --stdio
+    // ```
+    //
+    // Both of the last two exit 2 immediately. This path used to hand `--stdio`
+    // to whatever the user named, because discovery — which knows the answer —
+    // never runs once a `program` is configured. So the argument list is looked
+    // up by the program's own name against the same table discovery uses, and
+    // there is one place that knows what each server takes.
+    for (name, args) in [
+        ("basedpyright-langserver", vec!["--stdio".to_string()]),
+        ("pyright-langserver", vec!["--stdio".to_string()]),
+    ] {
+        let probe = Fake::new().program(name, &format!("C:/py/{name}.exe"));
+        let settings = config(&format!(
+            r#"{{ "servers": {{ "python": {{ "program": "{name}" }} }} }}"#
+        ));
+
+        let found = spec(resolve(Language::Python, Some(&settings), &probe));
+
+        assert_eq!(found.args, args, "{name}");
+    }
+}
+
+#[test]
+fn a_configured_program_nobody_recognises_keeps_the_language_default() {
+    // A wrapper script, a version-pinned shim, a build from source. There is
+    // nothing to look up, so the language's usual arguments are the best
+    // available answer — and `"args": []` remains the documented escape hatch.
+    let probe = Fake::new().program("my-pyright-wrapper", "C:/py/my-pyright-wrapper.exe");
+    let settings = config(r#"{ "servers": { "python": { "program": "my-pyright-wrapper" } } }"#);
+
+    let found = spec(resolve(Language::Python, Some(&settings), &probe));
+
+    assert_eq!(found.args, vec!["--stdio".to_string()]);
+}
+
+#[test]
 fn the_earlier_python_candidate_wins_when_several_are_installed() {
     let probe = Fake::new()
-        .program("pylsp", "C:/py/pylsp.exe")
         .program("pyright-langserver", "C:/py/pyright-langserver.exe")
         .program(
             "basedpyright-langserver",
@@ -373,7 +459,7 @@ fn ruff_is_never_treated_as_a_python_language_server() {
 }
 
 #[test]
-fn a_missing_python_server_lists_all_four_candidates_that_were_tried() {
+fn a_missing_python_server_lists_every_candidate_that_was_tried() {
     let (looked_for, hint) = not_found(resolve(Language::Python, None, &Fake::new()));
 
     assert_eq!(
@@ -381,8 +467,6 @@ fn a_missing_python_server_lists_all_four_candidates_that_were_tried() {
         vec![
             "basedpyright-langserver (on PATH)".to_string(),
             "pyright-langserver (on PATH)".to_string(),
-            "pylsp (on PATH)".to_string(),
-            "jedi-language-server (on PATH)".to_string(),
         ]
     );
     assert!(!hint.is_empty());
@@ -784,11 +868,11 @@ fn a_disabled_server_is_reported_without_touching_the_environment() {
 #[test]
 fn disabling_one_server_does_not_disable_the_others() {
     let cfg = config(r#"{"servers":{"rust":{"enabled":false}}}"#);
-    let probe = Fake::new().program("pylsp", "C:/py/pylsp.exe");
+    let probe = Fake::new().program("pyright-langserver", "C:/py/pyright-langserver.exe");
 
     assert_eq!(
         spec(resolve(Language::Python, Some(&cfg), &probe)).program,
-        PathBuf::from("C:/py/pylsp.exe")
+        PathBuf::from("C:/py/pyright-langserver.exe")
     );
 }
 
@@ -1017,7 +1101,7 @@ fn every_language_has_timeouts_that_allow_more_time_for_the_first_request() {
         ),
         (
             Language::Python,
-            Box::new(Fake::new().program("pylsp", "C:/py/pylsp.exe")),
+            Box::new(Fake::new().program("pyright-langserver", "C:/py/pyright-langserver.exe")),
         ),
     ];
 

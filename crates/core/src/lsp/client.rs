@@ -51,7 +51,7 @@
 //! [`super::protocol::DidChangeTextDocumentParams::whole_document`] builds and
 //! `notes.md` justifies. That decision is settled; do not revisit it here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -271,15 +271,11 @@ impl Client {
         args.extend(caller_args(&spec, std::process::id(), log_dir.as_deref()));
 
         // The one notification this server's readiness turns on, recorded by the
-        // transport's reader as state. `Immediate` waits for nothing, so there
-        // is nothing for the reader to keep.
+        // transport's reader as state. Built once and shared with the readiness
+        // watcher below: the matcher may be stateful, and two of them would each
+        // see only part of the stream.
         let readiness = spec.readiness;
-        let watch_for: Option<SignalFilter> = match readiness {
-            Readiness::Immediate => None,
-            readiness => Some(Arc::new(move |notification: &Notification| {
-                signals_ready(readiness, notification)
-            })),
-        };
+        let watch_for = readiness_filter(readiness);
 
         let transport = Transport::spawn(
             &Launch {
@@ -288,7 +284,7 @@ impl Client {
                 cwd: root.to_path_buf(),
                 env: spec.env.clone(),
             },
-            watch_for,
+            watch_for.clone(),
         )
         .map_err(|error| StartFailure::Spawn(format!("{error:#}")))?;
 
@@ -334,6 +330,7 @@ impl Client {
 
         let ready = spawn_readiness_watch(
             spec.readiness,
+            watch_for.clone(),
             notifications,
             transport.signal(),
             ceiling,
@@ -836,19 +833,23 @@ fn deadline_for(timeouts: &Timeouts, base: Duration, first: bool) -> Duration {
 /// value after that.
 fn spawn_readiness_watch(
     readiness: Readiness,
+    matches: Option<SignalFilter>,
     notifications: broadcast::Receiver<Notification>,
     signal: watch::Receiver<Option<Notification>>,
     ceiling: Duration,
     death: watch::Receiver<Option<Death>>,
 ) -> watch::Receiver<ReadyState> {
-    if readiness == Readiness::Immediate {
+    // `None` is exactly `Immediate` — the two are decided in one place,
+    // `readiness_filter`, so they cannot drift apart.
+    let Some(matches) = matches else {
         let (_, rx) = watch::channel(ReadyState::Ready);
         return rx;
-    }
+    };
 
     let (tx, rx) = watch::channel(ReadyState::Loading);
     tokio::spawn(watch_readiness(
         readiness,
+        matches,
         notifications,
         signal,
         ceiling,
@@ -874,6 +875,7 @@ fn spawn_readiness_watch(
 /// transport closing.
 async fn watch_readiness(
     readiness: Readiness,
+    matches: SignalFilter,
     mut notifications: broadcast::Receiver<Notification>,
     mut signal: watch::Receiver<Option<Notification>>,
     ceiling: Duration,
@@ -898,7 +900,7 @@ async fn watch_readiness(
     let streamed = async {
         loop {
             match notifications.recv().await {
-                Ok(notification) if signals_ready(readiness, &notification) => return true,
+                Ok(notification) if matches(&notification) => return true,
                 Ok(_) => {}
                 // Lag costs whatever was dropped, and that is accepted: a chatty
                 // but healthy server must not be stranded on "loading" because
@@ -994,6 +996,7 @@ fn signals_ready(readiness: Readiness, notification: &Notification) -> bool {
         // the honest answer: an immediate server is ready whatever arrives.
         Readiness::Immediate => true,
         Readiness::RoslynProjectInit => notification.method == PROJECT_INITIALIZATION_COMPLETE,
+        Readiness::FirstDiagnostics => notification.method == method::PUBLISH_DIAGNOSTICS,
         Readiness::Progress { token_prefix } => {
             if notification.method != method::PROGRESS {
                 return false;
@@ -1007,6 +1010,108 @@ fn signals_ready(readiness: Readiness, notification: &Notification) -> bool {
             // waiting on means the work is *running*, which is the opposite.
             matches!((token, kind), (Some(token), Some("end")) if token.starts_with(token_prefix))
         }
+        // Stateless matching cannot answer this one: see [`TitledProgress`].
+        // Reached only by a caller that ignored `readiness_filter`, and `false`
+        // is the safe answer — it waits rather than promoting.
+        Readiness::ProgressTitle { .. } => false,
+    }
+}
+
+/// The one matcher for a server's readiness signal, shared by the transport's
+/// sticky record and by the live stream.
+///
+/// One `Arc` rather than one closure each, because [`Readiness::ProgressTitle`]
+/// is **stateful**: two independent matchers would each see only some of the
+/// notifications and neither would reliably pair a `begin` with its `end`.
+///
+/// `None` for [`Readiness::Immediate`], which waits for nothing, so there is
+/// nothing for the transport's reader to keep.
+fn readiness_filter(readiness: Readiness) -> Option<SignalFilter> {
+    match readiness {
+        Readiness::Immediate => None,
+        Readiness::ProgressTitle { title_prefix } => {
+            let state = TitledProgress::new(title_prefix);
+            Some(Arc::new(move |notification: &Notification| {
+                state.matches(notification)
+            }))
+        }
+        readiness => Some(Arc::new(move |notification: &Notification| {
+            signals_ready(readiness, notification)
+        })),
+    }
+}
+
+/// Pairs a `$/progress` `end` with the `begin` that named the work.
+///
+/// Stateful because the protocol leaves no alternative. An `end` value carries
+/// `kind` and nothing else — no title, no description — so the only way to know
+/// *what* ended is to have remembered the token when its `begin` went past. A
+/// server that mints an opaque token per unit of work therefore cannot be
+/// matched by [`Readiness::Progress`] at all, and matching every `end` instead
+/// would promote at the first piece of work the server happened to finish.
+///
+/// Tokens are keyed by their JSON spelling, so the legal numeric token `7` and
+/// the equally legal string token `"7"` stay distinct.
+struct TitledProgress {
+    title_prefix: &'static str,
+    /// Tokens whose `begin` matched, awaiting their `end`.
+    ///
+    /// Capped: a server that begins matching work and never ends it would
+    /// otherwise grow this without bound for the life of the process. Past the
+    /// cap new tokens are dropped rather than evicting old ones — the earliest
+    /// match is the one readiness is waiting for, and forgetting it to make room
+    /// for a later one is the one outcome that would strand the server on
+    /// "loading" forever.
+    watching: Mutex<HashSet<String>>,
+}
+
+impl TitledProgress {
+    /// Far above the one or two a real server has in flight, far below anything
+    /// that matters for memory.
+    const MAX_TRACKED: usize = 64;
+
+    fn new(title_prefix: &'static str) -> Self {
+        Self {
+            title_prefix,
+            watching: Mutex::new(HashSet::new()),
+        }
+    }
+
+    fn matches(&self, notification: &Notification) -> bool {
+        if notification.method != method::PROGRESS {
+            return false;
+        }
+        let Some(params) = notification.params.as_ref() else {
+            return false;
+        };
+        let Some(token) = params.get("token") else {
+            return false;
+        };
+        let token = token.to_string();
+        let kind = params.pointer("/value/kind").and_then(Value::as_str);
+
+        let mut watching = match self.watching.lock() {
+            Ok(watching) => watching,
+            // The reader task is the only writer, so this is unreachable in
+            // practice; carrying on with the last consistent set beats refusing
+            // to ever report readiness again.
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match kind {
+            Some("begin") => {
+                let titled = params
+                    .pointer("/value/title")
+                    .and_then(Value::as_str)
+                    .is_some_and(|title| title.starts_with(self.title_prefix));
+                if titled && watching.len() < Self::MAX_TRACKED {
+                    watching.insert(token);
+                }
+                // A beginning is the opposite of ready, however well it matches.
+                false
+            }
+            Some("end") => watching.contains(&token),
+            _ => false,
+        }
     }
 }
 
@@ -1015,8 +1120,13 @@ fn awaited_signal(readiness: Readiness) -> String {
     match readiness {
         Readiness::Immediate => "anything (it was ready already)".to_string(),
         Readiness::RoslynProjectInit => format!("`{PROJECT_INITIALIZATION_COMPLETE}`"),
+        Readiness::FirstDiagnostics => format!("any `{}`", method::PUBLISH_DIAGNOSTICS),
         Readiness::Progress { token_prefix } => format!(
             "a `{}` end for a token beginning `{token_prefix}`",
+            method::PROGRESS
+        ),
+        Readiness::ProgressTitle { title_prefix } => format!(
+            "a `{}` end for the work titled `{title_prefix}`",
             method::PROGRESS
         ),
     }
