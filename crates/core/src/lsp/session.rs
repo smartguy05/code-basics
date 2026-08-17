@@ -1554,8 +1554,21 @@ fn readable(path: &Path) -> Option<String> {
 fn dispatch(client: &Client, actions: &[SyncAction]) {
     for action in actions {
         let outcome = match action {
-            SyncAction::DidOpen { path, text, .. } => client.did_open(path, text),
-            SyncAction::DidChange { path, text, .. } => client.did_change(path, text),
+            // The version is the mirror's and is carried through, not dropped:
+            // `Documents` is the one counter, and it is the only one with a rule
+            // that survives a close. See `Client::did_change`.
+            SyncAction::DidOpen {
+                path,
+                text,
+                version,
+                ..
+            } => client.did_open(path, text, *version),
+            SyncAction::DidChange {
+                path,
+                text,
+                version,
+                ..
+            } => client.did_change(path, text, *version),
             SyncAction::DidClose { path, .. } => client.did_close(path),
         };
         if let Err(error) = outcome {

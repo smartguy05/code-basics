@@ -53,6 +53,19 @@ pub enum SymbolKind {
     Type,
     Namespace,
     Constant,
+    /// A member with accessors, as C#, TypeScript, Java and Kotlin mean it.
+    ///
+    /// **Unreachable from the text scan below, and that is deliberate.** No
+    /// keyword introduces one unambiguously: C# writes `public string Name
+    /// { get; set; }`, which is a line the scan reads as a variable, and
+    /// `property` is not a keyword in any language here. It exists for
+    /// [`crate::lsp::protocol::symbol_kind`], where a real server has already
+    /// done the parsing and says `SymbolKind.Property` (7) outright.
+    ///
+    /// So this enum now has two producers with different confidence, which is
+    /// the arrangement the `lsp` module was added under: a heuristic that
+    /// abstains, beside a server that knows.
+    Property,
     Variable,
     Other,
 }

@@ -48,7 +48,7 @@ Ten types cross for the usages feature (`Availability`, `UsageResult`, `Usage`, 
 - `usage_result_serialises_with_the_keys_the_ui_reads`, `usage_serialises_with_the_keys_the_ui_reads`, `definition_result_serialises_with_the_keys_the_ui_reads`, `target_serialises_with_the_keys_the_ui_reads`, `anchor_result_serialises_with_the_keys_the_ui_reads`, `declaration_anchor_serialises_with_the_keys_the_ui_reads`, `lsp_status_serialises_with_the_keys_the_ui_reads`, `server_status_serialises_with_the_keys_the_ui_reads`.
 - `a_usage_result_with_no_count_still_carries_the_total_key_as_null` and `a_usage_outside_the_workspace_carries_a_null_path_not_a_missing_one` — the no-`skip_serializing_if` rule, asserted rather than described.
 - `highlight_is_an_object_with_start_and_end_not_an_array` — a tuple struct would serialise as a two-element array and the mirror is an object.
-- `symbol_kind_still_serialises_as_the_lower_case_strings_types_ts_mirrors` — `DeclarationAnchor.kind` reuses `symbols::declarations::SymbolKind`, so a rename over in the palette's enum would silently change this boundary too.
+- `symbol_kind_still_serialises_as_the_lower_case_strings_types_ts_mirrors` — `DeclarationAnchor.kind` reuses `symbols::declarations::SymbolKind`, so a rename over in the palette's enum would silently change this boundary too. It pins the spellings through an **exhaustive `match`**, not a hand-written list: a list pins only the variants somebody remembered to add to it, so a new kind would reach the wire with `types.ts` still unmirrored. The match fails to compile instead. Follow that pattern for any enum crossing this boundary.
 - `every_result_type_round_trips_through_json`.
 
 Three rules specific to this family:

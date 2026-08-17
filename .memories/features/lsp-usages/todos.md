@@ -1,8 +1,12 @@
 # Todos — LSP usages
 
-> **All 11 open items below are sequenced in `plan.md`** (written 2026-08-17).
-> Read that first; it carries the file:line references and the decisions already
-> made about each one.
+> **`plan.md`'s eleven items are done** (worked 2026-08-17). Five were real
+> defects, three were decisions now recorded in code or `CLAUDE.md`, and three
+> stay open with an explicit trigger rather than a date. See the follow-up
+> section at the end of `notes.md` for the captures behind each one.
+>
+> The only genuinely open item left is the untestable-by-construction frontend
+> (node environment, no DOM), and it has a manual procedure rather than a fix.
 
 ## Done
 
@@ -33,24 +37,33 @@ both invisible to a fixture without astral-plane characters:
 
 ## Opened by Phase 2, to settle before or during the phase that needs it
 
-- [ ] **`ServerSpec::language_id` is one string per language**, so a `.tsx` file
-      is opened as `typescript` and not `typescriptreact`. Fine until `didOpen`
-      is written — decide there whether the id is a property of the extension
-      rather than the language.
-- [ ] **`SymbolKind` has no `Property`**, so LSP `Property` (7) and `Field` (8)
-      both land on `Variable`. Adding a variant changes the wire type, the
-      `model.rs` key pinning and `types.ts`, so it belongs to the phase that
-      surfaces these rows, not to `protocol.rs`.
+- [x] ~~**`ServerSpec::language_id` is one string per language**~~ — it is a
+      property of the **extension**, and that was measured rather than reasoned:
+      opening a `.tsx` as `typescript` makes typescript-language-server report
+      `<unknown>` and `props` from inside a JSX expression as declarations, plus
+      nine diagnostics starting `'>' expected.`, and `documentSymbol` is exactly
+      what the inline rows are built from. `ServerSpec::language_id_for` refines
+      per extension; an extension belonging to another language falls back to the
+      server's own id rather than guessing.
+- [x] ~~**`SymbolKind` has no `Property`**~~ — added. LSP 7 → `Property`; **8
+      (`Field`) and 13 (`Variable`) stay `Variable` deliberately**, because every
+      language here that has properties also has fields and calls them different
+      things. The variant is unreachable from the text scan by design. The
+      key-pinning test is now an exhaustive `match` rather than a hand-written
+      array, so the next added variant fails to compile instead of reaching the
+      wire unmirrored.
 - [x] ~~`decode_goto`'s error always says `textDocument/definition`~~ — fixed:
       both call sites in `client.rs` wrap it with `malformed(method, error)`., because
       the four goto-shaped requests share one decoder that is not told which one
       it is decoding. `client.rs` must wrap the error with the real method or
       the UI will name the wrong question.
-- [ ] **The `LocationLink` path is not backed by a captured payload.** The real
-      Roslyn server answered `Location[]` despite `linkSupport: true`; those
-      tests are over hand-written JSON. The Rust oracle's `goto_definition` step
-      now sends real traffic over that decoder against rust-analyzer and passes,
-      but which shape arrived was not recorded — capture it next.
+- [x] ~~**The `LocationLink` path is not backed by a captured payload.**~~ —
+      captured. rust-analyzer 1.97.1 really does answer `LocationLink[]`, and in
+      the real payload `targetRange` starts on the doc comment (line 2) while
+      `targetSelectionRange` starts on the identifier (line 3), so `aim()`'s
+      preference is load-bearing rather than theoretical. Pasted verbatim into
+      `protocol_tests.rs`, named so captured and hand-written fixtures cannot be
+      confused.
 - [x] ~~Nothing about the three absent servers is verified~~ — all installed and
       run. **Every design-derived claim was wrong**; see `notes.md` for the
       captures. Summary: rust-analyzer's readiness prefix matched a sibling token
@@ -77,14 +90,17 @@ both invisible to a fixture without astral-plane characters:
 
 - [ ] **`Transport::shutdown` is `&self` and always publishes `ShutDown`**, so a
       second call re-publishes nothing (first-death-wins) but still burns the
-      `EXIT_GRACE` wait. Harmless today because only `Client::shutdown` calls it;
-      revisit when the session actor can request teardown twice.
+      `EXIT_GRACE` wait. Harmless today because only `Client::shutdown` calls it.
+      **Trigger: the session actor gaining a second teardown path.** Reviewed
+      2026-08-17 and deliberately left; the reason is in `notes.md`.
 - [ ] **`kill_tree` blocks the calling runtime worker** (`taskkill` via
       `std::process::Command::status`, or a 2 s escalation thread on Unix) and is
       called from async tasks and from `Drop`. Invisible on the multi-thread
       runtime the app uses; on the current-thread runtime every `#[tokio::test]`
       uses, it stalls every other task including the timeout that bounds the test.
-      Not worth fixing on its own — worth knowing if a test starts flaking.
+      **Trigger: the first LSP test that flakes on a timeout. The fix is
+      `spawn_blocking`** — written down so the diagnosis is not re-derived.
+      Reviewed 2026-08-17 and deliberately left.
 - [x] ~~`ReadyWithCaveat` reaches no consumer~~ — it does now: `session.rs`
       turns it into a `RunningRow` and a caveat `message`, which is exactly what the
       Phase 5 fix round made the UI honour. `ask` returns
@@ -92,10 +108,24 @@ both invisible to a fixture without astral-plane characters:
       contract is documented on `ask` (callers must read `readiness()` alongside
       the result) and enforced by nothing. Decide in the phase that renders a
       count whether the state should travel *with* the answer.
-- [ ] **The Unix tree kill is unverified.** `dropping_the_transport_kills_the_whole_tree`
-      now depends on `configure_process_group` making the child a group leader.
-      That is the mechanism `Supervisor` already relies on, but this machine is
-      Windows-only and no one has run the test on Linux or macOS.
+- [x] ~~**The Unix tree kill is unverified.**~~ — run on Linux (Docker,
+      `rust:slim` + `git` + `procps`, `src-tauri` dropped from the workspace
+      members so no webkit2gtk is needed). **The whole `cb-core` suite now passes
+      there**, and getting it to took two real fixes:
+      - `pid_alive` shelled out to `Command::new("kill")`, but `kill` is a POSIX
+        *shell builtin* and `/bin/kill` is not in a Debian slim image. It
+        therefore answered `false` for **every** pid, which means the two
+        `until(|| !pid_alive(..))` waits that *are* this test returned instantly
+        and asserted nothing. The item carried for a phase as "unverified" was
+        really "could not fail". Goes through `sh` now.
+      - `kill_tree` signalled `-pid` only, so for a pid that is not a group
+        leader it killed **nothing at all**, not even the named process. Both
+        production callers do spawn group leaders, so this was correct purely by
+        construction. It signals the group *and* the pid now, matching the
+        Windows `taskkill /T` arm.
+
+      Repeat the Docker run whenever a `#[cfg(unix)]` branch changes; the recipe
+      is in `notes.md` and costs one container.
 
 ## Watch out for
 
@@ -114,7 +144,8 @@ both invisible to a fixture without astral-plane characters:
       advertises `codeLensProvider: {resolveProvider: true}` and would give the
       count directly, but it is not uniform across four servers and needs its own
       configuration plumbing. `documentSymbol` + `references` is one code path
-      for all of them.
+      for all of them. **Trigger: the two-request cost becoming a *measured*
+      problem** — not a suspicion. Accepted again 2026-08-17.
 - [x] ~~No real-server oracle is checked in yet~~ — `crates/core/tests/lsp_oracle.rs`.
       Table-driven, one `#[ignore]`d test per language, self-contained fixtures,
       skipping only on `NotConfigured`. Plus `fixtures_say_what_the_oracles_assert`,
@@ -230,17 +261,29 @@ parse-check with the async-function wrapper before launching.
 
 ## Opened by the Phase 4 verification pass
 
-- [ ] **`Documents::version()` is a number nobody sends.** `session.rs:1520-1521`
-      discards the `SyncAction` version and `client.rs` keeps its own counter, so
-      the mirror's version is a plausible-looking value that never reaches a
-      server. Harmless now, wrong the moment anyone reads it. Two acceptable
-      fixes and one forbidden one — see `notes.md`.
-- [ ] **`src-tauri/src/commands/lsp.rs` is 49.7% line-covered** (37 functions, 25
-      untested). The whole-workspace figure is fine at 88.48%, and these are thin
-      delegators by design — but "thin" is now a claim about 165 lines that
-      nothing checks, and this is the third round in which the same gap has been
-      noted for a command module (`arch_*` before it). Either test the delegation
-      or write down that it is deliberately untested.
+- [x] ~~**`Documents::version()` is a number nobody sends.**~~ — fixed the way
+      the notes preferred: `Client::did_open`/`did_change` take the version as an
+      argument and `session::dispatch` passes the mirror's through. One counter,
+      in the only place whose high-water rule survives a close.
+
+      Getting a *failing* test first needed new machinery, and that is the
+      durable part: document sync is the one thing this subsystem does that a
+      server never answers, so no test could see the wire at all. `cb-fake-lsp`
+      gained a `notificationJournal` script field — every received notification
+      appended as one JSON line, in wire order. The defect was then immediate:
+      open / change / close / re-open / change produced **`[1, 2, 1, 2]`**.
+- [x] ~~**`src-tauri/src/commands/lsp.rs` is 49.7% line-covered**~~ — settled as
+      a rule rather than a number, because the cause is structural and was
+      verified: every `#[tauri::command]` takes `State<'_, AppState>`, which
+      cannot be built without a `tauri::App`, and the `tauri` dependency does not
+      enable the `test` feature. **No command in `cb-app` is called by any test,
+      in any module, and none can be.** `CLAUDE.md`'s `src-tauri` section now
+      says so, and says the thing that actually matters: a command body may not
+      *decide* anything, and the moment one does the decision moves to a plain
+      free function beside it. Applied to the one that did — `lsp_status` turned
+      a failure into a successful empty list — which is `status_for` now, tested
+      both ways. Judge these modules by whether the untested lines decide
+      anything, not by the percentage.
 
 ## The Phase 5 fix round (done)
 
@@ -328,7 +371,11 @@ supervisor from the picture.
 
 ## Noticed while verifying, pre-existing, out of scope
 
-- [ ] (moved to `plan.md` Phase 5 — belongs to the editor, not this WI) **The dirty dot stays lit after undoing back to the saved content.**
+- [ ] **MOVED OUT — this belongs to the editor, not to this work item.** Not
+      fixed here and deliberately not tracked here any longer; re-file it against
+      `FileEditor` when the editor is next worked on. Kept only so the next
+      reader of this file knows it was a decision rather than an oversight.
+      **The dirty dot stays lit after undoing back to the saved content.**
       `FileEditor` sets dirty on any `docChanged` and clears it only on save, so
       undoing an edit leaves the buffer identical to disk while the tab still
       claims unsaved changes. Observed with CDP: after insert-then-undo the first

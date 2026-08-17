@@ -165,12 +165,28 @@ pub fn spawn_session(app: tauri::AppHandle) {
 /// case: it appears as a row, with everywhere that was searched and a hint.
 #[tauri::command]
 pub async fn lsp_status(state: State<'_, AppState>) -> Result<LspStatus, String> {
-    Ok(match ensure_session(&state) {
+    Ok(status_for(ensure_session(&state)))
+}
+
+/// [`lsp_status`]'s one decision, outside the command body so it can be tested.
+///
+/// A `#[tauri::command]` takes [`State`], which cannot be built without a
+/// `tauri::App`, so nothing inside one is reachable from a unit test — see the
+/// `src-tauri` section of `CLAUDE.md`. That is tolerable exactly while the
+/// bodies decide nothing, and this one does decide something: it turns a failure
+/// into a successful empty list, which is the shape this whole subsystem exists
+/// to refuse everywhere else. Leaving it inline would have left the one line
+/// worth checking as the one line nothing could check.
+fn status_for(session: Result<LspHandle, String>) -> LspStatus {
+    match session {
         Ok(session) => session.status(),
+        // Deliberately not the error: see this function's own doc and the
+        // command's. "No workspace open" is not a server problem, and there are
+        // no servers to report.
         Err(_) => LspStatus {
             servers: Vec::new(),
         },
-    })
+    }
 }
 
 /// The editor opened a document, or replaced its contents wholesale.
@@ -267,6 +283,7 @@ mod tests {
 
     use std::path::PathBuf;
 
+    use cb_core::lsp::registry::Probe;
     use cb_core::workspace::Workspace;
 
     fn workspace_at(root: &str) -> Workspace {
@@ -336,6 +353,75 @@ mod tests {
             "a second call started a second session"
         );
         first.request_teardown();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn no_workspace_is_an_empty_server_list_and_a_session_is_its_own_rows() {
+        // The status surface is where a user is *sent* to find out why there is
+        // no language server, so it must not be the one place that puts an error
+        // toast in front of them. An empty list is the honest answer to "which
+        // servers does this workspace have" when there is no workspace.
+        assert!(status_for(Err("anything".to_string())).servers.is_empty());
+
+        // And the other half, which is what stops "always empty" from passing.
+        //
+        // Deliberately over a probe that finds nothing rather than over the real
+        // one: a session lists a language the moment it is started, *or*
+        // immediately and permanently if it could not be resolved at all — so on
+        // a machine with every server installed a fresh session has no rows, and
+        // an assertion about a non-empty list would pass here and fail on the
+        // next developer's box. With nothing installed all four languages are
+        // unresolvable, which is the same everywhere.
+        let session = session::start_with_probe(
+            PathBuf::from("/a"),
+            None,
+            1,
+            std::sync::Arc::new(NothingInstalled),
+        );
+        for _ in 0..200 {
+            if !session.status().servers.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let rows = status_for(Ok(session.clone()));
+        assert_eq!(
+            rows.servers.len(),
+            4,
+            "four languages, none of them resolvable, all of them reported"
+        );
+        assert_eq!(
+            rows.servers,
+            session.status().servers,
+            "the rows are the session's own, unmodified"
+        );
+        session.request_teardown();
+    }
+
+    /// A machine with nothing installed, so the row count is a fact about the
+    /// registry rather than about whoever is running the suite.
+    struct NothingInstalled;
+
+    impl Probe for NothingInstalled {
+        fn on_path(&self, _name: &str) -> Option<PathBuf> {
+            None
+        }
+        fn is_file(&self, _path: &Path) -> bool {
+            false
+        }
+        fn is_dir(&self, _path: &Path) -> bool {
+            false
+        }
+        fn read_dir(&self, _path: &Path) -> Vec<PathBuf> {
+            Vec::new()
+        }
+        fn home(&self) -> Option<PathBuf> {
+            None
+        }
+        fn env(&self, _key: &str) -> Option<String> {
+            None
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

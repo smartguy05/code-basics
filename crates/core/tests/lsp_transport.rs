@@ -902,8 +902,24 @@ fn pid_alive(pid: u32) -> bool {
 
     #[cfg(unix)]
     {
-        std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
+        // Through `sh`, not `Command::new("kill")`. `kill` is a POSIX **shell
+        // builtin** and a standalone `/bin/kill` only exists where procps is
+        // installed — it is not in a Debian slim image, and neither is `ps`. So
+        // the direct spawn failed to start at all and `unwrap_or(false)` turned
+        // that into "the process is dead".
+        //
+        // Which made this helper answer `false` for **every** pid on Unix. Both
+        // liveness preconditions in this file failed the first time they were
+        // ever run on Linux, and worse, the two `until(|| !pid_alive(..))` waits
+        // that are the actual subject of `dropping_the_transport_kills_the_whole_tree`
+        // would have returned instantly and asserted nothing. A test that cannot
+        // fail is not evidence, and this one was shipped as evidence.
+        //
+        // `sh` is already a hard requirement of this file (the fake's leaked
+        // grandchild is `sh`), so it costs nothing.
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("kill -0 {pid}"))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()

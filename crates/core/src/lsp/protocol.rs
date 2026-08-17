@@ -373,10 +373,14 @@ pub fn symbol_kind(number: u32) -> SymbolKind {
         // `Function` is "callable", and separating them would need three badges
         // to say something no user is scanning for.
         6 | 9 | 12 => SymbolKind::Function,
-        // A property and a field are named storage. `Variable` is the closest
-        // thing this enum has, and there is no `Property` to add without
-        // changing the wire type and the frontend mirror.
-        7 | 8 | 13 => SymbolKind::Variable,
+        7 => SymbolKind::Property,
+        // 8 Field and 13 Variable are named storage and stay `Variable`, which
+        // is a decision and not an omission. Every language this app builds
+        // that *has* properties also has fields and calls them different
+        // things — a property has accessors, a field does not — so folding a
+        // field into `Property` would be the confident wrong label this module
+        // is written to avoid. `Variable` claims only "named storage".
+        8 | 13 => SymbolKind::Variable,
         10 => SymbolKind::Enum,
         // 11 Interface is also what rust-analyzer reports a **trait** as: LSP
         // has no trait kind. So `SymbolKind::Trait` is unreachable from here,

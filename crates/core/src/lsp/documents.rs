@@ -48,8 +48,9 @@
 //!
 //! It is not the authority on process lifetime, on URIs, or on whether a server
 //! may be asked something — those are [`super::transport`], [`super::uri`] and
-//! [`super::client`]. It does not know that [`super::client::Client`] keeps a
-//! version counter of its own; see the note on [`SyncAction`].
+//! [`super::client`]. It does not send anything: [`super::session`] turns each
+//! action into the matching [`super::client::Client`] call, version included.
+//! See the note on [`SyncAction`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -68,15 +69,14 @@ pub type ServerId = &'static str;
 /// Returned, never sent. The caller — [`super::session`] — turns each of these
 /// into the matching [`super::client::Client`] call.
 ///
-/// **The `version` here is this mirror's, and `Client` keeps its own.**
-/// `Client::did_open`/`did_change` number their notifications from a private map
-/// and do not accept a version argument, so the number that actually reaches the
-/// wire today is the client's. The two agree on the only property a server cares
-/// about — that the number rises — and they will disagree on its value after a
-/// close and re-open, because `Client` forgets a document when it is closed and
-/// this mirror deliberately does not. If a server is ever seen to complain about
-/// a version, the fix is to make `Client` take the version from the action
-/// rather than to make this mirror restart.
+/// **The `version` here is the one that reaches the wire.**
+/// [`super::client::Client::did_open`] and `did_change` take it as an argument
+/// and record it as "what was last sent"; they do not number their own
+/// notifications. That was not always so — the client kept a private counter
+/// that restarted at 1 after a close and re-open, which made
+/// [`Documents::version`] a plausible-looking number nobody had ever sent. One
+/// counter, and it is this one, because this is the only one whose high-water
+/// rule survives a close.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncAction {
     DidOpen {

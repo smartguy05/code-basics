@@ -41,7 +41,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/architecture/signals/routes_tests.rs` | 886 | Tests for [`super::routes`]. |
 | `crates/core/src/architecture/store.rs` | 596 | Diagrams on disk: where they live, how they say where they came from, and |
 | `crates/core/src/architecture/store_tests.rs` | 631 | Tests for [`super::store`]. |
-| `crates/core/src/bin/fake_lsp.rs` | 713 | A scripted stand-in for a language server, used only by the transport tests. |
+| `crates/core/src/bin/fake_lsp.rs` | 752 | A scripted stand-in for a language server, used only by the transport tests. |
 | `crates/core/src/changelists.rs` | 203 | Change groups: named buckets for the files in a working tree. |
 | `crates/core/src/changelists_tests.rs` | 344 | Tests for change groups. Included by `changelists.rs` under `#[cfg(test)]`. |
 | `crates/core/src/config.rs` | 927 | The workspace configuration file, `.code-basics/config.json`. |
@@ -86,13 +86,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/providers/instructions.rs` | 148 | Asking the agent for a reason. |
 | `crates/core/src/intents/providers/instructions_tests.rs` | 204 | Tests for the label request appended to an agent's instruction file. |
 | `crates/core/src/intents/providers/mod.rs` | 234 | Per-agent knowledge: where it keeps its history, and how to ask it to |
-| `crates/core/src/intents/providers/providers_tests.rs` | 813 | Tests for provider detection and hook installation. |
+| `crates/core/src/intents/providers/providers_tests.rs` | 835 | Tests for provider detection and hook installation. |
 | `crates/core/src/intents/reject.rs` | 457 | Rejecting a change: undoing it and leaving the reason where it was. |
 | `crates/core/src/intents/reject_tests.rs` | 371 | Tests for rejecting a change — the marker comment left where code was. |
 | `crates/core/src/invocation.rs` | 267 | Turning a run configuration into a command line. |
 | `crates/core/src/invocation_tests.rs` | 455 | Tests for dispatching a configuration to the adapter that owns it. |
 | `crates/core/src/lib.rs` | 31 | Core logic for `code-basics`. |
-| `crates/core/src/lsp/client.rs` | 1153 | One language server, from handshake to shutdown, as questions and answers. |
+| `crates/core/src/lsp/client.rs` | 1179 | One language server, from handshake to shutdown, as questions and answers. |
 | `crates/core/src/lsp/client_tests.rs` | 658 | Unit tests for the parts of the client that need no server. |
 | `crates/core/src/lsp/documents.rs` | 370 | What each server has been told about each open document. |
 | `crates/core/src/lsp/documents_tests.rs` | 598 | Every ordering rule this module claims to obey, one test each. |
@@ -102,16 +102,16 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/lsp/jsonrpc_tests.rs` | 198 |  |
 | `crates/core/src/lsp/mod.rs` | 150 | Talking to real language servers, so "find usages" can be right. |
 | `crates/core/src/lsp/model.rs` | 300 | The types that cross the IPC boundary for this feature. |
-| `crates/core/src/lsp/model_tests.rs` | 406 | The wire shape of everything this subsystem sends the frontend. |
+| `crates/core/src/lsp/model_tests.rs` | 428 | The wire shape of everything this subsystem sends the frontend. |
 | `crates/core/src/lsp/positions.rs` | 178 | Counting characters and lines the way LSP does, and the way this app does. |
 | `crates/core/src/lsp/positions_tests.rs` | 242 |  |
-| `crates/core/src/lsp/protocol.rs` | 791 | The LSP messages this app actually uses, and nothing else. |
-| `crates/core/src/lsp/protocol_tests.rs` | 903 |  |
-| `crates/core/src/lsp/registry.rs` | 958 | Which server serves which file, where it is, and what to say when it is absent. |
-| `crates/core/src/lsp/registry_tests.rs` | 1195 |  |
-| `crates/core/src/lsp/results.rs` | 394 | LSP payloads in, the types the frontend reads out. |
+| `crates/core/src/lsp/protocol.rs` | 795 | The LSP messages this app actually uses, and nothing else. |
+| `crates/core/src/lsp/protocol_tests.rs` | 953 |  |
+| `crates/core/src/lsp/registry.rs` | 1030 | Which server serves which file, where it is, and what to say when it is absent. |
+| `crates/core/src/lsp/registry_tests.rs` | 1270 |  |
+| `crates/core/src/lsp/results.rs` | 398 | LSP payloads in, the types the frontend reads out. |
 | `crates/core/src/lsp/results_tests.rs` | 670 | Every rule this module claims to obey, one test each. |
-| `crates/core/src/lsp/session.rs` | 1610 | Every language server for one workspace, behind one actor. |
+| `crates/core/src/lsp/session.rs` | 1623 | Every language server for one workspace, behind one actor. |
 | `crates/core/src/lsp/session_tests.rs` | 490 | The session's pure decisions, headlessly. |
 | `crates/core/src/lsp/settings.rs` | 159 | The per-workspace language-server configuration block. |
 | `crates/core/src/lsp/settings_tests.rs` | 172 |  |
@@ -121,13 +121,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/lsp/uri_tests.rs` | 254 |  |
 | `crates/core/src/model.rs` | 636 | Types shared between the Rust core and the TypeScript frontend. |
 | `crates/core/src/process/chunker.rs` | 188 | Incremental UTF-8 decoding for streamed process output. |
-| `crates/core/src/process/kill.rs` | 87 | Platform-specific process *tree* termination. |
+| `crates/core/src/process/kill.rs` | 110 | Platform-specific process *tree* termination. |
 | `crates/core/src/process/mod.rs` | 615 | Process supervision: spawn, stream, cancel. |
 | `crates/core/src/process/resolve.rs` | 200 | Windows program-name resolution. |
 | `crates/core/src/secrets.rs` | 574 | .NET user secrets: per-project secrets stored *outside* the repository. |
 | `crates/core/src/symbols/cache.rs` | 456 | Persisting a built index so opening a workspace does not re-read every file. |
 | `crates/core/src/symbols/cache_tests.rs` | 578 | Tests for persisting a built index and reusing what it can still vouch for. |
-| `crates/core/src/symbols/declarations.rs` | 590 | Reading one line of source and deciding whether it declares something. |
+| `crates/core/src/symbols/declarations.rs` | 603 | Reading one line of source and deciding whether it declares something. |
 | `crates/core/src/symbols/declarations_tests.rs` | 491 | Tests for the declaration heuristic. |
 | `crates/core/src/symbols/fuzzy.rs` | 558 | Scoring how well a query matches a candidate symbol name. |
 | `crates/core/src/symbols/fuzzy_tests.rs` | 227 | Tests for scoring a query against a candidate name. |
@@ -144,10 +144,10 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/workspace.rs` | 2047 | Scanning a workspace for projects and building the configurations that can |
 | `crates/core/tests/git_operations.rs` | 997 | End-to-end git tests against real repositories on disk. |
 | `crates/core/tests/intent_attribution.rs` | 198 | Attribution measured against a real repository, rather than a fixture. |
-| `crates/core/tests/lsp_client.rs` | 1173 | One language server, from handshake to shutdown, against `cb-fake-lsp`. |
+| `crates/core/tests/lsp_client.rs` | 1256 | One language server, from handshake to shutdown, against `cb-fake-lsp`. |
 | `crates/core/tests/lsp_oracle.rs` | 838 | The answers a **real** language server gives, for the languages this machine |
-| `crates/core/tests/lsp_session.rs` | 872 | Every language server for one workspace, behind one actor, against `cb-fake-lsp`. |
-| `crates/core/tests/lsp_transport.rs` | 919 | The transport against a live process, one test per way a server misbehaves. |
+| `crates/core/tests/lsp_session.rs` | 962 | Every language server for one workspace, behind one actor, against `cb-fake-lsp`. |
+| `crates/core/tests/lsp_transport.rs` | 935 | The transport against a live process, one test per way a server misbehaves. |
 | `crates/core/tests/reject_markers.rs` | 359 | Rejection end to end: against a real repository, with the real `git`. |
 | `src/App.tsx` | 364 |  |
 | `src/components/BranchMenu.tsx` | 386 |  |
@@ -190,7 +190,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 |  |
 | `src/ipc/api.ts` | 593 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 1291 |  |
+| `src/ipc/types.ts` | 1299 |  |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
@@ -232,7 +232,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/git.rs` | 301 | Git commands. |
 | `src-tauri/src/commands/inspect.rs` | 350 | Object-inspection commands. |
 | `src-tauri/src/commands/intents.rs` | 283 | Agent-intent commands. |
-| `src-tauri/src/commands/lsp.rs` | 348 | Asking this workspace's language servers something, and saying what they do. |
+| `src-tauri/src/commands/lsp.rs` | 434 | Asking this workspace's language servers something, and saying what they do. |
 | `src-tauri/src/commands/run.rs` | 293 | Running applications and tests. |
 | `src-tauri/src/commands/secrets.rs` | 43 | .NET user secrets commands. |
 | `src-tauri/src/commands/symbols.rs` | 234 | The command palette's surface: searching the workspace, and asking after |
@@ -316,7 +316,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/lsp/model.rs`: `Availability`, `UsageResult`, `unavailable()`, `with_server()`, `Usage`, `Highlight`, `DefinitionResult`, `unavailable()`, `Target`, `AnchorResult`, `unavailable()`, `DeclarationAnchor`, `LspStatus`, `ServerStatus`
 - `crates/core/src/lsp/positions.rs`: `utf16_to_byte()`, `byte_to_utf16()`, `to_editor_line()`, `to_lsp_line()`, `Snippet`, `snippet()`
 - `crates/core/src/lsp/protocol.rs`: `Position`, `Range`, `Location`, `LocationLink`, `DecodeError`, `decode_goto()`, `Symbol`, `decode_document_symbols()`, `symbol_kind()`, `SyncKind`, `ServerCapabilities`, `from_initialize_result()`, `encoding_is_utf16()`, `initialize_params()`, `TextDocumentIdentifier`, `VersionedTextDocumentIdentifier`, `TextDocumentItem`, `DidOpenTextDocumentParams`, `new()`, `TextDocumentContentChangeEvent`, `DidChangeTextDocumentParams`, `whole_document()`, `DidCloseTextDocumentParams`, `new()`, `TextDocumentPositionParams`, `new()`, `ReferenceContext`, `ReferenceParams`, `new()`, `DocumentSymbolParams`, `new()`
-- `crates/core/src/lsp/registry.rs`: `RealProbe`, `Language`, `id()`, `Readiness`, `Timeouts`, `ServerSpec`, `Resolution`, `language_for_extension()`, `resolve()`, `Candidate`, `caller_args()`, `takes_caller_args()`
+- `crates/core/src/lsp/registry.rs`: `RealProbe`, `Language`, `id()`, `Readiness`, `Timeouts`, `ServerSpec`, `language_id_for()`, `Resolution`, `language_for_extension()`, `resolve()`, `Candidate`, `caller_args()`, `takes_caller_args()`
 - `crates/core/src/lsp/results.rs`: `usages()`, `targets()`, `anchors()`
 - `crates/core/src/lsp/session.rs`: `LspHandle`, `root()`, `generation()`, `status()`, `request_teardown()`, `open_document()`, `change_document()`, `close_document()`, `find_usages()`, `goto_definition()`, `declaration_anchors()`, `start()`, `start_with_probe()`
 - `crates/core/src/lsp/settings.rs`: `LspConfig`, `server()`, `ServerOverride`, `is_disabled()`, `UriStyleSetting`, `style()`

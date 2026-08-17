@@ -729,23 +729,100 @@ async fn a_server_that_dies_while_loading_is_never_promoted_at_the_ceiling() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn every_change_advances_the_document_version() {
-    // The server rejects a change that does not advance the version, so this
-    // counter is what makes a dropped notification detectable at all.
+async fn the_version_recorded_is_the_one_the_caller_supplied() {
+    // The server rejects a change that does not advance the version, so the
+    // version is what makes a dropped notification detectable at all — but the
+    // counter is `documents::Documents`, not this. What the client records is
+    // *what it sent*, which is what `document_version` claims to return.
+    //
+    // The numbers below are deliberately not 1, 2, 3: a client that had quietly
+    // kept counting for itself would produce those, and passing this test with
+    // them would prove nothing. They are the shape the mirror really produces
+    // after a close and re-open of an earlier document.
     bounded!(async {
         let session = start(fake(json!({ "capabilities": roslyn_capabilities() }))).await;
         let file = a_file(&session);
         let c = &session.client;
 
         assert_eq!(c.document_version(&file), None);
-        c.did_open(&file, "class A {}").expect("opened");
-        assert_eq!(c.document_version(&file), Some(1));
+        c.did_open(&file, "class A {}", 7).expect("opened");
+        assert_eq!(c.document_version(&file), Some(7));
 
-        c.did_change(&file, "class A { }").expect("changed");
-        assert_eq!(c.document_version(&file), Some(2));
-        c.did_change(&file, "class A { int x; }").expect("changed");
-        assert_eq!(c.document_version(&file), Some(3));
+        c.did_change(&file, "class A { }", 8).expect("changed");
+        assert_eq!(c.document_version(&file), Some(8));
+        c.did_change(&file, "class A { int x; }", 12)
+            .expect("changed");
+        assert_eq!(c.document_version(&file), Some(12));
     });
+}
+
+#[tokio::test]
+async fn the_language_id_on_the_wire_is_the_files_and_not_the_servers() {
+    // `ServerSpec::language_id_for` is pure and pinned in `registry_tests.rs`;
+    // this is the half that is not pure — that `did_open` calls it at all. It
+    // did not: it sent `self.spec.language_id` verbatim, so every `.tsx` in this
+    // application's own frontend was opened as `typescript` and came back with
+    // JSX innards reported as declarations.
+    //
+    // Read off the wire rather than out of the client, because the client's
+    // mirror does not record the id and a server never answers a notification.
+    bounded!(async {
+        let mut fake = fake(json!({
+            "capabilities": roslyn_capabilities(),
+            "notificationJournal": "PLACEHOLDER"
+        }));
+        fake.spec.language = Language::TypeScript;
+        fake.spec.language_id = "typescript";
+        let journal = fake.dir.path().join("notifications.jsonl");
+        rewrite_script(&fake, |script| {
+            script["notificationJournal"] = json!(journal.display().to_string());
+        });
+
+        let session = start(fake).await;
+        let root = session.client.root().to_path_buf();
+        session
+            .client
+            .did_open(&root.join("Card.tsx"), "export const A = 1;", 1)
+            .expect("opened");
+        session
+            .client
+            .did_open(&root.join("plain.ts"), "export const B = 2;", 1)
+            .expect("opened");
+
+        until(|| opened_language_ids(&journal).len() >= 2).await;
+        assert_eq!(
+            opened_language_ids(&journal),
+            vec!["typescriptreact".to_string(), "typescript".to_string()]
+        );
+    });
+}
+
+/// Every `languageId` a `didOpen` carried, in wire order.
+fn opened_language_ids(journal: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(journal) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["method"] == json!("textDocument/didOpen"))
+        .filter_map(|entry| {
+            entry["params"]["textDocument"]["languageId"]
+                .as_str()
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// Edit a fake's script on disk before it is started.
+///
+/// The script is written by [`fake`] and the path it needs — the temp directory
+/// — only exists afterwards, so a journal path cannot be part of the literal.
+fn rewrite_script(fake: &Fake, edit: impl FnOnce(&mut Value)) {
+    let path = fake.dir.path().join("script.json");
+    let mut script: Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("the script")).expect("json");
+    edit(&mut script);
+    std::fs::write(&path, serde_json::to_vec_pretty(&script).expect("json")).expect("write");
 }
 
 #[tokio::test]
@@ -757,7 +834,7 @@ async fn a_change_to_a_document_that_was_never_opened_is_refused() {
         let file = a_file(&session);
 
         assert_eq!(
-            session.client.did_change(&file, "class A {}"),
+            session.client.did_change(&file, "class A {}", 1),
             Err(RequestError::NotOpen { path: file.clone() })
         );
         assert_eq!(
@@ -768,22 +845,28 @@ async fn a_change_to_a_document_that_was_never_opened_is_refused() {
 }
 
 #[tokio::test]
-async fn closing_a_document_forgets_it_and_reopening_starts_again_at_one() {
+async fn closing_a_document_forgets_it_and_a_reopen_carries_the_callers_version() {
+    // Forgetting on close is right — a server discards its state on `didClose`,
+    // so nothing here should be remembered about it. What the client must *not*
+    // do is invent a fresh number for the re-open: it did, restarting at 1 while
+    // the mirror was at 3, and a version going backwards is the one thing the
+    // mirror's high-water rule exists to prevent. See
+    // `lsp_session.rs::the_version_on_the_wire_is_the_mirrors…`.
     bounded!(async {
         let session = start(fake(json!({ "capabilities": roslyn_capabilities() }))).await;
         let file = a_file(&session);
         let c = &session.client;
 
-        c.did_open(&file, "class A {}").expect("opened");
-        c.did_change(&file, "class B {}").expect("changed");
+        c.did_open(&file, "class A {}", 1).expect("opened");
+        c.did_change(&file, "class B {}", 2).expect("changed");
         c.did_close(&file).expect("closed");
         assert_eq!(c.document_version(&file), None);
 
-        c.did_open(&file, "class A {}").expect("reopened");
+        c.did_open(&file, "class A {}", 3).expect("reopened");
         assert_eq!(
             c.document_version(&file),
-            Some(1),
-            "a reopened document is a new document to the server"
+            Some(3),
+            "the re-open keeps going from where the mirror left off"
         );
     });
 }
@@ -797,8 +880,8 @@ async fn opening_a_document_twice_advances_it_rather_than_reopening_it() {
         let file = a_file(&session);
         let c = &session.client;
 
-        c.did_open(&file, "class A {}").expect("opened");
-        c.did_open(&file, "class A { }").expect("opened again");
+        c.did_open(&file, "class A {}", 1).expect("opened");
+        c.did_open(&file, "class A { }", 2).expect("opened again");
         assert_eq!(c.document_version(&file), Some(2));
     });
 }
@@ -1107,7 +1190,7 @@ async fn a_path_outside_any_root_is_still_a_usable_uri_but_a_relative_one_is_not
         // result, or the count is wrong.
         let outside = std::env::temp_dir().join("Elsewhere.cs");
         assert!(
-            session.client.did_open(&outside, "class A {}").is_ok(),
+            session.client.did_open(&outside, "class A {}", 1).is_ok(),
             "an absolute path outside the root is a perfectly good file: URI"
         );
         assert!(
@@ -1121,7 +1204,7 @@ async fn a_path_outside_any_root_is_still_a_usable_uri_but_a_relative_one_is_not
 
         let relative = Path::new("Collections.cs");
         assert_eq!(
-            session.client.did_open(relative, "class A {}"),
+            session.client.did_open(relative, "class A {}", 1),
             Err(RequestError::UnusableUri {
                 path: relative.to_path_buf()
             })

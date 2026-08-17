@@ -726,8 +726,22 @@ fn a_fresh_workspace_has_no_sessions_for_any_provider() {
 
 /// Installing hooks in the workspace is visible through the registry, not just
 /// through the provider itself.
+///
+/// **Conditional on Codex being installed on this machine**, and it says so
+/// rather than skipping quietly. `statuses` resolves the real Codex home, and
+/// `status_in` reports a provider whose home directory does not exist as
+/// `absent` — correctly, since hooks written into a workspace do nothing for an
+/// agent that is not there. So on a machine without Codex the row is `detected:
+/// false, capture: None`, which is the right answer and not the one this test is
+/// about.
+///
+/// It was written on a machine that has Codex and asserted the installed branch
+/// unconditionally, so it failed the first time the suite was run in a container
+/// — `left: None, right: Some(Project)` — with nothing in the failure to
+/// suggest the machine rather than the code. Both branches are asserted now, so
+/// the test says something wherever it runs.
 #[test]
-fn a_project_install_shows_up_in_the_statuses_row_for_that_provider() {
+fn a_project_install_shows_up_in_the_statuses_row_where_codex_is_installed() {
     let dir = workspace();
     let plan = codex::Codex::new()
         .install_plan(dir.path(), InstallScope::Project)
@@ -739,7 +753,15 @@ fn a_project_install_shows_up_in_the_statuses_row_for_that_provider() {
         .find(|s| s.provider == ProviderId::Codex)
         .expect("a Codex row");
 
-    assert_eq!(row.capture, Some(InstallScope::Project));
+    if row.detected {
+        assert_eq!(row.capture, Some(InstallScope::Project));
+    } else {
+        assert_eq!(
+            row.capture, None,
+            "Codex is not installed here, so hooks written into the workspace \
+             configure nothing and the row must not claim capture is on"
+        );
+    }
 }
 
 #[test]

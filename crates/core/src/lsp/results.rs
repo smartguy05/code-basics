@@ -263,10 +263,14 @@ fn group(root: &Path, locations: &[Location], text: &mut impl TextProvider) -> V
 /// immediately enclosing it is one of those type kinds. A namespace and anything
 /// [`crate::symbols::declarations::SymbolKind::Other`] never is.
 ///
-/// The awkward case is that LSP's `Property`, `Field` and `Variable` all arrive
-/// as [`SymbolKind::Variable`] — [`super::protocol::symbol_kind`] collapses them
-/// deliberately, because the enum exists to pick a badge — so the kind alone
-/// cannot tell a property from a local. The container chain can: a local's
+/// The awkward case is that LSP's `Field` and `Variable` both arrive as
+/// [`SymbolKind::Variable`] — [`super::protocol::symbol_kind`] collapses them
+/// deliberately, because a field and a property are different things in every
+/// language that has both — so the kind alone still cannot tell a field on a
+/// type from a local in a method. (`Property` is now its own kind, but it does
+/// not get a shortcut here: the same container rule decides it, so a server that
+/// reports a property with a container this file does not know is treated like
+/// any other unplaceable member.) The container chain can: a local's
 /// nearest enclosing declaration is the method it lives in, and a property's is
 /// the type it belongs to. Where the chain does not settle it — no container at
 /// all, or a container name that is not itself in this file's symbols — the
@@ -346,7 +350,7 @@ fn admits(symbol: &Symbol, kinds: &HashMap<&str, SymbolKind>) -> bool {
         | SymbolKind::Type => true,
         // Named storage: a member of a type, or a local. Only the container
         // separates them.
-        SymbolKind::Variable | SymbolKind::Constant => symbol
+        SymbolKind::Property | SymbolKind::Variable | SymbolKind::Constant => symbol
             .container
             .last()
             .and_then(|name| kinds.get(name.as_str()))

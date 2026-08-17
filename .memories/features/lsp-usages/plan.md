@@ -1,5 +1,12 @@
 # Plan — closing out the LSP usages work item
 
+> **DONE, 2026-08-17.** All eleven items worked in this order. Outcomes and the
+> evidence behind each are in `completed.md` and the follow-up section at the end
+> of `notes.md`; `todos.md` carries the three that stay open, each with a trigger.
+> Kept as written because the *sequence* turned out to be right — Phase 4.1, the
+> item it called highest-value, is where three of the five real defects were.
+
+
 Written 2026-08-17, after the real-server oracle round. Covers **every** open
 `- [ ]` in `todos.md` for this work item (11 of them). Read `notes.md` first for
 the captures behind the oracle round; this file assumes them.
