@@ -500,8 +500,26 @@ pub fn parse_labels(message: &str) -> Vec<(Vec<String>, String)> {
         .collect()
 }
 
+/// `line` without a leading `prefix`, compared case-insensitively, or `None`.
+///
+/// `str::get` rather than `line[..prefix.len()]`. The length check is in
+/// **bytes**, so it passes for a line whose `prefix.len()`-th byte sits *inside*
+/// a character, and slicing there is a panic rather than a mismatch. That is not
+/// a corner case: `"intent"` is six bytes, so any line starting with four ASCII
+/// bytes and then an em dash, a curly quote or an arrow lands exactly on it.
+///
+/// It brought the `Stop` hook down in the running app on the line
+/// `"Yes — verified three ways:"` — ordinary prose, nothing to do with intents.
+/// A panic here loses the recorded reason for the whole turn, which is the one
+/// thing this module exists to keep, so it must fail closed and quietly.
+///
+/// `get` returns `None` for a non-boundary, which is the right answer for both
+/// reasons a caller could get one: the line is shorter than the prefix, or it
+/// does not begin with it. The `prefix` is ASCII at every call site, which is
+/// what makes `eq_ignore_ascii_case` the correct comparison.
 fn strip_prefix_ignoring_case<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
-    (line.len() >= prefix.len() && line[..prefix.len()].eq_ignore_ascii_case(prefix))
+    let head = line.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix)
         .then(|| &line[prefix.len()..])
 }
 
