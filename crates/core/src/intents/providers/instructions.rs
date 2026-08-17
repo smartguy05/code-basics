@@ -51,6 +51,11 @@ workspace-relative, comma-separated:
 Intent(src/api.ts, src/apiLogic.test.ts): <why, for those files>
 ```
 
+Each entry is a workspace-relative path with forward slashes — a specific file,
+or a directory to cover everything you edited beneath it (e.g.
+`Intent(src/components): …`). Prefer naming the specific files; reach for a
+directory only when the turn's edits are one cohesive set under it.
+
 A scoped line covers the files it names; one plain line may cover the rest.
 Keep each label short enough to read at a glance — it titles a group of hunks
 in the Changes tab, not a commit message.

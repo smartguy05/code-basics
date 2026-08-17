@@ -193,7 +193,7 @@ impl Intents {
             if label.turn_id != record.turn_id {
                 continue;
             }
-            if label.paths.iter().any(|p| normalise_path(p) == record.path) {
+            if label.paths.iter().any(|p| scope_covers(p, &record.path)) {
                 return Some(label);
             }
             if label.paths.is_empty() && fallback.is_none() {
@@ -217,6 +217,22 @@ impl Intents {
 /// reports, whichever side wrote it. Mirrors `changelists::normalise`.
 pub fn normalise_path(path: &str) -> String {
     path.replace('\\', "/")
+}
+
+/// Does a declared scope entry cover a record's path?
+///
+/// A scope may name the file exactly, or a directory the file sits beneath —
+/// the latter is how an agent groups a cohesive set of edits under one folder
+/// (`Intent(ONEflight.Client.OPS135.Components): …`). The directory match is at
+/// a path segment, so `foo` never covers `foobar/x`. This is decidable rather
+/// than guessed: the scope was author-declared, and containment is a fact.
+fn scope_covers(scope: &str, record_path: &str) -> bool {
+    let scope = normalise_path(scope);
+    let scope = scope.trim_end_matches('/');
+    record_path == scope
+        || record_path
+            .strip_prefix(scope)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// Make a path recorded by a hook relative to the workspace.

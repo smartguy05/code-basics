@@ -267,6 +267,76 @@ fn a_label_path_written_with_backslashes_still_matches() {
     );
 }
 
+/// A scope naming a directory covers every file edited beneath it — the shape
+/// an agent uses to group a cohesive set of edits under one project folder.
+#[test]
+fn a_directory_label_covers_a_file_beneath_it() {
+    let intents = Intents {
+        records: vec![record(
+            0,
+            "ONEflight.Client.OPS135.Components/Pages/Reports/Trips/FlightsReportPage.razor",
+            &[],
+            &["x"],
+        )],
+        labels: vec![label(
+            "turn-1",
+            "cancel superseded table reads",
+            &["ONEflight.Client.OPS135.Components"],
+        )],
+    };
+
+    assert_eq!(
+        intents.label_for(&intents.records[0]).unwrap().label,
+        "cancel superseded table reads"
+    );
+}
+
+/// A directory scope stops at its own boundary: a file outside it is not
+/// covered, and because the scope is non-empty it cannot serve as the turn-wide
+/// fallback either, so the file goes unlabelled rather than mislabelled.
+#[test]
+fn a_directory_label_does_not_cover_a_file_outside_it() {
+    let intents = Intents {
+        records: vec![record(
+            0,
+            ".memories/work-items/19778/completed.md",
+            &[],
+            &["x"],
+        )],
+        labels: vec![label(
+            "turn-1",
+            "cancel superseded table reads",
+            &["ONEflight.Client.OPS135.Components"],
+        )],
+    };
+
+    assert!(intents.label_for(&intents.records[0]).is_none());
+}
+
+/// The prefix match is at a path segment, so `foo` never covers `foobar/x`.
+#[test]
+fn a_directory_label_does_not_cover_a_sibling_prefix() {
+    let intents = Intents {
+        records: vec![record(0, "foobar/x.rs", &[], &["x"])],
+        labels: vec![label("turn-1", "in foo", &["foo"])],
+    };
+
+    assert!(intents.label_for(&intents.records[0]).is_none());
+}
+
+#[test]
+fn a_directory_label_written_with_backslashes_still_matches() {
+    let intents = Intents {
+        records: vec![record(0, "dir/sub/f.rs", &[], &["x"])],
+        labels: vec![label("turn-1", "matched", &["dir\\sub"])],
+    };
+
+    assert_eq!(
+        intents.label_for(&intents.records[0]).unwrap().label,
+        "matched"
+    );
+}
+
 #[test]
 fn records_can_be_looked_up_by_path_in_sequence_order() {
     let intents = Intents {
