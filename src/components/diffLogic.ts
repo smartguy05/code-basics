@@ -1,5 +1,54 @@
 import type { FileDiff, Hunk } from "../ipc/types";
 
+/**
+ * Line endings normalised to `\n`.
+ *
+ * The diff view compares a baseline read from git (a blob, always `\n`) against
+ * the working file read from disk (`\r\n` on Windows right after an
+ * `autocrlf=true` checkout). `@codemirror/merge` diffs the two raw strings, so a
+ * bare ending mismatch marks **every** line changed and paints the whole pane
+ * green — a change git itself filters out. Both sides are brought to `\n` before
+ * the comparison so only real content differences show. Lone `\r` (old Mac) is
+ * folded too, so the normalisation is total rather than CRLF-only.
+ */
+export function normaliseEndings(source: string): string {
+  return source.replace(/\r\n?/g, "\n");
+}
+
+/**
+ * The working document with only `hunks` reverted to their baseline.
+ *
+ * Feeding this as the diff's left side (against the unchanged working copy on
+ * the right) makes every region *outside* those hunks identical on both sides,
+ * so the merge view highlights only the hunks named — the rest is unchanged and
+ * folds away. This is what scopes an intent card's diff to the card's own
+ * change instead of every change in the file, while keeping real line numbers.
+ *
+ * `working` must already be `\n`-normalised, since the hunk line content came
+ * from git as `\n`; mixing the two would splice mismatched endings back in.
+ * Hunks are applied bottom-up so an earlier splice cannot shift a later hunk's
+ * position. A hunk whose position falls outside the document is skipped rather
+ * than throwing — the diff can lag the file by a write.
+ */
+export function focusedBaseline(working: string, hunks: Hunk[]): string {
+  const lines = working.split("\n");
+
+  for (const hunk of [...hunks].sort((a, b) => b.newStart - a.newStart)) {
+    const start = hunk.newStart - 1;
+    if (start < 0 || start > lines.length) continue;
+
+    // The baseline side of the hunk: everything the working copy did not add,
+    // in order, which is exactly what those working lines replaced.
+    const baselineLines = hunk.lines
+      .filter((line) => line.origin !== "addition")
+      .map((line) => line.content);
+
+    lines.splice(start, hunk.newLines, ...baselineLines);
+  }
+
+  return lines.join("\n");
+}
+
 /** Every changed line index in a diff, for "select all". */
 export function allChangedIndices(diff: FileDiff): number[] {
   return diff.hunks

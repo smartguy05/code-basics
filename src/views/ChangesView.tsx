@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DiffView, type DiffLayout, type DiffViewHandle } from "../components/DiffView";
-import { allChangedIndices, onlyHunks } from "../components/diffLogic";
+import {
+  allChangedIndices,
+  focusedBaseline,
+  normaliseEndings,
+  onlyHunks,
+} from "../components/diffLogic";
 import { buildSections, statusLetter, type FileSection } from "./changesLogic";
 import { Sidebar } from "../components/Sidebar";
 import { IntentPanel } from "../components/IntentPanel";
@@ -420,6 +425,24 @@ export function ChangesView() {
     grouping === "intent" && groupHunks != null && diff != null
       ? onlyHunks(diff, groupHunks)
       : diff;
+
+  // With an intent card open, scope the side-by-side colouring to the card's
+  // own change: rebuild the baseline as the working copy with only those hunks
+  // reverted, so every other region is identical on both sides and only this
+  // intent's hunk shows as a difference. Memoised so the diff editor is not
+  // torn down and rebuilt on unrelated renders (the baseline is in its deps).
+  const viewBaseline = useMemo(() => {
+    if (
+      grouping === "intent" &&
+      groupHunks != null &&
+      diff != null &&
+      contents?.working != null &&
+      contents?.baseline != null
+    ) {
+      return focusedBaseline(normaliseEndings(contents.working), onlyHunks(diff, groupHunks).hunks);
+    }
+    return contents?.baseline ?? null;
+  }, [grouping, groupHunks, diff, contents]);
   const canRevertAll = shownDiff != null && allChangedIndices(shownDiff).length > 0;
   const sections = buildSections(files, groups);
   /** What the marker strip marks and what F7 steps through. */
@@ -842,7 +865,7 @@ export function ChangesView() {
             ) : (
               <DiffView
                 path={selectedPath}
-                baseline={contents.baseline}
+                baseline={viewBaseline}
                 working={contents.working}
                 diff={shownDiff}
                 layout={diffLayout}

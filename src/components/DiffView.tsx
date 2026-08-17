@@ -16,6 +16,7 @@ import {
   changeMarks,
   mapOffset,
   nextChangeLine,
+  normaliseEndings,
   normaliseWhitespace,
   scrollLeftForThumb,
   scrollThumb,
@@ -273,15 +274,22 @@ export function DiffView({
     const collapse = collapseUnchanged ? { margin: 3, minSize: 8 } : undefined;
     const diffConfig = ignoreWhitespace ? { override: whitespaceInsensitiveDiff } : undefined;
 
+    // The baseline comes from git (always `\n`); the working copy comes from
+    // disk (`\r\n` on Windows). `@codemirror/merge` diffs the two raw strings,
+    // so an ending mismatch alone would mark every line changed. Both sides are
+    // brought to `\n` for the comparison — git filters the same difference.
+    const baselineDoc = baseline == null ? null : normaliseEndings(baseline);
+    const workingDoc = normaliseEndings(working);
+
     // A CodeMirror failure must degrade to a message for this one file, not
     // take down the whole UI (an effect error unmounts the React tree).
     try {
       // A file with no committed baseline has nothing to diff against, so it
       // is shown as a plain editor rather than an all-green diff.
-      if (baseline != null && layout === "sideBySide") {
+      if (baselineDoc != null && layout === "sideBySide") {
         const merge = new MergeView({
           a: {
-            doc: baseline,
+            doc: baselineDoc,
             extensions: [
               lineNumbers(),
               EditorView.darkTheme.of(true),
@@ -290,7 +298,7 @@ export function DiffView({
               ...editorColors,
             ],
           },
-          b: { doc: working, extensions },
+          b: { doc: workingDoc, extensions },
           parent: hostRef.current,
           // The buttons copy a chunk from the baseline onto the working copy —
           // the side-by-side equivalent of the unified view's revert control.
@@ -320,10 +328,10 @@ export function DiffView({
         };
       }
 
-      if (baseline != null) {
+      if (baselineDoc != null) {
         extensions.push(
           unifiedMergeView({
-            original: baseline,
+            original: baselineDoc,
             mergeControls: true,
             highlightChanges: true,
             gutter: true,
@@ -335,7 +343,7 @@ export function DiffView({
       extensions.push(heightTheme);
 
       const view = new EditorView({
-        state: EditorState.create({ doc: working, extensions }),
+        state: EditorState.create({ doc: workingDoc, extensions }),
         parent: hostRef.current,
       });
       setEditorError(null);
