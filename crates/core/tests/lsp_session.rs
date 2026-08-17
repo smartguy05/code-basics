@@ -767,6 +767,96 @@ async fn a_document_opened_before_the_server_started_is_replayed_to_it() {
 }
 
 // ---------------------------------------------------------------------------
+// Document versions
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn the_version_on_the_wire_is_the_mirrors_and_never_restarts_after_a_reopen() {
+    // Two counters used to exist. `documents.rs` keeps a per-path high-water
+    // version that survives a close, precisely so a version can never go
+    // backwards; `client.rs` kept a private counter that started at 1 on every
+    // `didOpen` and forgot the document on `didClose`. `session::dispatch`
+    // destructured the `SyncAction` with `..` and threw the mirror's number
+    // away, so `Documents::version()` was an authority nobody consulted — a
+    // plausible-looking number that had never been sent.
+    //
+    // Nothing could see the divergence, because document sync is the one thing
+    // this subsystem does that a server never answers. Hence
+    // `notificationJournal` on the fake: the wire, on disk, in order.
+    bounded!(async {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let journal = dir.path().join("notifications.jsonl");
+        let mut script = json!({
+            "capabilities": capabilities(&[]),
+            "notificationJournal": journal.display().to_string(),
+            "steps": [{ "on": "*", "reply": [] }]
+        });
+        announce_readiness(&mut script);
+        let script_path = dir.path().join("script.json");
+        std::fs::write(&script_path, serde_json::to_vec_pretty(&script).unwrap()).unwrap();
+        let handle = session::start(
+            dir.path().to_path_buf(),
+            Some(config(&script_path, FAKE)),
+            1,
+        );
+        let harness = Harness { handle, dir };
+
+        started(&harness).await;
+        let file = harness.file("main.ts");
+        harness.handle.open_document(&file, "const a = 1;\n").await;
+        harness
+            .handle
+            .change_document(&file, "const a = 2;\n")
+            .await;
+        harness.handle.close_document(&file).await;
+        // The re-open is the whole point: the mirror is at 3 by now and the old
+        // client counter would start again at 1.
+        harness.handle.open_document(&file, "const a = 3;\n").await;
+        harness
+            .handle
+            .change_document(&file, "const a = 4;\n")
+            .await;
+
+        let arrived = until_or(Duration::from_secs(10), || {
+            sync_versions(&journal).len() >= 4
+        })
+        .await;
+        let versions = sync_versions(&journal);
+        assert!(
+            arrived,
+            "the fake never received four sync notifications; got {versions:?}"
+        );
+
+        let mut rising = versions.clone();
+        rising.dedup();
+        assert_eq!(versions, rising, "a version was repeated: {versions:?}");
+        assert!(
+            versions.windows(2).all(|pair| pair[0] < pair[1]),
+            "the version went backwards across the close and re-open: {versions:?}. \
+             That is the one thing the mirror's high-water rule exists to prevent, \
+             and it means the number on the wire is not the mirror's."
+        );
+    });
+}
+
+/// Every `didOpen`/`didChange` version the fake recorded, in wire order.
+fn sync_versions(journal: &Path) -> Vec<i64> {
+    let Ok(text) = std::fs::read_to_string(journal) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| {
+            matches!(
+                entry["method"].as_str(),
+                Some("textDocument/didOpen") | Some("textDocument/didChange")
+            )
+        })
+        .filter_map(|entry| entry["params"]["textDocument"]["version"].as_i64())
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Death
 // ---------------------------------------------------------------------------
 

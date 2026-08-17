@@ -302,6 +302,56 @@ fn a_message_too_short_to_mean_anything_produces_no_label() {
     assert!(parse_labels("").is_empty());
 }
 
+/// A line whose bytes straddle a character where the keyword would end must be
+/// skipped, not panic.
+///
+/// This crashed the `Stop` hook in the running app:
+///
+/// ```text
+/// panicked at crates\core\src\intents\hook.rs:504:40:
+/// end byte index 6 is not a char boundary; it is inside '—' (bytes 4..7)
+/// ```
+///
+/// `strip_prefix_ignoring_case` checked `line.len() >= prefix.len()` — a
+/// **byte** length — and then sliced `line[..prefix.len()]`. `"intent"` is six
+/// bytes, so any line beginning with four ASCII bytes followed by a multi-byte
+/// character has its sixth byte inside that character, and slicing there is a
+/// panic rather than a mismatch. `"Yes — verified"` is exactly that shape and is
+/// ordinary English prose; so is any line with an em dash, a curly quote or an
+/// arrow near the start.
+///
+/// The blast radius is what makes it worth a named test: the hook records **why
+/// a change was made**, it runs on every turn, and a panic there loses the
+/// intent for the whole turn while pointing at a line that has nothing to do
+/// with intents.
+#[test]
+fn a_line_with_a_multibyte_character_where_the_keyword_would_end_does_not_panic() {
+    // The exact line that brought the hook down.
+    assert!(parse_declared_labels("Yes — verified three ways:").is_empty());
+
+    // The same shape at every offset the check can land on, since which byte is
+    // "the sixth" depends only on what precedes it.
+    //
+    // `parse_declared_labels` rather than `parse_labels`: the latter falls back
+    // to the first sentence when nothing is declared, so it answers *something*
+    // for most of these — correctly, and it would hide what is being asserted
+    // here, which is that none of them is mistaken for a declaration and none of
+    // them panics.
+    for prefix in ["", "a", "ab", "abc", "abcd", "abcde", "abcdef"] {
+        let line = format!("{prefix}— dash");
+        assert!(
+            parse_declared_labels(&line).is_empty(),
+            "{line:?} is not a declared intent"
+        );
+    }
+
+    // And the case that must still work: a real declaration whose *label* is
+    // multi-byte. Losing this to an over-cautious fix would be the worse bug,
+    // because it is silent.
+    let labels = parse_labels("Intent: rename Café — the accented one");
+    assert_eq!(labels[0].1, "rename Café — the accented one");
+}
+
 // -- The narration gate on inferred labels ----------------------------------
 //
 // A mined first sentence was written for a human reading a chat, not as a card

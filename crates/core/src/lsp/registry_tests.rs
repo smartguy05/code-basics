@@ -218,6 +218,81 @@ fn an_unknown_extension_yields_nothing_rather_than_a_default_server() {
     }
 }
 
+/// A resolved TypeScript server, for the tests about how a *file* is opened.
+fn typescript_spec() -> ServerSpec {
+    let probe = Fake::new().program("typescript-language-server", "C:/npm/tsserver-ls.cmd");
+    spec(resolve(Language::TypeScript, None, &probe))
+}
+
+#[test]
+fn a_tsx_file_is_opened_as_typescriptreact_and_not_as_typescript() {
+    // Measured against typescript-language-server 5.x, not reasoned about. The
+    // same two-file JSX project, opened under each id:
+    //
+    // | languageId        | documentSymbol(card.tsx)              | diagnostics |
+    // |-------------------|---------------------------------------|-------------|
+    // | typescript        | `Card`, plus `<unknown>` and `props`  | 9, `'>' expected.` |
+    // | typescriptreact   | `Card`                                | 0           |
+    //
+    // `documentSymbol` is precisely what `results::anchors` builds the inline
+    // rows from, so the wrong id does not merely lose fidelity — it invents
+    // declarations out of the innards of a JSX expression, in this
+    // application's own `.tsx` files.
+    let spec = ServerSpec {
+        language_id: "typescript",
+        ..typescript_spec()
+    };
+    assert_eq!(
+        spec.language_id_for(Path::new("/w/src/Card.tsx")),
+        "typescriptreact"
+    );
+    assert_eq!(
+        spec.language_id_for(Path::new("/w/src/card.jsx")),
+        "javascriptreact"
+    );
+    // The plain ones are unchanged, and JavaScript is not TypeScript: tsserver
+    // applies different defaults to a `.js` buffer, and calling one "typescript"
+    // is the same class of claim as calling a `.tsx` file one.
+    assert_eq!(spec.language_id_for(Path::new("/w/a.ts")), "typescript");
+    assert_eq!(spec.language_id_for(Path::new("/w/a.mts")), "typescript");
+    assert_eq!(spec.language_id_for(Path::new("/w/a.js")), "javascript");
+    assert_eq!(spec.language_id_for(Path::new("/w/a.cjs")), "javascript");
+}
+
+#[test]
+fn an_extension_belonging_to_another_language_falls_back_to_the_servers_own_id() {
+    // A user's `lsp.servers` override can point any server at any file, and a
+    // path with no extension at all reaches this too. Refining the id is only
+    // ever legitimate when the extension really belongs to the language the
+    // server was resolved for; otherwise the server's own id is the only thing
+    // that is not a guess.
+    let spec = typescript_spec();
+    assert_eq!(
+        spec.language_id_for(Path::new("/w/Collections.cs")),
+        "typescript"
+    );
+    assert_eq!(
+        spec.language_id_for(Path::new("/w/notes.txt")),
+        "typescript"
+    );
+    assert_eq!(spec.language_id_for(Path::new("/w/Makefile")), "typescript");
+}
+
+#[test]
+fn a_language_with_one_spelling_gets_the_same_id_for_every_extension_it_owns() {
+    // Python is the case that matters: `.pyi` is a stub file and is still
+    // `python` to every server here. Inventing `pythonstub` would be exactly the
+    // guess the `.tsx` finding is *not* — that one was measured.
+    let spec = ServerSpec {
+        language: Language::Python,
+        language_id: "python",
+        ..typescript_spec()
+    };
+    for name in ["a.py", "a.pyi"] {
+        assert_eq!(spec.language_id_for(Path::new(name)), "python", "{name}");
+    }
+}
+
 #[test]
 fn a_leading_dot_is_not_part_of_an_extension() {
     // `Path::extension` never includes the dot, and that is what callers pass.

@@ -267,21 +267,43 @@ fn declaration_anchor_serialises_with_the_keys_the_ui_reads() {
 fn symbol_kind_still_serialises_as_the_lower_case_strings_types_ts_mirrors() {
     // `types.ts` mirrors these by hand and the palette already ships them; a
     // rename here would silently drop every badge.
-    let pairs = [
-        (SymbolKind::Function, "function"),
-        (SymbolKind::Class, "class"),
-        (SymbolKind::Struct, "struct"),
-        (SymbolKind::Enum, "enum"),
-        (SymbolKind::Interface, "interface"),
-        (SymbolKind::Trait, "trait"),
-        (SymbolKind::Type, "type"),
-        (SymbolKind::Namespace, "namespace"),
-        (SymbolKind::Constant, "constant"),
-        (SymbolKind::Variable, "variable"),
-        (SymbolKind::Other, "other"),
-    ];
-    for (kind, text) in pairs {
-        assert_eq!(serde_json::to_value(kind).unwrap(), json!(text));
+    //
+    // The **`match` is the point.** This used to be a hand-written array, which
+    // pins the spelling of every variant somebody remembered to list and says
+    // nothing about a new one: adding `Property` to the enum would have left the
+    // array compiling, this test passing, and `types.ts` unmirrored — a kind on
+    // the wire that the frontend's union does not contain. An exhaustive match
+    // fails to compile instead, which is the only mechanism in this repository
+    // that can make a wire-type change *stop* somebody.
+    let spelling = |kind: SymbolKind| match kind {
+        SymbolKind::Function => "function",
+        SymbolKind::Class => "class",
+        SymbolKind::Struct => "struct",
+        SymbolKind::Enum => "enum",
+        SymbolKind::Interface => "interface",
+        SymbolKind::Trait => "trait",
+        SymbolKind::Type => "type",
+        SymbolKind::Namespace => "namespace",
+        SymbolKind::Constant => "constant",
+        SymbolKind::Property => "property",
+        SymbolKind::Variable => "variable",
+        SymbolKind::Other => "other",
+    };
+    for kind in [
+        SymbolKind::Function,
+        SymbolKind::Class,
+        SymbolKind::Struct,
+        SymbolKind::Enum,
+        SymbolKind::Interface,
+        SymbolKind::Trait,
+        SymbolKind::Type,
+        SymbolKind::Namespace,
+        SymbolKind::Constant,
+        SymbolKind::Property,
+        SymbolKind::Variable,
+        SymbolKind::Other,
+    ] {
+        assert_eq!(serde_json::to_value(kind).unwrap(), json!(spelling(kind)));
     }
 }
 

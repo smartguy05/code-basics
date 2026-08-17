@@ -271,12 +271,12 @@ pub struct Timeouts {
 pub struct ServerSpec {
     pub id: &'static str,
     pub language: Language,
-    /// The LSP `languageId` for `textDocument/didOpen`.
+    /// The LSP `languageId` this server is opened under when the file itself
+    /// says nothing more specific.
     ///
-    /// One per language rather than per extension. `tsx` is really
-    /// `typescriptreact` to tsserver; that refinement belongs where a *file* is
-    /// opened, and is deliberately not invented here where only the language is
-    /// known.
+    /// One per language, because a server is resolved for a *language* and no
+    /// file is known yet. [`ServerSpec::language_id_for`] refines it per file,
+    /// which is where a `.tsx` becomes `typescriptreact`.
     pub language_id: &'static str,
     pub program: PathBuf,
     pub args: Vec<String>,
@@ -286,6 +286,78 @@ pub struct ServerSpec {
     pub uri_style: UriStyle,
     pub readiness: Readiness,
     pub timeouts: Timeouts,
+}
+
+impl ServerSpec {
+    /// The LSP `languageId` to open `path` under.
+    ///
+    /// # Why this is a property of the extension
+    ///
+    /// `.tsx` and `.jsx` are not merely TypeScript and JavaScript files with a
+    /// different suffix: `<div>` is a JSX element in one and a type assertion in
+    /// the other, so the id decides how the buffer is **parsed**. Measured
+    /// against typescript-language-server, on a two-file JSX project:
+    ///
+    /// | `languageId`      | `documentSymbol` of the `.tsx`         | diagnostics |
+    /// |-------------------|----------------------------------------|-------------|
+    /// | `typescript`      | `Card`, plus `<unknown>` and `props`   | 9, first `'>' expected.` |
+    /// | `typescriptreact` | `Card`                                 | 0 |
+    ///
+    /// `documentSymbol` is what [`super::results::anchors`] builds the inline
+    /// usage rows from, so the coarse id invents declarations out of the middle
+    /// of a JSX expression. That is the wrong-label failure this subsystem is
+    /// written to refuse, and it would have happened in this application's own
+    /// `.tsx` files.
+    ///
+    /// # Why the fallback is the server's own id
+    ///
+    /// An extension that does not belong to this server's language gets
+    /// [`ServerSpec::language_id`] unchanged. A user's `lsp.servers` override can
+    /// aim any server at any file, and a path may have no extension at all;
+    /// refining is only legitimate when the extension really is one of the
+    /// language's own. Everything else would be a guess, and this file has
+    /// already paid for one of those.
+    pub fn language_id_for(&self, path: &Path) -> &'static str {
+        let Some(extension) = path.extension().and_then(|e| e.to_str()) else {
+            return self.language_id;
+        };
+        if language_for_extension(extension) != Some(self.language) {
+            return self.language_id;
+        }
+        language_id_for_extension(extension).unwrap_or(self.language_id)
+    }
+}
+
+/// The LSP `languageId` an extension is opened under, where the extension says
+/// more than its language does.
+///
+/// Only the four spellings tsserver distinguishes. Every other extension this
+/// registry claims maps to its language's single id and is left to the caller's
+/// fallback — `.pyi` is a `python` buffer, not a `pythonstub` one, and inventing
+/// a spelling no server knows would be the guess that
+/// [`ServerSpec::language_id_for`] exists to avoid.
+fn language_id_for_extension(extension: &str) -> Option<&'static str> {
+    let matches =
+        |candidates: &[&str]| candidates.iter().any(|c| extension.eq_ignore_ascii_case(c));
+
+    if matches(&["tsx"]) {
+        return Some("typescriptreact");
+    }
+    if matches(&["jsx"]) {
+        return Some("javascriptreact");
+    }
+    // A `.js` buffer is not a TypeScript one either: tsserver applies different
+    // defaults to it, and calling it `typescript` is the same class of claim as
+    // calling a `.tsx` file one. `language_for_extension` folds these into
+    // `Language::TypeScript` because one server answers about all of them — that
+    // is a fact about which *process* to start, not about how to parse a buffer.
+    if matches(&["js", "mjs", "cjs"]) {
+        return Some("javascript");
+    }
+    if matches(&["ts", "mts", "cts"]) {
+        return Some("typescript");
+    }
+    None
 }
 
 /// What resolving a language produced. Four different things to tell the user.

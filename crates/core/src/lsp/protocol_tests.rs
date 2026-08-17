@@ -236,6 +236,38 @@ fn a_location_link_is_aimed_at_its_selection_range_and_not_its_whole_body() {
 }
 
 #[test]
+fn the_location_link_rust_analyzer_really_sends_is_aimed_at_its_selection_range() {
+    // **Captured, not hand-written.** Every other `LocationLink` case in this
+    // file is JSON somebody typed, which proves the decoder handles the shape in
+    // the specification and proves nothing about the shape a server sends. Roslyn
+    // answers `Location[]` even though we ask with `linkSupport: true`, so for a
+    // long time the `Links` arm — and `aim`'s whole reason for existing — was
+    // backed by no traffic at all.
+    //
+    // This is the verbatim `textDocument/definition` result from rust-analyzer
+    // 1.97.1, asked at `crate::try_get_elements(source)` in the Rust oracle's own
+    // fixture (`tests/lsp_oracle.rs::write_rust`), with only the temporary
+    // `targetUri` shortened. So: `linkSupport: true` does get honoured by some
+    // server, `originSelectionRange` is sent and ignored, and — the point of the
+    // test — `targetRange` starts on the **doc comment** at line 2 while
+    // `targetSelectionRange` starts on the identifier at line 3. Aiming at
+    // `targetRange` would land the cursor on `/// Declared here…`.
+    let links = json(
+        r#"[{
+            "originSelectionRange": {"start":{"line":1,"character":17},"end":{"line":1,"character":33}},
+            "targetUri": "file:///c:/oracle/lib.rs",
+            "targetRange": {"start":{"line":2,"character":0},"end":{"line":9,"character":1}},
+            "targetSelectionRange": {"start":{"line":3,"character":7},"end":{"line":3,"character":23}}
+        }]"#,
+    );
+    let locations = decode_goto(links).expect("rust-analyzer sends LocationLink[]");
+    assert_eq!(1, locations.len());
+    assert_eq!("file:///c:/oracle/lib.rs", locations[0].uri);
+    assert_eq!(position(3, 7), locations[0].range.start);
+    assert_eq!(position(3, 23), locations[0].range.end);
+}
+
+#[test]
 fn a_location_link_without_a_selection_range_falls_back_to_its_target_range() {
     // `targetSelectionRange` is required by the specification, and a server that
     // omits it still gave us a usable file and a usable line. The whole range is
@@ -521,6 +553,24 @@ fn the_lsp_kinds_this_app_has_a_badge_for_map_onto_the_palettes_own_kinds() {
     assert_eq!(SymbolKind::Variable, symbol_kind(13));
     assert_eq!(SymbolKind::Constant, symbol_kind(14));
     assert_eq!(SymbolKind::Struct, symbol_kind(23));
+}
+
+#[test]
+fn a_property_is_its_own_kind_and_a_field_is_still_not_one() {
+    // 7 Property used to land on `Variable` alongside 8 Field and 13 Variable,
+    // because the palette's enum had no `Property` to map to. That is a wrong
+    // badge rather than no badge, which this subsystem's rule forbids: every
+    // member of a C# or TypeScript class came back labelled "variable".
+    assert_eq!(SymbolKind::Property, symbol_kind(7));
+
+    // 8 Field deliberately stays `Variable`, and this is a decision rather than
+    // an omission. C#, TypeScript, Java and Kotlin all distinguish a field from
+    // a property in the language itself — a property has accessors and a field
+    // is storage — so labelling a field "property" would be the confident wrong
+    // answer this module exists to avoid. `Variable` says "named storage",
+    // which a field is, and claims nothing further.
+    assert_eq!(SymbolKind::Variable, symbol_kind(8));
+    assert_eq!(SymbolKind::Variable, symbol_kind(13));
 }
 
 #[test]

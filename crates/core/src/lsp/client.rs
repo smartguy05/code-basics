@@ -47,6 +47,11 @@
 //! opened is **refused** rather than promoted into a `didOpen` — inventing one
 //! would send text the server never asked about, under a version nobody agreed.
 //!
+//! **The version is supplied by the caller**, not counted here:
+//! [`super::documents::Documents`] is the single counter, and it is the only one
+//! whose high-water rule survives a close and re-open. What this mirror records
+//! is what was last *sent*.
+//!
 //! Changes go out as a single event whose range spans the whole document, which
 //! [`super::protocol::DidChangeTextDocumentParams::whole_document`] builds and
 //! `notes.md` justifies. That decision is settled; do not revisit it here.
@@ -443,20 +448,26 @@ impl Client {
     // Document sync
     // -----------------------------------------------------------------------
 
-    /// Tell the server about a document and its contents.
+    /// Tell the server about a document and its contents, under `version`.
     ///
     /// Opening a document that is already open would be a protocol violation,
     /// so it is sent as a change instead. The client owns the mirror; keeping
     /// the server's view legal is therefore its job and not the caller's.
-    pub fn did_open(&self, path: &Path, text: &str) -> Result<(), RequestError> {
+    ///
+    /// See [`Client::did_change`] for where `version` comes from and why it is
+    /// an argument rather than a counter kept here.
+    pub fn did_open(&self, path: &Path, text: &str, version: i32) -> Result<(), RequestError> {
         let uri = self.uri_for(path)?;
         let already_open = self.documents.lock().unwrap().contains_key(path);
         if already_open {
-            return self.did_change(path, text);
+            return self.did_change(path, text, version);
         }
 
-        let version = 1;
-        let params = DidOpenTextDocumentParams::new(&uri, self.spec.language_id, version, text);
+        // Per file, not per server: a `.tsx` opened as `typescript` is parsed as
+        // TypeScript, and `documentSymbol` then reports declarations that are
+        // really the innards of a JSX expression. See `ServerSpec::language_id_for`.
+        let params =
+            DidOpenTextDocumentParams::new(&uri, self.spec.language_id_for(path), version, text);
         self.send(method::DID_OPEN, &params)?;
         self.documents
             .lock()
@@ -465,26 +476,41 @@ impl Client {
         Ok(())
     }
 
-    /// Replace what the server has for a document.
+    /// Replace what the server has for a document, under `version`.
     ///
     /// Refused for a document that was never opened: the server would reject
     /// the change, and opening it here on the caller's behalf would send text
     /// under a version nobody agreed on.
-    pub fn did_change(&self, path: &Path, text: &str) -> Result<(), RequestError> {
+    ///
+    /// # Why the version is an argument
+    ///
+    /// This used to be a private counter here — `1` on `did_open`, `+1` on each
+    /// change, forgotten on `did_close`. [`super::documents::Documents`] keeps
+    /// its own, under a high-water rule that survives a close so a version can
+    /// never go backwards, and it is the mirror that decides what is owed to
+    /// whom. Two counters for one number meant the mirror's was an authority
+    /// nobody consulted: after a close and re-open it said 3 while the wire said
+    /// 1, and the next person to read it — to log a desync, to decide whether a
+    /// change is stale — would have got a number that was never sent.
+    ///
+    /// So there is one counter and it lives in the mirror. What is recorded here
+    /// is now only *what was last sent*, which is exactly what
+    /// [`Client::document_version`] claims to return. Monotonicity is the
+    /// caller's guarantee, and `documents.rs` is where it is enforced and pinned.
+    pub fn did_change(&self, path: &Path, text: &str, version: i32) -> Result<(), RequestError> {
         let uri = self.uri_for(path)?;
-        let version = {
+        {
             let mut documents = self.documents.lock().unwrap();
             let slot = documents
                 .get_mut(path)
                 .ok_or_else(|| RequestError::NotOpen {
                     path: path.to_path_buf(),
                 })?;
-            // Bumped before the send, and left bumped if the send fails: a
+            // Recorded before the send, and left recorded if the send fails: a
             // version must never be reused, and a server that missed one
             // notices the gap. Reusing it would look like a legal edit.
-            *slot += 1;
-            *slot
-        };
+            *slot = version;
+        }
 
         let params = DidChangeTextDocumentParams::whole_document(&uri, version, text);
         self.send(method::DID_CHANGE, &params)

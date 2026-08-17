@@ -712,6 +712,14 @@ export type SymbolKind =
   | "type"
   | "namespace"
   | "constant"
+  /**
+   * A member with accessors. Only a real language server produces this — the
+   * one-line word scan behind the palette cannot tell `public string Name
+   * { get; set; }` from a variable, so it never claims one. LSP's `Field` (8)
+   * deliberately stays `variable`: a field and a property are different things
+   * in C#, TypeScript, Java and Kotlin alike.
+   */
+  | "property"
   | "variable"
   | "other";
 

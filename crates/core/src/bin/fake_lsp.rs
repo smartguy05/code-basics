@@ -55,6 +55,7 @@
 //! notifications are ignored, as the protocol requires.
 
 use std::collections::HashMap;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -98,6 +99,19 @@ struct Script {
     /// `serverRequestThenReply` misbehaviour.
     #[serde(default)]
     server_requests: Vec<Message>,
+    /// Where to append every notification this process receives, one JSON object
+    /// (`{"method": …, "params": …}`) per line.
+    ///
+    /// A file rather than a reply because notifications have no reply, which is
+    /// precisely why they were invisible to every other test here: the document
+    /// sync is the one thing this subsystem does that a server never answers, so
+    /// nothing could see what was on the wire. `echoArgv` and `echoAnswer` exist
+    /// for the same reason and take the same shape.
+    ///
+    /// Appended synchronously from `dispatch`, before the handling task is
+    /// spawned, so the file's order is the wire's order.
+    #[serde(default)]
+    notification_journal: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -242,6 +256,30 @@ impl Server {
             return None;
         }
         self.script.steps.iter().find(|s| s.on == "*")
+    }
+
+    /// Append one received notification to `notificationJournal`, if the script
+    /// asked for one.
+    ///
+    /// Errors are swallowed on purpose: the journal is a test's window onto the
+    /// wire, not a behaviour, and a fake that died because a reader had the file
+    /// open would fail the test it was meant to explain.
+    fn journal(&self, method: &str, params: Option<&Value>) {
+        let Some(path) = &self.script.notification_journal else {
+            return;
+        };
+        let line = json!({"method": method, "params": params});
+        let Ok(mut line) = serde_json::to_vec(&line) else {
+            return;
+        };
+        line.push(b'\n');
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = file.write_all(&line);
+        }
     }
 
     /// Queue raw bytes for stdout exactly as given — the escape hatch the
@@ -663,6 +701,7 @@ fn dispatch(server: &Arc<Server>, frame: &[u8]) {
             tokio::spawn(handle(Arc::clone(server), Some(id), method, params));
         }
         Ok(Incoming::Notification { method, params }) => {
+            server.journal(&method, params.as_ref());
             let handled = tokio::spawn(handle(
                 Arc::clone(server),
                 None,

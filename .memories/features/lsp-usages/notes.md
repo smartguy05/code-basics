@@ -775,3 +775,173 @@ cargo test -p cb-core --test lsp_oracle -- --ignored --nocapture --test-threads=
 `--test-threads=1` is not optional: four servers indexing at once plus a
 `dotnet restore` starved Roslyn past the readiness ceiling and failed the C#
 oracle on a machine where it passes in seven seconds. Serially: ~25s for all five.
+
+---
+
+# The follow-up round (2026-08-17) — the plan's eleven open items
+
+Every finding below came from **executing something**, not from reviewing it.
+That is now four rounds in a row on this work item where a claim that held "by
+construction" was wrong the first time anybody ran it.
+
+## The `LocationLink` arm is real, and captured
+
+Probed rust-analyzer 1.97.1 directly (node script, `Content-Length` framing over
+stdin/stdout, `linkSupport: true`, waited for `rustAnalyzer/cachePriming` to end)
+over the Rust oracle's own fixture. It answers **`LocationLink[]`**, so the arm
+Roslyn never exercises is genuine — and the distinction `aim()` exists for is
+live in the real payload:
+
+| field | line (0-based) | what is there |
+|---|---|---|
+| `targetRange.start` | 2 | `/// Declared here, and called from exactly one other place.` |
+| `targetSelectionRange.start` | 3 | `pub fn try_get_elements` |
+
+Aiming at `targetRange` would land the cursor on the doc comment. Pasted verbatim
+into `protocol_tests.rs` as
+`the_location_link_rust_analyzer_really_sends_is_aimed_at_its_selection_range`,
+named so it is obvious which fixtures are captured and which are hand-written.
+
+## Notifications were invisible, so the document sync was untestable
+
+The two-counter defect (`Documents::version()` vs `Client`'s private counter)
+could not be *seen* by any test, because document sync is the one thing this
+subsystem does that a server never answers. Both the fake and the real servers
+are silent about it.
+
+Fixed by giving `cb-fake-lsp` a `notificationJournal` script field: every
+received notification appended as one JSON line, synchronously from `dispatch`,
+so the file's order is the wire's order. Same shape as `echoArgv`/`echoAnswer`,
+and for the same reason — a file is the only channel a notification has.
+
+With it, the failing test was immediate and unambiguous: open, change, close,
+re-open, change produced **`[1, 2, 1, 2]`** on the wire. Fix taken was the
+plan's preferred one: `Client::did_open`/`did_change` take the version as an
+argument and `session::dispatch` passes the mirror's through. One counter, in the
+only place with a high-water rule that survives a close.
+
+**Generalisable:** if a layer's output is a notification, nothing downstream can
+observe it, and it will be wrong. Give the fake a journal *before* writing the
+layer, not after.
+
+## `.tsx` was measured, and the coarse id is actively harmful
+
+The parked question — is `language_id` a property of the extension? — was
+settled by running typescript-language-server against the same two-file JSX
+project twice:
+
+| `languageId` | `documentSymbol(card.tsx)` | diagnostics |
+|---|---|---|
+| `typescript` | `Card`, **plus `<unknown>` and `props`** from inside the JSX | 9, first `'>' expected.` |
+| `typescriptreact` | `Card` | 0 |
+
+`documentSymbol` is what `results::anchors` builds the inline rows from, so the
+coarse id does not merely lose fidelity — it puts "N usages" rows on fragments of
+a JSX expression, in this application's own frontend. `ServerSpec::language_id_for`
+now refines per extension (`tsx`→`typescriptreact`, `jsx`→`javascriptreact`,
+`js`/`mjs`/`cjs`→`javascript`), falling back to the server's own id for an
+extension belonging to another language.
+
+Note the shape: the previous decision was *deferred with a reason* ("that
+refinement belongs where a file is opened"), the reason was correct, and the
+conclusion drawn from it — that it did not matter yet — was never checked.
+
+## Running the suite on Linux for the first time found three defects
+
+Docker (`rust:slim`, plus `git` and `procps`), copying the tree in and dropping
+`src-tauri` from the workspace members so no webkit2gtk is needed:
+
+```sh
+docker run --rm -v "$(pwd -W):/src:ro" -w /work rust:slim bash -c '...'
+```
+
+1. **`pid_alive` answered `false` for every pid on Unix.** It shelled out to
+   `Command::new("kill")`, but `kill` is a POSIX **shell builtin** and
+   `/bin/kill` only exists where procps is installed. The spawn failed and
+   `unwrap_or(false)` turned that into "dead". So both liveness preconditions
+   failed — and, far worse, the two `until(|| !pid_alive(..))` waits that *are*
+   `dropping_the_transport_kills_the_whole_tree` would have returned instantly
+   and asserted nothing. **The test that was carried for a whole phase as "the
+   Unix tree kill is unverified" could not have failed.** Now goes through `sh`,
+   which this file already requires.
+2. **`kill_tree` on Unix killed nothing at all for a non-group-leader pid.** It
+   signalled `-pid` only. That is right for a child `configure_process_group`
+   made a group leader — which both production callers are — but a pid without a
+   group of its own yields `ESRCH` and the process named in the argument is not
+   touched. Caught by `a_write_failure_kills_the_process_it_can_no_longer_reach`,
+   which spawns its stand-in with plain `std::process::Command`. Now signals the
+   group *and* the pid, matching what the Windows `taskkill /T` arm always did.
+3. **`a_project_install_shows_up_in_the_statuses_row_for_that_provider` was
+   machine-dependent.** `statuses` resolves the real Codex home and reports a
+   provider whose home does not exist as `absent`, so the test asserted the
+   installed branch on a box that happens to have Codex. Both branches asserted
+   now, and the name says so.
+
+**After the fixes the entire `cb-core` suite passes on Linux**: 1925 lib + 49 +
+2 (1 ignored) + 33 + 1 (5 ignored) + 17 + 26 + 11. Windows is 1930 lib — five
+Windows-only tests — and identical everywhere else.
+
+Phase 4.1 is therefore closed with evidence rather than with a note saying the
+platform is unverified. **Worth repeating whenever a `#[cfg(unix)]` branch
+changes**; it costs one Docker run.
+
+## Two things deliberately left, with their triggers
+
+- **`kill_tree` blocks the calling runtime worker** (`taskkill` via
+  `std::process::Command::status` on Windows; the 2 s escalation thread on Unix)
+  and is called from async tasks and from `Drop`. Invisible on the app's
+  multi-thread runtime; on the current-thread runtime every `#[tokio::test]`
+  uses, it stalls every other task **including the timeout that bounds the
+  test**. **Trigger: the first LSP test that flakes on a timeout. The fix is
+  `spawn_blocking`** — recorded here so the diagnosis is not re-derived.
+- **`Transport::shutdown` is `&self` and always publishes `ShutDown`**, so a
+  second call re-publishes nothing (first-death-wins) but still waits out
+  `EXIT_GRACE`. Harmless while only `Client::shutdown` calls it. **Trigger: the
+  session actor gaining a second teardown path** — not a date.
+
+## A command module's coverage is a category error, and now says so
+
+`commands/lsp.rs` was 49.7% line-covered and it was the **third** command module
+to collect that note. The cause is structural and was verified rather than
+assumed: every `#[tauri::command]` takes `State<'_, AppState>`, which cannot be
+built without a `tauri::App`, and the `tauri` dependency does not enable the
+`test` feature — **no command in this crate is called by any test, in any
+module.** Filing it a fourth time would not change that.
+
+So `CLAUDE.md` now carries the rule instead: command bodies may not *decide*
+anything, and the moment one does, the decision is extracted to a plain free
+function beside it. Applied to the one that did — `lsp_status` turned a failure
+into a successful **empty list**, the exact shape this subsystem refuses
+everywhere else, and inline it was the one line worth checking and the one line
+nothing could check. It is `status_for` now, tested both ways, with the `Ok` half
+driven through a probe that finds nothing so the row count is a fact about the
+registry rather than about whoever is running the suite.
+
+## `SymbolKind::Property`, and the pinning test that could not have caught it
+
+LSP `Property` (7), `Field` (8) and `Variable` (13) all landed on `Variable`.
+`Property` is now its own variant; **8 and 13 stay `Variable` deliberately** —
+C#, TypeScript, Java and Kotlin all distinguish a field from a property in the
+language itself, so labelling a field "property" is the confident wrong answer
+this module exists to refuse. `Variable` claims only "named storage".
+
+The variant is unreachable from `symbols::declarations`' text scan and always
+will be: no keyword introduces a property unambiguously, and C#'s
+`public string Name { get; set; }` reads as a variable. So the enum now has two
+producers with different confidence — a heuristic that abstains, beside a server
+that knows.
+
+Worth keeping: `symbol_kind_still_serialises_as_the_lower_case_strings_types_ts_mirrors`
+was a hand-written array, which pins the spelling of every variant somebody
+remembered to list and says nothing about a new one. Adding `Property` would have
+left it compiling, passing, and `types.ts` unmirrored. It is an exhaustive
+`match` now, which fails to *compile* — the only mechanism in this repository
+that can make a wire-type change stop somebody.
+
+## Counts after this round
+
+`cb-core` lib **1930** (Windows) / **1925** (Linux, five Windows-only tests);
+integration 49 / 2 (1 ignored) / **33** / 1 (5 ignored) / **17** / 26 / 11.
+`cb-app` **41**. `pnpm test` **631** in 23 files. Clippy at exactly the two
+documented baseline warnings (`importers/rider.rs:65`, `workspace.rs:1729` — pin
+by lint and file, never by line). All five real-server oracles pass in 103 s.
