@@ -815,7 +815,18 @@ fn did_change_sends_one_event_whose_range_spans_the_whole_document() {
     // permitted; a single whole-document range is legal under Incremental and
     // keeps every notification self-describing. See `.memories/features/
     // lsp-usages/notes.md` for why that beats mapping editor deltas.
-    let params = DidChangeTextDocumentParams::whole_document("file:///c:/x.cs", 7, "ab\ncde");
+    //
+    // This case passes the same text twice **because the document is not
+    // changing size here**, which is the one situation where old and new extents
+    // coincide. That coincidence is exactly what hid the range bug for a whole
+    // feature's worth of tests — see
+    // `the_replaced_range_describes_the_document_the_server_holds_not_the_new_one`.
+    let params = DidChangeTextDocumentParams::whole_document(
+        "file:///c:/x.cs",
+        7,
+        document_end("ab\ncde"),
+        "ab\ncde",
+    );
     assert_eq!(
         serde_json::json!({
             "textDocument": { "uri": "file:///c:/x.cs", "version": 7 },
@@ -832,17 +843,68 @@ fn did_change_sends_one_event_whose_range_spans_the_whole_document() {
 }
 
 #[test]
+fn the_replaced_range_describes_the_document_the_server_holds_not_the_new_one() {
+    // **The range and the text describe different documents**, and every other
+    // test in this file passed the same string for both — which is exactly why
+    // this shipped. A range is an instruction about the buffer the server
+    // *currently* has; the text is what to put there. Measuring the range from
+    // the new text is only correct when the two happen to be the same size.
+    //
+    // Found by running the app. Against real servers the two halves fail
+    // differently, and the second is far worse:
+    //
+    // | edit          | range vs server's buffer | result                       |
+    // |---------------|--------------------------|------------------------------|
+    // | same length   | exact                    | correct, by coincidence      |
+    // | one char more | overruns the end         | tsserver crashes             |
+    // | shorter       | stops short              | **stale tail silently kept** |
+    //
+    // The shrink case answered `Ready` with a confident wrong list: a 5640-char
+    // buffer replaced by a 39-char one still reported nine symbols that existed
+    // only in the deleted text. That is the failure this subsystem exists to
+    // refuse, so the range is now the *previous* document's extent.
+    let previous_end = position(4, 11);
+    let params = DidChangeTextDocumentParams::whole_document(
+        "file:///c:/x.cs",
+        7,
+        previous_end,
+        // Shorter than what the server holds, which is the dangerous direction.
+        "ab",
+    );
+    assert_eq!(
+        serde_json::json!({
+            "textDocument": { "uri": "file:///c:/x.cs", "version": 7 },
+            "contentChanges": [{
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 4, "character": 11 }
+                },
+                "text": "ab"
+            }]
+        }),
+        serde_json::to_value(&params).expect("serialises"),
+        "the range must span the whole of the server's document, not the new text"
+    );
+}
+
+#[test]
 fn the_whole_document_range_ends_on_the_empty_line_a_trailing_newline_creates() {
     // "a\n" is two lines to every editor and to LSP, the second empty. Ending on
     // line 0 would leave the newline outside the replaced range, and the server
     // would accumulate one extra line per edit.
-    let params = DidChangeTextDocumentParams::whole_document("file:///c:/x.cs", 1, "a\n");
+    let params = DidChangeTextDocumentParams::whole_document(
+        "file:///c:/x.cs",
+        1,
+        document_end("a\n"),
+        "a\n",
+    );
     assert_eq!(position(1, 0), params.content_changes[0].range.end);
 }
 
 #[test]
 fn the_whole_document_range_of_an_empty_document_is_the_zero_position() {
-    let params = DidChangeTextDocumentParams::whole_document("file:///c:/x.cs", 1, "");
+    let params =
+        DidChangeTextDocumentParams::whole_document("file:///c:/x.cs", 1, document_end(""), "");
     assert_eq!(position(0, 0), params.content_changes[0].range.start);
     assert_eq!(position(0, 0), params.content_changes[0].range.end);
 }
@@ -852,8 +914,12 @@ fn the_whole_document_range_counts_its_last_line_in_utf16_code_units() {
     // An emoji is one `char`, four bytes and **two** UTF-16 code units. A range
     // measured in either of the other two would fall short of the end of the
     // document and leave the server holding a tail we thought we had replaced.
-    let params =
-        DidChangeTextDocumentParams::whole_document("file:///c:/x.cs", 1, "let e = \"🙂\"");
+    let params = DidChangeTextDocumentParams::whole_document(
+        "file:///c:/x.cs",
+        1,
+        document_end("let e = \"🙂\""),
+        "let e = \"🙂\"",
+    );
     assert_eq!(position(0, 12), params.content_changes[0].range.end);
 }
 
@@ -862,7 +928,12 @@ fn a_carriage_return_stays_inside_the_line_it_ends() {
     // LSP splits on the line terminator, and `\r\n` is one terminator. Counting
     // the `\r` as content of the following line would put the range end one
     // column past where the server thinks the line ends.
-    let params = DidChangeTextDocumentParams::whole_document("file:///c:/x.cs", 1, "ab\r\ncd");
+    let params = DidChangeTextDocumentParams::whole_document(
+        "file:///c:/x.cs",
+        1,
+        document_end("ab\r\ncd"),
+        "ab\r\ncd",
+    );
     assert_eq!(position(1, 2), params.content_changes[0].range.end);
 }
 
@@ -876,7 +947,12 @@ fn a_carriage_return_stays_inside_the_line_it_ends() {
 /// prevent, and invisible in exactly the same way.
 #[test]
 fn a_document_ending_in_a_lone_carriage_return_is_still_covered_to_its_end() {
-    let params = DidChangeTextDocumentParams::whole_document("file:///c:/x.cs", 1, "ab\r");
+    let params = DidChangeTextDocumentParams::whole_document(
+        "file:///c:/x.cs",
+        1,
+        document_end("ab\r"),
+        "ab\r",
+    );
     assert_eq!(position(0, 3), params.content_changes[0].range.end);
 }
 

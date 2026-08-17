@@ -826,6 +826,75 @@ fn rewrite_script(fake: &Fake, edit: impl FnOnce(&mut Value)) {
 }
 
 #[tokio::test]
+async fn the_replaced_range_is_the_extent_of_what_the_server_was_last_told() {
+    // The range says *what to overwrite*, so it describes the server's current
+    // buffer; the text says what to put there. Measuring the range from the new
+    // text is right only when the sizes match, and both mismatches are real
+    // failures seen against real servers — a longer document overruns the buffer
+    // and crashes tsserver, a shorter one leaves a stale tail that the server
+    // then answers from, confidently and wrongly.
+    //
+    // Read off the wire, because this is a notification and nothing answers it.
+    // The three edits below are chosen so a range taken from the *new* text
+    // would differ from the correct one every single time.
+    bounded!(async {
+        let fake = fake(json!({
+            "capabilities": roslyn_capabilities(),
+            "notificationJournal": "PLACEHOLDER"
+        }));
+        let journal = fake.dir.path().join("notifications.jsonl");
+        rewrite_script(&fake, |script| {
+            script["notificationJournal"] = json!(journal.display().to_string());
+        });
+
+        let session = start(fake).await;
+        let file = a_file(&session);
+        let c = &session.client;
+
+        // Opened with three lines; the last is 5 characters long.
+        c.did_open(&file, "one\ntwo\nthree", 1).expect("opened");
+        // Grows: the server still holds the 3-line document, so the range must
+        // still end at (2, 5) and not at the new text's own end.
+        c.did_change(&file, "one\ntwo\nthree\nfour", 2)
+            .expect("changed");
+        // Shrinks hard: the server holds four lines, so the range must span all
+        // four. This is the case that silently corrupted the buffer.
+        c.did_change(&file, "x", 3).expect("changed");
+
+        until(|| change_ranges(&journal).len() >= 2).await;
+        assert_eq!(
+            change_ranges(&journal),
+            vec![
+                // The 3-line document that was open when the first edit was made.
+                ((0, 0), (2, 5)),
+                // The 4-line document the first edit produced.
+                ((0, 0), (3, 4)),
+            ],
+            "each range must describe the document the server held at that moment"
+        );
+    });
+}
+
+/// Every `didChange` range the fake recorded, as `((line, char), (line, char))`.
+fn change_ranges(journal: &Path) -> Vec<((u64, u64), (u64, u64))> {
+    let Ok(text) = std::fs::read_to_string(journal) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["method"] == json!("textDocument/didChange"))
+        .filter_map(|entry| {
+            let range = &entry["params"]["contentChanges"][0]["range"];
+            let at = |end: &str, field: &str| range[end][field].as_u64();
+            Some((
+                (at("start", "line")?, at("start", "character")?),
+                (at("end", "line")?, at("end", "character")?),
+            ))
+        })
+        .collect()
+}
+
+#[tokio::test]
 async fn a_change_to_a_document_that_was_never_opened_is_refused() {
     // Inventing a `didOpen` would send the server text it never asked about;
     // sending the change alone would be rejected. Both are worse than saying so.

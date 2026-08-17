@@ -652,18 +652,57 @@ impl DidChangeTextDocumentParams {
     /// notification self-describing, so the worst a lost one costs is staleness
     /// until the next edit. `notes.md` records this as the chosen trade, to be
     /// revisited only if it measures badly.
-    pub fn whole_document(uri: &str, version: i32, text: &str) -> Self {
+    ///
+    /// # `previous_end` is the end of the document the *server* holds
+    ///
+    /// Not of `text`. A range is an instruction about the buffer the server
+    /// already has, and `text` is what to put in its place; the two describe
+    /// different documents whenever an edit changes the length. This originally
+    /// measured the range from `text`, which is correct only when the two happen
+    /// to be the same size, and against real servers the two error directions
+    /// fail very differently:
+    ///
+    /// * **Longer** — the range runs past the end of the server's buffer.
+    ///   tsserver throws (`Cannot read properties of undefined (reading
+    ///   'charCount')`) and every later request for that file fails. Loud.
+    /// * **Shorter** — the range stops short, so the server keeps a **stale
+    ///   tail** and its buffer silently stops matching the file. Observed in the
+    ///   running app: a 5640-character buffer replaced by a 39-character one
+    ///   still reported nine symbols that existed only in the deleted text, as a
+    ///   confident `Ready` answer. Silent, and much worse.
+    ///
+    /// [`Client`](super::client::Client) supplies this from what it last sent,
+    /// which is the only place that knows. Callers must not pass
+    /// `document_end(text)`.
+    pub fn whole_document(uri: &str, version: i32, previous_end: Position, text: &str) -> Self {
         Self {
             text_document: VersionedTextDocumentIdentifier {
                 uri: uri.to_string(),
                 version,
             },
             content_changes: vec![TextDocumentContentChangeEvent {
-                range: document_range(text),
+                range: Range {
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: previous_end,
+                },
                 text: text.to_string(),
             }],
         }
     }
+}
+
+/// The position one past the last character of `text` — its extent as a
+/// document.
+///
+/// The client records this for each open document at the moment it sends the
+/// text, and hands it back as [`DidChangeTextDocumentParams::whole_document`]'s
+/// `previous_end` on the next edit. Eight bytes per document, which is why the
+/// text itself is not kept.
+pub fn document_end(text: &str) -> Position {
+    document_range(text).end
 }
 
 /// The range covering an entire document, in the protocol's own units.

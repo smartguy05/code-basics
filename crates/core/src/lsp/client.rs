@@ -55,6 +55,12 @@
 //! Changes go out as a single event whose range spans the whole document, which
 //! [`super::protocol::DidChangeTextDocumentParams::whole_document`] builds and
 //! `notes.md` justifies. That decision is settled; do not revisit it here.
+//!
+//! **The range describes the document the server holds, not the one being
+//! sent** — so this mirror records the *extent* of each document alongside its
+//! version, and hands it back on the next edit. Measuring it from the new text
+//! is right only when an edit happens not to change the length; see
+//! `did_change`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -68,7 +74,7 @@ use thiserror::Error;
 use tokio::sync::{broadcast, watch};
 
 use super::protocol::{
-    decode_document_symbols, decode_goto, initialize_params, method, DecodeError,
+    decode_document_symbols, decode_goto, document_end, initialize_params, method, DecodeError,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentSymbolParams, Location, Position, ReferenceParams, ServerCapabilities, Symbol,
     SyncKind, TextDocumentPositionParams,
@@ -202,6 +208,18 @@ pub enum RequestError {
 // The client
 // ---------------------------------------------------------------------------
 
+/// What was last sent to the server about one document.
+///
+/// The version and the extent travel together because they describe the same
+/// notification: the next edit needs the version to advance past, and the extent
+/// to replace. Keeping them in one value is what stops the two drifting.
+#[derive(Debug, Clone, Copy)]
+struct Sent {
+    version: i32,
+    /// The end of the text as the server now has it. See [`Client::did_change`].
+    end: Position,
+}
+
 /// One language server, ready to be asked things.
 pub struct Client {
     spec: ServerSpec,
@@ -210,11 +228,18 @@ pub struct Client {
     transport: Transport,
     capabilities: ServerCapabilities,
     ready: watch::Receiver<ReadyState>,
-    /// What each open document was last told, and under which version. Keyed by
-    /// the path the caller passed: this map is *our* mirror of *our* messages,
-    /// so the caller's spelling is the right key. Identity against a URI the
-    /// server sends back is a different question, decided on paths elsewhere.
-    documents: Mutex<HashMap<PathBuf, i32>>,
+    /// What each open document was last told: the version, and **the extent of
+    /// the text that went with it**. Keyed by the path the caller passed: this
+    /// map is *our* mirror of *our* messages, so the caller's spelling is the
+    /// right key. Identity against a URI the server sends back is a different
+    /// question, decided on paths elsewhere.
+    ///
+    /// The extent is here because the next `didChange` has to describe the range
+    /// it is replacing in terms of the buffer the server currently holds, and
+    /// this is the only place that knows what that is. Storing the end position
+    /// rather than the text keeps it to a few bytes per document — see
+    /// [`super::protocol::document_end`].
+    documents: Mutex<HashMap<PathBuf, Sent>>,
     /// True until the server has answered something. The first answer pays for
     /// project load or cache priming and the rest do not, so it gets the far
     /// longer deadline.
@@ -469,10 +494,13 @@ impl Client {
         let params =
             DidOpenTextDocumentParams::new(&uri, self.spec.language_id_for(path), version, text);
         self.send(method::DID_OPEN, &params)?;
-        self.documents
-            .lock()
-            .unwrap()
-            .insert(path.to_path_buf(), version);
+        self.documents.lock().unwrap().insert(
+            path.to_path_buf(),
+            Sent {
+                version,
+                end: document_end(text),
+            },
+        );
         Ok(())
     }
 
@@ -497,22 +525,44 @@ impl Client {
     /// is now only *what was last sent*, which is exactly what
     /// [`Client::document_version`] claims to return. Monotonicity is the
     /// caller's guarantee, and `documents.rs` is where it is enforced and pinned.
+    ///
+    /// # Why the range comes from here
+    ///
+    /// The notification replaces a *range* of the server's buffer, so that range
+    /// has to describe the buffer the server currently holds — the text of the
+    /// previous notification, not the text of this one. This client is the only
+    /// thing that knows what that was, so it records the extent alongside the
+    /// version and hands it back here. Measuring the range from the new text
+    /// instead crashes tsserver on any edit that lengthens the document and, far
+    /// worse, silently leaves a stale tail on any edit that shortens it; see
+    /// [`DidChangeTextDocumentParams::whole_document`].
     pub fn did_change(&self, path: &Path, text: &str, version: i32) -> Result<(), RequestError> {
         let uri = self.uri_for(path)?;
-        {
+        let previous_end = {
             let mut documents = self.documents.lock().unwrap();
             let slot = documents
                 .get_mut(path)
                 .ok_or_else(|| RequestError::NotOpen {
                     path: path.to_path_buf(),
                 })?;
+            let previous_end = slot.end;
             // Recorded before the send, and left recorded if the send fails: a
             // version must never be reused, and a server that missed one
             // notices the gap. Reusing it would look like a legal edit.
-            *slot = version;
-        }
+            //
+            // The extent moves with it. If the send fails the server never got
+            // this text, so the *next* range would be measured against a buffer
+            // it does not have — but a failed send is a dead transport (see
+            // `send`), and every request after it fails too, so there is no next
+            // range. Keeping the two fields in step is what matters.
+            *slot = Sent {
+                version,
+                end: document_end(text),
+            };
+            previous_end
+        };
 
-        let params = DidChangeTextDocumentParams::whole_document(&uri, version, text);
+        let params = DidChangeTextDocumentParams::whole_document(&uri, version, previous_end, text);
         self.send(method::DID_CHANGE, &params)
     }
 
@@ -530,7 +580,11 @@ impl Client {
 
     /// Which version the server was last told about, if the document is open.
     pub fn document_version(&self, path: &Path) -> Option<i32> {
-        self.documents.lock().unwrap().get(path).copied()
+        self.documents
+            .lock()
+            .unwrap()
+            .get(path)
+            .map(|sent| sent.version)
     }
 
     // -----------------------------------------------------------------------
