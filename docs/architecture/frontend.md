@@ -8,7 +8,7 @@ React 19 + TypeScript, built with Vite, rendered inside the native Tauri window 
 src/
 ├── main.tsx              entry: mounts <App/> in an ErrorBoundary; suppresses the
 │                         webview context menu (editable fields keep the native one)
-├── App.tsx               titlebar (branch widget, run-config slot) + tab row (Run
+├── App.tsx               titlebar (menu bar, branch widget, run-config slot) + tab row (Run
 │                         first), workspace open/reopen, recents (localStorage);
 │                         Run + Tests stay mounted while hidden so running
 │                         processes keep their consoles
@@ -49,6 +49,10 @@ src/
 │   │                     env, cwd, ...; Delete lives in its footer)
 │   ├── BranchMenu.tsx    titlebar branch widget: tree, sections, fetch/pull/push,
 │   │                     right-click create-from / merge-into, abort-merge
+│   ├── MenuBar.tsx       menu bar: File (Open/Rescan/Exit) + Enhancements with
+│   │                     fly-out Instructions/Prompts submenus (enhancementsLogic.ts)
+│   ├── enhancementsLogic.ts  the Enhancements decisions: add/remove action, badges,
+│   │                     empty-state text, copy + confirm-before-add messages
 │   ├── RunConfigMenu.tsx titlebar run-config dropdown: status dots, favourites,
 │   │                     reorder, new/import items (portal from RunView)
 │   ├── FileTree.tsx      lazy workspace directory tree (one fs_list_dir per expand)

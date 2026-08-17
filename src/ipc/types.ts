@@ -394,6 +394,24 @@ export interface InstallPlan {
   caveats?: string[];
 }
 
+/**
+ * One instruction template in the Enhancements menu (`enhancements::EnhancementInfo`).
+ */
+export interface EnhancementInfo {
+  id: string;
+  title: string;
+  /** Present in CLAUDE.md or AGENTS.md in the current workspace. */
+  installed: boolean;
+}
+
+/** One prompt in the Enhancements → Prompts submenu (`enhancements::PromptInfo`). */
+export interface PromptInfo {
+  id: string;
+  title: string;
+  /** The prompt text copied to the clipboard (front matter stripped). */
+  body: string;
+}
+
 /** Why a set of hunks belongs together (`git/grouping.rs`). */
 export type GroupKind =
   | "intent"

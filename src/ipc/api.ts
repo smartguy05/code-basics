@@ -14,6 +14,7 @@ import type {
   DiagramFile,
   DirEntry,
   ElidedReason,
+  EnhancementInfo,
   FileContents,
   FileDiff,
   InspectGraph,
@@ -28,6 +29,7 @@ import type {
   NetworkKind,
   ProcessEvent,
   ProjectSecrets,
+  PromptInfo,
   ProviderId,
   ProviderStatus,
   RejectSummary,
@@ -102,6 +104,25 @@ export const fsReadFile = (path: string) =>
 
 export const fsWriteFile = (path: string, content: string) =>
   invoke<void>("fs_write_file", { path, content });
+
+// ---------------------------------------------------------------------------
+// Enhancements (instruction templates for CLAUDE.md / AGENTS.md)
+// ---------------------------------------------------------------------------
+
+/** Every instruction template, flagged with whether it is installed here. */
+export const listEnhancements = () =>
+  invoke<EnhancementInfo[]>("list_enhancements");
+
+/** Add a template's section to both agent files; returns the refreshed list. */
+export const addEnhancement = (id: string) =>
+  invoke<EnhancementInfo[]>("add_enhancement", { id });
+
+/** Remove a template's section from both agent files; returns the refreshed list. */
+export const removeEnhancement = (id: string) =>
+  invoke<EnhancementInfo[]>("remove_enhancement", { id });
+
+/** Every prompt template, each carrying the body to copy to the clipboard. */
+export const listPrompts = () => invoke<PromptInfo[]>("list_prompts");
 
 // ---------------------------------------------------------------------------
 // Running

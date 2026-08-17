@@ -443,6 +443,75 @@ textarea:focus {
   color: var(--text);
 }
 
+/* ---- Menu bar (File / Enhancements) ---------------------------------- */
+
+/* Kept above the dropdown backdrop (z-index 40) so its buttons stay
+   interactive while a menu is open — that is what lets hovering one
+   top-level menu switch to it, classic menu-bar behaviour. */
+.menubar {
+  position: relative;
+  z-index: 42;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.menu-button {
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.menu-button:hover,
+.menu-button.open {
+  background: var(--border);
+}
+
+/* The Enhancements menu holds fly-out submenus, so it must not clip them —
+   its own list is short enough not to need scrolling. */
+.dropdown-menu.has-submenus {
+  overflow: visible;
+}
+
+.dropdown-submenu {
+  position: relative;
+}
+
+/* A submenu's caret, pushed to the right edge of its parent row. */
+.dropdown-submenu .submenu-caret {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--text-faint);
+}
+
+/* The fly-out itself, opening to the right of its parent row. */
+.dropdown-submenu > .dropdown-menu {
+  top: -5px;
+  left: 100%;
+  margin-left: 2px;
+}
+
+/* Inline confirmation before an instruction is written to shared files. */
+.dropdown-item.confirm-row {
+  gap: 6px;
+  cursor: default;
+  white-space: normal;
+}
+
+.confirm-row .confirm-yes,
+.confirm-row .confirm-no {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.confirm-row .confirm-yes {
+  background: var(--accent-dim);
+}
+
 /* Favourite toggle inside a .row (a span, since rows are buttons). */
 .star {
   flex: 0 0 auto;

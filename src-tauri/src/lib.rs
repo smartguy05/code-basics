@@ -10,6 +10,7 @@ mod state;
 mod commands {
     pub mod architecture;
     pub mod changelists;
+    pub mod enhancements;
     pub mod files;
     pub mod git;
     pub mod inspect;
@@ -91,6 +92,10 @@ pub fn run() {
             commands::workspace::launch_profiles,
             commands::workspace::set_favorite,
             commands::workspace::set_config_order,
+            commands::enhancements::list_enhancements,
+            commands::enhancements::add_enhancement,
+            commands::enhancements::remove_enhancement,
+            commands::enhancements::list_prompts,
             commands::files::fs_list_dir,
             commands::files::fs_read_file,
             commands::files::fs_write_file,

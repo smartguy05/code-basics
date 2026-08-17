@@ -4,7 +4,9 @@
 
 A workspace is any directory. On launch the app shows a welcome screen with an **Open** dialog and a list of recently opened workspaces (kept in `localStorage`, most recent first, capped at eight). You can also launch with a path: `code-basics <dir>`.
 
-When the workspace is a git repository, the titlebar shows a branch widget (⎇ branch, with ahead/behind counts): a Rider-style menu with fetch/pull/push, a new-branch field, and click-to-switch (× deletes a branch). It is available from every tab; the History tab keeps the full console output for network operations. Next to it sits the run-configuration dropdown (see [Run](#run)), and the six view tabs are on their own row below the titlebar.
+The titlebar starts with a menu bar: a **File** menu (Open, Rescan, Exit — the standalone Open…/Rescan buttons on the right remain too) and an **Enhancements** menu with **Instructions** and **Prompts** submenus (see [Enhancements](../guides/instruction-enhancements.md)). Opening a folder from here closes any open editor tabs.
+
+When the workspace is a git repository, the titlebar also shows a branch widget (⎇ branch, with ahead/behind counts): a Rider-style menu with fetch/pull/push, a new-branch field, and click-to-switch (× deletes a branch). It is available from every tab; the History tab keeps the full console output for network operations. Next to it sits the run-configuration dropdown (see [Run](#run)), and the six view tabs are on their own row below the titlebar.
 
 Opening a workspace scans it for projects — filesystem-only, so it is effectively instant — and layers any saved configurations from `.code-basics/config.json` on top of the detected ones. The backend keeps the open workspace across a window reload. See [Configuration](../reference/configuration.md) for what gets written where.
 

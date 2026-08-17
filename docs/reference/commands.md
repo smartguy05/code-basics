@@ -31,6 +31,21 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `fs_read_file` | `path: String` | `String` | UTF-8 text only; binary or >5 MB files are a clear error |
 | `fs_write_file` | `path: String`, `content: String` | `()` | Saves the file editor's contents (Ctrl+S) |
 
+## Enhancements (instructions + prompts)
+
+`src-tauri/src/commands/enhancements.rs` — the menu-bar **Enhancements** menu, with two file-driven submenus. Both read plain `.md` files (front matter: `id`, `title`, and for instructions `placement`) from user-owned directories, auto-generated from whatever files are present; bundled defaults are seeded on first use without overwriting edits.
+
+**Instructions** live in `%APPDATA%\code-basics\instructions\` (or `$XDG_CONFIG_HOME`/`~/.config` elsewhere; `CB_INSTRUCTIONS_PATH` overrides). Adding (after an inline confirmation) writes the section into **both** `CLAUDE.md` and `AGENTS.md`, bounded by an `<!-- code-basics: enhancement:<id> -->` marker so it is idempotent, refreshable and removable.
+
+**Prompts** live in the sibling `prompts/` directory (`CB_PROMPTS_PATH` overrides). Nothing is written — the command returns each prompt's body and the frontend copies it to the clipboard.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `list_enhancements` | — | `EnhancementInfo[]` | Every instruction template on disk, each flagged `installed` when its section is present in either agent file |
+| `add_enhancement` | `id: String` | `EnhancementInfo[]` | Splice the template's section into both agent files at its declared placement (backing up the originals); returns the refreshed list |
+| `remove_enhancement` | `id: String` | `EnhancementInfo[]` | Cut the template's marked section out of both agent files; returns the refreshed list |
+| `list_prompts` | — | `PromptInfo[]` | Every prompt on disk, each carrying the `body` the frontend copies to the clipboard |
+
 ## .NET user secrets
 
 `src-tauri/src/commands/secrets.rs` — `project` is the workspace-relative `.csproj` path a .NET `RunConfig.project` holds. Secrets live in `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere), never in the repository.

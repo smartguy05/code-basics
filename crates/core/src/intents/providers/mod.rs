@@ -136,9 +136,18 @@ pub trait Provider {
 /// clever: the plan already computed the exact final contents, precisely so
 /// that what the user approved is what gets written.
 pub fn apply_plan(plan: &InstallPlan) -> Result<()> {
+    apply_writes(&plan.writes)
+}
+
+/// Perform a set of planned writes, backing up any file being merged into first.
+///
+/// Split out from [`apply_plan`] so callers that assemble writes without a full
+/// [`InstallPlan`] — the instruction-template library — reuse the same
+/// backup-then-write behaviour rather than reimplementing it.
+pub fn apply_writes(writes: &[PlannedWrite]) -> Result<()> {
     use anyhow::Context;
 
-    for write in &plan.writes {
+    for write in writes {
         if let Some(parent) = write.path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;

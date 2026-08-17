@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { ArchitectureView } from "./views/ArchitectureView";
 import { BranchMenu } from "./components/BranchMenu";
 import { ChangesView } from "./views/ChangesView";
+import { MenuBar } from "./components/MenuBar";
 import { HistoryView } from "./views/HistoryView";
 import { InspectView } from "./views/InspectView";
 import { RunView } from "./views/RunView";
@@ -253,6 +254,10 @@ export function App() {
   return (
     <div className="app">
       <div className="titlebar">
+        {/* File (Open / Rescan / Exit) and Enhancements (Instructions / Prompts).
+            The standalone Open…/Rescan buttons below remain as shortcuts. */}
+        <MenuBar onOpen={pickFolder} onRescan={rescan} />
+
         <span className="workspace-name">{workspace.name}</span>
         <span className="faint mono" style={{ fontSize: 11 }}>
           {workspace.root}
@@ -304,6 +309,7 @@ export function App() {
             `requestToken` makes a jump *inside the file already showing* fire at
             all. See `OpenFileRequest` above. */}
         <RunView
+          key={workspace.root}
           workspace={workspace}
           onWorkspaceChange={setWorkspace}
           onInspect={requestInspect}
