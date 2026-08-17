@@ -1,5 +1,9 @@
 # Todos — LSP usages
 
+> **All 11 open items below are sequenced in `plan.md`** (written 2026-08-17).
+> Read that first; it carries the file:line references and the decisions already
+> made about each one.
+
 ## Done
 
 - [x] **Phase 0 — the blocking unknowns, retired by probing rather than reasoning.**
@@ -44,12 +48,16 @@ both invisible to a fixture without astral-plane characters:
       the UI will name the wrong question.
 - [ ] **The `LocationLink` path is not backed by a captured payload.** The real
       Roslyn server answered `Location[]` despite `linkSupport: true`; those
-      tests are over hand-written JSON. rust-analyzer is the candidate oracle on
-      this machine.
-- [ ] **Nothing about the three absent servers is verified** — program names,
-      argument lists and readiness for `typescript-language-server` and the four
-      Python candidates come from the design, not from a run. In particular
-      `--stdio` is confirmed only for the two pyright builds.
+      tests are over hand-written JSON. The Rust oracle's `goto_definition` step
+      now sends real traffic over that decoder against rust-analyzer and passes,
+      but which shape arrived was not recorded — capture it next.
+- [x] ~~Nothing about the three absent servers is verified~~ — all installed and
+      run. **Every design-derived claim was wrong**; see `notes.md` for the
+      captures. Summary: rust-analyzer's readiness prefix matched a sibling token
+      and promoted ~10s early; TypeScript and Python were not `Immediate`;
+      `--stdio` was handed to Python programs that reject it; and `pylsp` /
+      `jedi-language-server` were removed as candidates because they answer
+      zero and one-too-many respectively.
 
 - [x] **Phase 3 — transport, client, and a scripted fake server.**
       `transport.rs` (writer / reader / stderr-pump / reaper, register-before-send,
@@ -97,19 +105,21 @@ both invisible to a fixture without astral-plane characters:
       implementations", never an empty group that reads as "there are none". A
       server whose `textDocumentSync` is `None` is refused outright — we cannot
       keep it in sync, so nothing it says can be trusted.
-- [ ] **Three of the four servers are not installed on this machine**
-      (`typescript-language-server`, a Python server, and no OmniSharp). Only
-      `rust-analyzer` and Roslyn can be verified here, so their init quirks are
-      the only ones that will be found by testing rather than by a user.
+- [x] ~~Three of the four servers are not installed on this machine~~ — installed
+      2026-08-14: `typescript-language-server` + `typescript@5` (npm),
+      `basedpyright` (pip), `pyright` (npm), and the `rust-analyzer` rustup
+      component, which was a *shim for an uninstalled component* and failed at
+      launch rather than reporting itself absent.
 - [ ] **`codeLens` is a later optimisation, not the first cut.** Roslyn
       advertises `codeLensProvider: {resolveProvider: true}` and would give the
       count directly, but it is not uniform across four servers and needs its own
       configuration plumbing. `documentSymbol` + `references` is one code path
       for all of them.
-- [ ] **No real-server oracle is checked in yet.** The `Collections.cs` →
-      `Walker.cs:138` probe exists only as a transcript in `notes.md`. It should
-      become an `#[ignore]`d integration test that early-returns when the server
-      is absent, following `pnpm_resolves_to_its_cmd_shim_on_a_machine_that_has_it`.
+- [x] ~~No real-server oracle is checked in yet~~ — `crates/core/tests/lsp_oracle.rs`.
+      Table-driven, one `#[ignore]`d test per language, self-contained fixtures,
+      skipping only on `NotConfigured`. Plus `fixtures_say_what_the_oracles_assert`,
+      which is *not* ignored and holds the fixtures to the line numbers the
+      oracles assert. Run with `--test-threads=1`.
 - [x] ~~Roslyn spawns `BuildHost-netcore` children~~ — `transport.rs` calls
       `kill_tree(pid)` when a server ignores `shutdown`. Original note: Roslyn spawns `BuildHost-netcore` / `BuildHost-net472` children. Shutdown
       must go through `process::kill::kill_tree` or they are orphaned.
@@ -318,7 +328,7 @@ supervisor from the picture.
 
 ## Noticed while verifying, pre-existing, out of scope
 
-- [ ] **The dirty dot stays lit after undoing back to the saved content.**
+- [ ] (moved to `plan.md` Phase 5 — belongs to the editor, not this WI) **The dirty dot stays lit after undoing back to the saved content.**
       `FileEditor` sets dirty on any `docChanged` and clears it only on save, so
       undoing an edit leaves the buffer identical to disk while the tab still
       claims unsaved changes. Observed with CDP: after insert-then-undo the first

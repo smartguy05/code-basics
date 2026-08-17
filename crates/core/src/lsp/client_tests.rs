@@ -24,8 +24,12 @@ fn progress(token: Value, kind: &str) -> Notification {
     )
 }
 
+/// The real prefix, and the real token names underneath it. Captured from
+/// rust-analyzer 1.94 rather than imagined: the token whose *title* is
+/// "Indexing" is spelled `rustAnalyzer/cachePriming`, and the sibling tokens
+/// below really do end first.
 const RUST_ANALYZER: Readiness = Readiness::Progress {
-    token_prefix: "rustAnalyzer",
+    token_prefix: "rustAnalyzer/cachePriming",
 };
 
 // ---------------------------------------------------------------------------
@@ -34,15 +38,151 @@ const RUST_ANALYZER: Readiness = Readiness::Progress {
 
 #[test]
 fn a_progress_end_for_a_matching_token_is_the_signal() {
+    // The token a real rust-analyzer sends is exactly the prefix.
     assert!(signals_ready(
         RUST_ANALYZER,
-        &progress(json!("rustAnalyzer/Indexing"), "end")
+        &progress(json!("rustAnalyzer/cachePriming"), "end")
     ));
-    // The prefix is a prefix, not a namespace: the token may be exactly it.
+    // And it is still a prefix, so a build that qualified the token further
+    // would keep working.
     assert!(signals_ready(
         RUST_ANALYZER,
-        &progress(json!("rustAnalyzer"), "end")
+        &progress(json!("rustAnalyzer/cachePriming/2"), "end")
     ));
+}
+
+#[test]
+fn the_other_rust_analyzer_progress_tokens_are_not_readiness() {
+    // Every one of these is emitted by a real rust-analyzer before the index is
+    // usable, and `rustAnalyzer/Fetching` is emitted *repeatedly*. A prefix of
+    // `rustAnalyzer` matched all of them and published `Ready` about ten seconds
+    // early, with no caveat, which is the one failure shape this whole subsystem
+    // is built to make impossible.
+    for token in [
+        "rustAnalyzer/Fetching",
+        "rustAnalyzer/Building CrateGraph",
+        "rustAnalyzer/Roots Scanned",
+        "rustAnalyzer/Loading proc-macros",
+        "rustAnalyzer/Building compile-time-deps",
+        // Note the hyphen: flycheck uses a different namespace entirely.
+        "rust-analyzer/flycheck/0",
+    ] {
+        assert!(
+            !signals_ready(RUST_ANALYZER, &progress(json!(token), "end")),
+            "`{token}` ending must not be read as a usable index"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A server whose progress token carries no information
+// ---------------------------------------------------------------------------
+
+/// The real title, captured from typescript-language-server 5.3.0 driving
+/// TypeScript 5.9.3. Note the ellipsis is a single character, and the prefix
+/// deliberately stops before it.
+const TS_TITLE: &str = "Initializing JS/TS language features…";
+
+const TYPESCRIPT: Readiness = Readiness::ProgressTitle {
+    title_prefix: "Initializing JS/TS language features",
+};
+
+fn titled(token: Value, kind: &str, title: Option<&str>) -> Notification {
+    let mut value = json!({ "kind": kind });
+    if let Some(title) = title {
+        value["title"] = json!(title);
+    }
+    notification(method::PROGRESS, json!({ "token": token, "value": value }))
+}
+
+fn filter_for(readiness: Readiness) -> SignalFilter {
+    readiness_filter(readiness).expect("a readiness that watches for something")
+}
+
+#[test]
+fn a_titled_progress_is_recognised_by_its_begin_title_and_then_by_its_token() {
+    // typescript-language-server mints a fresh UUID per unit of work, so there
+    // is no prefix to match and the only identifying information is the
+    // `begin`'s title. The `end` carries the token and nothing else.
+    let matches = filter_for(TYPESCRIPT);
+    let token = json!("41f6b03a-c261-42d6-b5a6-676ce8b664b1");
+
+    // The beginning is the opposite of ready, exactly as for a prefix token.
+    assert!(!matches(&titled(token.clone(), "begin", Some(TS_TITLE))));
+    assert!(matches(&titled(token, "end", None)));
+}
+
+#[test]
+fn an_end_for_a_token_whose_beginning_was_never_matched_is_not_readiness() {
+    // The whole reason this variant is stateful. An `end` says nothing about
+    // *what* ended, so treating every `end` as the signal would be the
+    // `rustAnalyzer` namespace mistake in a worse form — it would match the
+    // first piece of work the server happened to finish.
+    let matches = filter_for(TYPESCRIPT);
+    assert!(!matches(&titled(json!("never-begun"), "end", None)));
+
+    // Including one whose beginning had a different title.
+    assert!(!matches(&titled(
+        json!("other"),
+        "begin",
+        Some("Formatting")
+    )));
+    assert!(!matches(&titled(json!("other"), "end", None)));
+}
+
+#[test]
+fn a_titled_progress_does_not_confuse_a_number_with_the_string_of_it() {
+    // Both spellings of a token are legal, and they are different tokens.
+    let matches = filter_for(TYPESCRIPT);
+    assert!(!matches(&titled(json!(7), "begin", Some(TS_TITLE))));
+    assert!(!matches(&titled(json!("7"), "end", None)));
+    assert!(matches(&titled(json!(7), "end", None)));
+}
+
+// ---------------------------------------------------------------------------
+// A server that announces nothing at all
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_first_diagnostics_are_pyrights_only_signal() {
+    // basedpyright publishes no progress and no custom notification for
+    // start-up: the only thing that changes at the moment it stops answering
+    // wrongly is that it publishes diagnostics for the file it was given.
+    let matches = filter_for(Readiness::FirstDiagnostics);
+
+    assert!(matches(&notification(
+        method::PUBLISH_DIAGNOSTICS,
+        json!({ "uri": "file:///c%3A/x/collections_mod.py", "diagnostics": [] })
+    )));
+}
+
+#[test]
+fn nothing_else_pyright_says_before_that_is_readiness() {
+    // Everything here was observed before the first diagnostics arrived, and
+    // every one of them would have promoted the server into the window where it
+    // answers `[]` for a symbol with a usage. The log lines are the temptation:
+    // "Found 2 source files" is the human-readable truth and is *prose*, which
+    // this subsystem never reads for meaning.
+    let matches = filter_for(Readiness::FirstDiagnostics);
+
+    for early in [
+        notification(
+            "window/logMessage",
+            json!({ "type": 3, "message": "basedpyright language server 1.39.10 starting" }),
+        ),
+        notification(
+            "window/logMessage",
+            json!({ "type": 3, "message": "Found 2 source files" }),
+        ),
+        notification("$/typescriptVersion", json!({ "version": "5.9.3" })),
+        titled(json!("f6eaa48f"), "end", None),
+    ] {
+        assert!(
+            !matches(&early),
+            "`{}` must not be read as readiness",
+            early.method
+        );
+    }
 }
 
 #[test]
@@ -53,7 +193,7 @@ fn a_beginning_or_a_report_is_the_opposite_of_ready() {
         assert!(
             !signals_ready(
                 RUST_ANALYZER,
-                &progress(json!("rustAnalyzer/Indexing"), kind)
+                &progress(json!("rustAnalyzer/cachePriming"), kind)
             ),
             "`{kind}` must not be read as readiness"
         );
@@ -69,7 +209,7 @@ fn somebody_elses_progress_token_is_not_our_signal() {
     // A near miss on case is a miss. Nothing here guesses.
     assert!(!signals_ready(
         RUST_ANALYZER,
-        &progress(json!("rustanalyzer/Indexing"), "end")
+        &progress(json!("rustanalyzer/cachePriming"), "end")
     ));
 }
 
@@ -84,7 +224,10 @@ fn a_progress_token_we_cannot_read_is_not_a_match() {
     ));
     assert!(!signals_ready(
         RUST_ANALYZER,
-        &notification(method::PROGRESS, json!({ "token": "rustAnalyzer" }))
+        &notification(
+            method::PROGRESS,
+            json!({ "token": "rustAnalyzer/cachePriming" })
+        )
     ));
     assert!(!signals_ready(
         RUST_ANALYZER,
@@ -196,6 +339,7 @@ async fn a_signal_recorded_before_the_watch_started_still_makes_the_server_ready
 
     let ready = spawn_readiness_watch(
         Readiness::RoslynProjectInit,
+        readiness_filter(Readiness::RoslynProjectInit),
         notifications.subscribe(),
         signal_rx,
         NEVER_REACHED,
@@ -231,6 +375,7 @@ async fn a_watch_that_lagged_past_the_chatter_is_still_ready_when_the_signal_lan
     let (death, death_rx) = watch::channel(None);
     let ready = spawn_readiness_watch(
         Readiness::RoslynProjectInit,
+        readiness_filter(Readiness::RoslynProjectInit),
         stream,
         signal_rx,
         NEVER_REACHED,
@@ -285,6 +430,7 @@ async fn a_server_promoted_at_the_ceiling_is_corrected_when_the_signal_finally_l
 
     let mut ready = spawn_readiness_watch(
         Readiness::RoslynProjectInit,
+        readiness_filter(Readiness::RoslynProjectInit),
         notifications.subscribe(),
         signal_rx,
         Duration::from_millis(100),
@@ -321,6 +467,7 @@ async fn a_server_that_dies_after_the_ceiling_is_not_upgraded_by_a_late_signal()
 
     let mut ready = spawn_readiness_watch(
         Readiness::RoslynProjectInit,
+        readiness_filter(Readiness::RoslynProjectInit),
         notifications.subscribe(),
         signal_rx,
         Duration::from_millis(100),

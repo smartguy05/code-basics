@@ -191,12 +191,54 @@ fn harness_with_program(script: Value, program: &str) -> Harness {
 /// scripted replies have to name files inside it.
 fn built(program: &str, build: impl FnOnce(&Path) -> Value) -> Harness {
     let dir = tempfile::tempdir().expect("a temp dir");
-    let script = build(dir.path());
+    let mut script = build(dir.path());
+    announce_readiness(&mut script);
     let path = dir.path().join("script.json");
     std::fs::write(&path, serde_json::to_vec_pretty(&script).expect("a script")).expect("write");
 
     let handle = session::start(dir.path().to_path_buf(), Some(config(&path, program)), 1);
     Harness { handle, dir }
+}
+
+/// Make the fake say what the server it is standing in for says.
+///
+/// These tests occupy the **typescript** slot, and the real
+/// `typescript-language-server` announces that it is ready by ending a
+/// `$/progress` whose `begin` was titled "Initializing JS/TS language features…"
+/// under a per-request UUID token. Until that arrives the session is `Loading`,
+/// which is correct and is the whole point of `Readiness::ProgressTitle`.
+///
+/// So the fake has to send it, or every test here would be measuring the
+/// readiness ceiling rather than the behaviour it names. Added centrally rather
+/// than in thirty scripts, and only the readiness pair is added — a test that
+/// wants a server which never becomes ready sets its own `emitOnInitialized`.
+fn announce_readiness(script: &mut Value) {
+    let Some(object) = script.as_object_mut() else {
+        return;
+    };
+    if object.contains_key("emitOnInitialized") {
+        return;
+    }
+    let token = "9f2b7c1e-fake-4a2d-9e11-000000000001";
+    object.insert(
+        "emitOnInitialized".to_string(),
+        json!([
+            {
+                "method": "$/progress",
+                "params": {
+                    "token": token,
+                    "value": {
+                        "kind": "begin",
+                        "title": "Initializing JS/TS language features…"
+                    }
+                }
+            },
+            {
+                "method": "$/progress",
+                "params": { "token": token, "value": { "kind": "end" } }
+            }
+        ]),
+    );
 }
 
 /// A machine with nothing at all installed, so "not found" is a fact about the

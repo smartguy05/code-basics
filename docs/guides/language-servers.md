@@ -9,15 +9,19 @@
 | Language | Files | Program looked for, in order | Install |
 |---|---|---|---|
 | C# | `.cs` | `Microsoft.CodeAnalysis.LanguageServer(.exe)` inside the VS Code **C# extension** | Install `ms-dotnettools.csharp` in VS Code (or Cursor / Windsurf / VS Code Insiders / a `.vscode-server`) |
-| TypeScript / JavaScript | `.ts .tsx .js .jsx .mjs .cjs .mts .cts` | `typescript-language-server` on `PATH` | `npm i -g typescript-language-server typescript` |
+| TypeScript / JavaScript | `.ts .tsx .js .jsx .mjs .cjs .mts .cts` | `typescript-language-server` on `PATH` | `npm i -g typescript-language-server typescript@5` |
 | Rust | `.rs` | `rust-analyzer` on `PATH` | `rustup component add rust-analyzer` |
-| Python | `.py .pyi` | `basedpyright-langserver`, then `pyright-langserver`, then `pylsp`, then `jedi-language-server` — all on `PATH` | e.g. `pip install basedpyright`, or `pip install pyright` / `python-lsp-server` / `jedi-language-server` |
+| Python | `.py .pyi` | `basedpyright-langserver`, then `pyright-langserver` — both on `PATH` | `pip install basedpyright`, or `npm i -g pyright` |
 
 Any other extension gets no server and no row — not a failure, just a language this feature does not cover.
 
-Two deliberate absences:
+**`typescript@5`, not `typescript`.** The `latest` tag now resolves to TypeScript 7, whose package ships `tsc` and no tsserver at all. `typescript-language-server` starts anyway, falls back to a stub that reports itself as version 1.0.0, and answers every query with an empty list — so following the unpinned command gives you a server that confidently reports zero usages for everything.
+
+Four deliberate absences, all for one reason: each would connect successfully and then give a count that is wrong, which is the only outcome this feature treats as worse than having no server at all. All four were run against a two-file fixture with exactly one call site (`crates/core/tests/lsp_oracle.rs`).
 
 - **`ruff` is never used**, even though it speaks LSP. It is a linter with no `references` and no `definition`, so it would connect happily and then answer nothing — which on screen reads as "this method is unused". A server that cannot answer must be recognised as such, not started.
+- **`pylsp` is never used.** It starts, initialises and reports itself ready, then answers `references` with **zero** for a symbol that has one usage.
+- **`jedi-language-server` is never used.** It ignores `includeDeclaration: false` and returns the declaration alongside the call site, so every count it gives is one too high — "1 usage" would appear above a method nothing calls. It also publishes no diagnostics, so there is no signal that it has finished starting.
 - **`ms-dotnettools.csdevkit` is never touched.** It is a different, proprietary extension. Only the MIT-licensed `ms-dotnettools.csharp` is searched, and the search prefix ends with `csharp-` so it cannot match the other one.
 
 ### How C# is found
@@ -75,6 +79,16 @@ The titlebar shows an indicator whenever a server has something to say — and n
 | *Usages paused* | The file could not be sent to the server, so nothing is being counted | The next edit that gets through resumes it; the row carries the reason |
 
 Servers write their own logs into `.code-basics/lsp-logs/`, which is gitignored — a verbose trace of one editing session, rewritten on every launch and safe to delete at any time.
+
+## Verifying against a real server
+
+The whole subsystem is otherwise tested against a scripted stand-in, which cannot catch a protocol regression against the real thing. `crates/core/tests/lsp_oracle.rs` closes that: it writes a small project per language, starts a session through the same discovery the app uses, and asserts the one usage it knows is there.
+
+```sh
+cargo test -p cb-core --test lsp_oracle -- --ignored --nocapture --test-threads=1
+```
+
+`#[ignore]`d because the result depends on which servers the machine has; a language with no server installed prints a line and is skipped, and nothing else is. `--test-threads=1` is required — four language servers indexing at once starve Roslyn's project load past its readiness ceiling.
 
 ## Related
 

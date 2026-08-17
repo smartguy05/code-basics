@@ -15,6 +15,7 @@
 | `pnpm coverage` | Frontend tests with coverage; fails under 70% lines on the `*Logic.ts` modules |
 | `cargo test -p cb-core` | All core tests (the entire logic layer) |
 | `cargo test -p cb-core <name>` | Tests whose names contain `<name>` |
+| `cargo test -p cb-core --test lsp_oracle -- --ignored --nocapture --test-threads=1` | The real-language-server oracle. Not part of the normal run: it starts whichever servers this machine has and skips the languages it does not. See [language servers](language-servers.md#verifying-against-a-real-server) |
 | `cargo llvm-cov --workspace --summary-only --fail-under-lines 70 --ignore-filename-regex "src.tauri.src.main\.rs\|process.kill\.rs\|bin.fake_lsp\.rs"` | Rust coverage gate (install with `cargo install cargo-llvm-cov` + `rustup component add llvm-tools-preview`) |
 | `cargo clippy` | Lint the Rust workspace |
 | `cargo fmt` | Format the Rust workspace (stock rustfmt defaults — there is no `rustfmt.toml`) |

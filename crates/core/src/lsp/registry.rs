@@ -184,12 +184,68 @@ pub enum Readiness {
     /// [`super::client::signals_ready`] and the transport's signal sink. So this
     /// is trustworthy exactly to the extent that the *first* `end` under the
     /// prefix is the one that matters; if a server emits several such tokens for
-    /// separate pieces of work, readiness is published at the first. That is not
-    /// verified against any real rust-analyzer build here, and the honest
-    /// consequence is written down rather than reasoned away: it would publish
-    /// `Ready` with no caveat while the index was still filling. Narrow the prefix
-    /// if that is ever observed; do not widen this comment.
+    /// separate pieces of work, readiness is published at the first.
+    ///
+    /// **That was observed, and the prefix was narrowed.** This used to read
+    /// `rustAnalyzer`, on the assumption that the namespace was the signal. A
+    /// capture against rust-analyzer 1.94 (`tests/lsp_oracle.rs`) shows it is
+    /// not — `Fetching`, `Building CrateGraph`, `Roots Scanned`,
+    /// `Loading proc-macros` and `Building compile-time-deps` all end first, and
+    /// `Fetching` ends *more than once*, so even "the last one" would not have
+    /// worked. The token that means the index is usable is
+    /// `rustAnalyzer/cachePriming` — spelled unlike the "Indexing" title it
+    /// displays under, which is why guessing it from the UI got it wrong. The
+    /// old prefix published `Ready`, with no caveat, about ten seconds early.
+    ///
+    /// So: this must name **one specific unit of work**, never a namespace. A
+    /// prefix broad enough to match a sibling token is a wrong answer delivered
+    /// confidently, which is worse than the late one it was trying to avoid.
     Progress { token_prefix: &'static str },
+    /// Trustworthy once the `$/progress` whose **`begin` carried this title**
+    /// has ended.
+    ///
+    /// For servers that mint an opaque token per unit of work, where
+    /// [`Self::Progress`] has nothing to match on.
+    /// typescript-language-server uses a fresh UUID
+    /// (`41f6b03a-c261-42d6-b5a6-676ce8b664b1`) and puts the only identifying
+    /// information in the `begin` value's `title` — "Initializing JS/TS language
+    /// features…" — while the `end` carries the token and nothing else. So the
+    /// token has to be remembered at `begin` and recognised at `end`, which is
+    /// why this one is matched by a stateful filter
+    /// ([`super::client::readiness_filter`]) rather than by a pure function.
+    ///
+    /// The title is matched by prefix so a trailing ellipsis, a count or a
+    /// percentage cannot invalidate it. Comparing whole titles would make the
+    /// signal a cosmetic string the server is free to change.
+    ProgressTitle { title_prefix: &'static str },
+    /// Trustworthy once the server has published diagnostics for anything.
+    ///
+    /// The last resort, for a server that announces its start-up in no other
+    /// way. basedpyright 1.39.10 sends no progress and no custom notification
+    /// while it scans the workspace; it simply answers `references` with `[]`
+    /// for about six hundred milliseconds and then starts answering correctly.
+    /// Captured (`tests/lsp_oracle.rs`):
+    ///
+    /// ```text
+    /// 0.7s  initialize result
+    /// 1.3s  textDocument/references -> []              <- a wrong zero
+    /// 1.3s  window/logMessage "Found 2 source files"
+    /// 1.3s  textDocument/publishDiagnostics            <- and correct from here on
+    /// 1.3s  textDocument/references -> the real call site
+    /// ```
+    ///
+    /// The temptation is the log line, which states the truth in English.
+    /// **Prose is never read for meaning in this subsystem**, and a message
+    /// the server is free to reword is not a protocol signal. Diagnostics are:
+    /// the server publishes them once it has analysed the file, which it cannot
+    /// do before resolving the file's imports, which is the very work that makes
+    /// `references` correct. Published even when there are none, so a clean file
+    /// still produces one.
+    ///
+    /// A server that never publishes any leaves this waiting until the readiness
+    /// ceiling, and is then promoted **with the caveat** — late and honest,
+    /// which is the trade this whole enum exists to make.
+    FirstDiagnostics,
     /// Roslyn: projects load asynchronously after `initialize`, and until they
     /// have, a reference query returns what it can see so far. Named for the
     /// server rather than described generically because the signal is
@@ -302,7 +358,10 @@ pub fn resolve(language: Language, config: Option<&LspConfig>, probe: &dyn Probe
 
     if let Some(program) = over.and_then(|o| o.program.as_deref()) {
         return match locate_explicit(program, probe) {
-            Some(path) => found(language, path, default_args(language), over),
+            Some(path) => {
+                let args = default_args(language, &path);
+                found(language, path, args, over)
+            }
             None => Resolution::Misconfigured {
                 language,
                 program: program.to_string(),
@@ -341,6 +400,7 @@ fn found(
     args: Vec<String>,
     over: Option<&ServerOverride>,
 ) -> Resolution {
+    let readiness = default_readiness(language, &program);
     let mut spec = ServerSpec {
         id: language.id(),
         language,
@@ -349,7 +409,7 @@ fn found(
         args,
         env: default_env(language),
         uri_style: default_uri_style(language),
-        readiness: default_readiness(language),
+        readiness,
         timeouts: default_timeouts(language),
     };
 
@@ -401,26 +461,97 @@ fn discover(
 ) -> Option<(PathBuf, Vec<String>)> {
     match language {
         Language::CSharp => discover_roslyn(probe, looked_for),
-        Language::Rust => on_path_candidates(probe, looked_for, &[("rust-analyzer", &[])]),
-        Language::TypeScript => on_path_candidates(
-            probe,
-            looked_for,
-            &[("typescript-language-server", &["--stdio"])],
-        ),
-        // Order is preference, and `ruff` is deliberately absent: it is a
-        // linter with no `references` and no `definition`, so it would connect
-        // successfully and then answer nothing, which reads as "unused".
-        Language::Python => on_path_candidates(
-            probe,
-            looked_for,
-            &[
-                ("basedpyright-langserver", &["--stdio"]),
-                ("pyright-langserver", &["--stdio"]),
-                ("pylsp", &[]),
-                ("jedi-language-server", &[]),
-            ],
-        ),
+        language => on_path_candidates(probe, looked_for, candidates(language)),
     }
+}
+
+/// One program this app knows how to launch, and how to launch it.
+///
+/// Both fields are properties of the **program**, not of the language it serves.
+/// That is not a design preference, it is what running them showed: the four
+/// Python servers below disagree about their arguments *and* about how they
+/// announce that they are ready.
+pub struct Candidate {
+    pub name: &'static str,
+    pub args: &'static [&'static str],
+    pub readiness: Readiness,
+}
+
+/// Every server this app knows how to launch for a language, in preference
+/// order.
+///
+/// **One table, two readers.** Discovery walks it, and so do [`default_args`]
+/// and [`default_readiness`] on the configured-`program` path — where discovery
+/// never runs and so never chose between the candidates. A second list would let
+/// the two disagree, and it did: `--stdio` was handed to whatever program a user
+/// named, and two of the four Python servers exit 2 on it.
+///
+/// C# is absent because Roslyn is not on PATH and is found by a filesystem
+/// search instead; its arguments are [`ROSLYN_ARGS`].
+fn candidates(language: Language) -> &'static [Candidate] {
+    match language {
+        // Reached only through the lookups; `discover` sends C# elsewhere.
+        Language::CSharp => &[],
+        Language::Rust => &[Candidate {
+            name: "rust-analyzer",
+            args: &[],
+            readiness: Readiness::Progress {
+                token_prefix: "rustAnalyzer/cachePriming",
+            },
+        }],
+        Language::TypeScript => &[Candidate {
+            name: "typescript-language-server",
+            args: &["--stdio"],
+            readiness: Readiness::ProgressTitle {
+                title_prefix: "Initializing JS/TS language features",
+            },
+        }],
+        // Order is preference. **Three** Python servers are deliberately absent,
+        // for one reason: each would connect successfully and then give a count
+        // that is wrong, which is the only outcome this subsystem treats as
+        // worse than having no server at all.
+        //
+        // * `ruff` is a linter with no `references` and no `definition`. It
+        //   would answer nothing, which reads as "unused".
+        // * `pylsp` was run against the two-file fixture in `tests/lsp_oracle.rs`
+        //   and answered `references` with **zero** — the same wrong zero, from a
+        //   server that starts, initialises and reports itself ready.
+        // * `jedi-language-server` answered **two** for the same fixture: it
+        //   ignores `includeDeclaration: false` and returns the declaration
+        //   alongside the one real call site. Every count it gives is one too
+        //   high, so "1 usage" would appear above a method nothing calls. It
+        //   also publishes no diagnostics at all, so there is no signal to wait
+        //   on either.
+        //
+        // Both were reachable until they were run. Removing them costs a user
+        // who has only one of them the feature — and [`Resolution::NotFound`]
+        // then names basedpyright and how to install it, which is a far better
+        // outcome than a number they would act on.
+        Language::Python => &[
+            Candidate {
+                name: "basedpyright-langserver",
+                args: &["--stdio"],
+                readiness: Readiness::FirstDiagnostics,
+            },
+            Candidate {
+                name: "pyright-langserver",
+                args: &["--stdio"],
+                readiness: Readiness::FirstDiagnostics,
+            },
+        ],
+    }
+}
+
+/// The candidate a path names, matched on the file stem.
+///
+/// So `C:/py/pylsp.exe`, `pylsp.cmd` and a bare `pylsp` all resolve alike — the
+/// three spellings a user may reasonably write for the same program. `None` for
+/// a wrapper script or a build from source, which nothing here can recognise.
+fn candidate_for(language: Language, program: &Path) -> Option<&'static Candidate> {
+    let stem = program.file_stem().and_then(|stem| stem.to_str())?;
+    candidates(language)
+        .iter()
+        .find(|candidate| candidate.name.eq_ignore_ascii_case(stem))
 }
 
 /// Try each name on PATH in order, recording all of them.
@@ -431,14 +562,14 @@ fn discover(
 fn on_path_candidates(
     probe: &dyn Probe,
     looked_for: &mut Vec<String>,
-    candidates: &[(&str, &[&str])],
+    candidates: &[Candidate],
 ) -> Option<(PathBuf, Vec<String>)> {
     let mut hit = None;
-    for (name, args) in candidates {
-        looked_for.push(format!("{name} (on PATH)"));
+    for candidate in candidates {
+        looked_for.push(format!("{} (on PATH)", candidate.name));
         if hit.is_none() {
-            if let Some(path) = probe.on_path(name) {
-                hit = Some((path, args.iter().map(|a| a.to_string()).collect()));
+            if let Some(path) = probe.on_path(candidate.name) {
+                hit = Some((path, candidate.args.iter().map(|a| a.to_string()).collect()));
             }
         }
     }
@@ -680,17 +811,27 @@ fn parse_extension_version(dir_name: &str) -> Option<Vec<u64>> {
 // Per-language defaults
 // ---------------------------------------------------------------------------
 
-fn default_args(language: Language) -> Vec<String> {
-    // Used only on the configured-`program` path, where discovery never ran and
-    // so never chose between the Python candidates — so this is a guess by
-    // construction, and the honest thing is to say which one it is rather than
-    // to count servers nobody here has run. `--stdio` is what the two pyright
-    // builds require, and they are the candidates discovery prefers; whether
-    // `pylsp` and `jedi-language-server` accept the flag is **unverified**
-    // (neither is installed on the machine this was written on). A user pointing
-    // at one of those sets `"args": []`, which `settings.rs` documents, and the
-    // failure mode if they do not is a server that refuses to start with its own
-    // message — visible, unlike a wrong answer.
+/// The arguments for a server the user named, rather than one discovery chose.
+///
+/// Looked up by the program's own name against [`candidates`] first, because
+/// what a server takes is a property of that server. This used to be decided by
+/// language alone, which handed `--stdio` to every Python server — and two of
+/// the four exit immediately with `unrecognized arguments: --stdio`. Since
+/// discovery does not run once a `program` is configured, nothing else was left
+/// to know better.
+///
+/// The name is matched on the file stem, so `C:/py/pylsp.exe`, `pylsp.cmd` and a
+/// bare `pylsp` all resolve alike — the three spellings a user may reasonably
+/// write for the same program.
+///
+/// A program no entry recognises — a wrapper script, a build from source — falls
+/// back to the language's usual arguments. There is genuinely nothing better to
+/// go on, and `"args": []` remains the documented escape hatch.
+fn default_args(language: Language, program: &Path) -> Vec<String> {
+    if let Some(candidate) = candidate_for(language, program) {
+        return candidate.args.iter().map(|a| a.to_string()).collect();
+    }
+
     let args: &[&str] = match language {
         Language::CSharp => ROSLYN_ARGS,
         Language::Rust => &[],
@@ -721,13 +862,41 @@ fn default_uri_style(language: Language) -> UriStyle {
     }
 }
 
-fn default_readiness(language: Language) -> Readiness {
+/// How this program announces that its answers can be trusted.
+///
+/// Looked up by program name first, for the same reason [`default_args`] is: the
+/// four Python servers announce readiness in two different ways, and one of them
+/// does not announce it at all. Deciding this by language alone left
+/// `jedi-language-server` — which is ready almost at once — sitting on "loading"
+/// until the ninety-second ceiling.
+///
+/// The fallback is the language's usual signal, for a program nothing here
+/// recognises.
+fn default_readiness(language: Language, program: &Path) -> Readiness {
+    if let Some(candidate) = candidate_for(language, program) {
+        return candidate.readiness;
+    }
+
     match language {
         Language::CSharp => Readiness::RoslynProjectInit,
+        // One specific unit of work, not the `rustAnalyzer` namespace — see
+        // [`Readiness::Progress`] for the capture that forced the distinction.
         Language::Rust => Readiness::Progress {
-            token_prefix: "rustAnalyzer",
+            token_prefix: "rustAnalyzer/cachePriming",
         },
-        Language::TypeScript | Language::Python => Readiness::Immediate,
+        // Not `Immediate`, which is what this used to say. Captured from
+        // typescript-language-server 5.3.0 over TypeScript 5.9.3: `initialize`
+        // returns in 0.2s, the project is not loaded for another second, and
+        // `references` in that window answers `[]` — a wrong zero delivered
+        // faster than the right answer. The work is announced as
+        // "Initializing JS/TS language features…" under a UUID token, which is
+        // why this needs the title and not a prefix.
+        Language::TypeScript => Readiness::ProgressTitle {
+            title_prefix: "Initializing JS/TS language features",
+        },
+        // Not `Immediate`: see [`Readiness::FirstDiagnostics`] for the capture
+        // showing basedpyright answering `[]` for the first ~600ms.
+        Language::Python => Readiness::FirstDiagnostics,
     }
 }
 
@@ -776,8 +945,8 @@ fn hint(language: Language) -> &'static str {
              `lsp.servers.typescript.program` in .code-basics/config.json."
         }
         Language::Python => {
-            "Install one of `basedpyright`, `pyright`, `python-lsp-server` or \
-             `jedi-language-server` (for example `pip install basedpyright`), or set \
+            "Install `basedpyright` or `pyright` (for example `pip install basedpyright`), \
+             or set \
              `lsp.servers.python.program` in .code-basics/config.json. Note that `ruff` \
              is a linter and cannot answer usage or definition queries."
         }

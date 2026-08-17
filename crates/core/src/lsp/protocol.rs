@@ -86,6 +86,10 @@ pub mod method {
     // Server → client **notifications**: must *not* be answered.
     pub const LOG_MESSAGE: &str = "window/logMessage";
     pub const PROGRESS: &str = "$/progress";
+    /// Never read for its *contents* — this app shows no diagnostics. It is
+    /// here because its arrival is the only start-up signal one server gives;
+    /// see [`super::registry::Readiness::FirstDiagnostics`].
+    pub const PUBLISH_DIAGNOSTICS: &str = "textDocument/publishDiagnostics";
 }
 
 /// A point in a document, as LSP counts.
