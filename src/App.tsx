@@ -110,6 +110,10 @@ export function App() {
     title: string;
   } | null>(null);
 
+  /** Open the agent panel as an adversarial review (Changes tab + menu bar). */
+  const openReview = () =>
+    setAgentPanel({ initialMode: "read-only", title: "Adversarial review" });
+
   /** Send the user to the Objects tab with something already chosen to read. */
   function requestInspect(request: InspectRequest) {
     setInspectRequest(request);
@@ -272,6 +276,7 @@ export function App() {
           onRunAgent={(promptId) =>
             setAgentPanel({ initialPromptId: promptId, initialMode: "read-only", title: "Run agent" })
           }
+          onOpenReview={openReview}
         />
 
         <span className="workspace-name">{workspace.name}</span>
@@ -350,12 +355,7 @@ export function App() {
       </div>
       {tab === "changes" && (
         <div className="body">
-          <ChangesView
-            key={workspace.root}
-            onOpenReview={() =>
-              setAgentPanel({ initialMode: "read-only", title: "Adversarial review" })
-            }
-          />
+          <ChangesView key={workspace.root} onOpenReview={openReview} />
         </div>
       )}
       {tab === "history" && (

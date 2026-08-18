@@ -9,8 +9,11 @@
 ## Phase 1 follow-ups (optional)
 - [x] Detect Claude Code / Codex; agent dropdown when both installed.
 - [x] Non-blocking minimizable panel (loader pill), hosted at App level.
-- [ ] Persist last-chosen agent/model/prompt (localStorage) across opens.
-- [ ] Menu-bar entry in `MenuBar.tsx` mirroring the Changes button.
+- [x] Persist last-chosen agent/model/prompt (localStorage) across opens.
+      (reviewLogic `loadAgentPrefs`/`saveAgentPrefs`/`preferred*`; posture NOT
+      persisted on purpose. Done in enhancements-run-agent follow-up.)
+- [x] Menu-bar entry in `MenuBar.tsx` mirroring the Changes button.
+      ("Review changes…" item under Enhancements → App `openReview`.)
 - [ ] Codex model selection (currently uses its configured default; would need a
       verified model list or reading `~/.codex/config.toml`).
 - [ ] Consider passing the working-tree diff into the prompt context explicitly

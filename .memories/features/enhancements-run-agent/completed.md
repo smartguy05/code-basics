@@ -34,6 +34,16 @@ Renamed the Enhancements submenus and turned prompts into runnable agents:
   `enhancementsLogic.ts` (+ run-once helpers; removed `copyFeedback`) + test.
 - Docs: commands.md, guides/instruction-enhancements.md, frontend.md, README, CLAUDE.md, INDEX.
 
+## Follow-up round (Run Agent polish)
+- **Persist last-chosen agent/model/prompt** across opens via localStorage
+  (`reviewLogic`: `loadAgentPrefs`/`saveAgentPrefs`/`preferredAgentId`/
+  `preferredModel`/`preferredPromptId`, tested). Saved on run start; posture is
+  intentionally NOT persisted (edit is an explicit choice each run). An explicit
+  `initialPromptId` still wins over the remembered prompt.
+- **Menu-bar "Review changes…"** item under Enhancements mirrors the Changes-tab
+  Review button; both routed through a single `App.openReview` helper.
+- Frontend-only; no new commands/IPC (INDEX unchanged). Guide updated.
+
 ## Verified
 - `cargo test -p cb-core --lib` → 2118 passed.
 - `pnpm typecheck` clean; `pnpm test` → 778 passed.

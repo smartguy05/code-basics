@@ -8,6 +8,12 @@ The menu-bar **Enhancements** menu has two submenus, both generated from plain
 - **Run Agent** — run a saved prompt as an agent (Claude Code / Codex) in the
   panel.
 
+The Enhancements menu also has a **Review changes…** item — the same adversarial
+review as the Changes-tab **Review** button, reachable without leaving the
+current tab. The panel remembers the agent, model, and prompt you last ran and
+pre-selects them next time (the read-only / allow-edits posture is **not**
+remembered — editing is an explicit choice each run).
+
 (The menu bar also has a **File** menu — Open, Rescan, Exit — mirroring the
 titlebar buttons.)
 

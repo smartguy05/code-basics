@@ -36,11 +36,14 @@ export function MenuBar({
   onOpen,
   onRescan,
   onRunAgent,
+  onOpenReview,
 }: {
   onOpen: () => void;
   onRescan: () => void;
   /** Open the agent panel to run a prompt (by id) as an agent. */
   onRunAgent: (promptId: string) => void;
+  /** Open the agent panel as an adversarial review (mirrors the Changes tab). */
+  onOpenReview: () => void;
 }) {
   const [menu, setMenu] = useState<TopMenu | null>(null);
   const [sub, setSub] = useState<Submenu | null>(null);
@@ -346,6 +349,20 @@ export function MenuBar({
                   })}
                 </div>
               )}
+            </div>
+
+            <div className="dropdown-separator" />
+            {/* Mirrors the Changes-tab Review button, so a review is reachable
+                without leaving the current tab. */}
+            <div
+              className="dropdown-item"
+              title="Run an adversarial review of the current changes (Claude Code or Codex)"
+              onClick={() => {
+                close();
+                onOpenReview();
+              }}
+            >
+              Review changes…
             </div>
 
             {error && (

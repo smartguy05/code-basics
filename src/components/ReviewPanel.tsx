@@ -4,11 +4,14 @@ import * as api from "../ipc/api";
 import type { AgentMode } from "../ipc/api";
 import type { ProcessEvent, PromptInfo, ReviewAgentInfo } from "../ipc/types";
 import {
-  defaultAgentId,
-  defaultModel,
-  defaultPromptId,
+  loadAgentPrefs,
   modelsFor,
+  preferredAgentId,
+  preferredModel,
+  preferredPromptId,
   reviewStatus,
+  saveAgentPrefs,
+  type AgentPrefs,
   type ReviewPhase,
 } from "./reviewLogic";
 import {
@@ -45,6 +48,9 @@ export function ReviewPanel({
   title?: string;
 }) {
   const consoleRef = useRef<ConsoleHandle>(null);
+  // The last-run selection, remembered across opens (agent/model/prompt only —
+  // the edit posture is deliberately never sticky).
+  const [prefs] = useState<AgentPrefs>(() => loadAgentPrefs(localStorage));
   const [agents, setAgents] = useState<ReviewAgentInfo[]>([]);
   const [prompts, setPrompts] = useState<PromptInfo[]>([]);
   const [agentId, setAgentId] = useState<string | undefined>();
@@ -67,10 +73,13 @@ export function ReviewPanel({
         if (!alive) return;
         setAgents(ags);
         setPrompts(ps);
-        setAgentId((cur) => cur ?? defaultAgentId(ags));
-        // An explicit initialPromptId wins; otherwise fall back to the default.
-        setPromptId((cur) => cur ?? defaultPromptId(ps));
-        setModel((cur) => cur ?? defaultModel(modelsFor(ags, defaultAgentId(ags))));
+        // Seed from the remembered selection, falling back to defaults. An
+        // explicit initialPromptId (the Run Agent entry) still wins for the
+        // prompt.
+        const agent = preferredAgentId(prefs, ags);
+        setAgentId((cur) => cur ?? agent);
+        setPromptId((cur) => cur ?? preferredPromptId(initialPromptId, prefs, ps));
+        setModel((cur) => cur ?? preferredModel(prefs, ags, agent));
       } catch (e) {
         if (alive) setError(String(e));
       }
@@ -85,8 +94,9 @@ export function ReviewPanel({
 
   const chooseAgent = (id: string) => {
     setAgentId(id);
-    // Model choices are per-agent, so re-seed the model for the new agent.
-    setModel(defaultModel(modelsFor(agents, id)));
+    // Model choices are per-agent, so re-seed the model for the new agent
+    // (keeping the remembered model when the new agent still offers it).
+    setModel(preferredModel(prefs, agents, id));
   };
 
   const start = () => {
@@ -101,6 +111,9 @@ export function ReviewPanel({
     // successful finish even if the selection changes afterwards.
     const runPromptId = promptId;
     const runIsOnce = prompts.find((p) => p.id === runPromptId)?.once ?? false;
+
+    // Remember this selection for the next open (posture excluded on purpose).
+    saveAgentPrefs(localStorage, { agentId, model: models.length ? model : undefined, promptId });
 
     // Claude streams NDJSON (--output-format stream-json); render it into
     // readable console text. Codex's `exec` already prints human text, so its

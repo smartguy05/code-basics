@@ -59,3 +59,83 @@ export function reviewStatus(phase: ReviewPhase, last: ProcessEvent | null): str
   }
   return "Done";
 }
+
+// --- Remembering the last-chosen agent/model/prompt ------------------------
+
+/** What the panel remembers across opens. Mode is deliberately not persisted —
+ * "allow edits" should be an explicit choice every run, not a sticky default. */
+export interface AgentPrefs {
+  agentId?: string;
+  model?: string;
+  promptId?: string;
+}
+
+const PREFS_KEY = "cb.agentPanel";
+
+/** Read the remembered selection. A missing or unparseable value is empty. */
+export function loadAgentPrefs(storage: Pick<Storage, "getItem">): AgentPrefs {
+  try {
+    const raw = storage.getItem(PREFS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    const { agentId, model, promptId } = parsed as Record<string, unknown>;
+    return {
+      agentId: typeof agentId === "string" ? agentId : undefined,
+      model: typeof model === "string" ? model : undefined,
+      promptId: typeof promptId === "string" ? promptId : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+/** Remember the selection just run. Never throws (storage may be unavailable). */
+export function saveAgentPrefs(storage: Pick<Storage, "setItem">, prefs: AgentPrefs): void {
+  try {
+    storage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    // Ignore: persistence is a convenience, not a requirement.
+  }
+}
+
+/**
+ * The agent to pre-select: the remembered one if it is still installed,
+ * otherwise the default (first in preference order).
+ */
+export function preferredAgentId(
+  prefs: AgentPrefs,
+  agents: ReviewAgentInfo[],
+): string | undefined {
+  if (prefs.agentId && agents.some((a) => a.id === prefs.agentId)) return prefs.agentId;
+  return defaultAgentId(agents);
+}
+
+/**
+ * The model to pre-select: the remembered one if the chosen agent still offers
+ * it, otherwise that agent's default.
+ */
+export function preferredModel(
+  prefs: AgentPrefs,
+  agents: ReviewAgentInfo[],
+  agentId: string | undefined,
+): string | undefined {
+  const models = modelsFor(agents, agentId);
+  if (prefs.model && models.includes(prefs.model)) return prefs.model;
+  return defaultModel(models);
+}
+
+/**
+ * The prompt to pre-select. An explicit `initialPromptId` (the Run Agent entry)
+ * always wins; otherwise the remembered prompt if it still exists, else the
+ * canonical default.
+ */
+export function preferredPromptId(
+  initialPromptId: string | undefined,
+  prefs: AgentPrefs,
+  prompts: PromptInfo[],
+): string | undefined {
+  if (initialPromptId && prompts.some((p) => p.id === initialPromptId)) return initialPromptId;
+  if (prefs.promptId && prompts.some((p) => p.id === prefs.promptId)) return prefs.promptId;
+  return defaultPromptId(prompts);
+}
