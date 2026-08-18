@@ -1,3 +1,7 @@
+---
+title: Knowledge Graph
+id: knowledge-graph
+---
 Build me a code knowledge graph for this repo: a local development tool that joins
 GIT HISTORY with the project's PROSE, so I can ask *why* the code is the way it is
 rather than only reading *what* it does. Reading HEAD tells me what a guard does; it

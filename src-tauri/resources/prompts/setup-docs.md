@@ -1,3 +1,7 @@
+---
+title: Intial Setup
+id: initial-setup
+---
 # Agent Scaffold Bootstrap Prompt
 
 Paste the block below into Claude Code at the root of a repository that has **no**
