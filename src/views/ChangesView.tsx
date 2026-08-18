@@ -86,7 +86,7 @@ const MODE_LABELS: Record<ComparisonMode, string> = {
   indexToHead: "Staged (vs HEAD)",
 };
 
-export function ChangesView() {
+export function ChangesView({ onOpenReview }: { onOpenReview: () => void }) {
   const [status, setStatus] = useState<WorkingStatus | null>(null);
   const [mode, setMode] = useState<ComparisonMode>("workingToHead");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -634,13 +634,20 @@ export function ChangesView() {
   return (
     <>
       <Sidebar className="file-list">
-        <div className="group-label">
-          {status?.branch ?? "no branch"}
+        <div className="group-label" style={{ display: "flex", alignItems: "center" }}>
+          <span>{status?.branch ?? "no branch"}</span>
           {status && (status.ahead > 0 || status.behind > 0) && (
             <span className="badge" style={{ marginLeft: 6 }}>
               ↑{status.ahead} ↓{status.behind}
             </span>
           )}
+          <span style={{ flex: 1 }} />
+          <button
+            onClick={onOpenReview}
+            title="Run an adversarial review of the current changes (Claude Code or Codex)"
+          >
+            Review
+          </button>
         </div>
 
         {status?.inProgressOperation && (

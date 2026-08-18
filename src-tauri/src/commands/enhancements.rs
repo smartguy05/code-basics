@@ -77,12 +77,19 @@ pub async fn remove_enhancement(
     Ok(enhancements::list(&dir, &root))
 }
 
+/// The seeded prompts directory.
+///
+/// Shared with the review command (`commands::review`), which *runs* a chosen
+/// prompt through `claude` rather than copying it to the clipboard.
+pub(crate) fn seeded_prompts_dir(app: &AppHandle) -> PathBuf {
+    seeded(enhancements::prompts_dir(), app, "prompts")
+}
+
 /// Every prompt found on disk, each carrying the body to copy to the clipboard.
 ///
 /// Prompts need no workspace — they are copied, not written — so this does not
 /// touch `AppState`.
 #[tauri::command]
 pub async fn list_prompts(app: AppHandle) -> Result<Vec<PromptInfo>, String> {
-    let dir = seeded(enhancements::prompts_dir(), &app, "prompts");
-    Ok(enhancements::list_prompts(&dir))
+    Ok(enhancements::list_prompts(&seeded_prompts_dir(&app)))
 }

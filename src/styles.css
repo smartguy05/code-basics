@@ -857,6 +857,98 @@ textarea:focus {
   height: 100%;
 }
 
+/* Adversarial-review panel ----------------------------------------------- */
+
+/* A floating window, deliberately NOT a modal: no backdrop, so the rest of the
+   app stays usable while a review runs in the background. */
+.review-panel {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 60vw);
+  height: min(560px, 70vh);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+/* `display: flex` above beats the UA `[hidden] { display: none }`, so hiding the
+   panel to minimize it needs an explicit rule. It stays mounted (not unmounted)
+   so its console keeps receiving the running review's output. */
+.review-panel[hidden] {
+  display: none;
+}
+
+/* The minimized restore pill. */
+.review-pill {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+
+/* A small indeterminate spinner shown while a review is running. */
+.review-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent, #6ea8fe);
+  border-radius: 50%;
+  animation: review-spin 0.8s linear infinite;
+}
+
+@keyframes review-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.review-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.review-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.review-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* xterm fights a scrollbar, so the console pane is strictly overflow:hidden. */
+.review-console {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--border-strong);
+}
+
 .console-search {
   position: absolute;
   top: 6px;

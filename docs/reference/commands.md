@@ -68,6 +68,16 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `run_tests` | `config_id: String`, `only_failed: bool`, `channel: Channel<ProcessEvent>` | `TestRunOutcome` | Streams output, then parses the report; `only_failed` filters to the previous run's failures |
 | `last_test_run` | `config_id: String` | `TestRunOutcome \| null` | Most recent result for this config |
 
+## Adversarial review
+
+`src-tauri/src/commands/review.rs` — runs a coding-agent CLI (Claude Code or Codex) read-only against the open workspace and streams its output. Every decision (which agents exist, allowed models, argument order) lives in `cb_core::review`.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `review_agents` | – | `ReviewAgentInfo[]` | The agents whose CLI is installed (`claude`/`codex`), preference order, each with its offered model aliases (empty ⇒ the agent's own default) |
+| `start_review` | `prompt_id: String`, `agent_id: String`, `model: String?`, `channel: Channel<ProcessEvent>` | `()` | Runs a chosen prompt from the Prompts library, read-only: Claude via `claude -p … --permission-mode plan`, Codex via `codex exec --sandbox read-only …`. Registered as `review:current`; an unknown model is refused; a missing CLI surfaces as a `Failed` event |
+| `cancel_review` | – | `bool` | Kills the review process **tree** |
+
 ## Git
 
 `src-tauri/src/commands/git.rs` — a `Repo` handle is opened per call (libgit2's `Repository` is not `Sync`).

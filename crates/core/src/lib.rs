@@ -22,6 +22,7 @@ pub mod invocation;
 pub mod lsp;
 pub mod model;
 pub mod process;
+pub mod review;
 pub mod secrets;
 pub mod symbols;
 pub mod testing;
@@ -30,5 +31,9 @@ pub mod workspace;
 #[cfg(test)]
 #[path = "invocation_tests.rs"]
 mod invocation_tests;
+
+#[cfg(test)]
+#[path = "review_tests.rs"]
+mod review_tests;
 
 pub use model::*;

@@ -18,6 +18,7 @@ mod commands {
     pub mod inspect;
     pub mod intents;
     pub mod lsp;
+    pub mod review;
     pub mod run;
     pub mod secrets;
     pub mod symbols;
@@ -109,6 +110,9 @@ pub fn run() {
             commands::run::running_ids,
             commands::run::run_tests,
             commands::run::last_test_run,
+            commands::review::start_review,
+            commands::review::cancel_review,
+            commands::review::review_agents,
             commands::git::git_status,
             commands::git::git_file_diff,
             commands::git::git_file_contents,

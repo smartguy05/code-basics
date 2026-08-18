@@ -425,6 +425,14 @@ export interface PromptInfo {
   body: string;
 }
 
+/** An installed review agent (`commands::review::ReviewAgentInfo`). */
+export interface ReviewAgentInfo {
+  id: string;
+  label: string;
+  /** Model aliases the picker may offer; empty means the agent's own default. */
+  models: string[];
+}
+
 /** Why a set of hunks belongs together (`git/grouping.rs`). */
 export type GroupKind =
   | "intent"

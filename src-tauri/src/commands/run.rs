@@ -15,7 +15,7 @@ use crate::state::AppState;
 ///
 /// Runs as its own task so output reaches the console as it is produced rather
 /// than in one burst at the end.
-fn forward(mut events: mpsc::Receiver<ProcessEvent>, channel: Channel<ProcessEvent>) {
+pub(crate) fn forward(mut events: mpsc::Receiver<ProcessEvent>, channel: Channel<ProcessEvent>) {
     tokio::spawn(async move {
         while let Some(event) = events.recv().await {
             // A closed channel means the window went away; nothing to do but

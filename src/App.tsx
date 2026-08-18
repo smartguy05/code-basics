@@ -7,6 +7,7 @@ import { MenuBar } from "./components/MenuBar";
 import { HistoryView } from "./views/HistoryView";
 import { InspectView } from "./views/InspectView";
 import { RunView } from "./views/RunView";
+import { ReviewPanel } from "./components/ReviewPanel";
 import { SearchEverywhere } from "./components/SearchEverywhere";
 import { TestsView } from "./views/TestsView";
 import * as api from "./ipc/api";
@@ -99,6 +100,9 @@ export function App() {
    * serves it are siblings.
    */
   const [inspectRequest, setInspectRequest] = useState<InspectRequest | null>(null);
+  // The adversarial-review panel is hosted here, not in the Changes tab, so a
+  // running review survives switching tabs (Changes unmounts when hidden).
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   /** Send the user to the Objects tab with something already chosen to read. */
   function requestInspect(request: InspectRequest) {
@@ -334,7 +338,7 @@ export function App() {
       </div>
       {tab === "changes" && (
         <div className="body">
-          <ChangesView key={workspace.root} />
+          <ChangesView key={workspace.root} onOpenReview={() => setReviewOpen(true)} />
         </div>
       )}
       {tab === "history" && (
@@ -366,6 +370,12 @@ export function App() {
         onOpenFile={requestOpenFile}
         onRunAction={requestSelectConfig}
       />
+
+      {/* Hosted here rather than in the Changes tab: the review runs as a
+          background process and its panel minimizes to a pill, so it must
+          outlive a tab switch. Mounted only while open (or minimized), and it
+          cancels its process on close. */}
+      {reviewOpen && <ReviewPanel onClose={() => setReviewOpen(false)} />}
     </div>
   );
 }

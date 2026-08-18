@@ -36,6 +36,7 @@ import type {
   ProviderId,
   ProviderStatus,
   RejectSummary,
+  ReviewAgentInfo,
   RiderImportPreview,
   RootSpec,
   RunConfig,
@@ -177,6 +178,33 @@ export function runTests(
 
 export const lastTestRun = (configId: string) =>
   invoke<TestRunOutcome | null>("last_test_run", { configId });
+
+// ---------------------------------------------------------------------------
+// Adversarial review
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a chosen review prompt against the open workspace with `claude`,
+ * streaming its output to `onEvent`.
+ *
+ * Mirrors {@link startRun}: the promise resolves when the review process exits,
+ * so callers should not await it before rendering the console.
+ */
+export function startReview(
+  promptId: string,
+  agentId: string,
+  model: string | undefined,
+  onEvent: (event: ProcessEvent) => void,
+): Promise<void> {
+  const channel = new Channel<ProcessEvent>();
+  channel.onmessage = onEvent;
+  return invoke<void>("start_review", { promptId, agentId, model, channel });
+}
+
+export const cancelReview = () => invoke<boolean>("cancel_review");
+
+/** The review agents whose CLI is installed, in preference order. */
+export const reviewAgents = () => invoke<ReviewAgentInfo[]>("review_agents");
 
 // ---------------------------------------------------------------------------
 // Git
