@@ -8,7 +8,7 @@ import {
 } from "./reviewLogic";
 import type { PromptInfo, ReviewAgentInfo } from "../ipc/types";
 
-const prompt = (id: string, title: string): PromptInfo => ({ id, title, body: "" });
+const prompt = (id: string, title: string): PromptInfo => ({ id, title, once: false, body: "" });
 const agent = (id: string, models: string[]): ReviewAgentInfo => ({ id, label: id, models });
 
 describe("defaultAgentId", () => {

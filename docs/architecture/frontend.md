@@ -67,9 +67,9 @@ src/
 │   ├── treeLogic.ts      the slash-name → folder-tree builder (buildTree /
 │   │                     ancestorPaths), shared by BranchMenu and HistoryView
 │   ├── MenuBar.tsx       menu bar: File (Open/Rescan/Exit) + Enhancements with
-│   │                     fly-out Instructions/Prompts submenus (enhancementsLogic.ts)
+│   │                     fly-out Add Instructions/Run Agent submenus (enhancementsLogic.ts)
 │   ├── enhancementsLogic.ts  the Enhancements decisions: add/remove action, badges,
-│   │                     empty-state text, copy + confirm-before-add messages
+│   │                     empty-state text, run-once click/badge + confirm messages
 │   ├── RunConfigMenu.tsx titlebar run-config dropdown: status dots, favourites,
 │   │                     reorder, new/import items (portal from RunView)
 │   ├── FileTree.tsx      lazy workspace directory tree (one fs_list_dir per expand)

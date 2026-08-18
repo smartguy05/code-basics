@@ -17,6 +17,44 @@ pub enum ReviewAgent {
     Codex,
 }
 
+/// How much the agent is allowed to do to the workspace.
+///
+/// A review runs [`ReadOnly`]; a "Run Agent" prompt may run [`Edit`] so a setup
+/// or knowledge-graph prompt can actually write files. Both postures must never
+/// block on an approval prompt — the supervisor closes stdin, so a prompt hangs
+/// the process forever.
+///
+/// [`ReadOnly`]: AgentMode::ReadOnly
+/// [`Edit`]: AgentMode::Edit
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentMode {
+    ReadOnly,
+    Edit,
+}
+
+impl AgentMode {
+    /// Stable id used across IPC and in the panel toggle.
+    pub fn id(self) -> &'static str {
+        match self {
+            AgentMode::ReadOnly => "read-only",
+            AgentMode::Edit => "edit",
+        }
+    }
+
+    /// Resolve a mode from its stable id. `None`/blank is the safe default
+    /// ([`ReadOnly`]); an unknown value is refused rather than silently allowing
+    /// edits.
+    ///
+    /// [`ReadOnly`]: AgentMode::ReadOnly
+    pub fn from_id(id: Option<&str>) -> Result<Self, String> {
+        match id.map(str::trim) {
+            None | Some("") | Some("read-only") => Ok(AgentMode::ReadOnly),
+            Some("edit") => Ok(AgentMode::Edit),
+            Some(other) => Err(format!("unknown agent mode {other:?}")),
+        }
+    }
+}
+
 /// The model aliases Claude Code offers. Kept to the CLI's stable aliases
 /// (`claude --model <alias>`) rather than pinned full ids, so a newer latest
 /// model is picked up without a code change.
@@ -30,9 +68,19 @@ pub const CLAUDE_DEFAULT_MODEL: &str = "opus";
 /// headless (`-p`) run never blocks on a permission prompt.
 pub const CLAUDE_PERMISSION_MODE: &str = "plan";
 
+/// Claude's editing posture: `bypassPermissions` executes tool calls without any
+/// prompt, which is required for a headless editing run — `acceptEdits` still
+/// prompts for non-file Bash commands, and any prompt hangs with stdin closed.
+pub const CLAUDE_EDIT_PERMISSION_MODE: &str = "bypassPermissions";
+
 /// Codex's read-only posture: the `read-only` sandbox lets model-generated shell
 /// commands read the tree but never write it, and needs no approval.
 pub const CODEX_SANDBOX: &str = "read-only";
+
+/// Codex's editing posture: the `workspace-write` sandbox lets commands write
+/// within the workspace. `codex exec` is non-interactive and never prompts for
+/// approval (escalations outside the sandbox are auto-denied), so it cannot hang.
+pub const CODEX_EDIT_SANDBOX: &str = "workspace-write";
 
 impl ReviewAgent {
     /// All known agents, in preference order (the first installed one leads the
@@ -119,39 +167,55 @@ pub fn resolve_model(
     }
 }
 
-/// The argument vector for the agent, given a resolved model and prompt body.
+/// The argument vector for the agent, given a posture, a resolved model and the
+/// prompt body.
 ///
 /// The prompt is one argv entry, never shell-joined, so a multi-line body with
 /// spaces cannot be split or reinterpreted; and it is passed as an argument (not
-/// stdin), because the supervisor runs every child with stdin closed.
-pub fn agent_args(agent: ReviewAgent, model: Option<&str>, prompt: &str) -> Vec<String> {
+/// stdin), because the supervisor runs every child with stdin closed. The `mode`
+/// picks the permission/sandbox posture — neither posture ever prompts, so a
+/// closed stdin cannot hang either.
+pub fn agent_args(
+    agent: ReviewAgent,
+    mode: AgentMode,
+    model: Option<&str>,
+    prompt: &str,
+) -> Vec<String> {
     match agent {
         ReviewAgent::ClaudeCode => {
-            // claude -p <prompt> [--model <m>] --permission-mode plan
+            // claude -p <prompt> [--model <m>] --permission-mode <mode>
             //        --output-format stream-json --verbose
             //
             // Stream-json (which the CLI requires --verbose for) emits each step
             // as it happens; the default text mode buffers the whole answer to
-            // the end, which looks hung during a long review. The frontend
-            // renders these NDJSON events into readable console output.
+            // the end, which looks hung during a long run. The frontend renders
+            // these NDJSON events into readable console output.
+            let permission = match mode {
+                AgentMode::ReadOnly => CLAUDE_PERMISSION_MODE,
+                AgentMode::Edit => CLAUDE_EDIT_PERMISSION_MODE,
+            };
             let mut args = vec!["-p".to_string(), prompt.to_string()];
             if let Some(m) = model {
                 args.push("--model".to_string());
                 args.push(m.to_string());
             }
             args.push("--permission-mode".to_string());
-            args.push(CLAUDE_PERMISSION_MODE.to_string());
+            args.push(permission.to_string());
             args.push("--output-format".to_string());
             args.push("stream-json".to_string());
             args.push("--verbose".to_string());
             args
         }
         ReviewAgent::Codex => {
-            // codex exec --sandbox read-only [-m <m>] <prompt>
+            // codex exec --sandbox <mode> [-m <m>] <prompt>
+            let sandbox = match mode {
+                AgentMode::ReadOnly => CODEX_SANDBOX,
+                AgentMode::Edit => CODEX_EDIT_SANDBOX,
+            };
             let mut args = vec![
                 "exec".to_string(),
                 "--sandbox".to_string(),
-                CODEX_SANDBOX.to_string(),
+                sandbox.to_string(),
             ];
             if let Some(m) = model {
                 args.push("-m".to_string());

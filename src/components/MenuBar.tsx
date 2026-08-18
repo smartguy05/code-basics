@@ -1,13 +1,15 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useState } from "react";
 import * as api from "../ipc/api";
-import type { EnhancementInfo, PromptInfo } from "../ipc/types";
+import type { EnhancementInfo, PromptInfo, PromptRuns } from "../ipc/types";
 import {
   actionTitle,
   confirmAddMessage,
-  copyFeedback,
+  confirmRerunMessage,
   emptyMessage,
   emptyPromptsMessage,
+  promptClickAction,
+  runBadge,
   statusBadge,
 } from "./enhancementsLogic";
 
@@ -19,9 +21,10 @@ import {
  * lists directly. `File` holds the workspace actions (which also remain as
  * titlebar buttons); `Enhancements` holds two fly-out submenus:
  *
- * - **Instructions** — add/remove a marker-bounded section in `CLAUDE.md` /
+ * - **Add Instructions** — add/remove a marker-bounded section in `CLAUDE.md` /
  *   `AGENTS.md` (all logic in `cb_core::enhancements`).
- * - **Prompts** — copy a prompt's body to the clipboard; nothing is written.
+ * - **Run Agent** — run a prompt's body as an agent in the panel; a run-once
+ *   prompt records its success per repo and confirms before re-running.
  *
  * The menu bar sits above the dropdown backdrop (see `styles.css`) so hovering
  * one top-level menu while another is open switches between them.
@@ -32,37 +35,45 @@ type Submenu = "instructions" | "prompts";
 export function MenuBar({
   onOpen,
   onRescan,
+  onRunAgent,
 }: {
   onOpen: () => void;
   onRescan: () => void;
+  /** Open the agent panel to run a prompt (by id) as an agent. */
+  onRunAgent: (promptId: string) => void;
 }) {
   const [menu, setMenu] = useState<TopMenu | null>(null);
   const [sub, setSub] = useState<Submenu | null>(null);
   const [instructions, setInstructions] = useState<EnhancementInfo[]>([]);
   const [prompts, setPrompts] = useState<PromptInfo[]>([]);
+  const [runs, setRuns] = useState<PromptRuns>({});
   const [busy, setBusy] = useState<string | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
   /** Instruction awaiting the user's confirmation before it is written. */
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  /** Run-once prompt awaiting confirmation before it is re-run. */
+  const [rerunId, setRerunId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const close = () => {
     setMenu(null);
     setSub(null);
-    setCopied(null);
     setConfirmId(null);
+    setRerunId(null);
   };
 
   // Load the Enhancements lists when that menu opens; they are cheap and rarely
-  // seen, so there is no reason to hit disk until then.
+  // seen, so there is no reason to hit disk until then. The run-once record is
+  // per-workspace, so it comes from the app state alongside the file lists.
   const loadEnhancements = useCallback(async () => {
     try {
-      const [nextInstructions, nextPrompts] = await Promise.all([
+      const [nextInstructions, nextPrompts, nextRuns] = await Promise.all([
         api.listEnhancements(),
         api.listPrompts(),
+        api.agentRuns(),
       ]);
       setInstructions(nextInstructions);
       setPrompts(nextPrompts);
+      setRuns(nextRuns);
       setError(null);
     } catch (e) {
       setError(api.errorMessage(e));
@@ -104,14 +115,21 @@ export function MenuBar({
     }
   };
 
-  const copyPrompt = async (prompt: PromptInfo) => {
-    try {
-      await navigator.clipboard.writeText(prompt.body);
-      setCopied(prompt.id);
-      setError(null);
-    } catch (e) {
-      setError(api.errorMessage(e));
+  // Click a prompt to run it as an agent. A run-once prompt that already ran
+  // here asks first (inline), matching how an instruction confirms before it
+  // writes to shared files.
+  const clickPrompt = (prompt: PromptInfo) => {
+    if (promptClickAction(prompt, runs) === "confirm-rerun") {
+      setRerunId(prompt.id);
+      return;
     }
+    close();
+    onRunAgent(prompt.id);
+  };
+
+  const runPrompt = (prompt: PromptInfo) => {
+    close();
+    onRunAgent(prompt.id);
   };
 
   const exit = () => {
@@ -120,6 +138,7 @@ export function MenuBar({
 
   const emptyInstructions = emptyMessage(instructions.length);
   const emptyPrompts = emptyPromptsMessage(prompts.length);
+  const now = Date.now();
 
   return (
     <div className="menubar">
@@ -184,7 +203,7 @@ export function MenuBar({
               className="dropdown-item dropdown-submenu"
               onMouseEnter={() => setSub("instructions")}
             >
-              <span>Instructions</span>
+              <span>Add Instructions</span>
               <span className="submenu-caret">▸</span>
               {sub === "instructions" && (
                 <div className="dropdown-menu" style={{ minWidth: 240 }}>
@@ -261,38 +280,70 @@ export function MenuBar({
               )}
             </div>
 
-            {/* Prompts submenu */}
+            {/* Run Agent submenu */}
             <div
               className="dropdown-item dropdown-submenu"
               onMouseEnter={() => {
                 setSub("prompts");
                 setConfirmId(null);
+                setRerunId(null);
               }}
             >
-              <span>Prompts</span>
+              <span>Run Agent</span>
               <span className="submenu-caret">▸</span>
               {sub === "prompts" && (
                 <div className="dropdown-menu" style={{ minWidth: 240 }}>
                   {emptyPrompts && (
                     <div className="dropdown-item muted">{emptyPrompts}</div>
                   )}
-                  {prompts.map((prompt) => (
-                    <div
-                      key={prompt.id}
-                      className="dropdown-item"
-                      title="Copy this prompt to the clipboard"
-                      onClick={() => void copyPrompt(prompt)}
-                    >
-                      <span
-                        style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}
+                  {prompts.map((prompt) => {
+                    const badge = runBadge(prompt, runs, now);
+
+                    // A run-once prompt that already ran here confirms inline
+                    // before re-running, like an instruction confirms its write.
+                    if (rerunId === prompt.id) {
+                      return (
+                        <div key={prompt.id} className="dropdown-item confirm-row">
+                          <span style={{ flex: 1 }}>{confirmRerunMessage(prompt.title)}</span>
+                          <button
+                            className="confirm-yes"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRerunId(null);
+                              runPrompt(prompt);
+                            }}
+                          >
+                            Run
+                          </button>
+                          <button
+                            className="confirm-no"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRerunId(null);
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={prompt.id}
+                        className="dropdown-item"
+                        title="Run this prompt as an agent"
+                        onClick={() => clickPrompt(prompt)}
                       >
-                        {prompt.title}
-                      </span>
-                      {copied === prompt.id && (
-                        <span className="badge">{copyFeedback(prompt.title)}</span>
-                      )}
-                    </div>
-                  ))}
+                        <span
+                          style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}
+                        >
+                          {prompt.title}
+                        </span>
+                        {badge && <span className="badge">{badge}</span>}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

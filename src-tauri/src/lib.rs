@@ -99,6 +99,8 @@ pub fn run() {
             commands::enhancements::add_enhancement,
             commands::enhancements::remove_enhancement,
             commands::enhancements::list_prompts,
+            commands::enhancements::agent_runs,
+            commands::enhancements::mark_agent_run,
             commands::files::fs_list_dir,
             commands::files::fs_read_file,
             commands::files::fs_write_file,

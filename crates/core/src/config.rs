@@ -233,6 +233,9 @@ const IGNORED: &[&str] = &[
     // (`--extensionLogDirectory`), so without this entry the app would be
     // writing uncommittable files into a committed directory.
     "lsp-logs/",
+    // Run-once record: which "Run Agent" prompts finished on this machine.
+    // Local state, not something to share through the repository.
+    crate::enhancements::runs::RUNS_FILE,
 ];
 
 /// Make sure `.code-basics/.gitignore` lists everything local.

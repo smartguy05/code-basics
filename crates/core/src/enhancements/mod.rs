@@ -24,6 +24,8 @@ use specta::Type;
 
 use crate::intents::providers::{self, PlannedWrite};
 
+pub mod runs;
+
 /// Where a template's section is spliced into the target file.
 ///
 /// An anchor that cannot be located never guesses — it falls back to [`End`],
@@ -58,6 +60,9 @@ pub struct Template {
     /// Human label for the menu.
     pub title: String,
     pub placement: Placement,
+    /// Run-once intent (prompts only): declared with `once: true` in front
+    /// matter. An instruction ignores it.
+    pub once: bool,
     /// The markdown spliced into the target file (front matter stripped).
     pub body: String,
 }
@@ -72,17 +77,20 @@ pub struct EnhancementInfo {
     pub installed: bool,
 }
 
-/// One prompt in the Prompts submenu.
+/// One prompt in the Run Agent submenu.
 ///
 /// Unlike an instruction, a prompt is never written to a file — its `body` is
-/// copied to the clipboard — so the whole thing travels to the frontend at once
-/// rather than behind an add/remove round-trip.
+/// run as an agent — so the whole thing travels to the frontend at once rather
+/// than behind an add/remove round-trip.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptInfo {
     pub id: String,
     pub title: String,
-    /// The prompt text to copy (front matter stripped).
+    /// Declared run-once (`once: true`): the menu records a successful run for
+    /// the workspace and confirms before re-running it.
+    pub once: bool,
+    /// The prompt text to run (front matter stripped).
     pub body: String,
 }
 
@@ -108,6 +116,7 @@ pub fn parse_template(text: &str, default_id: &str) -> Template {
     let mut title = None;
     let mut placement_word = None;
     let mut anchor = None;
+    let mut once = false;
 
     let body = if let Some((front, rest)) = split_front_matter(text) {
         for line in front.lines() {
@@ -120,6 +129,9 @@ pub fn parse_template(text: &str, default_id: &str) -> Template {
                 "title" => title = Some(value.to_string()),
                 "placement" => placement_word = Some(value.to_string()),
                 "anchor" => anchor = Some(value.to_string()),
+                // Only an explicit truthy value opts in; anything else is not
+                // run-once.
+                "once" => once = matches!(value.to_ascii_lowercase().as_str(), "true" | "yes"),
                 _ => {}
             }
         }
@@ -149,6 +161,7 @@ pub fn parse_template(text: &str, default_id: &str) -> Template {
             .unwrap_or_else(|| id.clone()),
         id,
         placement,
+        once,
         body,
     }
 }
@@ -397,17 +410,18 @@ pub fn list(dir: &Path, root: &Path) -> Vec<EnhancementInfo> {
         .collect()
 }
 
-/// Every prompt found on disk, sorted by title, ready to copy.
+/// Every prompt found on disk, sorted by title, ready to run.
 ///
 /// A prompt reuses the same template file format as an instruction — the
 /// placement and marker machinery is simply ignored; all that is kept is the
-/// title and the body.
+/// title, the body, and the run-once flag.
 pub fn list_prompts(dir: &Path) -> Vec<PromptInfo> {
     discover(dir)
         .into_iter()
         .map(|t| PromptInfo {
             id: t.id,
             title: t.title,
+            once: t.once,
             body: t.body,
         })
         .collect()

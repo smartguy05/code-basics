@@ -84,8 +84,42 @@ fn template(id: &str, placement: Placement, body: &str) -> Template {
         id: id.to_string(),
         title: id.to_string(),
         placement,
+        once: false,
         body: body.to_string(),
     }
+}
+
+#[test]
+fn once_defaults_to_false_and_opts_in_only_on_a_truthy_value() {
+    // Absent, or any non-truthy value, is not run-once.
+    assert!(!parse_template("---\nid: x\n---\nb\n", "x").once);
+    assert!(!parse_template("---\nid: x\nonce: false\n---\nb\n", "x").once);
+    assert!(!parse_template("---\nid: x\nonce: maybe\n---\nb\n", "x").once);
+    // Explicit truthy values opt in (case-insensitive).
+    assert!(parse_template("---\nid: x\nonce: true\n---\nb\n", "x").once);
+    assert!(parse_template("---\nid: x\nonce: TRUE\n---\nb\n", "x").once);
+    assert!(parse_template("---\nid: x\nonce: yes\n---\nb\n", "x").once);
+}
+
+#[test]
+fn list_prompts_carries_the_run_once_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("setup.md"),
+        "---\nid: setup\ntitle: Setup\nonce: true\n---\nBody.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("review.md"),
+        "---\nid: review\ntitle: Review\n---\nBody.\n",
+    )
+    .unwrap();
+
+    let prompts = list_prompts(dir.path());
+    let setup = prompts.iter().find(|p| p.id == "setup").unwrap();
+    let review = prompts.iter().find(|p| p.id == "review").unwrap();
+    assert!(setup.once, "declared run-once");
+    assert!(!review.once, "not declared run-once");
 }
 
 #[test]

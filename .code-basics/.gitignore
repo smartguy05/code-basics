@@ -4,6 +4,7 @@ intents/
 inspect/
 dumps/
 symbols.json
+agent-runs.json
 diagrams/derived/
 diagrams/.prompts/
 lsp-logs/

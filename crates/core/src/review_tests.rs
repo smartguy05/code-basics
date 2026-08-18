@@ -2,8 +2,8 @@
 //! an in-app adversarial review.
 
 use crate::review::{
-    agent_args, detect_agents, resolve_model, ReviewAgent, CLAUDE_DEFAULT_MODEL,
-    CLAUDE_PERMISSION_MODE, CODEX_SANDBOX,
+    agent_args, detect_agents, resolve_model, AgentMode, ReviewAgent, CLAUDE_DEFAULT_MODEL,
+    CLAUDE_EDIT_PERMISSION_MODE, CLAUDE_PERMISSION_MODE, CODEX_EDIT_SANDBOX, CODEX_SANDBOX,
 };
 
 // --- Agent identity ------------------------------------------------------
@@ -78,7 +78,12 @@ fn codex_has_no_models_so_any_request_yields_its_own_default() {
 
 #[test]
 fn claude_args_run_headless_read_only_with_model_and_prompt() {
-    let args = agent_args(ReviewAgent::ClaudeCode, Some("opus"), "Review the diff.");
+    let args = agent_args(
+        ReviewAgent::ClaudeCode,
+        AgentMode::ReadOnly,
+        Some("opus"),
+        "Review the diff.",
+    );
 
     assert!(args.contains(&"-p".to_string()), "headless: {args:?}");
 
@@ -102,10 +107,60 @@ fn claude_args_run_headless_read_only_with_model_and_prompt() {
 }
 
 #[test]
+fn claude_edit_mode_bypasses_permission_prompts() {
+    // A headless editing run must never prompt (stdin is closed): bypass, not
+    // acceptEdits, which still prompts for non-file Bash commands.
+    let args = agent_args(
+        ReviewAgent::ClaudeCode,
+        AgentMode::Edit,
+        None,
+        "Build the graph.",
+    );
+    let mode_at = args
+        .iter()
+        .position(|a| a == "--permission-mode")
+        .expect("--permission-mode");
+    assert_eq!(
+        args.get(mode_at + 1),
+        Some(&CLAUDE_EDIT_PERMISSION_MODE.to_string())
+    );
+    // Editing runs still stream so the console shows progress.
+    assert!(args.contains(&"stream-json".to_string()));
+    assert!(args.contains(&"--verbose".to_string()));
+}
+
+#[test]
+fn codex_edit_mode_uses_the_workspace_write_sandbox() {
+    let args = agent_args(ReviewAgent::Codex, AgentMode::Edit, None, "Set up.");
+    let sb = args
+        .iter()
+        .position(|a| a == "--sandbox")
+        .expect("--sandbox");
+    assert_eq!(args.get(sb + 1), Some(&CODEX_EDIT_SANDBOX.to_string()));
+    assert_eq!(args.last(), Some(&"Set up.".to_string()));
+}
+
+#[test]
+fn a_mode_round_trips_through_its_id() {
+    for mode in [AgentMode::ReadOnly, AgentMode::Edit] {
+        assert_eq!(AgentMode::from_id(Some(mode.id())), Ok(mode));
+    }
+    // Absent/blank is the safe read-only default; unknown is refused.
+    assert_eq!(AgentMode::from_id(None), Ok(AgentMode::ReadOnly));
+    assert_eq!(AgentMode::from_id(Some("  ")), Ok(AgentMode::ReadOnly));
+    assert!(AgentMode::from_id(Some("write-everything")).is_err());
+}
+
+#[test]
 fn claude_args_stream_events_so_the_console_shows_progress() {
     // Text mode buffers the whole answer until the end, which looks hung during a
     // long review. Stream-json (which requires --verbose) emits each step live.
-    let args = agent_args(ReviewAgent::ClaudeCode, None, "Review.");
+    let args = agent_args(
+        ReviewAgent::ClaudeCode,
+        AgentMode::ReadOnly,
+        None,
+        "Review.",
+    );
     let fmt_at = args
         .iter()
         .position(|a| a == "--output-format")
@@ -119,14 +174,24 @@ fn claude_args_stream_events_so_the_console_shows_progress() {
 
 #[test]
 fn claude_args_omit_the_model_flag_when_none() {
-    let args = agent_args(ReviewAgent::ClaudeCode, None, "Review.");
+    let args = agent_args(
+        ReviewAgent::ClaudeCode,
+        AgentMode::ReadOnly,
+        None,
+        "Review.",
+    );
     assert!(!args.contains(&"--model".to_string()), "no model: {args:?}");
     assert!(args.contains(&"--permission-mode".to_string()));
 }
 
 #[test]
 fn codex_args_run_exec_read_only_with_the_prompt_last() {
-    let args = agent_args(ReviewAgent::Codex, None, "Review the diff.");
+    let args = agent_args(
+        ReviewAgent::Codex,
+        AgentMode::ReadOnly,
+        None,
+        "Review the diff.",
+    );
 
     assert_eq!(args.first(), Some(&"exec".to_string()), "exec subcommand");
 
@@ -144,7 +209,12 @@ fn codex_args_run_exec_read_only_with_the_prompt_last() {
 
 #[test]
 fn codex_args_pass_a_model_with_lowercase_m_before_the_prompt() {
-    let args = agent_args(ReviewAgent::Codex, Some("o3"), "Review.");
+    let args = agent_args(
+        ReviewAgent::Codex,
+        AgentMode::ReadOnly,
+        Some("o3"),
+        "Review.",
+    );
     let m = args.iter().position(|a| a == "-m").expect("-m");
     assert_eq!(args.get(m + 1), Some(&"o3".to_string()));
     assert_eq!(args.last(), Some(&"Review.".to_string()));
@@ -154,7 +224,7 @@ fn codex_args_pass_a_model_with_lowercase_m_before_the_prompt() {
 fn the_prompt_is_a_single_argument_for_both_agents() {
     let prompt = "line one\nline two with spaces";
     for agent in ReviewAgent::ALL {
-        let args = agent_args(agent, None, prompt);
+        let args = agent_args(agent, AgentMode::ReadOnly, None, prompt);
         assert!(
             args.iter().any(|a| a == prompt),
             "{agent:?}: whole prompt is one argument: {args:?}"

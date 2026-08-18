@@ -11,6 +11,7 @@ import { ReviewPanel } from "./components/ReviewPanel";
 import { SearchEverywhere } from "./components/SearchEverywhere";
 import { TestsView } from "./views/TestsView";
 import * as api from "./ipc/api";
+import type { AgentMode } from "./ipc/api";
 import { applyEditorFontSize, loadEditorFontSize } from "./editorFontSize";
 import { DEFAULT_EDITOR_FONT_SIZE, recogniseFontSizeShortcut, stepFontSize } from "./editorFontSizeLogic";
 import { loadRecents, rememberRecent } from "./recentsLogic";
@@ -100,9 +101,14 @@ export function App() {
    * serves it are siblings.
    */
   const [inspectRequest, setInspectRequest] = useState<InspectRequest | null>(null);
-  // The adversarial-review panel is hosted here, not in the Changes tab, so a
-  // running review survives switching tabs (Changes unmounts when hidden).
-  const [reviewOpen, setReviewOpen] = useState(false);
+  // The agent panel (adversarial Review + Enhancements "Run Agent") is hosted
+  // here, not in a tab, so a running agent survives switching tabs. One slot,
+  // one agent at a time; a new request replaces the previous panel.
+  const [agentPanel, setAgentPanel] = useState<{
+    initialPromptId?: string;
+    initialMode: AgentMode;
+    title: string;
+  } | null>(null);
 
   /** Send the user to the Objects tab with something already chosen to read. */
   function requestInspect(request: InspectRequest) {
@@ -260,7 +266,13 @@ export function App() {
       <div className="titlebar">
         {/* File (Open / Rescan / Exit) and Enhancements (Instructions / Prompts).
             The standalone Open…/Rescan buttons below remain as shortcuts. */}
-        <MenuBar onOpen={pickFolder} onRescan={rescan} />
+        <MenuBar
+          onOpen={pickFolder}
+          onRescan={rescan}
+          onRunAgent={(promptId) =>
+            setAgentPanel({ initialPromptId: promptId, initialMode: "read-only", title: "Run agent" })
+          }
+        />
 
         <span className="workspace-name">{workspace.name}</span>
         <span className="faint mono" style={{ fontSize: 11 }}>
@@ -338,7 +350,12 @@ export function App() {
       </div>
       {tab === "changes" && (
         <div className="body">
-          <ChangesView key={workspace.root} onOpenReview={() => setReviewOpen(true)} />
+          <ChangesView
+            key={workspace.root}
+            onOpenReview={() =>
+              setAgentPanel({ initialMode: "read-only", title: "Adversarial review" })
+            }
+          />
         </div>
       )}
       {tab === "history" && (
@@ -371,11 +388,19 @@ export function App() {
         onRunAction={requestSelectConfig}
       />
 
-      {/* Hosted here rather than in the Changes tab: the review runs as a
-          background process and its panel minimizes to a pill, so it must
-          outlive a tab switch. Mounted only while open (or minimized), and it
-          cancels its process on close. */}
-      {reviewOpen && <ReviewPanel onClose={() => setReviewOpen(false)} />}
+      {/* Hosted here rather than in a tab: the agent runs as a background
+          process and its panel minimizes to a pill, so it must outlive a tab
+          switch. Mounted only while open (or minimized), and it cancels its
+          process on close. Keyed so a new request remounts a fresh panel. */}
+      {agentPanel && (
+        <ReviewPanel
+          key={`${agentPanel.title}:${agentPanel.initialPromptId ?? ""}`}
+          onClose={() => setAgentPanel(null)}
+          initialPromptId={agentPanel.initialPromptId}
+          initialMode={agentPanel.initialMode}
+          title={agentPanel.title}
+        />
+      )}
     </div>
   );
 }

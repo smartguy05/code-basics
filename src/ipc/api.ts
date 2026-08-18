@@ -33,6 +33,7 @@ import type {
   ProcessEvent,
   ProjectSecrets,
   PromptInfo,
+  PromptRuns,
   ProviderId,
   ProviderStatus,
   RejectSummary,
@@ -126,8 +127,15 @@ export const addEnhancement = (id: string) =>
 export const removeEnhancement = (id: string) =>
   invoke<EnhancementInfo[]>("remove_enhancement", { id });
 
-/** Every prompt template, each carrying the body to copy to the clipboard. */
+/** Every prompt template, each carrying the body to run as an agent. */
 export const listPrompts = () => invoke<PromptInfo[]>("list_prompts");
+
+/** The run-once record for the current workspace, keyed by prompt id. */
+export const agentRuns = () => invoke<PromptRuns>("agent_runs");
+
+/** Record a successful run of a run-once prompt in the current workspace. */
+export const markAgentRun = (promptId: string) =>
+  invoke<void>("mark_agent_run", { promptId });
 
 // ---------------------------------------------------------------------------
 // Running
@@ -180,25 +188,30 @@ export const lastTestRun = (configId: string) =>
   invoke<TestRunOutcome | null>("last_test_run", { configId });
 
 // ---------------------------------------------------------------------------
-// Adversarial review
+// Agent runs (adversarial review + Run Agent)
 // ---------------------------------------------------------------------------
 
+/** The posture an agent runs under: read-only, or allowed to edit files. */
+export type AgentMode = "read-only" | "edit";
+
 /**
- * Run a chosen review prompt against the open workspace with `claude`,
- * streaming its output to `onEvent`.
+ * Run a chosen prompt against the open workspace with `claude`/`codex`,
+ * streaming its output to `onEvent`. Serves both the adversarial review and the
+ * Enhancements "Run Agent" action; `mode` picks the read-only/edit posture.
  *
- * Mirrors {@link startRun}: the promise resolves when the review process exits,
+ * Mirrors {@link startRun}: the promise resolves when the agent process exits,
  * so callers should not await it before rendering the console.
  */
 export function startReview(
   promptId: string,
   agentId: string,
   model: string | undefined,
+  mode: AgentMode,
   onEvent: (event: ProcessEvent) => void,
 ): Promise<void> {
   const channel = new Channel<ProcessEvent>();
   channel.onmessage = onEvent;
-  return invoke<void>("start_review", { promptId, agentId, model, channel });
+  return invoke<void>("start_review", { promptId, agentId, model, mode, channel });
 }
 
 export const cancelReview = () => invoke<boolean>("cancel_review");

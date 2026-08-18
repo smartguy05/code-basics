@@ -7,7 +7,9 @@
 //! inspector sidecar resolves its own bundled directory.
 
 use std::path::PathBuf;
+use std::time::SystemTime;
 
+use cb_core::enhancements::runs::{self, PromptRuns};
 use cb_core::enhancements::{self, EnhancementInfo, PromptInfo};
 use tauri::{AppHandle, Manager, State};
 
@@ -80,16 +82,36 @@ pub async fn remove_enhancement(
 /// The seeded prompts directory.
 ///
 /// Shared with the review command (`commands::review`), which *runs* a chosen
-/// prompt through `claude` rather than copying it to the clipboard.
+/// prompt through the agent CLI.
 pub(crate) fn seeded_prompts_dir(app: &AppHandle) -> PathBuf {
     seeded(enhancements::prompts_dir(), app, "prompts")
 }
 
-/// Every prompt found on disk, each carrying the body to copy to the clipboard.
+/// Every prompt found on disk, each carrying the body to run as an agent.
 ///
-/// Prompts need no workspace — they are copied, not written — so this does not
-/// touch `AppState`.
+/// The prompt library itself needs no workspace — it is user-owned, not
+/// per-repo — so this does not touch `AppState`.
 #[tauri::command]
 pub async fn list_prompts(app: AppHandle) -> Result<Vec<PromptInfo>, String> {
     Ok(enhancements::list_prompts(&seeded_prompts_dir(&app)))
+}
+
+/// The run-once record for the current workspace, keyed by prompt id.
+///
+/// Drives the "already run" badge and the re-run confirmation in the Run Agent
+/// submenu. A missing record is an empty map, not an error.
+#[tauri::command]
+pub async fn agent_runs(state: State<'_, AppState>) -> Result<PromptRuns, String> {
+    let root = state.workspace_root()?;
+    Ok(runs::read_runs(&root))
+}
+
+/// Record a successful run of a run-once prompt in the current workspace.
+///
+/// Called by the panel when the agent process exits successfully, so a failed
+/// or cancelled run leaves no record.
+#[tauri::command]
+pub async fn mark_agent_run(state: State<'_, AppState>, prompt_id: String) -> Result<(), String> {
+    let root = state.workspace_root()?;
+    runs::record_run(&root, &prompt_id, SystemTime::now()).map_err(|e| format!("{e:#}"))
 }

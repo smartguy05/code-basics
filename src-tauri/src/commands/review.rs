@@ -11,7 +11,7 @@
 use cb_core::enhancements;
 use cb_core::model::Invocation;
 use cb_core::process::ProcessEvent;
-use cb_core::review::{self, ReviewAgent};
+use cb_core::review::{self, AgentMode, ReviewAgent};
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
@@ -51,8 +51,11 @@ pub async fn review_agents() -> Result<Vec<ReviewAgentInfo>, String> {
         .collect())
 }
 
-/// Run a chosen review prompt against the open workspace with the chosen agent,
-/// streaming its output live into the review console.
+/// Run a chosen prompt against the open workspace with the chosen agent,
+/// streaming its output live into the console.
+///
+/// Serves both the adversarial **Review** (read-only) and the Enhancements
+/// **Run Agent** action (read-only or edit, via `mode`).
 #[tauri::command]
 pub async fn start_review(
     app: AppHandle,
@@ -60,6 +63,7 @@ pub async fn start_review(
     prompt_id: String,
     agent_id: String,
     model: Option<String>,
+    mode: Option<String>,
     channel: Channel<ProcessEvent>,
 ) -> Result<(), String> {
     let root = state.workspace_root()?;
@@ -67,6 +71,8 @@ pub async fn start_review(
     let agent = ReviewAgent::from_id(&agent_id)?;
     // Refuse an unknown model rather than silently substituting one.
     let model = review::resolve_model(agent, model.as_deref())?;
+    // Absent/blank ⇒ read-only; an unknown value is refused, not defaulted.
+    let mode = AgentMode::from_id(mode.as_deref())?;
 
     // The prompt library is the same one the Enhancements menu lists, so a
     // user-authored review prompt dropped into the prompts dir is runnable with
@@ -78,7 +84,7 @@ pub async fn start_review(
 
     let invocation = Invocation {
         program: agent.program().to_string(),
-        args: review::agent_args(agent, model, &prompt.body),
+        args: review::agent_args(agent, mode, model, &prompt.body),
         cwd: root,
         env: Default::default(),
         report: None,

@@ -417,13 +417,27 @@ export interface EnhancementInfo {
   installed: boolean;
 }
 
-/** One prompt in the Enhancements → Prompts submenu (`enhancements::PromptInfo`). */
+/** One prompt in the Enhancements → Run Agent submenu (`enhancements::PromptInfo`). */
 export interface PromptInfo {
   id: string;
   title: string;
-  /** The prompt text copied to the clipboard (front matter stripped). */
+  /**
+   * Declared run-once (`once: true`): the menu records a successful run per
+   * workspace and confirms before re-running.
+   */
+  once: boolean;
+  /** The prompt text run as an agent (front matter stripped). */
   body: string;
 }
+
+/** One prompt's last successful run in this workspace (`enhancements::runs::PromptRun`). */
+export interface PromptRun {
+  /** When the run finished, in milliseconds since the Unix epoch. */
+  lastRunAtMs: number;
+}
+
+/** Run-once records keyed by prompt id (`enhancements::runs::PromptRuns`). */
+export type PromptRuns = Record<string, PromptRun>;
 
 /** An installed review agent (`commands::review::ReviewAgentInfo`). */
 export interface ReviewAgentInfo {

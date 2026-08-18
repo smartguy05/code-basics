@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { OutputConsole, type ConsoleHandle } from "./OutputConsole";
 import * as api from "../ipc/api";
+import type { AgentMode } from "../ipc/api";
 import type { ProcessEvent, PromptInfo, ReviewAgentInfo } from "../ipc/types";
 import {
   defaultAgentId,
@@ -17,22 +18,39 @@ import {
 } from "./reviewStreamLogic";
 
 /**
- * The adversarial-review panel: pick an agent (Claude Code / Codex), a prompt
- * and a model, run it read-only against the open workspace, and watch it stream.
+ * The agent panel: pick an agent (Claude Code / Codex), a prompt, a model and a
+ * posture (read-only / allow-edits), run it against the open workspace, and
+ * watch it stream. Serves both the adversarial **Review** and the Enhancements
+ * **Run Agent** action.
  *
  * Non-blocking by design. It is a floating panel, not a modal — no backdrop
- * captures clicks, so the rest of the app stays usable while a review runs. It
+ * captures clicks, so the rest of the app stays usable while it runs. It
  * **minimizes to a loader pill** rather than closing, and the console stays
  * mounted while minimized so output keeps arriving. Hosted at the app level, so
- * a running review survives switching tabs.
+ * a running agent survives switching tabs.
+ *
+ * `initialPromptId` pre-selects a prompt (the Run Agent entry); absent, the
+ * canonical review prompt leads (the Review entry). `initialMode` seeds the
+ * posture toggle. `title` labels the header and pill.
  */
-export function ReviewPanel({ onClose }: { onClose: () => void }) {
+export function ReviewPanel({
+  onClose,
+  initialPromptId,
+  initialMode = "read-only",
+  title = "Adversarial review",
+}: {
+  onClose: () => void;
+  initialPromptId?: string;
+  initialMode?: AgentMode;
+  title?: string;
+}) {
   const consoleRef = useRef<ConsoleHandle>(null);
   const [agents, setAgents] = useState<ReviewAgentInfo[]>([]);
   const [prompts, setPrompts] = useState<PromptInfo[]>([]);
   const [agentId, setAgentId] = useState<string | undefined>();
-  const [promptId, setPromptId] = useState<string | undefined>();
+  const [promptId, setPromptId] = useState<string | undefined>(initialPromptId);
   const [model, setModel] = useState<string | undefined>();
+  const [mode, setMode] = useState<AgentMode>(initialMode);
   const [phase, setPhase] = useState<ReviewPhase>("idle");
   const [last, setLast] = useState<ProcessEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +68,7 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
         setAgents(ags);
         setPrompts(ps);
         setAgentId((cur) => cur ?? defaultAgentId(ags));
+        // An explicit initialPromptId wins; otherwise fall back to the default.
         setPromptId((cur) => cur ?? defaultPromptId(ps));
         setModel((cur) => cur ?? defaultModel(modelsFor(ags, defaultAgentId(ags))));
       } catch (e) {
@@ -78,6 +97,11 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
     consoleRef.current?.clear();
     setPhase("running");
 
+    // Capture what is being run now, so a run-once prompt is recorded on a
+    // successful finish even if the selection changes afterwards.
+    const runPromptId = promptId;
+    const runIsOnce = prompts.find((p) => p.id === runPromptId)?.once ?? false;
+
     // Claude streams NDJSON (--output-format stream-json); render it into
     // readable console text. Codex's `exec` already prints human text, so its
     // output passes through untouched.
@@ -94,7 +118,7 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
     };
 
     void api
-      .startReview(promptId, agentId, models.length ? model : undefined, (event) => {
+      .startReview(promptId, agentId, models.length ? model : undefined, mode, (event) => {
         if (isClaude && event.type === "output" && event.stream === "stdout") {
           renderClaude(ndjson.push(event.text));
           return;
@@ -104,6 +128,16 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
           consoleRef.current?.handle(event);
           setLast(event);
           setPhase("done");
+          // A run-once prompt is recorded only on a clean, successful finish, so
+          // a failed or cancelled setup can be retried without a confirm.
+          if (
+            runIsOnce &&
+            event.type === "exited" &&
+            event.success &&
+            !event.cancelled
+          ) {
+            void api.markAgentRun(runPromptId).catch(() => {});
+          }
           // A failure always warrants attention; a clean finish only needs it
           // when minimized (the visible panel already shows the result).
           setMinimized((min) => {
@@ -146,16 +180,18 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
         <button
           className={`review-pill${attention ? " attention" : ""}`}
           onClick={restore}
-          title={attention ? "The review needs your attention" : "Restore the review panel"}
+          title={attention ? "The agent needs your attention" : "Restore the agent panel"}
         >
           {running && <span className="review-spinner" aria-hidden />}
-          <span>Review — {attention ? "needs attention" : status}</span>
+          <span>
+            {title} — {attention ? "needs attention" : status}
+          </span>
         </button>
       )}
 
       <div className="review-panel" hidden={minimized}>
         <div className={`review-header${attention ? " attention" : ""}`}>
-          <strong>Adversarial review</strong>
+          <strong>{title}</strong>
           <span className="faint" style={{ fontSize: 12 }}>
             {running && <span className="review-spinner" aria-hidden style={{ marginRight: 6 }} />}
             {status}
@@ -164,7 +200,7 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
           <button onClick={() => setMinimized(true)} title="Minimize (keeps running)">
             —
           </button>
-          <button onClick={close} title="Close (stops the review)">
+          <button onClick={close} title="Close (stops the agent)">
             ✕
           </button>
         </div>
@@ -222,13 +258,24 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
               </select>
             </label>
           )}
+          <label title="Read-only explores and reports; Allow edits lets the agent modify files">
+            Mode
+            <select
+              value={mode}
+              disabled={running}
+              onChange={(e) => setMode(e.target.value as AgentMode)}
+            >
+              <option value="read-only">Read-only</option>
+              <option value="edit">Allow edits</option>
+            </select>
+          </label>
           {running ? (
             <button className="primary" onClick={cancel}>
               Cancel
             </button>
           ) : (
             <button className="primary" disabled={!promptId || !agentId} onClick={start}>
-              Run review
+              {mode === "edit" ? "Run (edits)" : "Run"}
             </button>
           )}
         </div>

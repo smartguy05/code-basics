@@ -37,14 +37,16 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 
 **Instructions** live in `%APPDATA%\code-basics\instructions\` (or `$XDG_CONFIG_HOME`/`~/.config` elsewhere; `CB_INSTRUCTIONS_PATH` overrides). Adding (after an inline confirmation) writes the section into **both** `CLAUDE.md` and `AGENTS.md`, bounded by an `<!-- code-basics: enhancement:<id> -->` marker so it is idempotent, refreshable and removable.
 
-**Prompts** live in the sibling `prompts/` directory (`CB_PROMPTS_PATH` overrides). Nothing is written — the command returns each prompt's body and the frontend copies it to the clipboard.
+**Prompts** live in the sibling `prompts/` directory (`CB_PROMPTS_PATH` overrides). Nothing is written to the prompt files — the command returns each prompt's body, and clicking a prompt under **Run Agent** runs it as an agent in the panel (see `start_review`). A prompt marked `once: true` in its front matter is recorded per workspace when it finishes successfully, and re-running it asks first.
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
 | `list_enhancements` | — | `EnhancementInfo[]` | Every instruction template on disk, each flagged `installed` when its section is present in either agent file |
 | `add_enhancement` | `id: String` | `EnhancementInfo[]` | Splice the template's section into both agent files at its declared placement (backing up the originals); returns the refreshed list |
 | `remove_enhancement` | `id: String` | `EnhancementInfo[]` | Cut the template's marked section out of both agent files; returns the refreshed list |
-| `list_prompts` | — | `PromptInfo[]` | Every prompt on disk, each carrying the `body` the frontend copies to the clipboard |
+| `list_prompts` | — | `PromptInfo[]` | Every prompt on disk, each carrying its `body` and the `once` run-once flag |
+| `agent_runs` | — | `PromptRuns` | The current workspace's run-once record (`.code-basics/agent-runs.json`), keyed by prompt id; drives the "already run" badge |
+| `mark_agent_run` | `prompt_id: String` | `()` | Record a successful run-once run for the current workspace (called by the panel on a clean exit) |
 
 ## .NET user secrets
 
@@ -75,7 +77,7 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
 | `review_agents` | – | `ReviewAgentInfo[]` | The agents whose CLI is installed (`claude`/`codex`), preference order, each with its offered model aliases (empty ⇒ the agent's own default) |
-| `start_review` | `prompt_id: String`, `agent_id: String`, `model: String?`, `channel: Channel<ProcessEvent>` | `()` | Runs a chosen prompt from the Prompts library, read-only: Claude via `claude -p … --permission-mode plan`, Codex via `codex exec --sandbox read-only …`. Registered as `review:current`; an unknown model is refused; a missing CLI surfaces as a `Failed` event |
+| `start_review` | `prompt_id: String`, `agent_id: String`, `model: String?`, `mode: String?`, `channel: Channel<ProcessEvent>` | `()` | Runs a chosen prompt from the prompt library. `mode` picks the posture (default read-only): read-only is Claude `--permission-mode plan` / Codex `--sandbox read-only`; edit is Claude `--permission-mode bypassPermissions` / Codex `--sandbox workspace-write`. Serves both the adversarial Review and Run Agent. Registered as `review:current`; an unknown model or mode is refused; a missing CLI surfaces as a `Failed` event |
 | `cancel_review` | – | `bool` | Kills the review process **tree** |
 
 ## Git
