@@ -20,11 +20,16 @@ src/
 │   ├── editorNavLogic.ts editor back/forward stack + tab pin/partition (pure)
 │   ├── TestsView.tsx     test configs, run / re-run failed, live progress + tree
 │   ├── ChangesView.tsx   git status, comparison modes, side-by-side/inline diff;
-│   │                     a Files / Intent / Stashes toggle over the file list
-│   │                     (IntentPanel with staged badges + before/after behavioral
-│   │                     evidence, StashPanel stash manager)
+│   │                     a Files / Intent / Stashes / Erosion toggle over the file
+│   │                     list (IntentPanel with staged badges + before/after
+│   │                     behavioral evidence, StashPanel stash manager, ErosionPanel
+│   │                     rules scan)
 │   ├── behavioralPanelLogic.ts  the Intent view's runtime-evidence decisions:
 │   │                     per-card badge, score line, delta/status tone (tested)
+│   ├── ErosionPanel.tsx  the cb_core::erosion scan grouped by category, each flag
+│   │                     clicking through to its diff line; a bad-rule warning banner
+│   ├── erosionLogic.ts   the erosion decisions (tested): groupByCategory, badgeCount,
+│   │                     categoryLabel, category order
 │   ├── HistoryView.tsx   commit log, per-commit diffs, a branch folder tree
 │   │                     (Local/Remote, multi-select bulk delete), push/pull/fetch
 │   ├── historyLogic.ts   its decisions: commit-time formatting, and the
