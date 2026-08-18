@@ -21,7 +21,10 @@ src/
 │   ├── TestsView.tsx     test configs, run / re-run failed, live progress + tree
 │   ├── ChangesView.tsx   git status, comparison modes, side-by-side/inline diff;
 │   │                     a Files / Intent / Stashes toggle over the file list
-│   │                     (IntentPanel with staged badges, StashPanel stash manager)
+│   │                     (IntentPanel with staged badges + before/after behavioral
+│   │                     evidence, StashPanel stash manager)
+│   ├── behavioralPanelLogic.ts  the Intent view's runtime-evidence decisions:
+│   │                     per-card badge, score line, delta/status tone (tested)
 │   ├── HistoryView.tsx   commit log, per-commit diffs, a branch folder tree
 │   │                     (Local/Remote, multi-select bulk delete), push/pull/fetch
 │   ├── historyLogic.ts   its decisions: commit-time formatting, and the
@@ -51,7 +54,7 @@ src/
 │   ├── ObjectTree.tsx    inspected object graph: one distinct rendering per
 │                         ObjectValue, so "null" never looks like "unreadable"
 │   ├── DiffView.tsx      CodeMirror diff (side-by-side MergeView or unified),
-│   │                     per-line selection
+│   │                     per-line selection, Ctrl+F in-file search (both panes)
 │   ├── ConfigEditor.tsx  RunConfig form (project, launch profile dropdown, args,
 │   │                     env, cwd, ...; Delete lives in its footer)
 │   ├── BranchMenu.tsx    titlebar branch widget: tree, sections, fetch/pull/push,
@@ -65,7 +68,8 @@ src/
 │   ├── RunConfigMenu.tsx titlebar run-config dropdown: status dots, favourites,
 │   │                     reorder, new/import items (portal from RunView)
 │   ├── FileTree.tsx      lazy workspace directory tree (one fs_list_dir per expand)
-│   ├── FileEditor.tsx    CodeMirror editor over one file; Ctrl+S saves, reports dirty,
+│   ├── FileEditor.tsx    CodeMirror editor over one file; Ctrl+S saves, Ctrl+F finds
+│   │                     in-file (@codemirror/search), reports dirty,
 │   │                     reveals a requested line (clamped, token-guarded), and owns
 │   │                     the whole language-server client (didOpen/didChange/didClose,
 │   │                     the inline usages rows, both overlays)

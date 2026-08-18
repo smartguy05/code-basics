@@ -49,14 +49,16 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/behavioral/console_tests.rs` | 80 |  |
 | `crates/core/src/behavioral/http.rs` | 214 | Diffing two HTTP responses for one replayed request. |
 | `crates/core/src/behavioral/http_tests.rs` | 101 |  |
-| `crates/core/src/behavioral/httpfile.rs` | 293 | Parsing `.http` / `.rest` scenario files (VS Code REST Client / JetBrains |
-| `crates/core/src/behavioral/httpfile_tests.rs` | 102 |  |
-| `crates/core/src/behavioral/mod.rs` | 157 | Behavioral before/after testing — the *runtime* counterpart to the static |
+| `crates/core/src/behavioral/httpfile.rs` | 317 | Parsing `.http` / `.rest` scenario files (VS Code REST Client / JetBrains |
+| `crates/core/src/behavioral/httpfile_tests.rs` | 137 |  |
+| `crates/core/src/behavioral/mod.rs` | 159 | Behavioral before/after testing — the *runtime* counterpart to the static |
 | `crates/core/src/behavioral/mod_tests.rs` | 180 | Key-pinning for the behavioral wire types. |
 | `crates/core/src/behavioral/prepare.rs` | 121 | The testable decision seam between the raw deltas and the wire report. |
 | `crates/core/src/behavioral/prepare_tests.rs` | 115 | Tests for the pure report-assembly seam. |
 | `crates/core/src/behavioral/replay.rs` | 151 | The one impure corner of behavioral testing: firing HTTP requests. |
 | `crates/core/src/behavioral/replay_tests.rs` | 55 | Socket-free tests for the two decisions replay makes without the network. |
+| `crates/core/src/behavioral/scenario.rs` | 199 | The pure decision seam for serverful HTTP replay. |
+| `crates/core/src/behavioral/scenario_tests.rs` | 196 |  |
 | `crates/core/src/behavioral/worktree.rs` | 279 | An on-demand, isolated checkout of a commit to build and test against. |
 | `crates/core/src/behavioral/worktree_tests.rs` | 81 |  |
 | `crates/core/src/bin/fake_lsp.rs` | 752 | A scripted stand-in for a language server, used only by the transport tests. |
@@ -173,6 +175,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/testing/tree.rs` | 296 | Turning a flat list of test cases into the hierarchy the UI renders. |
 | `crates/core/src/testing/trx.rs` | 575 | Parser for Visual Studio `.trx` test reports. |
 | `crates/core/src/workspace.rs` | 2047 | Scanning a workspace for projects and building the configurations that can |
+| `crates/core/tests/behavioral_replay.rs` | 104 | A real-network smoke test for [`cb_core::behavioral::replay`]. |
 | `crates/core/tests/durable_why.rs` | 193 | End-to-end tests for durable intent: writing a git note at commit and |
 | `crates/core/tests/git_operations.rs` | 1085 | End-to-end git tests against real repositories on disk. |
 | `crates/core/tests/intent_attribution.rs` | 200 | Attribution measured against a real repository, rather than a fixture. |
@@ -184,11 +187,11 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/App.tsx` | 371 |  |
 | `src/components/BranchMenu.tsx` | 386 |  |
 | `src/components/ConfigEditor.tsx` | 313 |  |
-| `src/components/DiffView.tsx` | 752 |  |
+| `src/components/DiffView.tsx` | 761 |  |
 | `src/components/EnvironmentPicker.tsx` | 107 |  |
 | `src/components/ErosionPanel.tsx` | 101 |  |
 | `src/components/ErrorBoundary.tsx` | 65 |  |
-| `src/components/FileEditor.tsx` | 938 |  |
+| `src/components/FileEditor.tsx` | 946 |  |
 | `src/components/FileTree.tsx` | 118 |  |
 | `src/components/IntentPanel.tsx` | 797 |  |
 | `src/components/LspStatus.tsx` | 125 |  |
@@ -244,7 +247,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/RunView.tsx` | 1469 |  |
 | `src/views/TestsView.tsx` | 402 |  |
 | `src/views/architecture/DiagramCanvas.tsx` | 760 |  |
-| `src/views/architecture/DiagramEditor.tsx` | 318 |  |
+| `src/views/architecture/DiagramEditor.tsx` | 322 |  |
 | `src/views/architecture/architectureLogic.test.ts` | 176 |  |
 | `src/views/architecture/architectureLogic.ts` | 258 |  |
 | `src/views/architecture/copyLogic.test.ts` | 65 |  |
@@ -272,7 +275,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/testsLogic.test.ts` | 279 |  |
 | `src/views/testsLogic.ts` | 89 |  |
 | `src-tauri/src/commands/architecture.rs` | 219 | Architecture-diagram commands. |
-| `src-tauri/src/commands/behavioral.rs` | 290 | Behavioral before/after testing — running the same configuration against |
+| `src-tauri/src/commands/behavioral.rs` | 484 | Behavioral before/after testing — running the same configuration against |
 | `src-tauri/src/commands/changelists.rs` | 57 | Change-group commands. |
 | `src-tauri/src/commands/enhancements.rs` | 88 | Instruction-template commands. |
 | `src-tauri/src/commands/erosion.rs` | 32 | Erosion-detector command. |
@@ -339,10 +342,11 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/behavioral/compare.rs`: `CaseTransition`, `CaseDelta`, `TestDelta`, `diff_tests()`
 - `crates/core/src/behavioral/console.rs`: `ConsoleNormalization`, `mask_timestamps_and_ids()`, `multiset_minus()`, `diff_console()`, `is_change()`
 - `crates/core/src/behavioral/http.rs`: `RecordedResponse`, `is_change()`, `diff_http()`
-- `crates/core/src/behavioral/httpfile.rs`: `HttpRequestSpec`, `Readiness`, `HttpScenario`, `parse_http_file()`
+- `crates/core/src/behavioral/httpfile.rs`: `discover_http_files()`, `HttpRequestSpec`, `Readiness`, `HttpScenario`, `parse_http_file()`
 - `crates/core/src/behavioral/mod.rs`: `BehavioralDelta`, `ConsoleDelta`, `HeaderChange`, `BodyDelta`, `HttpDelta`, `CardBehavior`, `BehavioralScorecard`, `BehavioralReport`
 - `crates/core/src/behavioral/prepare.rs`: `scan_baseline()`, `find_config()`, `assemble_report()`
 - `crates/core/src/behavioral/replay.rs`: `record_from_parts()`, `ready_backoff()`, `send()`, `await_ready()`
+- `crates/core/src/behavioral/scenario.rs`: `SideResult`, `unready()`, `ReplayPlan`, `plan_replay()`, `LaunchChoice`, `choose_launch_config()`, `pair_and_diff()`
 - `crates/core/src/behavioral/worktree.rs`: `WorktreeOptions`, `BaselineWorktree`, `create()`, `path()`, `head_oid()`, `adopted()`, `keep_for_reuse()`, `finish()`, `teardown()`, `clear_all()`
 - `crates/core/src/changelists.rs`: `Changelist`, `Changelists`, `group_of()`, `changelists_path()`, `load()`, `save()`, `create()`, `remove()`, `rename()`, `assign()`
 - `crates/core/src/config.rs`: `WorkspaceConfig`, `dump_capture_enabled()`, `inspector_caps()`, `keep_dumps()`, `max_dump_megabytes()`, `config_dir()`, `config_path()`, `results_dir()`, `lsp_log_dir()`, `load()`, `ensure_gitignore()`, `save()`, `merge()`, `apply()`, `sort_configs()`, `set_favorite()`, `set_order()`, `upsert()`, `remove()`
