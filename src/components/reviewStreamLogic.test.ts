@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createNdjsonBuffer, formatClaudeStream } from "./reviewStreamLogic";
+import {
+  claudeLineNeedsAttention,
+  createNdjsonBuffer,
+  formatClaudeStream,
+} from "./reviewStreamLogic";
 
 // Strip ANSI so assertions read on the visible text.
 const plain = (s: string | null) => (s == null ? null : s.replace(/\x1b\[[0-9;]*m/g, ""));
@@ -96,5 +100,48 @@ describe("formatClaudeStream", () => {
   it("returns null for a non-JSON line rather than throwing", () => {
     expect(formatClaudeStream("not json at all")).toBeNull();
     expect(formatClaudeStream("")).toBeNull();
+  });
+});
+
+describe("claudeLineNeedsAttention", () => {
+  it("flags a result with permission denials", () => {
+    expect(
+      claudeLineNeedsAttention(JSON.stringify({ type: "result", permission_denials: [{ tool: "Write" }] })),
+    ).toBe(true);
+  });
+
+  it("does not flag a clean result", () => {
+    expect(
+      claudeLineNeedsAttention(JSON.stringify({ type: "result", permission_denials: [] })),
+    ).toBe(false);
+  });
+
+  it("flags a blocked tool_result mentioning permission", () => {
+    expect(
+      claudeLineNeedsAttention(
+        JSON.stringify({
+          type: "user",
+          message: { content: [{ type: "tool_result", is_error: true, content: "Permission denied to edit" }] },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not flag an unrelated tool error", () => {
+    expect(
+      claudeLineNeedsAttention(
+        JSON.stringify({
+          type: "user",
+          message: { content: [{ type: "tool_result", is_error: true, content: "file not found" }] },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not flag ordinary assistant output or non-JSON", () => {
+    expect(
+      claudeLineNeedsAttention(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } })),
+    ).toBe(false);
+    expect(claudeLineNeedsAttention("garbage")).toBe(false);
   });
 });

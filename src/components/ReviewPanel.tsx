@@ -10,7 +10,11 @@ import {
   reviewStatus,
   type ReviewPhase,
 } from "./reviewLogic";
-import { createNdjsonBuffer, formatClaudeStream } from "./reviewStreamLogic";
+import {
+  claudeLineNeedsAttention,
+  createNdjsonBuffer,
+  formatClaudeStream,
+} from "./reviewStreamLogic";
 
 /**
  * The adversarial-review panel: pick an agent (Claude Code / Codex), a prompt
@@ -33,6 +37,9 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
   const [last, setLast] = useState<ProcessEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [minimized, setMinimized] = useState(false);
+  // The agent needs the user: a permission was denied/blocked, or the run ended
+  // while minimized. Flashes the pill until the panel is restored.
+  const [attention, setAttention] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -67,6 +74,7 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
     if (!promptId || !agentId || running) return;
     setError(null);
     setLast(null);
+    setAttention(false);
     consoleRef.current?.clear();
     setPhase("running");
 
@@ -79,6 +87,9 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
       for (const line of lines) {
         const text = formatClaudeStream(line);
         if (text) consoleRef.current?.write(text);
+        // A denied/blocked action is the closest a headless review gets to
+        // "requires input" — flash so a minimized panel gets noticed.
+        if (claudeLineNeedsAttention(line)) setAttention(true);
       }
     };
 
@@ -93,6 +104,12 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
           consoleRef.current?.handle(event);
           setLast(event);
           setPhase("done");
+          // A failure always warrants attention; a clean finish only needs it
+          // when minimized (the visible panel already shows the result).
+          setMinimized((min) => {
+            if (event.type === "failed" || min) setAttention(true);
+            return min;
+          });
           return;
         }
         // Codex output, Claude's stderr, and the started banner pass through the
@@ -106,6 +123,12 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
   };
 
   const cancel = () => void api.cancelReview();
+
+  // Restoring the panel is the acknowledgement, so it clears the flash.
+  const restore = () => {
+    setMinimized(false);
+    setAttention(false);
+  };
 
   // Closing stops a running review — its console is going away with it.
   const close = () => {
@@ -121,17 +144,17 @@ export function ReviewPanel({ onClose }: { onClose: () => void }) {
     <>
       {minimized && (
         <button
-          className="review-pill"
-          onClick={() => setMinimized(false)}
-          title="Restore the review panel"
+          className={`review-pill${attention ? " attention" : ""}`}
+          onClick={restore}
+          title={attention ? "The review needs your attention" : "Restore the review panel"}
         >
           {running && <span className="review-spinner" aria-hidden />}
-          <span>Review — {status}</span>
+          <span>Review — {attention ? "needs attention" : status}</span>
         </button>
       )}
 
       <div className="review-panel" hidden={minimized}>
-        <div className="review-header">
+        <div className={`review-header${attention ? " attention" : ""}`}>
           <strong>Adversarial review</strong>
           <span className="faint" style={{ fontSize: 12 }}>
             {running && <span className="review-spinner" aria-hidden style={{ marginRight: 6 }} />}

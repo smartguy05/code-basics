@@ -918,6 +918,25 @@ textarea:focus {
   }
 }
 
+/* Flash for attention: a denied/blocked action, or the run ending while
+   minimized. Draws the eye to the pill (or the header if the panel is open). */
+.review-pill.attention,
+.review-header.attention {
+  animation: review-flash 0.9s ease-in-out infinite;
+}
+
+@keyframes review-flash {
+  0%,
+  100% {
+    background: var(--bg-raised);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  }
+  50% {
+    background: #7a4b00;
+    box-shadow: 0 0 0 2px #ffb020, 0 6px 20px rgba(0, 0, 0, 0.4);
+  }
+}
+
 .review-header {
   display: flex;
   align-items: center;

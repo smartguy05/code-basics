@@ -109,3 +109,37 @@ export function formatClaudeStream(line: string): string | null {
       return null; // user (tool_result), rate_limit_event, stream_event, …
   }
 }
+
+/**
+ * Whether a Claude stream line signals the run needs the user's attention — the
+ * closest thing a headless review has to "requires input": a permission was
+ * denied, or a tool was blocked. Used to flash the minimized pill.
+ */
+export function claudeLineNeedsAttention(line: string): boolean {
+  let obj: { type?: string; [k: string]: unknown };
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    return false;
+  }
+
+  if (obj.type === "result") {
+    return Array.isArray(obj.permission_denials) && obj.permission_denials.length > 0;
+  }
+
+  if (obj.type === "user") {
+    const message = obj.message as { content?: unknown } | undefined;
+    const content = message?.content;
+    if (Array.isArray(content)) {
+      for (const b of content as Array<Record<string, unknown>>) {
+        if (b.type === "tool_result" && b.is_error === true) {
+          const text =
+            typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? "");
+          if (/permission|requires approval|not allowed|denied/i.test(text)) return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
