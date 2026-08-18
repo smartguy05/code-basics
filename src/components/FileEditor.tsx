@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { editorColors, languageFor } from "./language";
 import { lineToPos } from "./searchLogic";
 import { onEditorFontSizeChange } from "../editorFontSize";
@@ -634,8 +635,15 @@ export function FileEditor({
       const extensions: Extension[] = [
         lineNumbers(),
         history(),
+        // Ctrl+F opens an in-file find panel at the top; the console's own
+        // Ctrl+F only fires while it is visible (offsetParent check), so the two
+        // never contend. `highlightSelectionMatches` underlines other copies of
+        // the current selection, the same affordance the console search gives.
+        search({ top: true }),
+        highlightSelectionMatches(),
         keymap.of([
           { key: "Mod-s", run: save },
+          ...searchKeymap,
           indentWithTab,
           ...defaultKeymap,
           ...historyKeymap,

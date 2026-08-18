@@ -22,7 +22,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use super::{IntentLabel, IntentRecord, ProviderId};
+use super::{IntentLabel, IntentPrompt, IntentRecord, ProviderId};
 
 pub mod claude_code;
 pub mod codex;
@@ -125,9 +125,20 @@ pub trait Provider {
 
     /// Read past sessions for this workspace into records.
     ///
-    /// Labels come back too where the agent's own history makes them
-    /// recoverable, but they are necessarily coarser than hook-captured ones.
-    fn history(&self, root: &Path) -> Result<(Vec<IntentRecord>, Vec<IntentLabel>)>;
+    /// Labels and the user's prompts come back too where the agent's own
+    /// history makes them recoverable. Labels are necessarily coarser than
+    /// hook-captured ones; prompts are keyed to the same synthesised turn id as
+    /// the records from that turn, so they join.
+    fn history(&self, root: &Path) -> Result<HistoryMined>;
+}
+
+/// What a session sweep recovered: records, coarse labels, and user prompts —
+/// each keyed to the same synthesised turn id so they join.
+#[derive(Debug, Default)]
+pub struct HistoryMined {
+    pub records: Vec<IntentRecord>,
+    pub labels: Vec<IntentLabel>,
+    pub prompts: Vec<IntentPrompt>,
 }
 
 /// Perform a plan, writing every file it names.
@@ -197,19 +208,19 @@ pub fn statuses(root: &Path) -> Vec<ProviderStatus> {
 /// One provider failing — an unreadable home directory, a format that moved —
 /// must not cost the other's history, so failures are dropped rather than
 /// propagated.
-pub fn history(root: &Path) -> (Vec<IntentRecord>, Vec<IntentLabel>) {
-    let mut records = Vec::new();
-    let mut labels = Vec::new();
+pub fn history(root: &Path) -> HistoryMined {
+    let mut merged = HistoryMined::default();
 
     for provider in all() {
-        if let Ok((r, l)) = provider.history(root) {
-            records.extend(r);
-            labels.extend(l);
+        if let Ok(mined) = provider.history(root) {
+            merged.records.extend(mined.records);
+            merged.labels.extend(mined.labels);
+            merged.prompts.extend(mined.prompts);
         }
     }
 
-    records.sort_by_key(|r| r.seq);
-    (records, labels)
+    merged.records.sort_by_key(|r| r.seq);
+    merged
 }
 
 /// The commit guard, as an extra write on an install plan.
@@ -224,6 +235,24 @@ pub(crate) fn guard_write(root: &Path, caveats: &mut Vec<String>) -> Option<Plan
     caveats.push(format!(
         "A guard is added to {} so a commit that still carries a rejection note \
          is refused. Commit with CB_ALLOW_REJECTED=1 to override it.",
+        write.path.display()
+    ));
+
+    Some(write)
+}
+
+/// The durable-why post-commit hook, as an extra write on an install plan.
+///
+/// Repository-level like the guard, and for the same reason: a commit made from
+/// the command line — including by an agent — goes through the system `git`,
+/// which the in-app commit's note-writing never reaches. Installing from both
+/// providers is harmless — the second plan finds the block already current.
+pub(crate) fn whyhook_write(root: &Path, caveats: &mut Vec<String>) -> Option<PlannedWrite> {
+    let write = super::whyhook::planned_write(root)?;
+
+    caveats.push(format!(
+        "A post-commit hook is added to {} so commits made from the command line \
+         also persist the intent behind each line into a durable git note.",
         write.path.display()
     ));
 

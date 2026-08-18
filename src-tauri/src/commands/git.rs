@@ -5,9 +5,14 @@
 //! performed on it.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use cb_core::git::repo::{resolve_network, MergeReport};
-use cb_core::git::{Branch, Commit, ComparisonMode, FileContents, FileDiff, Repo, WorkingStatus};
+use cb_core::git::why;
+use cb_core::git::{
+    Branch, Commit, ComparisonMode, FileContents, FileDiff, LineIntent, Repo, StashEntry,
+    WorkingStatus,
+};
 use cb_core::process::ProcessEvent;
 use tauri::ipc::Channel;
 use tauri::State;
@@ -141,8 +146,40 @@ pub async fn git_commit(
     message: String,
     amend: bool,
 ) -> Result<String, String> {
+    let root = state.workspace_root()?;
+    let repo = Repo::open(&root).map_err(|e| format!("{e:#}"))?;
+    let oid = repo.commit(&message, amend).map_err(|e| format!("{e:#}"))?;
+
+    // Persist why the change was made into a durable git note. Best-effort: the
+    // commit already succeeded, so a note failure is logged and swallowed rather
+    // than reported as a failed commit.
+    record_why(&root, &repo, &oid);
+
+    Ok(oid)
+}
+
+/// Build the content-keyed intent for a just-made commit and write it to its
+/// git note. Errors are swallowed — see [`git_commit`]. Shares
+/// [`why::record_note`] with the `post-commit` hook so the two paths cannot drift.
+fn record_why(root: &Path, repo: &Repo, oid: &str) {
+    if let Err(e) = why::record_note(repo, root, oid) {
+        eprintln!("durable intent note skipped for {oid}: {e:#}");
+    }
+}
+
+/// The recorded reason behind each line of a file, as a past commit left it.
+///
+/// Resolved entirely in Rust so the History tab does a pure lookup per caret
+/// move. Empty when the commit has no note or no line matches — the UI shows
+/// the empty state, never a guessed reason.
+#[tauri::command]
+pub async fn git_commit_file_why(
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+) -> Result<Vec<LineIntent>, String> {
     open(&state)?
-        .commit(&message, amend)
+        .why_for_file(&id, &path)
         .map_err(|e| format!("{e:#}"))
 }
 
@@ -250,8 +287,32 @@ pub async fn git_stash_save(state: State<'_, AppState>, message: String) -> Resu
 }
 
 #[tauri::command]
-pub async fn git_stash_pop(state: State<'_, AppState>) -> Result<(), String> {
-    open(&state)?.stash_pop().map_err(|e| format!("{e:#}"))
+pub async fn git_stash_list(state: State<'_, AppState>) -> Result<Vec<StashEntry>, String> {
+    open(&state)?.stash_list().map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn git_stash_pop(state: State<'_, AppState>, index: usize) -> Result<(), String> {
+    open(&state)?.stash_pop(index).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn git_stash_apply(state: State<'_, AppState>, index: usize) -> Result<(), String> {
+    open(&state)?
+        .stash_apply(index)
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn git_stash_drop(state: State<'_, AppState>, index: usize) -> Result<(), String> {
+    open(&state)?
+        .stash_drop(index)
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn git_stash_clear(state: State<'_, AppState>) -> Result<(), String> {
+    open(&state)?.stash_clear().map_err(|e| format!("{e:#}"))
 }
 
 /// Which network operation to perform.

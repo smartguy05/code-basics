@@ -69,7 +69,9 @@ fn report_attribution_against_this_repository() {
     }
 
     // What each agent already recorded, with no setup at all.
-    let (records, labels) = providers::history(&root);
+    let mined = providers::history(&root);
+    let records = mined.records;
+    let labels = mined.labels;
     println!(
         "history: {} record(s), {} label(s)",
         records.len(),

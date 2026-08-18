@@ -13,12 +13,19 @@ src/
 │                         Run + Tests stay mounted while hidden so running
 │                         processes keep their consoles
 ├── views/
-│   ├── RunView.tsx       file-tree sidebar, editor pane over per-run console tabs,
+│   ├── RunView.tsx       file-tree sidebar, editor pane (back/forward file
+│   │                     history + pinnable tabs) over per-run console tabs,
 │   │                     config dropdown (portaled to the titlebar), env picker,
 │   │                     build actions, secrets
+│   ├── editorNavLogic.ts editor back/forward stack + tab pin/partition (pure)
 │   ├── TestsView.tsx     test configs, run / re-run failed, live progress + tree
-│   ├── ChangesView.tsx   git status, comparison modes, side-by-side/inline diff
-│   ├── HistoryView.tsx   commit log, per-commit diffs, branches, push/pull/fetch
+│   ├── ChangesView.tsx   git status, comparison modes, side-by-side/inline diff;
+│   │                     a Files / Intent / Stashes toggle over the file list
+│   │                     (IntentPanel with staged badges, StashPanel stash manager)
+│   ├── HistoryView.tsx   commit log, per-commit diffs, a branch folder tree
+│   │                     (Local/Remote, multi-select bulk delete), push/pull/fetch
+│   ├── historyLogic.ts   its decisions: commit-time formatting, and the
+│   │                     sequential best-effort bulk branch delete + its summary
 │   ├── ArchitectureView.tsx  the Architecture tab: diagram list (two built-ins +
 │   │                     saved files), canvas, editor, save-a-copy
 │   ├── architecture/     that tab's parts — see below
@@ -49,6 +56,8 @@ src/
 │   │                     env, cwd, ...; Delete lives in its footer)
 │   ├── BranchMenu.tsx    titlebar branch widget: tree, sections, fetch/pull/push,
 │   │                     right-click create-from / merge-into, abort-merge
+│   ├── treeLogic.ts      the slash-name → folder-tree builder (buildTree /
+│   │                     ancestorPaths), shared by BranchMenu and HistoryView
 │   ├── MenuBar.tsx       menu bar: File (Open/Rescan/Exit) + Enhancements with
 │   │                     fly-out Instructions/Prompts submenus (enhancementsLogic.ts)
 │   ├── enhancementsLogic.ts  the Enhancements decisions: add/remove action, badges,
@@ -112,6 +121,14 @@ Three details that differ from `inspectRequest`, all forced by the same fact —
 - Each request carries a monotonic **`token`**. Choosing a symbol in a file that is *already open* changes neither the path nor the mount, so an equality check on the fields would decide nothing had happened and leave the user on the line they jumped from. A number that only goes up cannot collide with itself. `FileEditor` takes `revealLine` + `revealToken` and reacts to the token; it also remembers the last token it served, so an unrelated re-render cannot replay an old jump and drag the cursor back.
 - `RunView` consumes each request **by object identity** in a ref, the way `InspectView` does. Without that guard every process event, tab switch or status tick would re-open the file.
 - An action hit **selects** its configuration and never starts it. Starting a process off a fuzzy-matched keystroke is a guess whose cost is a build, a port, or a service talking to something real. `RunView` also checks the id against its own list first — the palette ranks over every configuration, that list is app configurations only, and setting a selection to an id it does not hold would empty the toolbar and look like the app breaking.
+
+### Editor navigation history and pinned tabs
+
+The Run tab's file tabs behave like a browser's, and both behaviours keep their decisions in `views/editorNavLogic.ts` (pure, tested in `editorNavLogic.test.ts`) with `RunView` as the rendering shell — the same rule as everywhere else.
+
+- **Back/forward.** A back/forward stack (`NavHistory` = entries + an index; `pushNav` truncates the forward entries, dedupes the current one, and caps at 50 by evicting from the front) records every navigation into the editor: a file opened from the tree, a file tab clicked, and — crucially — the `pendingOpen` consume, which is where the palette, the architecture diagram **and middle-click go-to-definition** all land. So one recording point covers all three producers. `navBack`/`navForward` move the index and hand back the entry; opening a file does *not* record (it is also how Back reopens a closed file, browser-style), and closing a tab does not record either. The browser side mouse buttons drive it (`navMouseAction` maps `button === 3` → back, `4` → forward) through a window-level, capture-phase `mousedown`+`auxclick` listener — `preventDefault` on mousedown, the same guard the middle-click handlers use, which also suppresses any WebView2 back/forward. It is armed only while the Run tab is on screen (`active` prop from `App`): this view stays mounted when hidden, and moving the active file behind another tab would change what the user sees with no visible cause. The mouse handler reads the history through a ref (`navHistoryRef`, mirrored by `writeNav`) so a listener captured once never goes stale — the `inspectInfoRef`/`writeInspect` idiom.
+- **Reveal tokens.** All reveals now draw their token from one `RunView`-owned counter (`revealSeq`) rather than `App`'s `requestToken`, so a history jump and a palette open cannot mint colliding tokens — a reveal only has to *differ* from the last one the editor applied to fire.
+- **Pinned tabs.** `pinnedFiles` (an in-memory `Set`, matching `openFiles` — neither persists) partitions the tabs (`partitionTabs`, order-preserving) into a pinned row above the normal strip; with nothing pinned it is byte-for-byte the old single strip. The 📌 control (`togglePin`) sits beside the × on every tab, and closing a file clears its pin.
 
 ## The IPC layer
 

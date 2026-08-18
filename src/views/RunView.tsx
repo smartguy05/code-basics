@@ -20,6 +20,16 @@ import {
   saveCollapsed,
   saveSplit,
 } from "./consolePanelLogic";
+import {
+  navBack,
+  navForward,
+  navMouseAction,
+  partitionTabs,
+  pushNav,
+  togglePin,
+  type NavEntry,
+  type NavHistory,
+} from "./editorNavLogic";
 import { preferApplicationProcess } from "./InspectView";
 import type { InspectRequest, OpenFileRequest, SelectConfigRequest } from "../App";
 import type {
@@ -96,6 +106,12 @@ interface OpenFile {
   name: string;
 }
 
+/** The tab label for a path, from either separator it may carry. */
+function baseName(path: string): string {
+  const parts = path.split(/[\\/]/);
+  return parts[parts.length - 1] || path;
+}
+
 function loadEnvironments(root: string): EnvironmentState {
   try {
     const raw = localStorage.getItem(environmentsKey(root));
@@ -116,10 +132,18 @@ export function RunView({
   pendingSelect,
   onSelectConsumed,
   onNavigate,
+  active,
 }: {
   workspace: Workspace;
   onWorkspaceChange: (workspace: Workspace) => void;
   onInspect: (request: InspectRequest) => void;
+  /**
+   * Whether the Run tab is the one on screen. The back/forward mouse buttons
+   * only act while it is: this view stays mounted when hidden, and moving the
+   * active file behind another tab would change what the user sees the next
+   * time they return here, with no visible cause.
+   */
+  active: boolean;
   /** A file the search palette chose; see `OpenFileRequest` in `App.tsx`. */
   pendingOpen?: OpenFileRequest | null;
   onOpenConsumed?: () => void;
@@ -220,6 +244,12 @@ export function RunView({
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [dirtyFiles, setDirtyFiles] = useState<Set<string>>(new Set());
+  /**
+   * Paths shown in the pinned tab row. In-memory only, to match `openFiles`:
+   * neither survives a workspace change (this view is keyed by `workspace.root`)
+   * and persisting the pins without the files they name would be half a feature.
+   */
+  const [pinnedFiles, setPinnedFiles] = useState<Set<string>>(new Set());
   const [split, setSplit] = useState(() => loadSplit(localStorage, workspace.root));
   const [consoleCollapsed, setConsoleCollapsed] = useState(() =>
     loadCollapsed(localStorage, workspace.root),
@@ -264,6 +294,93 @@ export function RunView({
   } | null>(null);
 
   /**
+   * One monotonic source for every reveal token in this view.
+   *
+   * A reveal only has to differ from the last one the editor applied to fire
+   * again (see `FileEditor`'s reveal effect), so a plain counter owned here
+   * serves both a palette-driven open and a back/forward jump without any chance
+   * of colliding with `App`'s own `requestToken`.
+   */
+  const revealSeq = useRef(0);
+  const nextRevealToken = () => (revealSeq.current += 1);
+
+  /**
+   * The back/forward stack over the files the user has looked at, plus a ref
+   * mirror so the window mouse handler — captured once — always reads the
+   * latest value. Same idiom as `inspectInfoRef`/`writeInspect` above.
+   */
+  const [, setNavHistory] = useState<NavHistory>({ entries: [], index: -1 });
+  const navHistoryRef = useRef<NavHistory>({ entries: [], index: -1 });
+  function writeNav(next: NavHistory) {
+    navHistoryRef.current = next;
+    setNavHistory(next);
+  }
+
+  /** Record a navigation into the history (open, tab switch, or goto jump). */
+  function recordNav(path: string, line?: number) {
+    writeNav(pushNav(navHistoryRef.current, { path, line }));
+  }
+
+  /**
+   * Show a history entry without recording it — this *is* the recorded past.
+   * A closed file is reopened, browser-like, so Back can still reach it.
+   */
+  function applyEntry(entry: NavEntry) {
+    openFile(entry.path, baseName(entry.path));
+    setActiveFile(entry.path);
+    setReveal(
+      entry.line == null
+        ? null
+        : { path: entry.path, line: entry.line, token: nextRevealToken() },
+    );
+  }
+
+  function goBack() {
+    const result = navBack(navHistoryRef.current);
+    if (!result) return;
+    writeNav(result.history);
+    applyEntry(result.entry);
+  }
+
+  function goForward() {
+    const result = navForward(navHistoryRef.current);
+    if (!result) return;
+    writeNav(result.history);
+    applyEntry(result.entry);
+  }
+
+  /** Held in a ref so the window listener always calls the current closures. */
+  const nav = useRef({ goBack, goForward });
+  nav.current = { goBack, goForward };
+
+  /**
+   * The browser side mouse buttons drive the editor history while the Run tab
+   * is on screen. `preventDefault` on mousedown both stops the Windows
+   * autoscroll cursor and suppresses any WebView2 back/forward — the same guard
+   * the middle-click handlers use. Capture phase, matching the app's other
+   * window-level listeners.
+   */
+  useEffect(() => {
+    if (!active) return;
+    const onDown = (event: MouseEvent) => {
+      if (navMouseAction(event.button)) event.preventDefault();
+    };
+    const onAux = (event: MouseEvent) => {
+      const action = navMouseAction(event.button);
+      if (!action) return;
+      event.preventDefault();
+      if (action === "back") nav.current.goBack();
+      else nav.current.goForward();
+    };
+    window.addEventListener("mousedown", onDown, true);
+    window.addEventListener("auxclick", onAux, true);
+    return () => {
+      window.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("auxclick", onAux, true);
+    };
+  }, [active]);
+
+  /**
    * Serve a file the palette chose, exactly once.
    *
    * Consumed by object identity in a ref, the way `InspectView` consumes its
@@ -280,8 +397,12 @@ export function RunView({
     setReveal(
       pendingOpen.line == null
         ? null
-        : { path: pendingOpen.path, line: pendingOpen.line, token: pendingOpen.token },
+        : { path: pendingOpen.path, line: pendingOpen.line, token: nextRevealToken() },
     );
+    // The palette, the architecture diagram and middle-click go-to-definition
+    // all arrive here, so recording the jump here is what feeds every one of
+    // them into the back/forward history.
+    recordNav(pendingOpen.path, pendingOpen.line);
     onOpenConsumed?.();
   }, [pendingOpen, onOpenConsumed]);
 
@@ -320,6 +441,14 @@ export function RunView({
       next.delete(path);
       return next;
     });
+    setPinnedFiles((previous) => {
+      if (!previous.has(path)) return previous;
+      const next = new Set(previous);
+      next.delete(path);
+      return next;
+    });
+    // Closing is not a navigation: the fallback to another tab below must not
+    // push onto the history (a browser does not record a tab close as "forward").
     if (activeFile === path) {
       setActiveFile(remaining[remaining.length - 1]?.path ?? null);
     }
@@ -790,6 +919,68 @@ export function RunView({
       : null;
   const crashCode = activeInspect?.exit?.code ?? null;
 
+  // The open tabs split into the pinned row and the normal row; with nothing
+  // pinned this is exactly the old single strip.
+  const { pinned: pinnedTabs, unpinned: unpinnedTabs } = partitionTabs(
+    openFiles,
+    pinnedFiles,
+  );
+
+  /** One file tab — reused by both the pinned and the normal row. */
+  const renderFileTab = (file: OpenFile) => {
+    const isPinned = pinnedFiles.has(file.path);
+    return (
+      <button
+        key={file.path}
+        className={file.path === activeFile ? "active" : ""}
+        onClick={() => {
+          setActiveFile(file.path);
+          recordNav(file.path);
+        }}
+        // Middle-click closes, like browser tabs. The mousedown guard stops the
+        // autoscroll cursor.
+        onMouseDown={(e) => e.button === 1 && e.preventDefault()}
+        onAuxClick={(e) => {
+          if (e.button === 1) closeFile(file.path);
+        }}
+        title={file.path}
+      >
+        {dirtyFiles.has(file.path) && (
+          <span className="dirty-dot" title="Unsaved changes — Ctrl+S to save">
+            ●
+          </span>
+        )}
+        {file.name}
+        <span
+          className={isPinned ? "row-action pin pinned" : "row-action pin"}
+          role="button"
+          title={isPinned ? "Unpin this file" : "Pin this file"}
+          onClick={(e) => {
+            e.stopPropagation();
+            setPinnedFiles((previous) => togglePin(previous, file.path));
+          }}
+        >
+          📌
+        </span>
+        <span
+          className="row-action"
+          role="button"
+          title={
+            dirtyFiles.has(file.path)
+              ? "Close this file (unsaved changes are discarded)"
+              : "Close this file"
+          }
+          onClick={(e) => {
+            e.stopPropagation();
+            closeFile(file.path);
+          }}
+        >
+          ×
+        </span>
+      </button>
+    );
+  };
+
   return (
     <>
       {/* Lives in the titlebar (portal), next to the branch widget. */}
@@ -846,7 +1037,10 @@ export function RunView({
         <FileTree
           refreshToken={workspace}
           activePath={activeFile}
-          onOpenFile={openFile}
+          onOpenFile={(path, name) => {
+            openFile(path, name);
+            recordNav(path);
+          }}
         />
       </Sidebar>
 
@@ -1104,44 +1298,18 @@ export function RunView({
                       : { flex: `0 1 ${Math.round(split * 100)}%` }
                   }
                 >
-                  <div className="console-tabs">
-                    {openFiles.map((file) => (
-                      <button
-                        key={file.path}
-                        className={file.path === activeFile ? "active" : ""}
-                        onClick={() => setActiveFile(file.path)}
-                        // Middle-click closes, like browser tabs. The
-                        // mousedown guard stops the autoscroll cursor.
-                        onMouseDown={(e) => e.button === 1 && e.preventDefault()}
-                        onAuxClick={(e) => {
-                          if (e.button === 1) closeFile(file.path);
-                        }}
-                        title={file.path}
-                      >
-                        {dirtyFiles.has(file.path) && (
-                          <span className="dirty-dot" title="Unsaved changes — Ctrl+S to save">
-                            ●
-                          </span>
-                        )}
-                        {file.name}
-                        <span
-                          className="row-action"
-                          role="button"
-                          title={
-                            dirtyFiles.has(file.path)
-                              ? "Close this file (unsaved changes are discarded)"
-                              : "Close this file"
-                          }
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            closeFile(file.path);
-                          }}
-                        >
-                          ×
-                        </span>
-                      </button>
-                    ))}
-                  </div>
+                  {/* Pinned tabs get their own row above the rest; with none
+                      pinned only the normal strip renders, unchanged. */}
+                  {pinnedTabs.length > 0 && (
+                    <div className="console-tabs pinned-tabs">
+                      {pinnedTabs.map(renderFileTab)}
+                    </div>
+                  )}
+                  {unpinnedTabs.length > 0 && (
+                    <div className="console-tabs">
+                      {unpinnedTabs.map(renderFileTab)}
+                    </div>
+                  )}
                   <div className="editor-area">
                     {openFiles.map((file) => (
                       <div

@@ -787,7 +787,7 @@ fn one_intent_spanning_two_files_becomes_a_single_card() {
 }
 
 #[test]
-fn intent_cards_sort_before_everything_else() {
+fn intent_cards_sort_before_locations_and_formatting() {
     let laballed = simple(
         "a.rs",
         &[
@@ -810,6 +810,47 @@ fn intent_cards_sort_before_everything_else() {
     let groups = with_intent(&[laballed, formatting], &intents);
 
     assert_eq!(groups[0].kind, GroupKind::Intent);
+}
+
+/// The reviewer signs off by reading top-down, so the card that carries the
+/// most risk — a change nothing accounts for — must lead, not trail. This is
+/// the deliberate reversal of the old "intent first" ordering.
+#[test]
+fn unexplained_cards_sort_to_the_top() {
+    // A stated intent and an unexplained hunk in a config file with no symbol.
+    let stated = simple(
+        "a.rs",
+        &["+    let retry_limit = read_configured_retry_limit();"],
+        "",
+    );
+    let unexplained = simple("config.json", &["+  \"unaccounted\": true,"], "");
+
+    let intents = record_with_label(
+        "a.rs",
+        &["    let retry_limit = read_configured_retry_limit();"],
+        "add retry",
+    );
+
+    let groups = with_intent(&[stated, unexplained], &intents);
+
+    assert_eq!(groups[0].kind, GroupKind::Other);
+    assert!(
+        groups.iter().any(|g| g.kind == GroupKind::Intent),
+        "the stated intent card should still be present"
+    );
+}
+
+/// Formatting changed no code, so it stays the one kind safe to skim — last,
+/// below even the unexplained cards now promoted above it.
+#[test]
+fn formatting_still_sorts_last_below_unexplained() {
+    let unexplained = simple("config.json", &["+  \"unaccounted\": true,"], "");
+    let formatting = simple("b.rs", &["-  let x = 1;", "+let x = 1;"], "");
+
+    let groups = group_without_intent(&[unexplained, formatting]);
+
+    assert_eq!(groups.last().unwrap().kind, GroupKind::Formatting);
+    assert_eq!(groups[0].kind, GroupKind::Other);
 }
 
 // -- shape of the result ----------------------------------------------------

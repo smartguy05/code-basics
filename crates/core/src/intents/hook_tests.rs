@@ -803,6 +803,25 @@ fn an_unknown_event_name_is_not_accepted() {
     assert_eq!(HookEvent::parse("Stop"), Some(HookEvent::Stop));
 }
 
+/// The durable-why post-commit hook line the installer writes must be understood
+/// by the recorder, or a commit's intent is silently never persisted.
+#[test]
+fn the_post_commit_hook_line_is_parsed() {
+    let parsed = parse_recorder_args(&args(&[
+        "exe",
+        "record-intent",
+        "--code-basics-intent",
+        "--event",
+        "PostCommit",
+        "--workspace",
+        "/repo",
+    ]))
+    .expect("a recorder invocation");
+
+    assert_eq!(parsed.event, HookEvent::PostCommit);
+    assert_eq!(parsed.workspace.as_deref(), Some("/repo"));
+}
+
 // -- payload shapes the ingest has to survive -------------------------------
 
 /// The hook runs unattended after every edit, so an event carrying nothing it

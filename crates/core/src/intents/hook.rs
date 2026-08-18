@@ -105,6 +105,11 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 pub enum HookEvent {
     PostToolUse,
     Stop,
+    /// A git `post-commit` hook fired. Unlike the agent events it carries no
+    /// stdin payload — the workspace is always named on the command line — and
+    /// its job is to persist the durable-why note for the new commit, not to
+    /// ingest an edit.
+    PostCommit,
 }
 
 impl HookEvent {
@@ -112,6 +117,7 @@ impl HookEvent {
         match name {
             "PostToolUse" => Some(HookEvent::PostToolUse),
             "Stop" => Some(HookEvent::Stop),
+            "PostCommit" => Some(HookEvent::PostCommit),
             _ => None,
         }
     }
@@ -130,6 +136,9 @@ pub fn ingest(
     match event {
         HookEvent::PostToolUse => ingest_edit(root, provider, payload),
         HookEvent::Stop => ingest_label(root, provider, payload),
+        // A post-commit hook has no payload to ingest — the recorder handles it
+        // on its own path before reaching here.
+        HookEvent::PostCommit => Ok(0),
     }
 }
 

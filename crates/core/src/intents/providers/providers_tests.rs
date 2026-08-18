@@ -768,7 +768,7 @@ fn a_project_install_shows_up_in_the_statuses_row_where_codex_is_installed() {
 fn a_workspace_no_agent_has_run_in_has_no_merged_history() {
     let dir = workspace();
 
-    let (records, labels) = history(dir.path());
+    let HistoryMined { records, labels, .. } = history(dir.path());
 
     assert!(records.is_empty(), "got: {records:?}");
     assert!(labels.is_empty(), "got: {labels:?}");
@@ -780,7 +780,7 @@ fn a_workspace_no_agent_has_run_in_has_no_merged_history() {
 fn merged_history_comes_back_sorted_by_sequence() {
     let dir = workspace();
 
-    let (records, _) = history(dir.path());
+    let HistoryMined { records, .. } = history(dir.path());
 
     let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
     let mut sorted = seqs.clone();

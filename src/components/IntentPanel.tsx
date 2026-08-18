@@ -2,14 +2,28 @@ import { useState } from "react";
 import * as api from "../ipc/api";
 import {
   canRejectInMode,
+  cardTitle,
+  groupStagedState,
   importFeedback,
   intentDataHint,
   rejectFeedback,
   rejectReasonError,
+  scorecardLine,
+  stagedState,
+  unfulfilledCaption,
+  type StagedState,
 } from "./intentPanelLogic";
+import {
+  behavioralBadge,
+  behavioralScoreLine,
+  deltaLine,
+} from "./behavioralPanelLogic";
 import type {
+  BehavioralReport,
+  CardBehavior,
   ComparisonMode,
   Confidence,
+  FileChange,
   GroupFile,
   GroupKind,
   InstallPlan,
@@ -18,7 +32,30 @@ import type {
   ProviderId,
   ProviderStatus,
   RejectSummary,
+  Scorecard,
+  UnfulfilledClaim,
 } from "../ipc/types";
+
+const STAGE_TAG: Record<StagedState, { label: string; className: string; title: string } | null> = {
+  staged: { label: "staged", className: "staged", title: "Staged — in the index" },
+  partial: {
+    label: "partial",
+    className: "partial",
+    title: "Partially staged — some hunks are in the index, some are not",
+  },
+  none: null,
+};
+
+/** The small staged/partial pill shown on a file row or card. `none` renders nothing. */
+function StageTag({ state }: { state: StagedState }) {
+  const tag = STAGE_TAG[state];
+  if (!tag) return null;
+  return (
+    <span className={`stage-tag ${tag.className}`} title={tag.title}>
+      {tag.label}
+    </span>
+  );
+}
 
 /**
  * The Changes tab's intent view: hunks collapsed into the decisions behind
@@ -64,12 +101,31 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
   codex: "Codex",
 };
 
+/** The small before/after pill on a card, coloured by `behavioralBadge`. */
+function BehavioralBadge({ card }: { card: CardBehavior }) {
+  const badge = behavioralBadge(card);
+  return (
+    <span className={`behavioral-badge ${badge.tone}`} title={badge.title}>
+      {badge.label}
+    </span>
+  );
+}
+
 export interface IntentPanelProps {
   groups: IntentGroup[];
+  /** The per-turn coverage tally, shown above the cards. */
+  scorecard: Scorecard;
+  /** Declared intents no changed hunk evidences — shown as review items. */
+  unfulfilled: UnfulfilledClaim[];
   providers: ProviderStatus[];
   selectedGroup: string | null;
   /** The file open in the diff pane, so the card can mark its row. */
   selectedPath: string | null;
+  /**
+   * The working-tree status, so each card and file can show whether it is
+   * staged — the Intent view has no Staged section of its own.
+   */
+  statusFiles: FileChange[];
   /** Which view is displayed — rejecting is only possible in a working-tree one. */
   mode: ComparisonMode;
   busy: boolean;
@@ -95,13 +151,22 @@ export interface IntentPanelProps {
   onEnable: (provider: ProviderId, scope: InstallScope) => Promise<void>;
   /** Resolves with how many records the import found, so the panel can say so. */
   onImportHistory: () => Promise<number>;
+  /**
+   * The runtime before/after comparison, when one has been run. Its
+   * per-card attributions badge the matching cards; its unattributed deltas
+   * appear only in the overall section, never pinned to a card.
+   */
+  behavioral?: BehavioralReport | null;
 }
 
 export function IntentPanel({
   groups,
+  scorecard,
+  unfulfilled,
   providers,
   selectedGroup,
   selectedPath,
+  statusFiles,
   mode,
   busy,
   onSelect,
@@ -113,15 +178,46 @@ export function IntentPanel({
   onReject,
   onEnable,
   onImportHistory,
+  behavioral,
 }: IntentPanelProps) {
-  const stated = groups.filter((g) => g.kind === "intent").length;
   const capturing = providers.some((p) => p.capture != null);
+  // Attributions keyed by group id, so a card can find its own behavior in O(1).
+  const behaviorByGroup = new Map(
+    (behavioral?.attributions ?? []).map((card) => [card.groupId, card]),
+  );
   const hint = intentDataHint(groups, providers);
+  const unfulfilledHeading = unfulfilledCaption(unfulfilled);
 
   // Open by default until capture is set up. The panel is the only way to turn
   // it on, and a feature nobody can find is a feature that does not exist.
   const [setupOpen, setSetupOpen] = useState(!capturing);
   const [feedback, setFeedback] = useState<string | null>(null);
+  // The unexplained cards are collected under one collapsible section — they
+  // sort to the top and can be a wall of noise a reviewer wants to fold away.
+  const [unexplainedCollapsed, setUnexplainedCollapsed] = useState(false);
+
+  const unexplained = groups.filter((g) => g.kind === "other");
+  const explained = groups.filter((g) => g.kind !== "other");
+
+  const renderCard = (group: IntentGroup) => (
+    <GroupCard
+      key={group.id}
+      group={group}
+      behavior={behaviorByGroup.get(group.id) ?? null}
+      selected={group.id === selectedGroup}
+      selectedPath={group.id === selectedGroup ? selectedPath : null}
+      statusFiles={statusFiles}
+      mode={mode}
+      busy={busy}
+      onSelect={onSelect}
+      onSelectFile={onSelectFile}
+      onStage={onStage}
+      onRevert={onRevert}
+      onStageFile={onStageFile}
+      onRevertFile={onRevertFile}
+      onReject={(group, reason, file) => void runReject(group, reason, file)}
+    />
+  );
 
   const runImport = async () => {
     setFeedback(null);
@@ -201,17 +297,92 @@ export function IntentPanel({
         <span style={{ flex: 1 }}>
           {groups.length} group{groups.length === 1 ? "" : "s"}
         </span>
-        <span
-          className="badge"
-          title={
-            stated > 0
-              ? `${stated} group(s) come from what the agent actually said; the rest are inferred`
-              : "Nothing is agent-stated yet — every group here is inferred from the diff"
-          }
-        >
-          {stated} stated
-        </span>
+        {scorecard.unmatched > 0 && (
+          <span
+            className="badge warning"
+            title="Stated intents with no matching change in this diff"
+          >
+            {scorecard.unmatched} unmatched
+          </span>
+        )}
       </div>
+
+      {groups.length > 0 && (
+        <div
+          className="muted"
+          style={{ padding: "2px 8px 6px", fontSize: 11 }}
+          title="Claims are declared intents; evidenced means a matching change was found. Hunks and unattributed count the diff itself."
+        >
+          {scorecardLine(scorecard)}
+        </div>
+      )}
+
+      {behavioral && (
+        <div className="behavioral-overall">
+          <div
+            className="muted"
+            style={{ padding: "2px 8px 4px", fontSize: 11 }}
+            title="The runtime before/after run: outcomes it compared between HEAD and the working tree, and how many differences it could attribute to a card."
+          >
+            {behavioralScoreLine(behavioral.scorecard)}
+          </div>
+
+          {behavioral.unattributed.length > 0 && (
+            <div style={{ padding: "2px 8px 4px" }}>
+              <div
+                className="faint"
+                style={{ fontSize: 11, marginBottom: 2 }}
+                title="Observable differences no card could be held responsible for — shown here rather than pinned to a card that may not have caused them."
+              >
+                Unattributed differences
+              </div>
+              {behavioral.unattributed.map((delta, i) => {
+                const line = deltaLine(delta);
+                return (
+                  <div
+                    key={`${line.text}:${i}`}
+                    className={`behavioral-delta ${line.tone}`}
+                    style={{ fontSize: 11 }}
+                  >
+                    {line.text}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {behavioral.warnings.map((warning) => (
+            <div key={warning} className="warning" style={{ fontSize: 11 }}>
+              {warning}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {unfulfilledHeading && (
+        <div className="warning" style={{ fontSize: 12 }}>
+          <div style={{ marginBottom: 4 }}>{unfulfilledHeading}</div>
+          {unfulfilled.map((claim) => (
+            <div
+              key={`${claim.turnId}:${claim.label}`}
+              style={{ fontSize: 11, marginTop: 2 }}
+              // These are informational: there is nothing in the tree to act on,
+              // and a stated intent may simply have landed and moved past the
+              // matcher's reach rather than being undone.
+              title={
+                "The agent stated this, but no changed hunk matches it here. " +
+                "It may be committed, later overwritten, hand-reverted, or " +
+                "reformatted past the matcher — reported, not assumed undone."
+              }
+            >
+              <span className="label">{claim.label}</span>
+              {claim.paths.length > 0 && (
+                <span className="faint"> — {claim.paths.join(", ")}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {groups.length === 0 && (
         <div className="muted" style={{ padding: 8, fontSize: 12 }}>
@@ -219,31 +390,33 @@ export function IntentPanel({
         </div>
       )}
 
-      {groups.map((group) => (
-        <GroupCard
-          key={group.id}
-          group={group}
-          selected={group.id === selectedGroup}
-          selectedPath={group.id === selectedGroup ? selectedPath : null}
-          mode={mode}
-          busy={busy}
-          onSelect={onSelect}
-          onSelectFile={onSelectFile}
-          onStage={onStage}
-          onRevert={onRevert}
-          onStageFile={onStageFile}
-          onRevertFile={onRevertFile}
-          onReject={(group, reason, file) => void runReject(group, reason, file)}
-        />
-      ))}
+      {unexplained.length > 0 && (
+        <>
+          <div
+            className="group-label dropdown-section"
+            style={{ display: "flex", alignItems: "center", gap: 4 }}
+            onClick={() => setUnexplainedCollapsed((open) => !open)}
+            title="Changes no stated intent accounts for — review these first"
+          >
+            <span className="twisty">{unexplainedCollapsed ? "▸" : "▾"}</span>
+            <span style={{ flex: 1 }}>Unexplained</span>
+            <span className="badge">{unexplained.length}</span>
+          </div>
+          {!unexplainedCollapsed && unexplained.map(renderCard)}
+        </>
+      )}
+
+      {explained.map(renderCard)}
     </>
   );
 }
 
 function GroupCard({
   group,
+  behavior,
   selected,
   selectedPath,
+  statusFiles,
   mode,
   busy,
   onSelect,
@@ -255,8 +428,10 @@ function GroupCard({
   onReject,
 }: {
   group: IntentGroup;
+  behavior: CardBehavior | null;
   selected: boolean;
   selectedPath: string | null;
+  statusFiles: FileChange[];
   mode: ComparisonMode;
   busy: boolean;
   onSelect: (group: IntentGroup) => void;
@@ -301,11 +476,13 @@ function GroupCard({
     <div
       className={`intent-card ${selected ? "selected" : ""}`}
       onClick={() => onSelect(group)}
-      title={KIND_TITLE[group.kind]}
+      title={cardTitle(group, KIND_TITLE[group.kind])}
     >
       <div className="headline">
         <span className={`kind ${group.kind}`}>{KIND_LABEL[group.kind]}</span>
         <span className="label">{group.label}</span>
+        {behavior && <BehavioralBadge card={behavior} />}
+        <StageTag state={groupStagedState(group.files.map((f) => f.path), statusFiles)} />
         <span className="confidence" title={`${group.confidence} confidence`}>
           {CONFIDENCE_MARK[group.confidence]}
         </span>
@@ -328,9 +505,13 @@ function GroupCard({
                   e.stopPropagation();
                   onSelectFile(group, file);
                 }}
-                title="Show only this group's changes in this file"
+                // The full path titles the whole row: the name is truncated
+                // with an ellipsis, and a nested title on the inner span is not
+                // reliably shown over the row's own title.
+                title={`${file.path}\nClick to show only this group's changes in this file`}
               >
                 <span className="path">{file.path}</span>
+                <StageTag state={stagedState(file.path, statusFiles)} />
                 <span className="faint" style={{ fontSize: 11, whiteSpace: "nowrap" }}>
                   {file.hunks.length} hunk{file.hunks.length === 1 ? "" : "s"} ·{" "}
                   {file.lineIndices.length} line{file.lineIndices.length === 1 ? "" : "s"}

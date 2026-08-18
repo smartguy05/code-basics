@@ -9,8 +9,10 @@ mod state;
 
 mod commands {
     pub mod architecture;
+    pub mod behavioral;
     pub mod changelists;
     pub mod enhancements;
+    pub mod erosion;
     pub mod files;
     pub mod git;
     pub mod inspect;
@@ -133,8 +135,13 @@ pub fn run() {
             commands::git::git_history,
             commands::git::git_commit_diff,
             commands::git::git_commit_file_contents,
+            commands::git::git_commit_file_why,
             commands::git::git_stash_save,
+            commands::git::git_stash_list,
             commands::git::git_stash_pop,
+            commands::git::git_stash_apply,
+            commands::git::git_stash_drop,
+            commands::git::git_stash_clear,
             commands::git::git_network,
             commands::intents::intent_groups,
             commands::intents::stage_intent_group,
@@ -145,6 +152,9 @@ pub fn run() {
             commands::intents::enable_intent_capture,
             commands::intents::import_intent_history,
             commands::intents::clear_intent_history,
+            commands::behavioral::behavioral_diff,
+            commands::behavioral::behavioral_clear,
+            commands::erosion::erosion_scan,
             commands::inspect::inspect_status,
             commands::inspect::inspect_attachable,
             commands::inspect::inspect_run_dump,

@@ -493,15 +493,19 @@ fn absorb(into: &mut IntentGroup, other: IntentGroup) {
     into.confidence = into.confidence.min(other.confidence);
 }
 
-/// Intent first because it is the only kind that explains *why*; formatting
-/// last because it is the one a reviewer can safely skim.
+/// Ordered by review risk, highest first. This deliberately reverses the older
+/// "intent first" rule: the card that carries the *most* risk is the one
+/// nothing accounts for — an `Other` hunk is a change no stated intent explains,
+/// which is exactly what a reviewer must not skim past — so it leads. A stated
+/// intent, having been explained, comes next, and formatting, which changed no
+/// code, trails as the one kind that is safe to skim.
 fn kind_order(kind: GroupKind) -> u8 {
     match kind {
-        GroupKind::Intent => 0,
-        GroupKind::SameTurn => 1,
-        GroupKind::NewSymbol => 2,
-        GroupKind::ModifiedSymbol => 3,
-        GroupKind::Other => 4,
+        GroupKind::Other => 0,
+        GroupKind::Intent => 1,
+        GroupKind::SameTurn => 2,
+        GroupKind::NewSymbol => 3,
+        GroupKind::ModifiedSymbol => 4,
         GroupKind::Formatting => 5,
     }
 }

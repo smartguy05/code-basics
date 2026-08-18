@@ -49,6 +49,8 @@ Application launches: .NET executable projects (including `launchSettings.json` 
 
 The sidebar is a directory tree of the workspace, filtered like the project scan (no `node_modules`, `bin`, `obj`, …) but with no depth limit — each directory is listed the first time it is expanded. Clicking a file opens it in an editor pane above the console (syntax highlighting per extension, tabs per open file). **Ctrl+S** saves; unsaved files show a ● on their tab, and closing such a tab discards the changes. The divider between editor and console drags to resize, and the split persists.
 
+The file tabs behave like a browser's. **The back and forward mouse buttons step through the files you have been looking at** — open one file, then another, and *back* returns you to the first; this includes jumps made by [middle-clicking a symbol](#finding-where-a-method-is-used) to go to its definition, so *back* brings you home from a jump into another file. This works while the Run tab is on screen. **Pin a tab** with the 📌 that appears on it (hover a tab, or it stays lit once pinned): pinned tabs move to a separate row above the rest and stay put, so a file you keep returning to is not lost among the others. Middle-click still closes a tab, pinned or not.
+
 The console **collapses out of the way** while you are reading code: the ▾ beside its tabs folds it down to that strip, and the ▸ brings it back. Collapsed it is still a tab strip, not a hidden panel, so there is always something to click. Nothing stops: a running process keeps running, its output keeps accumulating, and the scrollback is all there when you expand it again. Both the collapsed state and the divider position are remembered **per workspace** — how much room the terminal deserves is a property of what you are doing in a given repository, so a service you run and watch and a library you only read do not fight over one setting.
 
 #### Finding where a method is used
@@ -95,10 +97,13 @@ Working-copy review:
 - **Reading them.** The horizontal scrollbar along the bottom drives **both panes at once**, so a long line stays lined up while you scroll sideways; the line numbers stay pinned. Shift+wheel does the same. **A− / A+** — or **Ctrl+-** / **Ctrl+=**, with **Ctrl+0** to reset — set the text size for every editor in the app, and the size is remembered.
 - **Collapse unchanged** folds long runs of untouched code down to a few lines either side of each change. **Ignore whitespace** stops reindents, reflows and line-ending changes being drawn as differences — it changes only what is *drawn*, never what Stage or Revert act on, because a whitespace-only hunk is still a real change on disk.
 - Stage/unstage whole files, hunks, or individually selected lines. **Right-click a file** to stage or unstage it without opening it.
-- The file list is grouped into **Staged**, your own named **change groups**, and **Unstaged**. Groups are for organising work in progress — right-click a file to move it into one, or use "+ New group". They are local to you and never committed; see [change groups](../reference/configuration.md#change-groups-changelistsjson). A partially staged file shows under both Staged and its unstaged group, as `git status` reports it.
+- The list has three views, chosen with the **Files / Intent / Stashes** toggle at the top:
+  - **Files** — the file list grouped into **Staged**, your own named **change groups**, and **Unstaged**. Groups are for organising work in progress — right-click a file to move it into one, or use "+ New group". They are local to you and never committed; see [change groups](../reference/configuration.md#change-groups-changelistsjson). A partially staged file shows under both Staged and its unstaged group, as `git status` reports it.
+  - **Intent** — the same changes grouped by the decision behind each, as cards you can stage or revert as a unit. Because this view has no Staged section of its own, each card and file carries a **staged** / **partial** badge so you can see what is already in the index without switching back to Files. See [agent intent capture](../guides/agent-intent-capture.md).
+  - **Stashes** — every stash, newest first, each showing the branch it was taken on and a read-only preview of what it holds (a stash is a commit, so it opens in the same diff viewer). **+ Stash changes** sets the working tree aside under a message; select a stash to preview it, then **Apply** (keep it in the list), **Pop** (apply and remove), **Drop** (remove one), or **Clear all**.
 - Revert individual lines — the app builds a reverse patch of just your selection and lets `git apply` do the surgery ([how that works](../architecture/core-crate.md#git)).
 - **Reject** an agent's change instead of silently reverting it: the change goes back *and* the reason you type is left as a comment where the code was, for the agent to read and act on. A `pre-commit` hook then refuses to commit while that comment is still there. See [rejecting a change](../guides/agent-intent-capture.md#rejecting-a-change).
-- Commit (with amend), branches (create/checkout/delete), stash save/pop.
+- Commit (with amend) and branches (create/checkout/delete).
 - Push/pull/fetch shell out to your system `git`, so existing credentials (SSH agent, credential manager) work with no prompts inside the app.
 
 ### History
@@ -106,6 +111,17 @@ Working-copy review:
 The commit log (subject, author, time). Selecting a commit lists the files it
 touched and opens the first one in the same diff viewer the Changes tab uses —
 read-only, but with the same colours, marker strip, F7 navigation and text size.
+
+The sidebar lists branches as a **folder tree**: a slash-named branch like
+`Releases/S20` or `users/anthony/work-item` nests under collapsible folders
+(`Releases`, `users` → `anthony`), the same way the titlebar widget groups them.
+Local and Remote each get their own section; the folders on the current branch
+start expanded. Click a branch to switch to it (a remote checks out as a local
+tracking branch). To delete in bulk, **tick the checkboxes** on the branches you
+want gone and press **Delete N selected** — deletions run one at a time (git's
+shared ref store cannot be rewritten concurrently) and are best-effort: a branch
+git refuses — not fully merged, or checked out in a linked worktree — is
+reported with its reason while the rest still go.
 
 ### Architecture
 

@@ -1,6 +1,8 @@
 # Agent intent capture
 
-The Changes tab can collapse a diff into the *decisions* behind it — "add retry to token refresh", "Whitespace only", "`EstimateCost`" — and stage or revert each as a unit. Switch between **Files** and **Intent** at the top of the Changes sidebar.
+The Changes tab can collapse a diff into the *decisions* behind it — "add retry to token refresh", "Whitespace only", "`EstimateCost`" — and stage or revert each as a unit. Switch between **Files**, **Intent**, and **Stashes** at the top of the Changes sidebar.
+
+Because the Intent view has no Staged section of its own, each card and each file within it carries a **staged** / **partial** badge, read from `git status`: staged when the whole card (or file) is in the index, partial when only some of it is. So staging a card from here and watching it move to *staged* works without switching back to the Files view.
 
 This works with [Claude Code](https://claude.com/claude-code) and [OpenAI Codex](https://github.com/openai/codex), together or separately.
 
@@ -189,5 +191,25 @@ Stated honestly, because the UI shows these as unexplained rather than pretendin
 - Edits made before capture was enabled, in a workspace with no session history.
 
 Two records that made the same change in the same file can also be confused with each other; the newer one wins. Rename detection is not attempted at all — git's own is similarity-based, and a wrongly claimed rename reads as a far stronger statement than "these hunks are near each other".
+
+## Durable "why": intent that survives the commit
+
+Recorded intent lives in gitignored JSONL and would die at commit. To keep it, **committing in the app also writes a git note** under `refs/notes/code-basics-intents` mapping each attributed line to the turn and reason behind it — keyed by content (the same normalised skeleton attribution matches on), never by position. The History tab then reads that note back: open a file in a past commit and the "Why these lines exist" panel shows the recorded reason for each line the note resolved. A line whose content matches no stored key shows nothing, never a guessed reason.
+
+Because the key is content, a line resolves even after it was reformatted or rebased — provided the note itself travelled. Two caveats follow from git notes being keyed to commit oids:
+
+- **Rebase/amend mint new oids and orphan the note** unless `notes.rewriteRef=refs/notes/code-basics-intents` is set in the repo's git config.
+- **Notes do not push/pull by default** — they need an explicit `refs/notes/*` refspec.
+
+The write is best-effort: a note failure never fails the commit. Both commit paths are covered: the in-app commit writes the note directly, and **enabling intent capture also installs a `post-commit` hook** (bounded by markers, additive, previewed like every other install) so a commit made from the command line — including one an agent makes — persists its note too. Both paths funnel through one core function (`git::why::record_note`) so they cannot drift.
+
+### The prompt behind the line
+
+The note records the agent's short label. It also records the **user's original prompt** for the turn, when one was captured — the request in the human's own words, with the reasoning and constraints the label drops. Hover any line in the History diff and the tooltip shows the label, whether it was stated or inferred, and the prompt.
+
+Prompts come from **session mining**: *Import past sessions* reads each agent transcript's user turns and writes them keyed to the same turn id as that turn's edits, so they join. A `user` transcript line that is really a tool result is not mined as a prompt. Two limits worth knowing:
+
+- **Claude Code only for now.** Codex records and labels are mined, but its rollout user-turn shape is less certain, so Codex prompt mining is a follow-up.
+- **Import-driven, not live.** Prompts appear for turns that have been imported; re-import to pick up new ones. A live `UserPromptSubmit` hook was rejected because its payload keys by session, not the per-turn id the lines need.
 
 Related: [Changes and history](../getting-started/using-the-app.md) · [configuration](../reference/configuration.md) · [commands](../reference/commands.md)

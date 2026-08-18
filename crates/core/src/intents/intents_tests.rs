@@ -71,6 +71,50 @@ fn records_are_returned_in_sequence_order() {
     assert_eq!(seqs, vec![0, 1, 2]);
 }
 
+fn prompt(turn: &str, text: &str) -> IntentPrompt {
+    IntentPrompt {
+        provider: ProviderId::ClaudeCode,
+        turn_id: turn.into(),
+        prompt: text.into(),
+    }
+}
+
+#[test]
+fn prompts_round_trip_and_join_by_turn() {
+    let dir = workspace();
+    append_prompt(dir.path(), &prompt("turn-7", "add exponential backoff, cap at 5")).unwrap();
+    append_prompt(dir.path(), &prompt("turn-8", "unrelated request")).unwrap();
+
+    let prompts = load_prompts(dir.path()).unwrap();
+
+    assert_eq!(prompts.len(), 2);
+    assert_eq!(
+        prompt_for(&prompts, "turn-7"),
+        Some("add exponential backoff, cap at 5")
+    );
+    // A turn with no recorded prompt joins to nothing.
+    assert_eq!(prompt_for(&prompts, "turn-missing"), None);
+}
+
+#[test]
+fn an_intent_prompt_serialises_with_the_keys_the_note_reads() {
+    let value = serde_json::to_value(prompt("t", "why")).unwrap();
+    let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(keys, ["prompt", "provider", "turnId"]);
+}
+
+#[test]
+fn clear_also_removes_the_prompts_file() {
+    let dir = workspace();
+    append_prompt(dir.path(), &prompt("t", "p")).unwrap();
+    assert!(prompts_path(dir.path()).exists());
+
+    clear(dir.path()).unwrap();
+
+    assert!(!prompts_path(dir.path()).exists());
+}
+
 /// The same edit can be seen by a hook and again by a history sweep.
 #[test]
 fn the_same_edit_seen_twice_is_deduplicated_on_tool_use_id() {

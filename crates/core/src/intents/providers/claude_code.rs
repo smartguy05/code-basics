@@ -27,11 +27,11 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::{
-    home_dir, hooks_json, instructions, InstallPlan, InstallScope, PlannedWrite, Provider,
-    ProviderStatus,
+    home_dir, hooks_json, instructions, HistoryMined, InstallPlan, InstallScope, PlannedWrite,
+    Provider, ProviderStatus,
 };
 use crate::intents::{
-    normalise_path, IntentEdit, IntentLabel, IntentRecord, LabelSource, ProviderId,
+    normalise_path, IntentEdit, IntentLabel, IntentPrompt, IntentRecord, LabelSource, ProviderId,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -185,6 +185,9 @@ impl Provider for ClaudeCode {
         // commit that still carries one has to be refused.
         writes.extend(super::guard_write(root, &mut caveats));
 
+        // A commit from the command line also persists its intent into a note.
+        writes.extend(super::whyhook_write(root, &mut caveats));
+
         Ok(InstallPlan {
             provider: ProviderId::ClaudeCode,
             scope,
@@ -193,18 +196,17 @@ impl Provider for ClaudeCode {
         })
     }
 
-    fn history(&self, root: &Path) -> Result<(Vec<IntentRecord>, Vec<IntentLabel>)> {
-        let mut records = Vec::new();
-        let mut labels = Vec::new();
+    fn history(&self, root: &Path) -> Result<HistoryMined> {
+        let mut mined = HistoryMined::default();
         let mut seq = 0u64;
 
         if let Some(home) = self.home() {
             for session in find_sessions(&home, root) {
-                read_transcript(&session, root, &mut seq, &mut records, &mut labels);
+                read_transcript(&session, root, &mut seq, &mut mined);
             }
         }
 
-        Ok((records, labels))
+        Ok(mined)
     }
 }
 
@@ -264,20 +266,24 @@ fn transcript_cwd(path: &Path) -> Option<String> {
 }
 
 /// Read one transcript into records, attaching the nearest preceding prose as
-/// a best-effort label.
-fn read_transcript(
-    path: &Path,
-    root: &Path,
-    seq: &mut u64,
-    records: &mut Vec<IntentRecord>,
-    labels: &mut Vec<IntentLabel>,
-) {
+/// a best-effort label and the user prompt that opened the turn.
+fn read_transcript(path: &Path, root: &Path, seq: &mut u64, mined: &mut HistoryMined) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
+    let records = &mut mined.records;
+    let labels = &mut mined.labels;
+    let prompts = &mut mined.prompts;
 
     // The most recent prose, which becomes the label for edits that follow.
     let mut recent_text: Option<String> = None;
+
+    // The user's most recent prompt, and the one that opened the current block.
+    // A `user` line often carries a tool_result rather than a human prompt;
+    // `user_prompt_text` returns `None` for those, so only real prompts land here.
+    let mut recent_prompt: Option<String> = None;
+    let mut block_prompt: Option<String> = None;
+    let mut prompted_block: Option<usize> = None;
 
     // Everything the agent did after one piece of prose is one intent.
     //
@@ -298,12 +304,23 @@ fn read_transcript(
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if value.get("type").and_then(Value::as_str) != Some("assistant") {
-            continue;
-        }
+        let kind = value.get("type").and_then(Value::as_str);
 
         // Sidechain entries are a subagent's work, not the main session's.
         if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+
+        // A user turn opens the block that follows it. Remember the prompt; the
+        // block it belongs to is fixed when the next prose increments `block`.
+        if kind == Some("user") {
+            if let Some(text) = user_prompt_text(&value) {
+                recent_prompt = Some(text);
+            }
+            continue;
+        }
+
+        if kind != Some("assistant") {
             continue;
         }
 
@@ -326,9 +343,11 @@ fn read_transcript(
                 Some("text") => {
                     if let Some(text) = content_block.get("text").and_then(Value::as_str) {
                         if let Some(summary) = summarise(text) {
-                            // A new piece of prose starts a new intent.
+                            // A new piece of prose starts a new intent, and it
+                            // is opened by the most recent user prompt.
                             recent_text = Some(summary);
                             block += 1;
+                            block_prompt = recent_prompt.clone();
                         }
                     }
                 }
@@ -337,21 +356,37 @@ fn read_transcript(
 
                     let before = records.len();
                     read_tool_use(content_block, root, &branch, &turn, seq, records);
+                    if records.len() == before {
+                        continue;
+                    }
 
                     // One label per block of prose, however many edits followed
                     // it. Emitting one per edit would defeat the grouping.
-                    if records.len() > before && labelled_block != Some(block) {
+                    if labelled_block != Some(block) {
                         if let Some(label) = &recent_text {
                             labelled_block = Some(block);
                             labels.push(IntentLabel {
                                 provider: ProviderId::ClaudeCode,
-                                turn_id: turn,
+                                turn_id: turn.clone(),
                                 label: label.clone(),
                                 paths: Vec::new(),
                                 anchor: None,
                                 // Mined out of prose an agent wrote for a
                                 // human, never offered as a card title.
                                 source: LabelSource::Inferred,
+                            });
+                        }
+                    }
+
+                    // The user prompt that opened this block, keyed to the same
+                    // turn id the records carry so it joins. Once per block.
+                    if prompted_block != Some(block) {
+                        if let Some(prompt) = &block_prompt {
+                            prompted_block = Some(block);
+                            prompts.push(IntentPrompt {
+                                provider: ProviderId::ClaudeCode,
+                                turn_id: turn,
+                                prompt: prompt.clone(),
                             });
                         }
                     }
@@ -388,6 +423,32 @@ fn summarise(text: &str) -> Option<String> {
         && cleaned.len() <= 120
         && !crate::intents::hook::looks_like_narration(cleaned))
     .then(|| cleaned.to_string())
+}
+
+/// The human prompt in a `type == "user"` transcript line, or `None`.
+///
+/// A user line is *not* always a prompt: the commonest one is a `tool_result`
+/// being fed back to the model. Those carry no `text` block, so returning the
+/// text only — and `None` when there is none — keeps tool-result echoes out of
+/// the prompt store. `message.content` may be a bare string (an old transcript
+/// shape) or an array of typed blocks.
+fn user_prompt_text(value: &Value) -> Option<String> {
+    let content = value.get("message").and_then(|m| m.get("content"))?;
+
+    let text = match content {
+        Value::String(s) => s.trim().to_string(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string(),
+        _ => return None,
+    };
+
+    (!text.is_empty()).then_some(text)
 }
 
 /// Turn one `Edit` or `Write` tool call into records.

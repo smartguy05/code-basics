@@ -735,8 +735,96 @@ fn stashes_and_restores_changes() {
     repo.stash_save("wip").unwrap();
     assert_eq!(read(path, "f.txt"), "original\n");
 
-    repo.stash_pop().unwrap();
+    repo.stash_pop(0).unwrap();
     assert_eq!(read(path, "f.txt"), "work in progress\n");
+}
+
+#[test]
+fn lists_every_stash_newest_first_with_its_message_and_commit() {
+    let dir = init_repo(&[("f.txt", "original\n")]);
+    let path = dir.path();
+    let mut repo = Repo::open(path).unwrap();
+
+    write(path, "f.txt", "first change\n");
+    repo.stash_save("first").unwrap();
+    write(path, "f.txt", "second change\n");
+    repo.stash_save("second").unwrap();
+
+    let stashes = repo.stash_list().unwrap();
+    assert_eq!(stashes.len(), 2);
+
+    // index 0 is the most recent (git's stash@{0}).
+    assert_eq!(stashes[0].index, 0);
+    assert_eq!(stashes[1].index, 1);
+    assert!(stashes[0].message.contains("second"));
+    assert!(stashes[1].message.contains("first"));
+
+    // The oid must name a real commit whose diff the preview can read.
+    assert!(!stashes[0].id.is_empty());
+    let diff = repo.commit_diff(&stashes[0].id).unwrap();
+    assert!(diff.iter().any(|d| d.path == "f.txt"));
+
+    // The branch is parsed from the "On <branch>:" prefix git writes.
+    assert_eq!(stashes[0].branch.as_deref(), Some("main"));
+}
+
+#[test]
+fn apply_restores_a_specific_stash_without_dropping_it() {
+    let dir = init_repo(&[("f.txt", "original\n")]);
+    let path = dir.path();
+    let mut repo = Repo::open(path).unwrap();
+
+    write(path, "f.txt", "first change\n");
+    repo.stash_save("first").unwrap();
+    write(path, "f.txt", "second change\n");
+    repo.stash_save("second").unwrap();
+
+    // Apply the older stash (index 1) and confirm it stays in the list.
+    repo.stash_apply(1).unwrap();
+    assert_eq!(read(path, "f.txt"), "first change\n");
+    assert_eq!(repo.stash_list().unwrap().len(), 2);
+}
+
+#[test]
+fn drop_removes_one_stash_and_reindexes_the_rest() {
+    let dir = init_repo(&[("f.txt", "original\n")]);
+    let path = dir.path();
+    let mut repo = Repo::open(path).unwrap();
+
+    write(path, "f.txt", "first change\n");
+    repo.stash_save("first").unwrap();
+    write(path, "f.txt", "second change\n");
+    repo.stash_save("second").unwrap();
+
+    repo.stash_drop(0).unwrap();
+    let stashes = repo.stash_list().unwrap();
+    assert_eq!(stashes.len(), 1);
+    // What was stash@{1} ("first") is now stash@{0}.
+    assert_eq!(stashes[0].index, 0);
+    assert!(stashes[0].message.contains("first"));
+}
+
+#[test]
+fn clear_removes_every_stash() {
+    let dir = init_repo(&[("f.txt", "original\n")]);
+    let path = dir.path();
+    let mut repo = Repo::open(path).unwrap();
+
+    for text in ["a\n", "b\n", "c\n"] {
+        write(path, "f.txt", text);
+        repo.stash_save("wip").unwrap();
+    }
+    assert_eq!(repo.stash_list().unwrap().len(), 3);
+
+    repo.stash_clear().unwrap();
+    assert!(repo.stash_list().unwrap().is_empty());
+}
+
+#[test]
+fn listing_stashes_on_a_clean_repo_is_empty_not_an_error() {
+    let dir = init_repo(&[("f.txt", "original\n")]);
+    let mut repo = Repo::open(dir.path()).unwrap();
+    assert!(repo.stash_list().unwrap().is_empty());
 }
 
 // ---------------------------------------------------------------------------

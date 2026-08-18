@@ -15,11 +15,12 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use cb_core::git::attribution::{self, Options};
-use cb_core::git::grouping::{self, GroupFile, IntentGroup};
+use cb_core::git::coverage::{self, IntentReview};
+use cb_core::git::grouping::{self, GroupFile};
 use cb_core::git::{ComparisonMode, Repo};
 use cb_core::intents::providers::{self, InstallPlan, InstallScope, ProviderStatus};
 use cb_core::intents::reject::{self, RejectSummary};
-use cb_core::intents::{self, guard, LoadOptions, ProviderId};
+use cb_core::intents::{self, guard, whyhook, LoadOptions, ProviderId};
 use tauri::State;
 
 use crate::state::AppState;
@@ -30,12 +31,16 @@ fn open(state: &State<'_, AppState>) -> Result<(PathBuf, Repo), String> {
     Ok((root, repo))
 }
 
-/// Build the cards for the whole working tree.
+/// Build the cards for the whole working tree, with the coverage audit.
+///
+/// Returns the grouped cards alongside the two failures of the intent join —
+/// unexplained hunks (already sorted to the top of `groups`) and unfulfilled
+/// claims — plus the per-turn scorecard.
 #[tauri::command]
 pub async fn intent_groups(
     state: State<'_, AppState>,
     mode: ComparisonMode,
-) -> Result<Vec<IntentGroup>, String> {
+) -> Result<IntentReview, String> {
     let (root, repo) = open(&state)?;
 
     let diffs = repo.diff_all(mode).map_err(|e| format!("{e:#}"))?;
@@ -45,7 +50,7 @@ pub async fn intent_groups(
     let intents = intents::load(&root, &LoadOptions { branch }).map_err(|e| format!("{e:#}"))?;
 
     let attributions = attribution::attribute(&diffs, &intents, Options::default());
-    Ok(grouping::group(&diffs, &attributions))
+    Ok(coverage::review(&diffs, &attributions, &intents))
 }
 
 /// The line indices a group covers, recomputed for one comparison mode.
@@ -245,6 +250,13 @@ pub async fn enable_intent_capture(
         }
     }
 
+    // The durable-why post-commit hook is likewise a shell script.
+    if let Some(hook) = whyhook::hook_path(&root) {
+        if whyhook::is_installed(&hook) {
+            whyhook::ensure_executable(&hook).map_err(|e| format!("{e:#}"))?;
+        }
+    }
+
     // The hook refuses to record into a workspace that never opted in, so the
     // directory has to exist before the next edit lands.
     std::fs::create_dir_all(intents::intents_dir(&root))
@@ -260,14 +272,17 @@ pub async fn enable_intent_capture(
 #[tauri::command]
 pub async fn import_intent_history(state: State<'_, AppState>) -> Result<usize, String> {
     let root = state.workspace_root()?;
-    let (mut records, labels) = providers::history(&root);
+    let mut mined = providers::history(&root);
 
-    intents::rebase_seqs(&mut records, intents::next_seq(&root));
-    for record in &records {
+    intents::rebase_seqs(&mut mined.records, intents::next_seq(&root));
+    for record in &mined.records {
         intents::append_edit(&root, record).map_err(|e| format!("{e:#}"))?;
     }
-    for label in &labels {
+    for label in &mined.labels {
         intents::append_label(&root, label).map_err(|e| format!("{e:#}"))?;
+    }
+    for prompt in &mined.prompts {
+        intents::append_prompt(&root, prompt).map_err(|e| format!("{e:#}"))?;
     }
 
     Ok(intents::load(&root, &LoadOptions::default())

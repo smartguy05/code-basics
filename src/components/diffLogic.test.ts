@@ -2,13 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   allChangedIndices,
   changeMarks,
+  clampDiffSplit,
+  DEFAULT_DIFF_SPLIT,
+  diffSplitFraction,
   focusedBaseline,
   hunkIndices,
+  loadDiffSplit,
   mapOffset,
   nextChangeLine,
   normaliseEndings,
   normaliseWhitespace,
   onlyHunks,
+  saveDiffSplit,
   scrollLeftForThumb,
   scrollThumb,
 } from "./diffLogic";
@@ -416,5 +421,52 @@ describe("focusedBaseline", () => {
       lines: [ln("addition", "gone", 99)],
     };
     expect(focusedBaseline(working, [stale])).toBe("a\nb");
+  });
+});
+
+describe("diff pane split", () => {
+  it("clamps a fraction into the visible range", () => {
+    expect(clampDiffSplit(0.5)).toBe(0.5);
+    expect(clampDiffSplit(0.01)).toBe(0.15);
+    expect(clampDiffSplit(0.99)).toBe(0.85);
+  });
+
+  it("falls back to the even split for a non-finite fraction", () => {
+    expect(clampDiffSplit(NaN)).toBe(DEFAULT_DIFF_SPLIT);
+    expect(clampDiffSplit(Infinity)).toBe(DEFAULT_DIFF_SPLIT);
+  });
+
+  it("turns a pointer position into a clamped fraction of the track", () => {
+    expect(diffSplitFraction(150, 100, 200)).toBeCloseTo(0.25);
+    expect(diffSplitFraction(90, 100, 200)).toBe(0.15); // left of the track, clamped
+    expect(diffSplitFraction(400, 100, 200)).toBe(0.85); // right of the track, clamped
+  });
+
+  it("returns the even split when the track has no width", () => {
+    expect(diffSplitFraction(150, 100, 0)).toBe(DEFAULT_DIFF_SPLIT);
+  });
+
+  function storage(initial?: string) {
+    const map = new Map<string, string>();
+    if (initial !== undefined) map.set("code-basics.diffSplit", initial);
+    return {
+      map,
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => void map.set(k, v),
+    };
+  }
+
+  it("round-trips a saved fraction", () => {
+    const store = storage();
+    saveDiffSplit(store, 0.3);
+    expect(loadDiffSplit(store)).toBeCloseTo(0.3);
+  });
+
+  it("clamps what it stores and defaults when nothing is stored", () => {
+    const store = storage();
+    saveDiffSplit(store, 0.99);
+    expect(loadDiffSplit(store)).toBe(0.85);
+    expect(loadDiffSplit(storage())).toBe(DEFAULT_DIFF_SPLIT);
+    expect(loadDiffSplit(storage("not a number"))).toBe(DEFAULT_DIFF_SPLIT);
   });
 });

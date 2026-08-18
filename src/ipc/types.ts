@@ -339,6 +339,19 @@ export interface Commit {
   time: number;
 }
 
+/**
+ * One entry in the stash list (`repo.rs::StashEntry`). A stash is stored as a
+ * commit, so `id` feeds the ordinary `gitCommitDiff`/`gitCommitFileContents`
+ * preview path.
+ */
+export interface StashEntry {
+  index: number;
+  id: string;
+  message: string;
+  branch: string | null;
+  time: number;
+}
+
 export type NetworkKind = "fetch" | "pull" | "push" | "pushSetUpstream";
 
 export interface RiderImportPreview {
@@ -452,6 +465,208 @@ export interface IntentGroup {
   lineCount: number;
   /** The weakest confidence of any hunk in the group. */
   confidence: Confidence;
+}
+
+/**
+ * A declared intent for which no changed hunk shows matching content
+ * (`git/coverage.rs`).
+ *
+ * NOT an accusation: the edit may be committed, later overwritten,
+ * hand-reverted, or transformed past the matcher's normalisation ladder.
+ * Reported as unmatched, never as undone.
+ */
+export interface UnfulfilledClaim {
+  turnId: string;
+  /** The declared label's text. */
+  label: string;
+  provider: ProviderId;
+  /** Files in this diff the claim's turn touched. */
+  paths: string[];
+}
+
+/**
+ * The per-turn tally shown above the cards (`git/coverage.rs`): the direct
+ * answer to "did the agent do what it told me it did".
+ */
+export interface Scorecard {
+  /** Declared intents whose turn edited a file in this diff. */
+  claims: number;
+  /** Claims evidenced by at least one matched change anywhere in the diff. */
+  evidenced: number;
+  /** Claims with no matching change — always equal to `unfulfilled.length`. */
+  unmatched: number;
+  /** Changed hunks across the tree. */
+  hunks: number;
+  /** Hunks with at least one attributed span. */
+  attributedHunks: number;
+  /** Changed lines across the tree that no record claimed. */
+  unattributedLines: number;
+}
+
+/** Grouping plus the two coverage failures and the aggregate (`git/coverage.rs`). */
+export interface IntentReview {
+  groups: IntentGroup[];
+  unfulfilled: UnfulfilledClaim[];
+  scorecard: Scorecard;
+}
+
+// ---------------------------------------------------------------------------
+// Behavioral before/after testing (`behavioral/`) — the runtime counterpart to
+// the static intent Scorecard above.
+// ---------------------------------------------------------------------------
+
+/** How one test case's outcome moved between the HEAD and working-tree runs. */
+export type CaseTransition =
+  | "unchanged"
+  | "fixed"
+  | "regressed"
+  | "stillFailing"
+  | "added"
+  | "removed";
+
+/** One test case's before/after outcome (`behavioral/compare.rs`). */
+export interface CaseDelta {
+  fullName: string;
+  base: TestOutcome | null;
+  work: TestOutcome | null;
+  transition: CaseTransition;
+  /** Source files this case plausibly exercises; filled in during attribution. */
+  filesHint: string[];
+}
+
+/** Every case whose outcome changed, plus before/after summaries. */
+export interface TestDelta {
+  cases: CaseDelta[];
+  summaryBefore: TestSummary;
+  summaryAfter: TestSummary;
+}
+
+/** A difference in captured console output, after masking known noise. */
+export interface ConsoleDelta {
+  addedLines: string[];
+  removedLines: string[];
+  normalized: boolean;
+  confidence: Confidence;
+}
+
+/** One header whose presence or value changed between the two responses. */
+export interface HeaderChange {
+  name: string;
+  before: string | null;
+  after: string | null;
+}
+
+/** A difference in a response body, after type-aware normalisation. */
+export interface BodyDelta {
+  addedLines: string[];
+  removedLines: string[];
+  normalized: boolean;
+}
+
+/** A difference between the HEAD and working-tree responses for one `.http` request. */
+export interface HttpDelta {
+  name: string;
+  /** `[before, after]` status codes, only when they differ. */
+  status: [number, number] | null;
+  headerChanges: HeaderChange[];
+  body: BodyDelta | null;
+  confidence: Confidence;
+}
+
+/** One observable difference, internally tagged on `kind` (`behavioral/mod.rs`). */
+export type BehavioralDelta =
+  | ({ kind: "test" } & CaseDelta)
+  | ({ kind: "console" } & ConsoleDelta)
+  | ({ kind: "http" } & HttpDelta);
+
+/** The behavioral deltas attributed to one intent card. */
+export interface CardBehavior {
+  groupId: string;
+  deltas: BehavioralDelta[];
+  confidence: Confidence;
+}
+
+/** The per-run tally shown beside the static {@link Scorecard}. */
+export interface BehavioralScorecard {
+  outcomesCompared: number;
+  deltas: number;
+  attributedDeltas: number;
+  unattributedDeltas: number;
+  abstained: number;
+}
+
+/** The whole before/after comparison — runtime twin of {@link IntentReview}. */
+export interface BehavioralReport {
+  tests: TestDelta | null;
+  console: ConsoleDelta | null;
+  http: HttpDelta[];
+  attributions: CardBehavior[];
+  unattributed: BehavioralDelta[];
+  scorecard: BehavioralScorecard;
+  warnings: string[];
+}
+
+/** Whether a label was declared by the agent or mined from its prose (`intents/`). */
+export type LabelSource = "declared" | "inferred";
+
+/**
+ * The recorded reason behind one line of a past commit (`git/why.rs`).
+ *
+ * Content-keyed and durable: it survives reformatting and rebase because the
+ * key is the line's normalised skeleton, never its position. Absent for any
+ * line whose content matches no stored key — the History tab shows the empty
+ * state rather than a guessed reason.
+ */
+export interface LineIntent {
+  /** 1-based line number in the committed file. */
+  line: number;
+  label?: string;
+  labelSource?: LabelSource;
+  turnId: string;
+  confidence: Confidence;
+  /** The user prompt that caused it, when captured; currently always absent. */
+  prompt?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Erosion detector (`erosion/`)
+// ---------------------------------------------------------------------------
+
+/** The kind of weakening the erosion scan detects (`erosion/rules.rs`). */
+export type ErosionCategory =
+  | "deletedAssertion"
+  | "ignoredTest"
+  | "widenedCatch"
+  | "removedNullCheck"
+  | "unsafeCast"
+  | "leftoverStub"
+  | "removedSafeguard"
+  | "droppedLog";
+
+/** One located weakening the scan found (`erosion/scan.rs`). */
+export interface ErosionFlag {
+  path: string;
+  /** Source line number, for display as `path:line`. */
+  line: number;
+  /** `DiffLine.index` of the offending line, for highlighting in the diff pane. */
+  index: number;
+  origin: LineOrigin;
+  category: ErosionCategory;
+  ruleId: string;
+  message: string;
+  /** The offending line, trimmed, for display. */
+  content: string;
+}
+
+/**
+ * Everything the erosion scan found (`erosion/scan.rs`).
+ *
+ * `warnings` carries rules whose TOML would not parse or whose regex would not
+ * compile — surfaced to the user, never silently dropped.
+ */
+export interface ErosionReport {
+  flags: ErosionFlag[];
+  warnings: string[];
 }
 
 /**

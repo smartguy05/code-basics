@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use super::patch::{self, DiffLine, Direction, FileDiff, Hunk, LineOrigin};
+use super::why::{self, DurableWhy, LineIntent, WHY_NOTES_REF};
 
 /// Strip the read-only attribute from every directory in a working tree,
 /// returning how many were changed.
@@ -19,8 +20,11 @@ use super::patch::{self, DiffLine, Direction, FileDiff, Hunk, LineOrigin};
 /// Files are deliberately left alone: there the attribute *is* meaningful.
 ///
 /// A no-op off Windows, where the attribute does not exist.
+///
+/// `pub(crate)` so the behavioral worktree teardown can reuse it rather than
+/// re-implement the Windows read-only-directory dance.
 #[cfg(windows)]
-fn clear_readonly_directories(root: &Path) -> usize {
+pub(crate) fn clear_readonly_directories(root: &Path) -> usize {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
 
@@ -50,7 +54,7 @@ fn clear_readonly_directories(root: &Path) -> usize {
 }
 
 #[cfg(not(windows))]
-fn clear_readonly_directories(_root: &Path) -> usize {
+pub(crate) fn clear_readonly_directories(_root: &Path) -> usize {
     0
 }
 
@@ -171,6 +175,28 @@ pub struct Commit {
     pub time: i64,
 }
 
+/// One entry in the stash list.
+///
+/// A stash is stored as a commit, so `id` names a real commit whose diff the UI
+/// previews through the ordinary `commit_diff` / `commit_file_contents` path —
+/// no stash-specific diff plumbing is needed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StashEntry {
+    /// `stash@{index}` — what apply/pop/drop address. 0 is the most recent.
+    pub index: u32,
+    /// The stash commit's oid, in hex.
+    pub id: String,
+    /// The full stash message git recorded ("On main: wip").
+    pub message: String,
+    /// The branch the stash was taken on, parsed from the message when present.
+    /// `None` rather than a guess when the message does not carry it — a wrong
+    /// label is worse than none.
+    pub branch: Option<String>,
+    /// Seconds since the Unix epoch.
+    pub time: i64,
+}
+
 /// How a merge ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -236,6 +262,18 @@ impl Repo {
 
     pub fn workdir(&self) -> &Path {
         &self.workdir
+    }
+
+    /// The commit `HEAD` currently points at, as a full hex oid.
+    ///
+    /// Errors when the repository has no commits yet (an unborn branch), which
+    /// is exactly when there is no baseline to compare against.
+    pub fn head_oid(&self) -> Result<String> {
+        let head = self.inner.head().context("repository has no HEAD")?;
+        let oid = head
+            .target()
+            .context("HEAD does not point at a commit (unborn branch)")?;
+        Ok(oid.to_string())
     }
 
     /// Where git looks for this repository's hooks.
@@ -1155,6 +1193,70 @@ impl Repo {
         })
     }
 
+    // -----------------------------------------------------------------------
+    // Durable intent (git notes under `refs/notes/code-basics-intents`)
+    // -----------------------------------------------------------------------
+
+    /// Persist the content-keyed intent for a commit into its git note.
+    ///
+    /// Writing with `force` makes a repeat write for the same commit idempotent.
+    /// Note writes update a ref, which is not concurrency-safe (see the libgit2
+    /// caveat in CLAUDE.md), so callers must not fire these in parallel.
+    pub fn write_why_note(&self, commit: &str, why: &DurableWhy) -> Result<()> {
+        if why.is_empty() {
+            return Ok(());
+        }
+        let oid = git2::Oid::from_str(commit).with_context(|| format!("invalid commit id {commit}"))?;
+        let signature = self
+            .inner
+            .signature()
+            .context("git has no user.name/user.email configured")?;
+        let payload = serde_json::to_string(why).context("failed to serialise durable intent")?;
+
+        self.inner
+            .note(&signature, &signature, Some(WHY_NOTES_REF), oid, &payload, true)
+            .context("failed to write intent note")?;
+        Ok(())
+    }
+
+    /// Read the durable intent stored for a commit, or `None` when it has none.
+    pub fn read_why_note(&self, commit: &str) -> Result<Option<DurableWhy>> {
+        let oid = git2::Oid::from_str(commit).with_context(|| format!("invalid commit id {commit}"))?;
+
+        let note = match self.inner.find_note(Some(WHY_NOTES_REF), oid) {
+            Ok(note) => note,
+            // No note for this commit is the normal case, not an error.
+            Err(_) => return Ok(None),
+        };
+        let Some(message) = note.message() else {
+            return Ok(None);
+        };
+        let why: DurableWhy =
+            serde_json::from_str(message).context("intent note is not valid JSON")?;
+        Ok(Some(why))
+    }
+
+    /// Resolve every line of a file, as a commit left it, to its recorded
+    /// reason. Empty when the commit has no note, the file is not in it, or no
+    /// line's content matches a stored key.
+    pub fn why_for_file(&self, commit: &str, path: &str) -> Result<Vec<LineIntent>> {
+        let Some(why) = self.read_why_note(commit)? else {
+            return Ok(Vec::new());
+        };
+        let Some(file) = why::file_in(&why, path) else {
+            return Ok(Vec::new());
+        };
+
+        let oid = git2::Oid::from_str(commit).with_context(|| format!("invalid commit id {commit}"))?;
+        let commit_obj = self.inner.find_commit(oid).context("unknown commit")?;
+        let tree = commit_obj.tree().context("failed to read commit tree")?;
+        let Some(blob) = self.blob_in_tree(&tree, path)? else {
+            return Ok(Vec::new());
+        };
+
+        Ok(why::resolve_lines(file, &blob))
+    }
+
     /// One file's contents in a tree, or `None` if the tree does not have it.
     fn blob_in_tree(&self, tree: &git2::Tree<'_>, path: &str) -> Result<Option<String>> {
         let Ok(entry) = tree.get_path(Path::new(path)) else {
@@ -1184,10 +1286,69 @@ impl Repo {
         Ok(())
     }
 
-    pub fn stash_pop(&mut self) -> Result<()> {
+    /// Every stash, most recent first (`index` 0 is `stash@{0}`).
+    pub fn stash_list(&mut self) -> Result<Vec<StashEntry>> {
+        // Collect inside the closure — `stash_foreach` will not let us borrow
+        // `self` again to look up commit times, so gather the raw parts first
+        // and enrich them afterwards.
+        let mut raw: Vec<(u32, String, String)> = Vec::new();
         self.inner
-            .stash_pop(0, None)
-            .context("failed to restore the most recent stash")
+            .stash_foreach(|index, message, oid| {
+                raw.push((index as u32, message.to_string(), oid.to_string()));
+                true
+            })
+            .context("failed to list stashes")?;
+
+        let mut out = Vec::with_capacity(raw.len());
+        for (index, message, id) in raw {
+            let time = git2::Oid::from_str(&id)
+                .ok()
+                .and_then(|oid| self.inner.find_commit(oid).ok())
+                .map(|commit| commit.time().seconds())
+                .unwrap_or(0);
+            let branch = parse_stash_branch(&message);
+            out.push(StashEntry {
+                index,
+                id,
+                message,
+                branch,
+                time,
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn stash_pop(&mut self, index: usize) -> Result<()> {
+        self.inner
+            .stash_pop(index, None)
+            .with_context(|| format!("failed to restore stash@{{{index}}}"))
+    }
+
+    /// Apply a stash without removing it from the list.
+    pub fn stash_apply(&mut self, index: usize) -> Result<()> {
+        self.inner
+            .stash_apply(index, None)
+            .with_context(|| format!("failed to apply stash@{{{index}}}"))
+    }
+
+    /// Remove a single stash without applying it.
+    pub fn stash_drop(&mut self, index: usize) -> Result<()> {
+        self.inner
+            .stash_drop(index)
+            .with_context(|| format!("failed to drop stash@{{{index}}}"))
+    }
+
+    /// Remove every stash. git2 has no native clear, so drop the newest
+    /// repeatedly — each drop shifts the rest down, so index 0 is always valid
+    /// until the list is empty.
+    pub fn stash_clear(&mut self) -> Result<()> {
+        let count = self.stash_list()?.len();
+        for _ in 0..count {
+            self.inner
+                .stash_drop(0)
+                .context("failed to clear stashes")?;
+        }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -1393,9 +1554,64 @@ fn unstaged_kind(status: git2::Status) -> Option<ChangeKind> {
     }
 }
 
+/// Pull the branch name out of a stash message, or `None` when it does not
+/// carry one in the shape git writes.
+///
+/// git records `WIP on <branch>: <sha> <subject>` for an automatic message and
+/// `On <branch>: <message>` for a named one. Anything else (a hand-edited
+/// reflog, a future git format) yields `None` rather than a guess.
+fn parse_stash_branch(message: &str) -> Option<String> {
+    let rest = message
+        .strip_prefix("WIP on ")
+        .or_else(|| message.strip_prefix("On "))?;
+    let branch = rest.split(':').next()?.trim();
+    if branch.is_empty() {
+        None
+    } else {
+        Some(branch.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The exact camelCase keys `StashEntry` produces.
+    ///
+    /// `src/ipc/types.ts` mirrors these by hand, so a Rust rename has to fail
+    /// here rather than surface as an undefined value in the stash panel.
+    #[test]
+    fn stash_entry_serialises_with_the_keys_the_ui_reads() {
+        let entry = StashEntry {
+            index: 0,
+            id: "abc123".into(),
+            message: "On main: wip".into(),
+            branch: Some("main".into()),
+            time: 42,
+        };
+        let value = serde_json::to_value(&entry).unwrap();
+        let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["branch", "id", "index", "message", "time"]);
+    }
+
+    #[test]
+    fn stash_branch_is_parsed_from_both_message_shapes() {
+        assert_eq!(
+            parse_stash_branch("WIP on main: 0abc123 subject"),
+            Some("main".to_string())
+        );
+        assert_eq!(
+            parse_stash_branch("On feature/x: my message"),
+            Some("feature/x".to_string())
+        );
+    }
+
+    #[test]
+    fn an_unrecognised_stash_message_yields_no_branch() {
+        assert_eq!(parse_stash_branch("some hand-edited text"), None);
+        assert_eq!(parse_stash_branch("On : empty"), None);
+    }
 
     /// The exact strings the UI is allowed to send for `NetworkKind`.
     ///

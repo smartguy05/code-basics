@@ -84,7 +84,7 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `git_unstage_lines` | `path: String`, `lines: u32[]` | `bool` | |
 | `git_revert_lines` | `path: String`, `mode: ComparisonMode`, `lines: u32[]` | `bool` | Reverse-applies just the selection |
 | `git_discard_file` | `path: String` | `()` | |
-| `git_commit` | `message: String`, `amend: bool` | `String` | Returns the new commit id |
+| `git_commit` | `message: String`, `amend: bool` | `String` | Returns the new commit id. Also persists the change's content-keyed intent into a git note (`refs/notes/code-basics-intents`), best-effort — a note failure never fails the commit |
 | `git_branches` | – | `Branch[]` | |
 | `git_create_branch` | `name: String`, `checkout: bool`, `from: String?` | `()` | `from` is the revision to branch from; absent means HEAD |
 | `git_checkout_branch` | `name: String` | `()` | |
@@ -100,8 +100,13 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `git_history` | `limit: u32` | `Commit[]` | |
 | `git_commit_diff` | `id: String` | `FileDiff[]` | |
 | `git_commit_file_contents` | `id: String, path: String` | `FileContents` | Both sides of one file as a commit changed it, for the History diff viewer. Either side is null when the file did not exist there (added, deleted, or a root commit) |
-| `git_stash_save` | `message: String` | `()` | |
-| `git_stash_pop` | – | `()` | |
+| `git_commit_file_why` | `id: String, path: String` | `LineIntent[]` | The recorded reason behind each line of a file as a past commit left it, resolved from the durable git note. Content-keyed, so it survives reformatting/rebase; empty when the commit has no note or no line matches (never a guessed reason) |
+| `git_stash_save` | `message: String` | `()` | Stash the working tree (including untracked) under a message |
+| `git_stash_list` | – | `StashEntry[]` | Every stash, newest first; `id` is the stash commit for previewing via `git_commit_diff` |
+| `git_stash_pop` | `index: usize` | `()` | Apply `stash@{index}` and remove it |
+| `git_stash_apply` | `index: usize` | `()` | Apply `stash@{index}`, keeping it in the list |
+| `git_stash_drop` | `index: usize` | `()` | Remove `stash@{index}` without applying it |
+| `git_stash_clear` | – | `()` | Drop every stash |
 | `git_network` | `kind: NetworkKind`, `channel: Channel<ProcessEvent>` | `i32 \| null` | Push/pull/fetch via system `git`; returns the exit code |
 
 ## Agent intent
@@ -110,15 +115,47 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `intent_groups` | `mode: ComparisonMode` | `IntentGroup[]` | The cards for the whole working tree. Recomputed on every call rather than cached: a stale group would offer to stage lines that have moved |
+| `intent_groups` | `mode: ComparisonMode` | `IntentReview` | The cards for the whole working tree, plus the coverage audit: unexplained hunks (sorted to the top of `groups`), unfulfilled claims (declared intents no hunk evidences), and the per-turn `scorecard`. Recomputed on every call rather than cached |
 | `stage_intent_group` | `group: String, path: Option<String>` | `usize` | Stage every line in one card; returns how many files changed. Takes the group **id**, not its lines — indices are only valid for one comparison mode, and staging uses a different one from the view, so they are re-derived here |
 | `revert_intent_group` | `group: String, mode: ComparisonMode, path: Option<String>` | `usize` | Revert every line in one card, in the displayed mode; `path` limits either command to that file's share of the card |
 | `reject_intent_group` | `group: String, mode: ComparisonMode, path: Option<String>, reason: String` | `RejectSummary` | Revert one card **and** leave the reason as a marker comment where the code was. Refused in `indexToHead` — a revert there changes the index, so the note would explain something the reviewer is not looking at — and refused without a reason. `unmarked` names files reverted without a note for want of line-comment syntax |
 | `intent_capture_status` | – | `ProviderStatus[]` | Per agent: detected, where hooks are installed, how many past sessions match this workspace, and anything blocking capture |
 | `intent_install_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact final contents of every file an install would write. **Touches nothing** — this is what the confirmation dialog renders |
-| `enable_intent_capture` | `provider: ProviderId, scope: InstallScope` | `ProviderStatus[]` | Perform a confirmed install. Additive: existing hooks are preserved and the file is backed up first. Also installs the `pre-commit` guard and makes it executable |
-| `import_intent_history` | – | `usize` | Read what the agents already recorded, with no setup; returns the total record count afterwards |
+| `enable_intent_capture` | `provider: ProviderId, scope: InstallScope` | `ProviderStatus[]` | Perform a confirmed install. Additive: existing hooks are preserved and the file is backed up first. Also installs the `pre-commit` guard and the durable-why `post-commit` hook, and makes both executable |
+| `import_intent_history` | – | `usize` | Read what the agents already recorded, with no setup: edits, coarse labels, and the user prompts mined from session transcripts (keyed to the same turn id so they join). Returns the total record count afterwards |
 | `clear_intent_history` | – | `()` | Forget everything recorded for this workspace |
+
+## Behavioral before/after testing
+
+`src-tauri/src/commands/behavioral.rs` — the runtime counterpart to the intent coverage audit: run the same config against `HEAD` and the working tree and diff the observable outcomes. Decisions live in `cb_core::behavioral`.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `behavioral_diff` | `configId: String, httpFiles: Option<Vec<String>>, channel: Channel<ProcessEvent>` | `BehavioralReport` | Build `HEAD` in an isolated `git worktree` and the working tree in place, run the config on both under distinct `:base`/`:work` supervisor ids (streaming both sides' output onto `channel`), then diff test results and console output and attribute each delta to the intent card whose files it points at. Every failure — a bad baseline checkout, a config absent at `HEAD`, a server that never became ready — is an abstain recorded in `warnings`, never an error. HTTP replay is parsed and plumbed but the serverful before/after launch is not yet driven, so `http` is currently empty with a warning |
+| `behavioral_clear` | – | `String[]` | Remove the cached baseline checkouts under `.code-basics/behavioral/`; returns any teardown residue as warnings |
+
+## Erosion detector
+
+`src-tauri/src/commands/erosion.rs` — a rules-based, no-model scan over the diff for changes that quietly weaken the codebase (deleted assertions, skipped tests, widened catches, introduced panics, stubs left in production paths, removed safeguards and logs).
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `erosion_scan` | `mode: ComparisonMode` | `ErosionReport` | Every flag found across the working tree, plus `warnings` for any rule whose TOML would not parse or whose regex would not compile. Recomputed on every call |
+
+Each rule is one regex against one **side** of the diff. The built-in set ships per ecosystem (.NET / TS-JS / Rust) and is **extended, never shadowed** by per-workspace TOML in `.code-basics/erosion/*.toml`:
+
+```toml
+[[rule]]
+id = "no-fire-and-forget-task"
+category = "widenedCatch"   # deletedAssertion | ignoredTest | widenedCatch | removedNullCheck | unsafeCast | leftoverStub | removedSafeguard | droppedLog
+side = "added"              # added (things introduced) | removed (things taken away)
+pattern = 'Task\.Run\('     # regex matched against a changed line's content; a context line is never matched
+message = "Fire-and-forget Task.Run swallows failures."
+extensions = [".cs"]        # optional; empty = every file
+prodOnly = false            # optional; skip files that look like tests
+```
+
+See `examples/erosion/custom.toml` for a copyable starting point.
 
 ## Object inspection
 

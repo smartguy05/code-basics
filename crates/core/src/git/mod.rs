@@ -17,14 +17,18 @@
 //! implementation of partial patch application.
 
 pub mod attribution;
+pub mod coverage;
 pub mod grouping;
 pub mod patch;
 pub mod repo;
+pub mod why;
 
 pub use attribution::{AttributedSpan, Confidence, FileAttribution, HunkAttribution};
+pub use coverage::{IntentReview, Scorecard, UnfulfilledClaim};
 pub use grouping::{GroupFile, GroupKind, IntentGroup};
+pub use why::{DurableWhy, FileWhy, LineIntent, WhyEntry, WHY_NOTES_REF};
 pub use patch::{DiffLine, Direction, FileDiff, Hunk, LineOrigin};
 pub use repo::{
     Branch, ChangeKind, Commit, ComparisonMode, FileChange, FileContents, Repo, StageTarget,
-    WorkingStatus,
+    StashEntry, WorkingStatus,
 };

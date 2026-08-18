@@ -1,12 +1,33 @@
 import { describe, expect, it } from "vitest";
 import {
   canRejectInMode,
+  cardTitle,
+  groupStagedState,
   importFeedback,
   intentDataHint,
   rejectFeedback,
   rejectReasonError,
+  scorecardLine,
+  stagedState,
+  unfulfilledCaption,
 } from "./intentPanelLogic";
-import type { IntentGroup, ProviderStatus } from "../ipc/types";
+import type {
+  FileChange,
+  IntentGroup,
+  ProviderStatus,
+  Scorecard,
+  UnfulfilledClaim,
+} from "../ipc/types";
+
+function change(over: Partial<FileChange> & { path: string }): FileChange {
+  return {
+    oldPath: null,
+    staged: null,
+    unstaged: null,
+    isBinary: false,
+    ...over,
+  };
+}
 
 function group(kind: IntentGroup["kind"], id = kind): IntentGroup {
   return {
@@ -33,6 +54,19 @@ const PINNED =
   "Your user-level hook is pinned to C:\\Users\\Someone\\Code\\ONEflight and " +
   "will not record here. Enable capture again to repair it — the entry is " +
   "replaced, not duplicated.";
+
+describe("cardTitle", () => {
+  it("shows the group's own label for a stated intent", () => {
+    const g = group("intent");
+    expect(cardTitle(g, "a kind sentence")).toBe(g.label);
+  });
+
+  it("keeps the explanatory kind sentence for every non-intent kind", () => {
+    expect(cardTitle(group("formatting"), "whitespace only")).toBe("whitespace only");
+    expect(cardTitle(group("modifiedSymbol"), "body changed")).toBe("body changed");
+    expect(cardTitle(group("other"), "grouped by file")).toBe("grouped by file");
+  });
+});
 
 describe("intentDataHint", () => {
   it("says nothing when at least one group is a stated intent", () => {
@@ -119,6 +153,66 @@ describe("intentDataHint", () => {
   });
 });
 
+describe("scorecardLine", () => {
+  function card(over: Partial<Scorecard> = {}): Scorecard {
+    return {
+      claims: 0,
+      evidenced: 0,
+      unmatched: 0,
+      hunks: 0,
+      attributedHunks: 0,
+      unattributedLines: 0,
+      ...over,
+    };
+  }
+
+  it("reads as a compact summary with plurals", () => {
+    const line = scorecardLine(
+      card({ claims: 4, evidenced: 3, unmatched: 1, hunks: 41, unattributedLines: 6 }),
+    );
+    expect(line).toBe("4 claims · 3 evidenced · 1 unmatched · 41 hunks · 6 unattributed");
+  });
+
+  it("uses the singular for one claim and one hunk", () => {
+    const line = scorecardLine(card({ claims: 1, evidenced: 1, hunks: 1 }));
+    expect(line).toContain("1 claim ·");
+    expect(line).toContain("1 hunk ·");
+  });
+
+  it("reads sensibly at zero", () => {
+    expect(scorecardLine(card())).toBe(
+      "0 claims · 0 evidenced · 0 unmatched · 0 hunks · 0 unattributed",
+    );
+  });
+});
+
+describe("unfulfilledCaption", () => {
+  function claim(over: Partial<UnfulfilledClaim> = {}): UnfulfilledClaim {
+    return { turnId: "t", label: "l", provider: "claudeCode", paths: [], ...over };
+  }
+
+  it("is null when there is nothing unmatched", () => {
+    expect(unfulfilledCaption([])).toBeNull();
+  });
+
+  it("uses the singular for one", () => {
+    const text = unfulfilledCaption([claim()]);
+    expect(text).toBe("1 stated intent with no matching change in this diff");
+  });
+
+  it("uses the plural for several", () => {
+    const text = unfulfilledCaption([claim(), claim()]);
+    expect(text).toContain("2 stated intents");
+  });
+
+  // A wrong label is worse than none: the wording never accuses.
+  it("never accuses the agent of lying or not doing the work", () => {
+    const text = unfulfilledCaption([claim()]) ?? "";
+    expect(text).not.toMatch(/not done/i);
+    expect(text).not.toMatch(/lie|lied/i);
+  });
+});
+
 describe("importFeedback", () => {
   it("names how many records were imported", () => {
     expect(importFeedback(7)).toBe("Imported 7 recorded intents.");
@@ -185,5 +279,52 @@ describe("rejectFeedback", () => {
     const text = rejectFeedback({ reverted: 2, marked: ["a.ts"], unmarked: ["data.json"] });
     expect(text).toContain("data.json");
     expect(text).toMatch(/without a note/i);
+  });
+});
+
+describe("stagedState", () => {
+  const files = [
+    change({ path: "src/a.ts", staged: "modified" }), // fully staged
+    change({ path: "src/b.ts", unstaged: "modified" }), // not staged
+    change({ path: "src/c.ts", staged: "modified", unstaged: "modified" }), // partial
+  ];
+
+  it("reports a fully staged file as staged", () => {
+    expect(stagedState("src/a.ts", files)).toBe("staged");
+  });
+
+  it("reports an unstaged file as none", () => {
+    expect(stagedState("src/b.ts", files)).toBe("none");
+  });
+
+  it("reports a partially staged file as partial", () => {
+    expect(stagedState("src/c.ts", files)).toBe("partial");
+  });
+
+  it("treats a path absent from status as none", () => {
+    expect(stagedState("src/missing.ts", files)).toBe("none");
+  });
+});
+
+describe("groupStagedState", () => {
+  const staged = change({ path: "a", staged: "modified" });
+  const unstaged = change({ path: "b", unstaged: "modified" });
+  const partial = change({ path: "c", staged: "modified", unstaged: "modified" });
+
+  it("is staged only when every file is fully staged", () => {
+    expect(groupStagedState(["a"], [staged])).toBe("staged");
+    expect(groupStagedState(["a", "b"], [staged, unstaged])).toBe("partial");
+  });
+
+  it("is none only when no file is staged at all", () => {
+    expect(groupStagedState(["b"], [unstaged])).toBe("none");
+  });
+
+  it("is partial when any file is partially staged", () => {
+    expect(groupStagedState(["c"], [partial])).toBe("partial");
+  });
+
+  it("is none for an empty group", () => {
+    expect(groupStagedState([], [])).toBe("none");
   });
 });

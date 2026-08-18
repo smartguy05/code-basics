@@ -9,6 +9,10 @@ import {
 import { buildSections, statusLetter, type FileSection } from "./changesLogic";
 import { Sidebar } from "../components/Sidebar";
 import { IntentPanel } from "../components/IntentPanel";
+import { pickBehavioralConfig } from "../components/behavioralPanelLogic";
+import { ErosionPanel } from "../components/ErosionPanel";
+import { badgeCount } from "../components/erosionLogic";
+import { StashPanel } from "../components/StashPanel";
 import * as api from "../ipc/api";
 import { applyEditorFontSize, loadEditorFontSize, onEditorFontSizeChange } from "../editorFontSize";
 import {
@@ -17,30 +21,49 @@ import {
   stepFontSize,
 } from "../editorFontSizeLogic";
 import type {
+  BehavioralReport,
   Changelist,
   ComparisonMode,
   FileChange,
   FileContents,
   FileDiff,
+  ErosionFlag,
+  ErosionReport,
   GroupFile,
   InstallScope,
   IntentGroup,
   ProviderId,
   ProviderStatus,
   RejectSummary,
+  RunConfig,
+  Scorecard,
+  UnfulfilledClaim,
   WorkingStatus,
 } from "../ipc/types";
 
 const DIFF_LAYOUT_KEY = "code-basics.diffLayout";
+
+/** A zeroed scorecard for before the first intent refresh. */
+const EMPTY_SCORECARD: Scorecard = {
+  claims: 0,
+  evidenced: 0,
+  unmatched: 0,
+  hunks: 0,
+  attributedHunks: 0,
+  unattributedLines: 0,
+};
 const GROUPING_KEY = "code-basics.changesGrouping";
 const COLLAPSE_KEY = "code-basics.diffCollapseUnchanged";
 const WHITESPACE_KEY = "code-basics.diffIgnoreWhitespace";
 
 /** How the sidebar organises the working tree. */
-type Grouping = "files" | "intent";
+type Grouping = "files" | "intent" | "stashes" | "erosion";
 
 function loadGrouping(): Grouping {
-  return localStorage.getItem(GROUPING_KEY) === "intent" ? "intent" : "files";
+  const stored = localStorage.getItem(GROUPING_KEY);
+  return stored === "intent" || stored === "stashes" || stored === "erosion"
+    ? stored
+    : "files";
 }
 
 function loadDiffLayout(): DiffLayout {
@@ -129,7 +152,18 @@ export function ChangesView() {
 
   const [grouping, setGrouping] = useState<Grouping>(loadGrouping);
   const [intentGroups, setIntentGroups] = useState<IntentGroup[]>([]);
+  const [scorecard, setScorecard] = useState<Scorecard>(EMPTY_SCORECARD);
+  const [unfulfilled, setUnfulfilled] = useState<UnfulfilledClaim[]>([]);
+  const [erosion, setErosion] = useState<ErosionReport | null>(null);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  /**
+   * The runtime before/after comparison for the current intent view, and the
+   * config it runs. The intent sidebar has no console of its own, so the run's
+   * streamed output is condensed into a one-line status rather than shown raw.
+   */
+  const [configs, setConfigs] = useState<RunConfig[]>([]);
+  const [behavioral, setBehavioral] = useState<BehavioralReport | null>(null);
+  const [behavioralStatus, setBehavioralStatus] = useState<string | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   /** Diff lines to preselect, so opening a card lands on its lines. */
   const [highlight, setHighlight] = useState<number[]>([]);
@@ -160,8 +194,9 @@ export function ChangesView() {
   function changeGrouping(next: Grouping) {
     setGrouping(next);
     localStorage.setItem(GROUPING_KEY, next);
-    // The files view has no cards, so nothing may stay scoped to one.
-    if (next === "files") {
+    // Only the intent view has cards, so nothing may stay scoped to one when
+    // leaving it (for either the files or the stashes view).
+    if (next !== "intent") {
       setSelectedGroup(null);
       setHighlight([]);
       setGroupHunks(null);
@@ -188,6 +223,18 @@ export function ChangesView() {
     void refreshStatus();
   }, [refreshStatus]);
 
+  // The run configs, so the before/after action has a config to replay. A test
+  // config is preferred (its outcomes are the sharpest evidence); otherwise the
+  // first config the workspace knows about.
+  useEffect(() => {
+    void api
+      .currentWorkspace()
+      .then((ws) => setConfigs(ws?.configs ?? []))
+      .catch(() => setConfigs([]));
+  }, []);
+
+  const behavioralConfig = pickBehavioralConfig(configs);
+
   /**
    * Recompute the intent cards.
    *
@@ -197,11 +244,13 @@ export function ChangesView() {
   const refreshIntent = useCallback(async () => {
     if (grouping !== "intent") return;
     try {
-      const [groups, status] = await Promise.all([
+      const [review, status] = await Promise.all([
         api.intentGroups(mode),
         api.intentCaptureStatus().catch(() => [] as ProviderStatus[]),
       ]);
-      setIntentGroups(groups);
+      setIntentGroups(review.groups);
+      setScorecard(review.scorecard);
+      setUnfulfilled(review.unfulfilled);
       setProviders(status);
     } catch (e) {
       setError(api.errorMessage(e));
@@ -211,6 +260,23 @@ export function ChangesView() {
   useEffect(() => {
     void refreshIntent();
   }, [refreshIntent, status]);
+
+  /**
+   * Recompute the erosion flags — only while the erosion view is showing, for
+   * the same reason as the intent grouping: it walks every changed file.
+   */
+  const refreshErosion = useCallback(async () => {
+    if (grouping !== "erosion") return;
+    try {
+      setErosion(await api.erosionScan(mode));
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
+  }, [grouping, mode]);
+
+  useEffect(() => {
+    void refreshErosion();
+  }, [refreshErosion, status]);
 
   const loadFile = useCallback(
     async (path: string, comparison: ComparisonMode) => {
@@ -239,7 +305,8 @@ export function ChangesView() {
     await refreshStatus();
     if (selectedPath) await loadFile(selectedPath, mode);
     await refreshIntent();
-  }, [refreshStatus, loadFile, selectedPath, mode, refreshIntent]);
+    await refreshErosion();
+  }, [refreshStatus, loadFile, selectedPath, mode, refreshIntent, refreshErosion]);
 
   async function withBusy(action: () => Promise<void>) {
     setBusy(true);
@@ -365,6 +432,33 @@ export function ChangesView() {
     return total;
   };
 
+  /**
+   * Run the current config against HEAD and the working tree, then diff the
+   * observable outcomes. The two runs stream their output here; with no console
+   * in this view, each event is condensed into a one-line status.
+   */
+  const runBehavioral = () =>
+    withBusy(async () => {
+      if (!behavioralConfig) return;
+      setBehavioral(null);
+      setBehavioralStatus("Running before/after comparison…");
+      const report = await api.behavioralDiff(behavioralConfig.id, null, (event) => {
+        if (event.type === "started") {
+          setBehavioralStatus(`Running ${event.program}…`);
+        } else if (event.type === "exited") {
+          setBehavioralStatus(
+            event.cancelled
+              ? "Run cancelled."
+              : `Run finished (exit ${event.code ?? "?"}).`,
+          );
+        } else if (event.type === "failed") {
+          setBehavioralStatus(`Run failed: ${event.message}`);
+        }
+      });
+      setBehavioral(report);
+      setBehavioralStatus(null);
+    });
+
   /** Stage or unstage a whole file, whichever one was right-clicked. */
   const stageFile = (path: string, staged: boolean) =>
     withBusy(async () => {
@@ -465,6 +559,14 @@ export function ChangesView() {
     setGroupHunks(null);
   }
 
+  /** Open an erosion flag: show its file and highlight the offending line. */
+  function openErosionFlag(flag: ErosionFlag) {
+    setSelectedPath(flag.path);
+    setSelectedGroup(null);
+    setGroupHunks(null);
+    setHighlight([flag.index]);
+  }
+
   function renderFileRow(change: FileChange, section: FileSection) {
     const { letter, className } = statusLetter(change, section.side);
     return (
@@ -485,6 +587,50 @@ export function ChangesView() {
     );
   }
 
+  const groupingToggle = (
+    <div className="segmented">
+      <button
+        className={grouping === "files" ? "active" : ""}
+        onClick={() => changeGrouping("files")}
+        title="List the changed files"
+      >
+        Files
+      </button>
+      <button
+        className={grouping === "intent" ? "active" : ""}
+        onClick={() => changeGrouping("intent")}
+        title="Collapse hunks into the decisions behind them"
+      >
+        Intent
+      </button>
+      <button
+        className={grouping === "erosion" ? "active" : ""}
+        onClick={() => changeGrouping("erosion")}
+        title="Flag changes that quietly weaken the codebase"
+      >
+        Erosion
+        {badgeCount(erosion) > 0 && (
+          <span className="badge" style={{ marginLeft: 4 }}>
+            {badgeCount(erosion)}
+          </span>
+        )}
+      </button>
+      <button
+        className={grouping === "stashes" ? "active" : ""}
+        onClick={() => changeGrouping("stashes")}
+        title="View, apply and drop stashes"
+      >
+        Stashes
+      </button>
+    </div>
+  );
+
+  // Stashes are a self-contained list-with-preview that replaces the file list,
+  // diff and commit box entirely — none of which apply to a stash.
+  if (grouping === "stashes") {
+    return <StashPanel header={groupingToggle} onChanged={() => void refreshAll()} />;
+  }
+
   return (
     <>
       <Sidebar className="file-list">
@@ -501,40 +647,60 @@ export function ChangesView() {
           <div className="warning">A {status.inProgressOperation} is in progress.</div>
         )}
 
-        <div className="segmented">
-          <button
-            className={grouping === "files" ? "active" : ""}
-            onClick={() => changeGrouping("files")}
-            title="List the changed files"
-          >
-            Files
-          </button>
-          <button
-            className={grouping === "intent" ? "active" : ""}
-            onClick={() => changeGrouping("intent")}
-            title="Collapse hunks into the decisions behind them"
-          >
-            Intent
-          </button>
-        </div>
+        {groupingToggle}
 
         {grouping === "intent" && (
-          <IntentPanel
-            groups={intentGroups}
-            providers={providers}
-            selectedGroup={selectedGroup}
+          <>
+            <div
+              className="behavioral-run"
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px" }}
+            >
+              <button
+                disabled={busy || !behavioralConfig}
+                onClick={() => void runBehavioral()}
+                title={
+                  behavioralConfig
+                    ? `Run "${behavioralConfig.name}" against HEAD and the working tree, then diff the outcomes`
+                    : "No run configuration is available to replay before/after"
+                }
+              >
+                Run before/after
+              </button>
+              {behavioralStatus && (
+                <span className="faint" style={{ fontSize: 11 }}>
+                  {behavioralStatus}
+                </span>
+              )}
+            </div>
+            <IntentPanel
+              groups={intentGroups}
+              scorecard={scorecard}
+              unfulfilled={unfulfilled}
+              providers={providers}
+              selectedGroup={selectedGroup}
+              selectedPath={selectedPath}
+              statusFiles={files}
+              mode={mode}
+              busy={busy}
+              onSelect={selectGroup}
+              onSelectFile={selectGroupFile}
+              onStage={stageGroup}
+              onRevert={revertGroup}
+              onStageFile={stageGroupFile}
+              onRevertFile={revertGroupFile}
+              onReject={rejectGroup}
+              onEnable={enableCapture}
+              onImportHistory={importHistory}
+              behavioral={behavioral}
+            />
+          </>
+        )}
+
+        {grouping === "erosion" && (
+          <ErosionPanel
+            report={erosion}
             selectedPath={selectedPath}
-            mode={mode}
-            busy={busy}
-            onSelect={selectGroup}
-            onSelectFile={selectGroupFile}
-            onStage={stageGroup}
-            onRevert={revertGroup}
-            onStageFile={stageGroupFile}
-            onRevertFile={revertGroupFile}
-            onReject={rejectGroup}
-            onEnable={enableCapture}
-            onImportHistory={importHistory}
+            onOpenFlag={openErosionFlag}
           />
         )}
 

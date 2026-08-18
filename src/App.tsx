@@ -318,6 +318,7 @@ export function App() {
           pendingSelect={selectRequest}
           onSelectConsumed={() => setSelectRequest(null)}
           onNavigate={requestOpenFile}
+          active={tab === "run"}
         />
       </div>
       <div className="body" hidden={tab !== "tests"}>

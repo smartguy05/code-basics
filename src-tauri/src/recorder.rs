@@ -29,7 +29,8 @@
 use std::io::Read;
 use std::path::Path;
 
-use cb_core::intents::hook;
+use cb_core::git::{why, Repo};
+use cb_core::intents::hook::{self, HookEvent};
 
 /// Exit code that makes a Claude Code `Stop` hook block the stop and show the
 /// hook's stderr to the model.
@@ -72,6 +73,13 @@ fn record() -> anyhow::Result<Option<String>> {
         return Ok(None);
     };
 
+    // A git post-commit hook carries no stdin payload and always names its
+    // workspace: persist the durable-why note for the new commit and stop.
+    if invocation.event == HookEvent::PostCommit {
+        record_why_for_head(invocation.workspace.as_deref())?;
+        return Ok(None);
+    }
+
     let mut payload = String::new();
     std::io::stdin().read_to_string(&mut payload)?;
     let payload: serde_json::Value = serde_json::from_str(&payload)?;
@@ -105,4 +113,24 @@ fn record() -> anyhow::Result<Option<String>> {
         invocation.event,
         &payload,
     ))
+}
+
+/// Persist the durable-why note for the workspace's HEAD commit.
+///
+/// Called from the `post-commit` hook. Silent for a workspace that never
+/// enabled capture, and — like everything else here — never fails loudly.
+fn record_why_for_head(workspace: Option<&str>) -> anyhow::Result<()> {
+    let Some(root) = workspace.map(Path::new) else {
+        return Ok(());
+    };
+    if !hook::is_enabled(root) {
+        return Ok(());
+    }
+
+    let repo = Repo::open(root)?;
+    let head = repo.history(1)?;
+    let Some(commit) = head.first() else {
+        return Ok(());
+    };
+    why::record_note(&repo, root, &commit.id)
 }

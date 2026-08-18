@@ -1,9 +1,48 @@
 import type {
   ComparisonMode,
+  FileChange,
   IntentGroup,
   ProviderStatus,
   RejectSummary,
+  Scorecard,
+  UnfulfilledClaim,
 } from "../ipc/types";
+
+/**
+ * Whether a file's changes are in the index, so an intent card can show what is
+ * staged without leaving the Intent view.
+ *
+ * `git status` reports the two halves independently, so a file can be both
+ * staged and unstaged at once (some hunks staged, others not). That third state
+ * is kept distinct rather than collapsed into "staged": staging a card is only
+ * fully done when nothing of it is left unstaged.
+ */
+export type StagedState = "staged" | "partial" | "none";
+
+/** The staged state of one path, from the working-tree status. */
+export function stagedState(path: string, files: FileChange[]): StagedState {
+  const file = files.find((f) => f.path === path);
+  if (!file || file.staged == null) return "none";
+  return file.unstaged == null ? "staged" : "partial";
+}
+
+/**
+ * The staged state of a whole card, folded from its files.
+ *
+ * "staged" only when every file is fully staged; "none" when not one is; and
+ * "partial" for everything between — including a card whose files are each fully
+ * staged or fully not, since it is still half-done as a unit.
+ */
+export function groupStagedState(
+  paths: string[],
+  files: FileChange[],
+): StagedState {
+  if (paths.length === 0) return "none";
+  const states = paths.map((p) => stagedState(p, files));
+  if (states.every((s) => s === "staged")) return "staged";
+  if (states.every((s) => s === "none")) return "none";
+  return "partial";
+}
 
 /**
  * Deciding what to say when nothing here is agent-stated.
@@ -45,6 +84,15 @@ export type IntentDataHint =
        */
       caveats: string[];
     };
+
+/**
+ * The card's hover tooltip. A stated intent shows its own text (the headline is
+ * ellipsis-truncated, so hover is where the full intent is read); every other
+ * kind is a location, so it keeps its explanatory KIND_TITLE sentence.
+ */
+export function cardTitle(group: IntentGroup, kindTitle: string): string {
+  return group.kind === "intent" ? group.label : kindTitle;
+}
 
 /** Decide the banner above the group list. */
 export function intentDataHint(
@@ -98,6 +146,38 @@ export function intentDataHint(
     canImport: false,
     caveats,
   };
+}
+
+/**
+ * The one-line scorecard above the cards — the direct answer to "did the agent
+ * do what it told me it did".
+ *
+ * A reading like `4 claims · 3 evidenced · 1 unmatched · 41 hunks · 6
+ * unattributed`. Reads sensibly at zero (`0 claims`), so it can show even when
+ * capture is off and nothing was stated.
+ */
+export function scorecardLine(sc: Scorecard): string {
+  return [
+    `${sc.claims} claim${sc.claims === 1 ? "" : "s"}`,
+    `${sc.evidenced} evidenced`,
+    `${sc.unmatched} unmatched`,
+    `${sc.hunks} hunk${sc.hunks === 1 ? "" : "s"}`,
+    `${sc.unattributedLines} unattributed`,
+  ].join(" · ");
+}
+
+/**
+ * The heading for the unfulfilled-claims section, or `null` when there is
+ * nothing to say.
+ *
+ * The wording is deliberately neutral: "no matching change in this diff", never
+ * "not done" or a claim the agent lied — the change may have landed and moved
+ * beyond the matcher's reach. See {@link UnfulfilledClaim}.
+ */
+export function unfulfilledCaption(claims: UnfulfilledClaim[]): string | null {
+  if (claims.length === 0) return null;
+  const n = claims.length;
+  return `${n} stated intent${n === 1 ? "" : "s"} with no matching change in this diff`;
 }
 
 /** What to say once an import has finished, given what it returned. */

@@ -380,6 +380,15 @@ fn text_block(text: &str) -> serde_json::Value {
     json!({ "type": "text", "text": text })
 }
 
+/// A human prompt line, the shape `read_transcript` mines into an `IntentPrompt`.
+fn user(text: &str) -> String {
+    json!({
+        "type": "user",
+        "message": { "role": "user", "content": [ { "type": "text", "text": text } ] },
+    })
+    .to_string()
+}
+
 fn edit_block(id: &str, relative: &str) -> serde_json::Value {
     json!({
         "type": "tool_use",
@@ -396,13 +405,17 @@ fn transcript(dir: &Path, name: &str, lines: &[String]) -> PathBuf {
 }
 
 fn read(lines: &[String]) -> (Vec<IntentRecord>, Vec<IntentLabel>) {
+    let mined = read_mined(lines);
+    (mined.records, mined.labels)
+}
+
+fn read_mined(lines: &[String]) -> HistoryMined {
     let dir = tempfile::tempdir().unwrap();
     let path = transcript(dir.path(), "sess.jsonl", lines);
     let mut seq = 0;
-    let mut records = Vec::new();
-    let mut labels = Vec::new();
-    read_transcript(&path, &root(), &mut seq, &mut records, &mut labels);
-    (records, labels)
+    let mut mined = HistoryMined::default();
+    read_transcript(&path, &root(), &mut seq, &mut mined);
+    mined
 }
 
 #[test]
@@ -467,6 +480,60 @@ fn user_entries_and_malformed_lines_are_skipped() {
     assert!(records.is_empty());
 }
 
+/// The user's prompt is mined and keyed to the **same** turn id as the edits of
+/// the block it opened — the invariant the whole feature rests on.
+#[test]
+fn the_user_prompt_is_mined_and_keyed_to_the_edits_turn() {
+    let mined = read_mined(&[
+        user("Add exponential backoff to the token refresh, cap at 5 retries"),
+        assistant(json!([
+            text_block("Add retry with backoff to the refresher"),
+            edit_block("t1", "a.rs"),
+        ])),
+    ]);
+
+    assert_eq!(mined.records.len(), 1);
+    assert_eq!(mined.prompts.len(), 1);
+    assert_eq!(mined.prompts[0].turn_id, mined.records[0].turn_id);
+    assert!(mined.prompts[0].prompt.contains("exponential backoff"));
+    assert_eq!(mined.prompts[0].provider, ProviderId::ClaudeCode);
+}
+
+/// A `user` line carrying a tool_result — not a human prompt — must never be
+/// mined as one.
+#[test]
+fn a_tool_result_user_line_is_not_mined_as_a_prompt() {
+    let tool_result = json!({
+        "type": "user",
+        "message": { "content": [ { "type": "tool_result", "content": "ok" } ] },
+    })
+    .to_string();
+
+    let mined = read_mined(&[
+        tool_result,
+        assistant(json!([
+            text_block("doing the thing"),
+            edit_block("t1", "a.rs"),
+        ])),
+    ]);
+
+    assert_eq!(mined.records.len(), 1);
+    assert!(mined.prompts.is_empty(), "got: {:?}", mined.prompts);
+}
+
+/// A block of prose with no edits produces no prompt — the prompt only lands
+/// where records did, so it can join.
+#[test]
+fn a_prompt_with_no_edits_in_its_block_is_not_recorded() {
+    let mined = read_mined(&[
+        user("just asking a question"),
+        assistant(json!([text_block("Here is the answer to your question")])),
+    ]);
+
+    assert!(mined.records.is_empty());
+    assert!(mined.prompts.is_empty());
+}
+
 #[test]
 fn the_branch_recorded_on_the_entry_is_carried_onto_the_records() {
     let (records, _) = read(&[assistant(json!([edit_block("t1", "a.rs")]))]);
@@ -515,19 +582,12 @@ fn an_entry_whose_message_has_no_content_array_is_skipped() {
 fn an_unreadable_transcript_is_ignored_rather_than_failing() {
     let dir = tempfile::tempdir().unwrap();
     let mut seq = 0;
-    let mut records = Vec::new();
-    let mut labels = Vec::new();
+    let mut mined = HistoryMined::default();
 
-    read_transcript(
-        &dir.path().join("missing.jsonl"),
-        &root(),
-        &mut seq,
-        &mut records,
-        &mut labels,
-    );
+    read_transcript(&dir.path().join("missing.jsonl"), &root(), &mut seq, &mut mined);
 
-    assert!(records.is_empty());
-    assert!(labels.is_empty());
+    assert!(mined.records.is_empty());
+    assert!(mined.labels.is_empty());
 }
 
 #[test]
@@ -543,11 +603,10 @@ fn the_turn_id_names_the_session_file_and_the_prose_block() {
     );
 
     let mut seq = 0;
-    let mut records = Vec::new();
-    let mut labels = Vec::new();
-    read_transcript(&path, &root(), &mut seq, &mut records, &mut labels);
+    let mut mined = HistoryMined::default();
+    read_transcript(&path, &root(), &mut seq, &mut mined);
 
-    assert_eq!(records[0].turn_id, "claude-history-abc-123-1");
+    assert_eq!(mined.records[0].turn_id, "claude-history-abc-123-1");
 }
 
 // -- the Provider, before the seam ------------------------------------------
@@ -561,7 +620,7 @@ fn a_workspace_no_session_ever_ran_in_has_no_history() {
     let provider = ClaudeCode::new();
 
     let status = provider.status(dir.path());
-    let (records, labels) = provider.history(dir.path()).unwrap();
+    let HistoryMined { records, labels, .. } = provider.history(dir.path()).unwrap();
 
     assert_eq!(status.provider, ProviderId::ClaudeCode);
     assert_eq!(status.detected, provider.detected());
@@ -836,7 +895,7 @@ fn history_reads_every_session_for_the_workspace_into_records() {
         vec![fixture.edit_turn("Now update the callers to match", "t2", "src/b.rs")],
     );
 
-    let (records, labels) = fixture.provider().history(fixture.root()).unwrap();
+    let HistoryMined { records, labels, .. } = fixture.provider().history(fixture.root()).unwrap();
 
     let mut paths: Vec<&str> = records.iter().map(|r| r.path.as_str()).collect();
     paths.sort();
@@ -859,7 +918,7 @@ fn the_sequence_number_keeps_rising_across_sessions() {
         vec![fixture.edit_turn("Now update the callers to match", "t2", "src/b.rs")],
     );
 
-    let (records, _) = fixture.provider().history(fixture.root()).unwrap();
+    let HistoryMined { records, .. } = fixture.provider().history(fixture.root()).unwrap();
 
     assert_eq!(
         records.iter().map(|r| r.seq).collect::<Vec<_>>(),
@@ -872,7 +931,7 @@ fn history_from_a_home_that_does_not_exist_is_empty_rather_than_an_error() {
     let fixture = Fixture::new();
     let provider = ClaudeCode::with_home(fixture.home.path().join("nope"));
 
-    let (records, labels) = provider.history(fixture.root()).unwrap();
+    let HistoryMined { records, labels, .. } = provider.history(fixture.root()).unwrap();
 
     assert!(records.is_empty());
     assert!(labels.is_empty());

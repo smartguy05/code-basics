@@ -5,6 +5,7 @@ import type {
   AnchorResult,
   ArchGraph,
   AttachableList,
+  BehavioralReport,
   Branch,
   BuildAction,
   Changelists,
@@ -15,6 +16,7 @@ import type {
   DirEntry,
   ElidedReason,
   EnhancementInfo,
+  ErosionReport,
   FileContents,
   FileDiff,
   InspectGraph,
@@ -22,8 +24,9 @@ import type {
   InspectTarget,
   InstallPlan,
   InstallScope,
-  IntentGroup,
+  IntentReview,
   LaunchProfile,
+  LineIntent,
   LspStatus,
   MergeReport,
   NetworkKind,
@@ -39,6 +42,7 @@ import type {
   RunDump,
   SearchHit,
   SearchScope,
+  StashEntry,
   SymbolIndexStatus,
   TestRunOutcome,
   UsageResult,
@@ -275,10 +279,24 @@ export const gitCommitDiff = (id: string) =>
 export const gitCommitFileContents = (id: string, path: string) =>
   invoke<FileContents>("git_commit_file_contents", { id, path });
 
+/** The recorded reason behind each line of a file, as a past commit left it. */
+export const gitCommitFileWhy = (id: string, path: string) =>
+  invoke<LineIntent[]>("git_commit_file_why", { id, path });
+
 export const gitStashSave = (message: string) =>
   invoke<void>("git_stash_save", { message });
 
-export const gitStashPop = () => invoke<void>("git_stash_pop");
+export const gitStashList = () => invoke<StashEntry[]>("git_stash_list");
+
+export const gitStashPop = (index = 0) => invoke<void>("git_stash_pop", { index });
+
+export const gitStashApply = (index: number) =>
+  invoke<void>("git_stash_apply", { index });
+
+export const gitStashDrop = (index: number) =>
+  invoke<void>("git_stash_drop", { index });
+
+export const gitStashClear = () => invoke<void>("git_stash_clear");
 
 export function gitNetwork(
   kind: NetworkKind,
@@ -293,9 +311,19 @@ export function gitNetwork(
 // Agent intent
 // ---------------------------------------------------------------------------
 
-/** The intent cards for the whole working tree, recomputed on every call. */
+/**
+ * The intent review for the whole working tree, recomputed on every call:
+ * the grouped cards, the unfulfilled claims, and the per-turn scorecard.
+ */
 export const intentGroups = (mode: ComparisonMode) =>
-  invoke<IntentGroup[]>("intent_groups", { mode });
+  invoke<IntentReview>("intent_groups", { mode });
+
+/**
+ * The erosion scan for the whole working tree — changes that quietly weaken the
+ * codebase — recomputed on every call.
+ */
+export const erosionScan = (mode: ComparisonMode) =>
+  invoke<ErosionReport>("erosion_scan", { mode });
 
 /**
  * Stage everything in one group — or one file's share of it — returning how
@@ -346,6 +374,35 @@ export const importIntentHistory = () =>
   invoke<number>("import_intent_history");
 
 export const clearIntentHistory = () => invoke<void>("clear_intent_history");
+
+// ---------------------------------------------------------------------------
+// Behavioral before/after testing (`behavioral/`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a configuration against both git HEAD and the working tree, then diff the
+ * observable outcomes — test results, console output, and `.http` responses —
+ * as evidence a change did what its intent claimed.
+ *
+ * The inspector-style output of both runs is streamed to `onEvent`; the promise
+ * resolves with the assembled `BehavioralReport` once both sides have finished
+ * and been compared.
+ *
+ * `httpFiles` names the `.http` scenarios to replay, or `null` to let the
+ * backend discover them.
+ */
+export function behavioralDiff(
+  configId: string,
+  httpFiles: string[] | null,
+  onEvent: (event: ProcessEvent) => void,
+): Promise<BehavioralReport> {
+  const channel = new Channel<ProcessEvent>();
+  channel.onmessage = onEvent;
+  return invoke<BehavioralReport>("behavioral_diff", { configId, httpFiles, channel });
+}
+
+/** Discard the cached baseline worktrees; returns any teardown warnings. */
+export const behavioralClear = () => invoke<string[]>("behavioral_clear");
 
 // ---------------------------------------------------------------------------
 // Object inspection

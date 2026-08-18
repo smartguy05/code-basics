@@ -151,6 +151,21 @@ impl Default for Options {
     }
 }
 
+/// The durable content key for a line, or `None` when the line cannot identify
+/// anything on its own (a bare `}`, `);`, or blank line).
+///
+/// Shared with [`crate::git::why`] so a line committed today keys the same way
+/// it matched: the skeleton form — the strongest normalisation the ladder
+/// applies — gated by the same anchor rule the matcher uses. Position is never
+/// part of it, so the key survives reformatting and rebase exactly as
+/// attribution does.
+pub fn anchor_key(line: &str) -> Option<String> {
+    let forms = Forms::new(line);
+    forms
+        .is_anchor(&Options::default())
+        .then(|| forms.skeleton.clone())
+}
+
 /// Attribute one file's diff.
 pub fn attribute_file(diff: &FileDiff, intents: &Intents, options: Options) -> FileAttribution {
     let records = intents.for_path(&diff.path);

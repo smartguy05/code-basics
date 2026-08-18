@@ -51,11 +51,13 @@ pub mod hook;
 pub mod patchfmt;
 pub mod providers;
 pub mod reject;
+pub mod whyhook;
 
 /// Directory under `.code-basics/` holding recorded intent.
 pub const INTENTS_DIR: &str = "intents";
 pub const EDITS_FILE: &str = "edits.jsonl";
 pub const LABELS_FILE: &str = "labels.jsonl";
+pub const PROMPTS_FILE: &str = "prompts.jsonl";
 
 /// Which agent recorded an edit.
 ///
@@ -167,6 +169,20 @@ pub struct IntentLabel {
     /// Whether the agent offered this as a label or it was mined from prose.
     #[serde(default)]
     pub source: LabelSource,
+}
+
+/// The user's prompt for one turn.
+///
+/// The turn's edits carry the agent's short label; this carries the human's
+/// original request — the reasoning and constraints the label drops. Joined to
+/// edits and labels on the same `turn_id`, so the durable-why note can show why
+/// a line exists in the words that asked for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct IntentPrompt {
+    pub provider: ProviderId,
+    pub turn_id: String,
+    pub prompt: String,
 }
 
 /// Everything recorded for a workspace, already filtered and joined.
@@ -284,6 +300,10 @@ pub fn labels_path(root: &Path) -> PathBuf {
     intents_dir(root).join(LABELS_FILE)
 }
 
+pub fn prompts_path(root: &Path) -> PathBuf {
+    intents_dir(root).join(PROMPTS_FILE)
+}
+
 /// How records are filtered as they load.
 #[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
@@ -304,6 +324,23 @@ pub fn load(root: &Path, options: &LoadOptions) -> Result<Intents> {
     let labels = load_labels(root)?;
 
     Ok(Intents { records, labels })
+}
+
+/// Read the recorded user prompts, keyed by turn id.
+///
+/// Kept separate from [`Intents`] (which is a widely-constructed value type) so
+/// callers that need prompts — only the durable-why note today — load them
+/// explicitly. Reuses the crash-tolerant reader.
+pub fn load_prompts(root: &Path) -> Result<Vec<IntentPrompt>> {
+    read_jsonl::<IntentPrompt>(&prompts_path(root))
+}
+
+/// The user's prompt for a turn within a loaded set, when one was recorded.
+pub fn prompt_for<'a>(prompts: &'a [IntentPrompt], turn_id: &str) -> Option<&'a str> {
+    prompts
+        .iter()
+        .find(|p| p.turn_id == turn_id)
+        .map(|p| p.prompt.as_str())
 }
 
 /// Read the labels, dropping inferred ones that do not read like a reason.
@@ -394,6 +431,10 @@ pub fn append_label(root: &Path, label: &IntentLabel) -> Result<()> {
     append_line(&labels_path(root), label, root)
 }
 
+pub fn append_prompt(root: &Path, prompt: &IntentPrompt) -> Result<()> {
+    append_line(&prompts_path(root), prompt, root)
+}
+
 fn append_line<T: Serialize>(path: &Path, value: &T, root: &Path) -> Result<()> {
     use std::io::Write;
 
@@ -446,7 +487,7 @@ pub fn rebase_seqs(records: &mut [IntentRecord], base: u64) -> u64 {
 
 /// Forget everything recorded for a workspace.
 pub fn clear(root: &Path) -> Result<()> {
-    for path in [edits_path(root), labels_path(root)] {
+    for path in [edits_path(root), labels_path(root), prompts_path(root)] {
         if path.exists() {
             std::fs::remove_file(&path)
                 .with_context(|| format!("failed to remove {}", path.display()))?;

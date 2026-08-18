@@ -321,3 +321,59 @@ export function scrollLeftForThumb(metrics: ScrollMetrics, thumbLeft: number): n
   const progress = Math.min(1, Math.max(0, thumbLeft / travel));
   return overflow * progress;
 }
+
+/**
+ * The side-by-side pane divider position, remembered across files and sessions.
+ *
+ * The value is the left (baseline) pane's share of the width, held inside a
+ * range where both panes stay wide enough to read — a pane dragged to nothing
+ * is not a review layout, and a stored fraction from a corrupt entry that fell
+ * outside the range would hide one side with nothing logged.
+ */
+export const DEFAULT_DIFF_SPLIT = 0.5;
+const MIN_DIFF_SPLIT = 0.15;
+const MAX_DIFF_SPLIT = 0.85;
+const DIFF_SPLIT_KEY = "code-basics.diffSplit";
+
+/** Only the two methods this module needs, so a fake is trivial in a test. */
+type SplitStorage = Pick<Storage, "getItem" | "setItem">;
+
+/**
+ * Hold the left pane's fraction inside the visible range.
+ *
+ * A non-finite fraction becomes {@link DEFAULT_DIFF_SPLIT} rather than
+ * propagating: `Math.min`/`Math.max` pass `NaN` straight through, and a `NaN`
+ * flex-grow makes a pane vanish.
+ */
+export function clampDiffSplit(frac: number): number {
+  if (!Number.isFinite(frac)) return DEFAULT_DIFF_SPLIT;
+  return Math.min(MAX_DIFF_SPLIT, Math.max(MIN_DIFF_SPLIT, frac));
+}
+
+/** The left pane's fraction for a pointer at `clientX` over a track `[left, left + width]`. */
+export function diffSplitFraction(clientX: number, left: number, width: number): number {
+  if (!(width > 0)) return DEFAULT_DIFF_SPLIT;
+  return clampDiffSplit((clientX - left) / width);
+}
+
+/** The remembered divider fraction, or the even split when nothing usable is stored. */
+export function loadDiffSplit(storage: SplitStorage): number {
+  try {
+    const raw = storage.getItem(DIFF_SPLIT_KEY);
+    if (raw === null || raw.trim() === "") return DEFAULT_DIFF_SPLIT;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? clampDiffSplit(parsed) : DEFAULT_DIFF_SPLIT;
+  } catch {
+    return DEFAULT_DIFF_SPLIT;
+  }
+}
+
+/** Remember the divider position; an unavailable storage is nothing worth reporting. */
+export function saveDiffSplit(storage: SplitStorage, frac: number): void {
+  if (!Number.isFinite(frac)) return;
+  try {
+    storage.setItem(DIFF_SPLIT_KEY, String(clampDiffSplit(frac)));
+  } catch {
+    /* the divider is on screen and behaving; only its memory is not */
+  }
+}

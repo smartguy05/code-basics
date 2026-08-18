@@ -549,6 +549,43 @@ textarea:focus {
 .dot.skipped { background: var(--skip); }
 .dot.other { background: var(--text-faint); }
 
+/* Behavioral before/after evidence, shown in the Intent view. Tone maps to the
+   same pass/fail palette the test tree uses: a regression reads red, a fix
+   green, everything else stays muted (the abstain default). */
+.behavioral-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.behavioral-badge.positive { border-color: var(--pass); color: var(--pass); }
+.behavioral-badge.warning { border-color: var(--fail); color: var(--fail); }
+.behavioral-badge.neutral { color: var(--text-faint); }
+
+.behavioral-overall {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+.behavioral-delta {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.behavioral-delta.positive { color: var(--pass); }
+.behavioral-delta.warning { color: var(--fail); }
+.behavioral-delta.neutral { color: var(--text-faint); }
+
+.behavioral-run {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px;
+}
+
 .spinner {
   width: 10px;
   height: 10px;
@@ -784,6 +821,28 @@ textarea:focus {
   border-color: var(--border);
 }
 
+/* The pinned file tabs get their own band above the normal strip. */
+.console-tabs.pinned-tabs {
+  background: var(--bg-raised);
+}
+
+/* The pin control: hidden until the tab is hovered, but always shown once the
+   file is pinned — the same "faint metadata" weight as the × close control. */
+.console-tabs .row-action.pin {
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.console-tabs button:hover .row-action.pin {
+  opacity: 0.55;
+}
+
+.console-tabs .row-action.pin.pinned,
+.console-tabs .row-action.pin:hover {
+  opacity: 1;
+}
+
 .tab-status {
   font-size: 11px;
   flex: 0 0 auto;
@@ -871,6 +930,20 @@ textarea:focus {
   grid-column: 1;
   min-height: 0;
   overflow: auto;
+}
+
+/* The drag handle between the two side-by-side panes. It is inserted into
+   `@codemirror/merge`'s own flex row (`.cm-mergeViewEditors`), so `flex: 0 0`
+   keeps it a fixed-width column that the panes size around. */
+.diff-host .cm-mergeViewEditors .diff-pane-resizer {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: var(--border);
+  z-index: 5;
+}
+
+.diff-host .cm-mergeViewEditors .diff-pane-resizer:hover {
+  background: var(--accent-dim);
 }
 
 /* The panes' own horizontal scrollbars sit at the bottom of the *document*,
@@ -1002,6 +1075,81 @@ textarea:focus {
 
 .cm-editor .cm-nonmatchingBracket {
   background: rgba(224, 85, 97, 0.3);
+}
+
+/* @codemirror/search find panel (Ctrl+F in the file, diff and diagram editors).
+   The library's default panel is light-themed; bring it to the app palette so
+   it reads like the console's own find bar. */
+.cm-editor .cm-panels {
+  background: var(--bg-raised);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.cm-editor .cm-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-family: var(--font);
+  font-size: 12px;
+}
+.cm-editor .cm-search .cm-textfield,
+.cm-editor .cm-search input {
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font: inherit;
+}
+.cm-editor .cm-search input:focus {
+  outline: 1px solid var(--accent);
+}
+.cm-editor .cm-search .cm-button,
+.cm-editor .cm-search button {
+  background: var(--bg-inset);
+  background-image: none;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.cm-editor .cm-search .cm-button:hover,
+.cm-editor .cm-search button:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+.cm-editor .cm-search label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-dim);
+}
+.cm-editor .cm-panel.cm-search [name="close"] {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+}
+.cm-editor .cm-panel.cm-search [name="close"]:hover {
+  color: var(--text);
+}
+
+/* The matches themselves: the current one in accent, the rest in amber (the
+   same amber the console search and .warning use). */
+.cm-editor .cm-searchMatch {
+  background: rgba(201, 162, 39, 0.28);
+  outline: 1px solid rgba(201, 162, 39, 0.5);
+}
+.cm-editor .cm-searchMatch-selected {
+  background: rgba(90, 120, 220, 0.45);
+  outline: 1px solid var(--accent);
+}
+.cm-editor .cm-selectionMatch {
+  background: rgba(120, 140, 200, 0.18);
 }
 
 /* Selected-for-revert lines, driven by a CodeMirror decoration.
@@ -1460,6 +1608,32 @@ textarea:focus {
   white-space: nowrap;
   direction: rtl;
   text-align: left;
+}
+
+/* Staged/partial pill on a card headline or file row: the Intent view's stand-in
+   for the Files view's Staged section. */
+.stage-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.stage-tag.staged {
+  color: var(--pass);
+  border-color: var(--pass);
+  background: color-mix(in srgb, var(--pass) 14%, transparent);
+}
+
+.stage-tag.partial {
+  color: var(--skip);
+  border-color: var(--skip);
+  background: color-mix(in srgb, var(--skip) 14%, transparent);
 }
 
 .intent-card .group-file .file-actions {
@@ -2179,4 +2353,15 @@ textarea:focus {
   color: var(--text-faint);
   font-size: 11px;
   z-index: 2;
+}
+
+/* The durable-intent hover tooltip in the History diff. */
+.cm-tooltip .cm-why-tooltip {
+  max-width: 480px;
+  padding: 6px 9px;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg-raised);
 }
