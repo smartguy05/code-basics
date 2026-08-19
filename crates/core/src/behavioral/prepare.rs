@@ -60,9 +60,8 @@ pub fn assemble_report(
     warnings: Vec<String>,
 ) -> BehavioralReport {
     // Count what was compared before consuming the pieces.
-    let outcomes_compared = tests.is_some() as u32
-        + console.as_ref().map(|_| 1).unwrap_or(0)
-        + http.len() as u32;
+    let outcomes_compared =
+        tests.is_some() as u32 + console.as_ref().map(|_| 1).unwrap_or(0) + http.len() as u32;
 
     // Flatten each signal to individual observable deltas. A test suite yields
     // one delta per changed case; the console yields at most one; each HTTP

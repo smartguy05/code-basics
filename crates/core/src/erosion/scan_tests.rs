@@ -53,7 +53,13 @@ fn file(path: &str, lines: &[&str]) -> FileDiff {
     }
 }
 
-fn rule(id: &str, category: ErosionCategory, side: RuleSide, pattern: &str, exts: &[&str]) -> ErosionRule {
+fn rule(
+    id: &str,
+    category: ErosionCategory,
+    side: RuleSide,
+    pattern: &str,
+    exts: &[&str],
+) -> ErosionRule {
     ErosionRule {
         id: id.into(),
         category,
@@ -69,7 +75,10 @@ fn rule(id: &str, category: ErosionCategory, side: RuleSide, pattern: &str, exts
 
 #[test]
 fn a_deleted_assertion_is_flagged() {
-    let diff = file("Foo.cs", &["-    Assert.Equal(expected, actual);", "+    // gone"]);
+    let diff = file(
+        "Foo.cs",
+        &["-    Assert.Equal(expected, actual);", "+    // gone"],
+    );
     let rules = vec![rule(
         "deleted-assert",
         ErosionCategory::DeletedAssertion,
@@ -199,7 +208,10 @@ fn the_builtin_secret_rules_flag_leaks_but_not_placeholders() {
         .into_iter()
         .filter(|r| r.category == ErosionCategory::Secret)
         .collect();
-    assert!(!secret_rules.is_empty(), "there should be built-in secret rules");
+    assert!(
+        !secret_rules.is_empty(),
+        "there should be built-in secret rules"
+    );
 
     // Real leaks on added lines — each distinct line should be flagged.
     let leaks = file(
@@ -286,8 +298,20 @@ fn a_prod_only_rule_skips_test_files_but_fires_in_production() {
 fn two_rules_of_one_category_do_not_double_flag_a_line() {
     let diff = file("a.rs", &["+    let value = thing.unwrap();"]);
     let rules = vec![
-        rule("a", ErosionCategory::UnsafeCast, RuleSide::Added, r"\.unwrap", &[".rs"]),
-        rule("b", ErosionCategory::UnsafeCast, RuleSide::Added, r"unwrap\(\)", &[".rs"]),
+        rule(
+            "a",
+            ErosionCategory::UnsafeCast,
+            RuleSide::Added,
+            r"\.unwrap",
+            &[".rs"],
+        ),
+        rule(
+            "b",
+            ErosionCategory::UnsafeCast,
+            RuleSide::Added,
+            r"unwrap\(\)",
+            &[".rs"],
+        ),
     ];
 
     let report = scan_diffs(&[diff], &rules);
@@ -299,7 +323,13 @@ fn two_rules_of_one_category_do_not_double_flag_a_line() {
 
 #[test]
 fn a_bad_regex_is_reported_in_the_reports_warnings() {
-    let bad = rule("bad", ErosionCategory::UnsafeCast, RuleSide::Added, "(", &[]);
+    let bad = rule(
+        "bad",
+        ErosionCategory::UnsafeCast,
+        RuleSide::Added,
+        "(",
+        &[],
+    );
     let diff = file("a.rs", &["+something"]);
 
     let report = scan_diffs(&[diff], &[bad]);

@@ -584,7 +584,12 @@ fn an_unreadable_transcript_is_ignored_rather_than_failing() {
     let mut seq = 0;
     let mut mined = HistoryMined::default();
 
-    read_transcript(&dir.path().join("missing.jsonl"), &root(), &mut seq, &mut mined);
+    read_transcript(
+        &dir.path().join("missing.jsonl"),
+        &root(),
+        &mut seq,
+        &mut mined,
+    );
 
     assert!(mined.records.is_empty());
     assert!(mined.labels.is_empty());
@@ -620,7 +625,9 @@ fn a_workspace_no_session_ever_ran_in_has_no_history() {
     let provider = ClaudeCode::new();
 
     let status = provider.status(dir.path());
-    let HistoryMined { records, labels, .. } = provider.history(dir.path()).unwrap();
+    let HistoryMined {
+        records, labels, ..
+    } = provider.history(dir.path()).unwrap();
 
     assert_eq!(status.provider, ProviderId::ClaudeCode);
     assert_eq!(status.detected, provider.detected());
@@ -895,7 +902,9 @@ fn history_reads_every_session_for_the_workspace_into_records() {
         vec![fixture.edit_turn("Now update the callers to match", "t2", "src/b.rs")],
     );
 
-    let HistoryMined { records, labels, .. } = fixture.provider().history(fixture.root()).unwrap();
+    let HistoryMined {
+        records, labels, ..
+    } = fixture.provider().history(fixture.root()).unwrap();
 
     let mut paths: Vec<&str> = records.iter().map(|r| r.path.as_str()).collect();
     paths.sort();
@@ -931,7 +940,9 @@ fn history_from_a_home_that_does_not_exist_is_empty_rather_than_an_error() {
     let fixture = Fixture::new();
     let provider = ClaudeCode::with_home(fixture.home.path().join("nope"));
 
-    let HistoryMined { records, labels, .. } = provider.history(fixture.root()).unwrap();
+    let HistoryMined {
+        records, labels, ..
+    } = provider.history(fixture.root()).unwrap();
 
     assert!(records.is_empty());
     assert!(labels.is_empty());

@@ -73,10 +73,7 @@ fn tee(
 
 /// Read a captured buffer out of its `Arc<Mutex<..>>` once the tee task is done.
 fn drain_capture(captured: Arc<Mutex<String>>) -> String {
-    captured
-        .lock()
-        .map(|b| b.clone())
-        .unwrap_or_default()
+    captured.lock().map(|b| b.clone()).unwrap_or_default()
 }
 
 /// Run one side of the comparison as a test run, returning its parsed result
@@ -260,10 +257,7 @@ async fn run_http_replay(
                 warnings.extend(scenario.warnings.clone());
                 scenarios.push(scenario);
             }
-            Err(e) => warnings.push(format!(
-                "could not read .http file {}: {e}",
-                path.display()
-            )),
+            Err(e) => warnings.push(format!("could not read .http file {}: {e}", path.display())),
         }
     }
 

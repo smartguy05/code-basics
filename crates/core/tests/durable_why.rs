@@ -123,13 +123,21 @@ fn writing_a_note_twice_for_a_commit_is_idempotent() {
     let path = dir.path();
     let repo = Repo::open(path).unwrap();
 
-    write(path, "a.rs", "fn main() {\n    let a_distinctive_line = compute_it();\n}\n");
+    write(
+        path,
+        "a.rs",
+        "fn main() {\n    let a_distinctive_line = compute_it();\n}\n",
+    );
     run(path, &["add", "."]);
     let oid = repo.commit("change", false).unwrap();
 
     let diffs = repo.commit_diff(&oid).unwrap();
     let intents = Intents {
-        records: vec![record("turn-1", "a.rs", &["    let a_distinctive_line = compute_it();"])],
+        records: vec![record(
+            "turn-1",
+            "a.rs",
+            &["    let a_distinctive_line = compute_it();"],
+        )],
         labels: vec![declared("turn-1", "compute it")],
     };
     let attributions = attribution::attribute(&diffs, &intents, Options::default());

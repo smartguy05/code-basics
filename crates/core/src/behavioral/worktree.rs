@@ -40,7 +40,9 @@ const TEARDOWN_PAUSE: Duration = Duration::from_millis(150);
 
 /// The directory holding every cached baseline checkout.
 fn base_root(repo_root: &Path) -> PathBuf {
-    config::config_dir(repo_root).join("behavioral").join("base")
+    config::config_dir(repo_root)
+        .join("behavioral")
+        .join("base")
 }
 
 /// A short, filesystem-friendly slice of a full hex oid.
@@ -169,11 +171,7 @@ fn worktree_add(repo_root: &Path, dir: &Path, oid: &str) -> Result<()> {
         .context("failed to run `git worktree add` (is git on PATH?)")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!(
-            "git worktree add for {} failed: {}",
-            oid,
-            stderr.trim()
-        );
+        bail!("git worktree add for {} failed: {}", oid, stderr.trim());
     }
     Ok(())
 }

@@ -138,7 +138,11 @@ fn plan_has_no_readiness_when_none_declared() {
 fn plan_disambiguates_duplicate_request_names() {
     // Two requests named the same in one file must not collide on the key and
     // silently drop one — both are kept, the repeat gets an occurrence suffix.
-    let scenarios = vec![scenario_with("a.http", &["dup", "dup"], Some(a_readiness()))];
+    let scenarios = vec![scenario_with(
+        "a.http",
+        &["dup", "dup"],
+        Some(a_readiness()),
+    )];
     let plan = plan_replay(&scenarios);
 
     assert_eq!(plan.requests.len(), 2, "both requests survive");
@@ -188,7 +192,11 @@ fn no_app_config_abstains() {
 #[test]
 fn ambiguous_app_configs_abstain() {
     let passed = cfg("tests", RunKind::Test);
-    let all = vec![passed.clone(), cfg("api", RunKind::App), cfg("worker", RunKind::App)];
+    let all = vec![
+        passed.clone(),
+        cfg("api", RunKind::App),
+        cfg("worker", RunKind::App),
+    ];
     match choose_launch_config(&passed, &all) {
         LaunchChoice::Abstain(w) => assert!(w.contains("ambiguous")),
         LaunchChoice::Use(id) => panic!("should abstain, got {id}"),

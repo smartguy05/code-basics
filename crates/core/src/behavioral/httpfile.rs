@@ -190,7 +190,11 @@ fn parse_block(lines: &[&str], vars: &BTreeMap<String, String>, scenario: &mut H
     let url = substitute(&url, vars, scenario);
 
     // Drop trailing blank body lines.
-    while body_lines.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+    while body_lines
+        .last()
+        .map(|l| l.trim().is_empty())
+        .unwrap_or(false)
+    {
         body_lines.pop();
     }
     let body = if body_lines.is_empty() {

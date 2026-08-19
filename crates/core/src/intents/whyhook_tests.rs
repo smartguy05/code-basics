@@ -43,7 +43,10 @@ fn an_existing_hook_is_appended_to_not_replaced() {
     let write = plan_for(&hook, EXE, root()).expect("a write");
 
     assert!(write.merges_existing);
-    assert!(write.content.contains("echo existing"), "existing script kept");
+    assert!(
+        write.content.contains("echo existing"),
+        "existing script kept"
+    );
     assert!(write.content.contains(BEGIN));
 }
 

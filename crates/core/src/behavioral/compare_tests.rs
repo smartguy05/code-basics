@@ -81,7 +81,11 @@ fn unchanged_cases_are_omitted() {
     let base = run(vec![case("a::t", TestOutcome::Passed)]);
     let work = run(vec![case("a::t", TestOutcome::Passed)]);
     let d = diff_tests(&base, &work);
-    assert!(d.cases.is_empty(), "pass->pass should not appear: {:?}", d.cases);
+    assert!(
+        d.cases.is_empty(),
+        "pass->pass should not appear: {:?}",
+        d.cases
+    );
     // Skipped transitions are not confident changes either.
     let base = run(vec![case("a::t", TestOutcome::Passed)]);
     let work = run(vec![case("a::t", TestOutcome::Skipped)]);
@@ -94,7 +98,10 @@ fn added_and_removed_by_full_name() {
     let work = run(vec![case("only_work::t", TestOutcome::Passed)]);
     let d = diff_tests(&base, &work);
     assert_eq!(delta(&d, "only_work::t").transition, CaseTransition::Added);
-    assert_eq!(delta(&d, "only_base::t").transition, CaseTransition::Removed);
+    assert_eq!(
+        delta(&d, "only_base::t").transition,
+        CaseTransition::Removed
+    );
     // Deterministic ordering by full_name.
     let names: Vec<&str> = d.cases.iter().map(|c| c.full_name.as_str()).collect();
     let mut sorted = names.clone();

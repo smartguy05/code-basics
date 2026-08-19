@@ -13,7 +13,10 @@ Accept: application/json
 
 ";
     let s = parse_http_file(text);
-    assert_eq!(s.variables.get("host").map(String::as_str), Some("http://localhost:5000"));
+    assert_eq!(
+        s.variables.get("host").map(String::as_str),
+        Some("http://localhost:5000")
+    );
 
     let r = s.readiness.expect("readiness parsed");
     assert_eq!(r.method, "GET");
@@ -27,7 +30,10 @@ Accept: application/json
     assert_eq!(req.name, "get-user");
     assert_eq!(req.method, "GET");
     assert_eq!(req.url, "http://localhost:5000/api/users/1");
-    assert_eq!(req.headers, vec![("Accept".into(), "application/json".into())]);
+    assert_eq!(
+        req.headers,
+        vec![("Accept".into(), "application/json".into())]
+    );
     assert!(req.body.is_none());
 }
 
@@ -49,7 +55,9 @@ Content-Type: application/json
     assert_eq!(s.requests[0].method, "POST");
     assert_eq!(s.requests[0].body.as_deref(), Some("{\"name\":\"x\"}"));
     assert!(
-        s.warnings.iter().any(|w| w.contains("response-handler script")),
+        s.warnings
+            .iter()
+            .any(|w| w.contains("response-handler script")),
         "warnings: {:?}",
         s.warnings
     );

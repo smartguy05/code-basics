@@ -94,7 +94,10 @@ fn console_line_naming_a_file_attributes() {
     let groups = [group("g1", &["src/api.ts"]), group("g2", &["src/other.ts"])];
     let d = console_delta(&["updated handler in src/api.ts:42"], Confidence::Medium);
     let (cards, un) = attribute_behavioral(vec![d], &groups);
-    assert!(un.is_empty(), "a console line naming one group's file should attribute");
+    assert!(
+        un.is_empty(),
+        "a console line naming one group's file should attribute"
+    );
     assert_eq!(cards[0].group_id, "g1");
 }
 
@@ -111,14 +114,18 @@ fn http_delta_is_unattributed() {
 fn card_confidence_is_the_weakest_member() {
     let groups = [group("g1", &["src/a.ts"])];
     let deltas = vec![
-        test_delta(&["src/a.ts"]),                            // Medium
+        test_delta(&["src/a.ts"]),                             // Medium
         console_delta(&["touched src/a.ts"], Confidence::Low), // Low
     ];
     let (cards, un) = attribute_behavioral(deltas, &groups);
     assert!(un.is_empty());
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0].deltas.len(), 2);
-    assert_eq!(cards[0].confidence, Confidence::Low, "card takes its shakiest delta");
+    assert_eq!(
+        cards[0].confidence,
+        Confidence::Low,
+        "card takes its shakiest delta"
+    );
 }
 
 #[test]

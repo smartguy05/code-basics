@@ -26,8 +26,7 @@ use serde_json::{json, Value};
 
 use super::{
     home_dir, hooks_json, instructions, HistoryMined, InstallPlan, InstallScope, PlannedWrite,
-    Provider,
-    ProviderStatus,
+    Provider, ProviderStatus,
 };
 use crate::intents::patchfmt;
 use crate::intents::{normalise_path, IntentEdit, IntentLabel, IntentRecord, ProviderId};

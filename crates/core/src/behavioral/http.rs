@@ -174,8 +174,12 @@ fn diff_body(before: &RecordedResponse, after: &RecordedResponse) -> (Option<Bod
                 // Canonicalise (key order) then mask (timestamps/ids) and
                 // compare the resulting lines — so both kinds of noise are gone
                 // before we decide there is a difference at all.
-                let b_lines = masked_lines(&serde_json::to_string_pretty(&canonicalize(&b)).unwrap_or_default());
-                let a_lines = masked_lines(&serde_json::to_string_pretty(&canonicalize(&a)).unwrap_or_default());
+                let b_lines = masked_lines(
+                    &serde_json::to_string_pretty(&canonicalize(&b)).unwrap_or_default(),
+                );
+                let a_lines = masked_lines(
+                    &serde_json::to_string_pretty(&canonicalize(&a)).unwrap_or_default(),
+                );
                 if b_lines == a_lines {
                     return (None, false);
                 }

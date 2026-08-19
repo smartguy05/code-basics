@@ -96,7 +96,10 @@ fn build_with_prompts(
 
 #[test]
 fn a_committed_line_keys_by_content_and_resolves_to_its_reason() {
-    let diff = simple("a.rs", &["+    let retry_limit = read_configured_retry_limit();"]);
+    let diff = simple(
+        "a.rs",
+        &["+    let retry_limit = read_configured_retry_limit();"],
+    );
     let intents = Intents {
         records: vec![record(
             "turn-1",
@@ -116,7 +119,10 @@ fn a_committed_line_keys_by_content_and_resolves_to_its_reason() {
 
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].line, 2);
-    assert_eq!(resolved[0].label.as_deref(), Some("add retry to token refresh"));
+    assert_eq!(
+        resolved[0].label.as_deref(),
+        Some("add retry to token refresh")
+    );
     assert_eq!(resolved[0].turn_id, "turn-1");
 }
 
@@ -145,7 +151,12 @@ fn reformatting_before_commit_still_resolves() {
 fn a_line_no_record_claims_resolves_to_nothing() {
     let diff = simple("a.rs", &["+    let a_distinctive_recorded_line = 1;"]);
     let intents = Intents {
-        records: vec![record("turn-1", "a.rs", &["    let a_distinctive_recorded_line = 1;"], 1)],
+        records: vec![record(
+            "turn-1",
+            "a.rs",
+            &["    let a_distinctive_recorded_line = 1;"],
+            1,
+        )],
         labels: vec![declared("turn-1", "recorded")],
     };
 
@@ -204,7 +215,10 @@ fn an_ambiguous_key_across_turns_is_dropped() {
 
 #[test]
 fn content_hash_is_stable_and_deterministic() {
-    assert_eq!(content_hash("letx=compute(a,b)"), content_hash("letx=compute(a,b)"));
+    assert_eq!(
+        content_hash("letx=compute(a,b)"),
+        content_hash("letx=compute(a,b)")
+    );
     assert_ne!(content_hash("alpha"), content_hash("beta"));
 }
 
@@ -235,14 +249,25 @@ fn a_why_entry_serialises_with_the_keys_the_reader_expects() {
 
     assert_eq!(
         keys(&serde_json::to_value(&entry).unwrap()),
-        ["confidence", "contentHash", "label", "labelSource", "prompt", "seq", "turnId"]
+        [
+            "confidence",
+            "contentHash",
+            "label",
+            "labelSource",
+            "prompt",
+            "seq",
+            "turnId"
+        ]
     );
 }
 
 /// A recorded prompt for the turn is threaded onto the line's intent.
 #[test]
 fn a_recorded_prompt_is_threaded_onto_the_line() {
-    let diff = simple("a.rs", &["+    let retry_limit = read_configured_retry_limit();"]);
+    let diff = simple(
+        "a.rs",
+        &["+    let retry_limit = read_configured_retry_limit();"],
+    );
     let intents = Intents {
         records: vec![record(
             "turn-1",
@@ -271,7 +296,11 @@ fn a_recorded_prompt_is_threaded_onto_the_line() {
         Some("add exponential backoff, cap at 5")
     );
     // A turn with no recorded prompt threads nothing.
-    let bare = build_with_prompts(&[simple("b.rs", &["+    let x = go();"])], &intents, &prompts);
+    let bare = build_with_prompts(
+        &[simple("b.rs", &["+    let x = go();"])],
+        &intents,
+        &prompts,
+    );
     assert!(file_in(&bare, "b.rs").is_none());
 }
 

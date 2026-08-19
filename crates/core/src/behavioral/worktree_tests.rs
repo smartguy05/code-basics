@@ -53,7 +53,10 @@ fn drop_removes_an_unkept_checkout() {
         wt.path().to_path_buf()
         // wt dropped here without keep_for_reuse
     };
-    assert!(!path.exists(), "drop should clean up a checkout nobody kept");
+    assert!(
+        !path.exists(),
+        "drop should clean up a checkout nobody kept"
+    );
 }
 
 #[test]
@@ -69,11 +72,17 @@ fn create_is_cache_hit_at_same_oid() {
 
     // A second create at the same oid reuses the cached checkout.
     let wt2 = BaselineWorktree::create(&root, &oid, &WorktreeOptions::default()).unwrap();
-    assert!(wt2.adopted(), "second create at the same oid should be a cache hit");
+    assert!(
+        wt2.adopted(),
+        "second create at the same oid should be a cache hit"
+    );
     assert_eq!(wt2.path(), path);
     // An adopted checkout is kept, so finish() leaves it in place for clear_all.
     assert!(wt2.finish().is_empty());
-    assert!(path.exists(), "an adopted (kept) checkout is not torn down by finish()");
+    assert!(
+        path.exists(),
+        "an adopted (kept) checkout is not torn down by finish()"
+    );
 
     let warnings = clear_all(&root);
     assert!(warnings.is_empty(), "clear_all warnings: {warnings:?}");

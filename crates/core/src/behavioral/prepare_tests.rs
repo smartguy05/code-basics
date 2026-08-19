@@ -77,7 +77,10 @@ fn one_attributed_test_and_one_unattributed_console() {
         BehavioralDelta::Test(_)
     ));
     assert_eq!(report.unattributed.len(), 1);
-    assert!(matches!(report.unattributed[0], BehavioralDelta::Console(_)));
+    assert!(matches!(
+        report.unattributed[0],
+        BehavioralDelta::Console(_)
+    ));
 }
 
 #[test]

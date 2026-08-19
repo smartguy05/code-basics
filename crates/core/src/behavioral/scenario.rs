@@ -119,7 +119,10 @@ pub fn choose_launch_config(passed: &RunConfig, all: &[RunConfig]) -> LaunchChoi
     if matches!(passed.kind, RunKind::App) {
         return LaunchChoice::Use(passed.id.clone());
     }
-    let apps: Vec<&RunConfig> = all.iter().filter(|c| matches!(c.kind, RunKind::App)).collect();
+    let apps: Vec<&RunConfig> = all
+        .iter()
+        .filter(|c| matches!(c.kind, RunKind::App))
+        .collect();
     match apps.as_slice() {
         [] => LaunchChoice::Abstain(format!(
             "HTTP replay skipped: `{}` is not an application launch and the workspace declares no \
@@ -187,7 +190,10 @@ pub fn pair_and_diff(
                     Some(Err(e)) => parts.push(format!("working tree: {e}")),
                     Some(Ok(_)) => {}
                 }
-                warnings.push(format!("request `{name}` not comparable: {}", parts.join("; ")));
+                warnings.push(format!(
+                    "request `{name}` not comparable: {}",
+                    parts.join("; ")
+                ));
             }
         }
     }

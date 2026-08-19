@@ -91,11 +91,7 @@ fn rules_read_from_the_workspaces_own_config_directory() {
 #[test]
 fn builtin_rules_cover_each_ecosystem() {
     let rules = builtin_rules();
-    let covers = |ext: &str| {
-        rules
-            .iter()
-            .any(|r| r.extensions.iter().any(|e| e == ext))
-    };
+    let covers = |ext: &str| rules.iter().any(|r| r.extensions.iter().any(|e| e == ext));
     assert!(covers(".cs"), "expected a .NET rule");
     assert!(covers(".ts"), "expected a TS rule");
     assert!(covers(".rs"), "expected a Rust rule");

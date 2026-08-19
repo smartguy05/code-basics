@@ -26,9 +26,9 @@ pub mod why;
 pub use attribution::{AttributedSpan, Confidence, FileAttribution, HunkAttribution};
 pub use coverage::{IntentReview, Scorecard, UnfulfilledClaim};
 pub use grouping::{GroupFile, GroupKind, IntentGroup};
-pub use why::{DurableWhy, FileWhy, LineIntent, WhyEntry, WHY_NOTES_REF};
 pub use patch::{DiffLine, Direction, FileDiff, Hunk, LineOrigin};
 pub use repo::{
     Branch, ChangeKind, Commit, ComparisonMode, FileChange, FileContents, Repo, StageTarget,
     StashEntry, WorkingStatus,
 };
+pub use why::{DurableWhy, FileWhy, LineIntent, WhyEntry, WHY_NOTES_REF};

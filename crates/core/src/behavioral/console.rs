@@ -79,8 +79,10 @@ fn epoch_ms() -> &'static Regex {
 fn guid() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
-            .unwrap()
+        Regex::new(
+            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+        )
+        .unwrap()
     })
 }
 
@@ -153,32 +155,29 @@ pub fn diff_console(base: &str, work: &str, norm: &ConsoleNormalization) -> Cons
     let mut total_lines = 0usize;
     let mut any_masking = false;
 
-    let normalize = |text: &str,
-                     masked: &mut usize,
-                     total: &mut usize,
-                     any: &mut bool|
-     -> Vec<String> {
-        text.lines()
-            .map(|raw| {
-                *total += 1;
-                let stripped = if norm.strip_ansi {
-                    let s = ansi().replace_all(raw, "").into_owned();
-                    if s != raw {
+    let normalize =
+        |text: &str, masked: &mut usize, total: &mut usize, any: &mut bool| -> Vec<String> {
+            text.lines()
+                .map(|raw| {
+                    *total += 1;
+                    let stripped = if norm.strip_ansi {
+                        let s = ansi().replace_all(raw, "").into_owned();
+                        if s != raw {
+                            *any = true;
+                        }
+                        s
+                    } else {
+                        raw.to_string()
+                    };
+                    let content = mask_content(&stripped, norm, &roots_sorted);
+                    if content != stripped {
+                        *masked += 1;
                         *any = true;
                     }
-                    s
-                } else {
-                    raw.to_string()
-                };
-                let content = mask_content(&stripped, norm, &roots_sorted);
-                if content != stripped {
-                    *masked += 1;
-                    *any = true;
-                }
-                content
-            })
-            .collect()
-    };
+                    content
+                })
+                .collect()
+        };
 
     let base_lines = normalize(base, &mut masked_lines, &mut total_lines, &mut any_masking);
     let work_lines = normalize(work, &mut masked_lines, &mut total_lines, &mut any_masking);

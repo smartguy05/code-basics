@@ -37,7 +37,9 @@ pub use attribute::attribute_behavioral;
 pub use compare::{diff_tests, CaseDelta, CaseTransition, TestDelta};
 pub use console::{diff_console, ConsoleNormalization};
 pub use http::{diff_http, RecordedResponse, VOLATILE_HEADERS};
-pub use httpfile::{discover_http_files, parse_http_file, HttpRequestSpec, HttpScenario, Readiness};
+pub use httpfile::{
+    discover_http_files, parse_http_file, HttpRequestSpec, HttpScenario, Readiness,
+};
 pub use prepare::{assemble_report, find_config, scan_baseline};
 pub use replay::{await_ready, send};
 pub use scenario::{choose_launch_config, pair_and_diff, plan_replay, LaunchChoice, SideResult};

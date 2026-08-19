@@ -13,7 +13,12 @@ fn resp(status: u16, headers: &[(&str, &str)], body: &str, ct: Option<&str>) -> 
 }
 
 fn json(status: u16, body: &str) -> RecordedResponse {
-    resp(status, &[("Content-Type", "application/json")], body, Some("application/json"))
+    resp(
+        status,
+        &[("Content-Type", "application/json")],
+        body,
+        Some("application/json"),
+    )
 }
 
 #[test]
@@ -38,7 +43,9 @@ fn volatile_date_header_is_ignored() {
     let before = json(200, r#"{"a":1}"#);
     let mut after = json(200, r#"{"a":1}"#);
     // A Date header differing is pure noise.
-    after.headers.push(("Date".into(), "Tue, 01 Jan 2030".into()));
+    after
+        .headers
+        .push(("Date".into(), "Tue, 01 Jan 2030".into()));
     let d = diff_http("get", &before, &after, &[]);
     assert!(!d.is_change(), "Date change must not register: {d:?}");
 }
@@ -77,7 +84,10 @@ fn timestamps_in_json_body_are_masked() {
     let before = json(200, r#"{"at":"2026-01-01T00:00:00","v":1}"#);
     let after = json(200, r#"{"at":"2026-09-09T12:00:00","v":1}"#);
     let d = diff_http("get", &before, &after, &[]);
-    assert!(!d.is_change(), "only a timestamp differs — masked away: {d:?}");
+    assert!(
+        !d.is_change(),
+        "only a timestamp differs — masked away: {d:?}"
+    );
 }
 
 #[test]

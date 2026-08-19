@@ -1206,7 +1206,8 @@ impl Repo {
         if why.is_empty() {
             return Ok(());
         }
-        let oid = git2::Oid::from_str(commit).with_context(|| format!("invalid commit id {commit}"))?;
+        let oid =
+            git2::Oid::from_str(commit).with_context(|| format!("invalid commit id {commit}"))?;
         let signature = self
             .inner
             .signature()
@@ -1214,14 +1215,22 @@ impl Repo {
         let payload = serde_json::to_string(why).context("failed to serialise durable intent")?;
 
         self.inner
-            .note(&signature, &signature, Some(WHY_NOTES_REF), oid, &payload, true)
+            .note(
+                &signature,
+                &signature,
+                Some(WHY_NOTES_REF),
+                oid,
+                &payload,
+                true,
+            )
             .context("failed to write intent note")?;
         Ok(())
     }
 
     /// Read the durable intent stored for a commit, or `None` when it has none.
     pub fn read_why_note(&self, commit: &str) -> Result<Option<DurableWhy>> {
-        let oid = git2::Oid::from_str(commit).with_context(|| format!("invalid commit id {commit}"))?;
+        let oid =
+            git2::Oid::from_str(commit).with_context(|| format!("invalid commit id {commit}"))?;
 
         let note = match self.inner.find_note(Some(WHY_NOTES_REF), oid) {
             Ok(note) => note,
@@ -1247,7 +1256,8 @@ impl Repo {
             return Ok(Vec::new());
         };
 
-        let oid = git2::Oid::from_str(commit).with_context(|| format!("invalid commit id {commit}"))?;
+        let oid =
+            git2::Oid::from_str(commit).with_context(|| format!("invalid commit id {commit}"))?;
         let commit_obj = self.inner.find_commit(oid).context("unknown commit")?;
         let tree = commit_obj.tree().context("failed to read commit tree")?;
         let Some(blob) = self.blob_in_tree(&tree, path)? else {

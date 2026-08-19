@@ -768,7 +768,9 @@ fn a_project_install_shows_up_in_the_statuses_row_where_codex_is_installed() {
 fn a_workspace_no_agent_has_run_in_has_no_merged_history() {
     let dir = workspace();
 
-    let HistoryMined { records, labels, .. } = history(dir.path());
+    let HistoryMined {
+        records, labels, ..
+    } = history(dir.path());
 
     assert!(records.is_empty(), "got: {records:?}");
     assert!(labels.is_empty(), "got: {labels:?}");

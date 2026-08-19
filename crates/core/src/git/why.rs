@@ -152,10 +152,7 @@ pub fn build_for_commit(
                         seq: span.seq,
                         confidence: span.confidence,
                     };
-                    candidates
-                        .entry(hash)
-                        .or_default()
-                        .observe(entry);
+                    candidates.entry(hash).or_default().observe(entry);
                 }
             }
         }

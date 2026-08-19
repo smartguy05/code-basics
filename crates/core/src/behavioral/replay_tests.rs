@@ -11,7 +11,10 @@ fn record_from_parts_picks_content_type_case_insensitively() {
         200,
         vec![
             ("X-Trace".into(), "abc".into()),
-            ("Content-Type".into(), "application/json; charset=utf-8".into()),
+            (
+                "Content-Type".into(),
+                "application/json; charset=utf-8".into(),
+            ),
         ],
         "{}".into(),
     );
