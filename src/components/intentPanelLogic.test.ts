@@ -1,18 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   canRejectInMode,
+  cardRisk,
   cardTitle,
   groupStagedState,
   importFeedback,
   intentDataHint,
   rejectFeedback,
   rejectReasonError,
+  scopeCreep,
   scorecardLine,
   stagedState,
   unfulfilledCaption,
 } from "./intentPanelLogic";
 import type {
+  ErosionFlag,
   FileChange,
+  GroupFile,
   IntentGroup,
   ProviderStatus,
   Scorecard,
@@ -326,5 +330,139 @@ describe("groupStagedState", () => {
 
   it("is none for an empty group", () => {
     expect(groupStagedState([], [])).toBe("none");
+  });
+});
+
+// -- scope-creep + risk badges ----------------------------------------------
+
+const gfile = (path: string, lineIndices: number[] = []): GroupFile => ({
+  path,
+  lineIndices,
+  hunks: [],
+});
+
+const mkGroup = (over: Partial<IntentGroup>): IntentGroup => ({
+  id: "g",
+  kind: "intent",
+  label: "why",
+  files: [],
+  lineCount: 0,
+  confidence: "high",
+  ...over,
+});
+
+const card = (over: Partial<Scorecard>): Scorecard => ({
+  claims: 0,
+  evidenced: 0,
+  unmatched: 0,
+  hunks: 0,
+  attributedHunks: 0,
+  unattributedLines: 0,
+  ...over,
+});
+
+const eflag = (over: Partial<ErosionFlag>): ErosionFlag => ({
+  path: "a.ts",
+  line: 1,
+  index: 0,
+  origin: "addition",
+  category: "secret",
+  ruleId: "r",
+  message: "m",
+  content: "c",
+  ...over,
+});
+
+describe("scopeCreep", () => {
+  it("abstains on a small diff even with an unattributed line", () => {
+    const groups = [mkGroup({ lineCount: 10 })];
+    expect(scopeCreep(card({ unattributedLines: 5 }), groups)).toBeNull();
+  });
+
+  it("abstains when there are no changes at all", () => {
+    expect(scopeCreep(card({}), [])).toBeNull();
+  });
+
+  it("notices when unexplained groups cross the floor on a large diff", () => {
+    const groups = [
+      mkGroup({ kind: "other", lineCount: 20 }),
+      mkGroup({ kind: "other", lineCount: 20 }),
+    ];
+    const out = scopeCreep(card({ unattributedLines: 0 }), groups);
+    expect(out?.level).toBe("notice");
+  });
+
+  it("notices when a meaningful share of the diff is unattributed", () => {
+    // total = sum(lineCount) = 100; share = 40/100 = 0.4 -> the NOTICE threshold.
+    const groups = [mkGroup({ lineCount: 100 })];
+    const out = scopeCreep(card({ unattributedLines: 40 }), groups);
+    expect(out?.level).toBe("notice");
+  });
+
+  it("escalates to high only when BOTH signals are substantial", () => {
+    // 5 unexplained groups (>=4) and share 60/100 = 0.6 (>=0.6): high is now
+    // reachable — the denominator is sum(lineCount), not summed with unattributed.
+    const groups = Array.from({ length: 5 }, () => mkGroup({ kind: "other", lineCount: 20 }));
+    const out = scopeCreep(card({ unattributedLines: 60 }), groups);
+    expect(out?.level).toBe("high");
+  });
+
+  it("stays at notice when only one signal is substantial", () => {
+    // Many unexplained groups but a small unattributed share.
+    const groups = Array.from({ length: 5 }, () => mkGroup({ kind: "other", lineCount: 20 }));
+    const out = scopeCreep(card({ unattributedLines: 10 }), groups);
+    expect(out?.level).toBe("notice");
+  });
+});
+
+describe("cardRisk", () => {
+  it("abstains for a high-confidence stated card in a plain path with no flag", () => {
+    const g = mkGroup({ confidence: "high", files: [gfile("src/util/math.ts", [0, 1])] });
+    expect(cardRisk(g, [])).toBeNull();
+  });
+
+  it("elevates an unexplained (other) card", () => {
+    const g = mkGroup({ kind: "other", files: [gfile("src/util/math.ts")] });
+    expect(cardRisk(g, [])?.level).toBe("elevated");
+  });
+
+  it("does not elevate a titled same-turn card in a plain path", () => {
+    const g = mkGroup({ kind: "sameTurn", label: "3 files changed together", files: [gfile("src/util/math.ts")] });
+    expect(cardRisk(g, [])).toBeNull();
+  });
+
+  it("elevates on low confidence", () => {
+    const g = mkGroup({ confidence: "low", files: [gfile("src/util/math.ts")] });
+    expect(cardRisk(g, [])?.level).toBe("elevated");
+  });
+
+  it("elevates on a sensitive path and names it", () => {
+    const g = mkGroup({ files: [gfile("src/auth/session.ts")] });
+    const out = cardRisk(g, []);
+    expect(out?.level).toBe("elevated");
+    expect(out?.reasons.some((r) => r.includes("auth/session.ts"))).toBe(true);
+  });
+
+  it("does not treat 'author' or an ordinary config file as sensitive", () => {
+    expect(cardRisk(mkGroup({ files: [gfile("src/models/author.ts")] }), [])).toBeNull();
+    expect(cardRisk(mkGroup({ files: [gfile("vite.config.ts")] }), [])).toBeNull();
+  });
+
+  it("goes high on an intersecting secret erosion flag", () => {
+    const g = mkGroup({ files: [gfile("src/util/math.ts", [4, 5])] });
+    const out = cardRisk(g, [eflag({ path: "src/util/math.ts", index: 5, category: "secret" })]);
+    expect(out?.level).toBe("high");
+  });
+
+  it("stays elevated (not high) on an intersecting low-severity flag", () => {
+    const g = mkGroup({ files: [gfile("src/util/math.ts", [4, 5])] });
+    const out = cardRisk(g, [eflag({ path: "src/util/math.ts", index: 5, category: "droppedLog" })]);
+    expect(out?.level).toBe("elevated");
+  });
+
+  it("ignores an erosion flag on a different line or in a different file", () => {
+    const g = mkGroup({ files: [gfile("src/util/math.ts", [4, 5])] });
+    expect(cardRisk(g, [eflag({ path: "src/util/math.ts", index: 9, category: "secret" })])).toBeNull();
+    expect(cardRisk(g, [eflag({ path: "src/other.ts", index: 5, category: "secret" })])).toBeNull();
   });
 });

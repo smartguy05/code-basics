@@ -262,11 +262,13 @@ export function ChangesView({ onOpenReview }: { onOpenReview: () => void }) {
   }, [refreshIntent, status]);
 
   /**
-   * Recompute the erosion flags — only while the erosion view is showing, for
-   * the same reason as the intent grouping: it walks every changed file.
+   * Recompute the erosion flags. Runs for the Erosion view (which shows them)
+   * and the Intent view (whose risk badges read them), for the same reason the
+   * intent grouping does: it walks every changed file. Both re-run on a mode
+   * change, so the flags' `index` values always match the diff currently shown.
    */
   const refreshErosion = useCallback(async () => {
-    if (grouping !== "erosion") return;
+    if (grouping !== "erosion" && grouping !== "intent") return;
     try {
       setErosion(await api.erosionScan(mode));
     } catch (e) {
@@ -277,6 +279,14 @@ export function ChangesView({ onOpenReview }: { onOpenReview: () => void }) {
   useEffect(() => {
     void refreshErosion();
   }, [refreshErosion, status]);
+
+  // Erosion flags are keyed by DiffLine.index, which only means anything within
+  // one comparison mode. Drop them the instant the mode changes so a risk badge
+  // can never intersect a stale flag against a differently-numbered diff; the
+  // effect above then rescans for the new mode.
+  useEffect(() => {
+    setErosion(null);
+  }, [mode]);
 
   const loadFile = useCallback(
     async (path: string, comparison: ComparisonMode) => {
@@ -699,6 +709,7 @@ export function ChangesView({ onOpenReview }: { onOpenReview: () => void }) {
               onEnable={enableCapture}
               onImportHistory={importHistory}
               behavioral={behavioral}
+              erosionFlags={erosion?.flags}
             />
           </>
         )}

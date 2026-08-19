@@ -70,15 +70,15 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/enhancements/runs.rs` | 82 | Per-workspace record of which run-once prompts have already been run. |
 | `crates/core/src/enhancements/runs_tests.rs` | 69 | Tests for the per-workspace run-once record. Pure filesystem work over a |
 | `crates/core/src/erosion/mod.rs` | 40 | Flagging the changes that quietly weaken a codebase. |
-| `crates/core/src/erosion/rules.rs` | 235 | The erosion rule model, its TOML loader, and the built-in set. |
-| `crates/core/src/erosion/rules_tests.rs` | 160 | Tests for erosion rule loading and the built-in set. |
+| `crates/core/src/erosion/rules.rs` | 247 | The erosion rule model, its TOML loader, and the built-in set. |
+| `crates/core/src/erosion/rules_tests.rs` | 183 | Tests for erosion rule loading and the built-in set. |
 | `crates/core/src/erosion/scan.rs` | 135 | Running the rules over a diff. |
-| `crates/core/src/erosion/scan_tests.rs` | 256 | Tests for the erosion diff scan. |
+| `crates/core/src/erosion/scan_tests.rs` | 304 | Tests for the erosion diff scan. |
 | `crates/core/src/files.rs` | 218 | Workspace file access for the directory tree and file editor. |
 | `crates/core/src/git/attribution.rs` | 844 | Deciding which recorded edit produced which line of a diff. |
 | `crates/core/src/git/attribution_tests.rs` | 1044 | Tests for attributing diff lines to recorded edits. |
-| `crates/core/src/git/coverage.rs` | 339 | Auditing the agent's own story about its work. |
-| `crates/core/src/git/coverage_tests.rs` | 713 | Tests for the intent-coverage reverse pass and scorecard. |
+| `crates/core/src/git/coverage.rs` | 345 | Auditing the agent's own story about its work. |
+| `crates/core/src/git/coverage_tests.rs` | 812 | Tests for the intent-coverage reverse pass and scorecard. |
 | `crates/core/src/git/grouping.rs` | 614 | Turning hunks into a handful of decisions. |
 | `crates/core/src/git/grouping_tests.rs` | 1040 | Tests for collapsing hunks into cards. |
 | `crates/core/src/git/mod.rs` | 34 | Git operations. |
@@ -197,7 +197,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/ErrorBoundary.tsx` | 65 |  |
 | `src/components/FileEditor.tsx` | 946 |  |
 | `src/components/FileTree.tsx` | 118 |  |
-| `src/components/IntentPanel.tsx` | 797 |  |
+| `src/components/IntentPanel.tsx` | 853 |  |
 | `src/components/LspStatus.tsx` | 125 |  |
 | `src/components/MenuBar.tsx` | 381 |  |
 | `src/components/ObjectTree.tsx` | 351 |  |
@@ -221,9 +221,9 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/enhancementsLogic.test.ts` | 118 |  |
 | `src/components/enhancementsLogic.ts` | 100 |  |
 | `src/components/erosionLogic.test.ts` | 78 |  |
-| `src/components/erosionLogic.ts` | 63 |  |
-| `src/components/intentPanelLogic.test.ts` | 330 |  |
-| `src/components/intentPanelLogic.ts` | 240 |  |
+| `src/components/erosionLogic.ts` | 65 |  |
+| `src/components/intentPanelLogic.test.ts` | 200 |  |
+| `src/components/intentPanelLogic.ts` | 405 |  |
 | `src/components/language.test.ts` | 114 |  |
 | `src/components/language.ts` | 113 |  |
 | `src/components/lspStatusLogic.test.ts` | 306 |  |
@@ -247,12 +247,12 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 |  |
 | `src/ipc/api.ts` | 712 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 1554 |  |
+| `src/ipc/types.ts` | 1555 |  |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
 | `src/views/ArchitectureView.tsx` | 677 |  |
-| `src/views/ChangesView.tsx` | 1059 |  |
+| `src/views/ChangesView.tsx` | 1060 |  |
 | `src/views/HistoryView.tsx` | 556 |  |
 | `src/views/InspectView.tsx` | 1062 |  |
 | `src/views/RunView.tsx` | 1469 |  |

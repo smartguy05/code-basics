@@ -150,11 +150,34 @@ fn categories_serialise_in_camel_case() {
         ErosionCategory::LeftoverStub,
         ErosionCategory::RemovedSafeguard,
         ErosionCategory::DroppedLog,
+        ErosionCategory::Secret,
     ])
     .unwrap();
 
     assert_eq!(
         json,
-        r#"["deletedAssertion","ignoredTest","widenedCatch","removedNullCheck","unsafeCast","leftoverStub","removedSafeguard","droppedLog"]"#
+        r#"["deletedAssertion","ignoredTest","widenedCatch","removedNullCheck","unsafeCast","leftoverStub","removedSafeguard","droppedLog","secret"]"#
+    );
+}
+
+/// Secret detection ships out of the box; each rule reads the added side, since
+/// removing a leaked key is not a new leak.
+#[test]
+fn builtin_rules_include_secret_detectors() {
+    let rules = builtin_rules();
+    let secret: Vec<&ErosionRule> = rules
+        .iter()
+        .filter(|r| r.category == ErosionCategory::Secret)
+        .collect();
+
+    assert!(!secret.is_empty(), "expected built-in secret rules");
+    assert!(
+        secret.iter().all(|r| r.side == RuleSide::Added),
+        "secret rules read the added side"
+    );
+    // A secret is a leak wherever it lands, including a test fixture.
+    assert!(
+        secret.iter().all(|r| !r.prod_only),
+        "secret rules are not prod-only"
     );
 }

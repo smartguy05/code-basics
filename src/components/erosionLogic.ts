@@ -12,6 +12,7 @@ import type { ErosionCategory, ErosionFlag, ErosionReport } from "../ipc/types";
 
 /** The order categories are shown in — most-scrutinised first. */
 export const CATEGORY_ORDER: ErosionCategory[] = [
+  "secret",
   "deletedAssertion",
   "ignoredTest",
   "removedNullCheck",
@@ -23,6 +24,7 @@ export const CATEGORY_ORDER: ErosionCategory[] = [
 ];
 
 const CATEGORY_LABEL: Record<ErosionCategory, string> = {
+  secret: "Hardcoded secrets",
   deletedAssertion: "Deleted assertions",
   ignoredTest: "Skipped tests",
   removedNullCheck: "Removed null checks",

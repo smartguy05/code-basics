@@ -27,6 +27,8 @@ pub enum ErosionCategory {
     RemovedSafeguard,
     /// A log line that was removed.
     DroppedLog,
+    /// A hardcoded credential introduced into the diff.
+    Secret,
 }
 
 /// Which side of the diff a rule inspects.
@@ -227,6 +229,16 @@ pub fn builtin_rules() -> Vec<ErosionRule> {
         r("rs-todo-macro", LeftoverStub, Added, r"\btodo!\(|\bunimplemented!\(", "A todo!/unimplemented! was left behind.", RS, true),
         r("rs-todo", LeftoverStub, Added, r"//\s*(TODO|FIXME)\b", "A TODO/FIXME was left in the code.", RS, true),
         r("rs-dropped-log", DroppedLog, Removed, r"tracing::(info|warn|error|debug)|log::(info|warn|error|debug)", "A log line was removed.", RS, false),
+        // -- Hardcoded secrets (all files, added side) --------------------
+        // A secret is a leak wherever it lands — a test fixture is not exempt —
+        // so these carry no `prod_only` and no extension filter. Each pattern is
+        // shaped to a specific credential to keep false positives near zero.
+        r("secret-aws-access-key", Secret, Added, r"AKIA[0-9A-Z]{16}", "An AWS access key id was hardcoded.", &[], false),
+        r("secret-private-key", Secret, Added, r"-----BEGIN (RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----", "A private key was committed.", &[], false),
+        r("secret-github-token", Secret, Added, r"gh[oprsu]_[A-Za-z0-9]{30,}", "A GitHub token was hardcoded.", &[], false),
+        r("secret-slack-token", Secret, Added, r"xox[baprs]-[A-Za-z0-9-]{10,}", "A Slack token was hardcoded.", &[], false),
+        r("secret-assignment", Secret, Added, r#"(?i)\b(api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key)\b\s*[:=]\s*["'](?:[^$<{%])[^"'\s]{11,}["']"#, "A credential was assigned to a hardcoded literal.", &[], false),
+        r("secret-connection-password", Secret, Added, r#"(?i)\b(password|pwd)=(?:[^$<{%\s;"'])[^;\s"']{7,}"#, "A connection-string password was hardcoded.", &[], false),
     ]
 }
 

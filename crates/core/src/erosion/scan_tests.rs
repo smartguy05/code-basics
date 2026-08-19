@@ -142,6 +142,104 @@ fn a_removed_line_is_not_matched_by_an_added_side_rule() {
     assert!(report.flags.is_empty());
 }
 
+// -- secrets ----------------------------------------------------------------
+
+#[test]
+fn an_introduced_secret_is_flagged() {
+    let diff = file("config.rs", &[r#"+    let key = "AKIAIOSFODNN7EXAMPLE";"#]);
+    let rules = vec![rule(
+        "aws-access-key",
+        ErosionCategory::Secret,
+        RuleSide::Added,
+        r"AKIA[0-9A-Z]{16}",
+        &[],
+    )];
+
+    let report = scan_diffs(&[diff], &rules);
+
+    assert_eq!(report.flags.len(), 1);
+    assert_eq!(report.flags[0].category, ErosionCategory::Secret);
+    assert_eq!(report.flags[0].origin, LineOrigin::Addition);
+    assert_eq!(report.flags[0].line, 1);
+    // The click target is the diff-line index, so the panel can highlight it.
+    assert_eq!(report.flags[0].index, 0);
+}
+
+#[test]
+fn the_same_secret_on_a_removed_or_context_line_is_not_flagged() {
+    // Removing a leaked key, or a key sitting on an unchanged line, is not a
+    // newly introduced secret. Secret rules read the added side only.
+    let removed = file("config.rs", &[r#"-    let key = "AKIAIOSFODNN7EXAMPLE";"#]);
+    let context = file(
+        "config.rs",
+        &[
+            r#"    let key = "AKIAIOSFODNN7EXAMPLE";"#,
+            "+    let unrelated = 1;",
+        ],
+    );
+    let rules = vec![rule(
+        "aws-access-key",
+        ErosionCategory::Secret,
+        RuleSide::Added,
+        r"AKIA[0-9A-Z]{16}",
+        &[],
+    )];
+
+    let report = scan_diffs(&[removed, context], &rules);
+
+    assert!(report.flags.is_empty());
+}
+
+/// The SHIPPED secret rules (not a test stand-in) must catch real leaks yet stay
+/// silent on the placeholders and env-var indirections that fill config
+/// templates and fixtures — a false secret flag is worse than none.
+#[test]
+fn the_builtin_secret_rules_flag_leaks_but_not_placeholders() {
+    let secret_rules: Vec<ErosionRule> = crate::erosion::builtin_rules()
+        .into_iter()
+        .filter(|r| r.category == ErosionCategory::Secret)
+        .collect();
+    assert!(!secret_rules.is_empty(), "there should be built-in secret rules");
+
+    // Real leaks on added lines — each distinct line should be flagged.
+    let leaks = file(
+        "config.rs",
+        &[
+            r#"+    let k = "AKIAIOSFODNN7EXAMPLE";"#,
+            r#"+    let gh = "ghp_0123456789abcdefghijklmnopqrstuvwx";"#,
+            r#"+    apiKey = "sk-live-0123456789abcdef";"#,
+            r#"+    conn = "Server=db;Password=P@ssw0rd123;";"#,
+        ],
+    );
+    let leak_report = scan_diffs(&[leaks], &secret_rules);
+    assert_eq!(
+        leak_report.flags.len(),
+        4,
+        "each planted leak should be flagged once, got {:?}",
+        leak_report.flags
+    );
+
+    // Placeholders and env-var / template indirections on added lines — none of
+    // these is a hardcoded credential, so none must fire.
+    let innocuous = file(
+        "config.rs",
+        &[
+            r#"+    password = "changeme";"#,
+            r#"+    token = "placeholder";"#,
+            r#"+    password: "required field","#,
+            r#"+    conn = "Password=${DB_PASSWORD};";"#,
+            r#"+    conn = "Password=<your-password>;";"#,
+            r#"+    conn = "pwd=%DB_PWD%;";"#,
+        ],
+    );
+    let innocuous_report = scan_diffs(&[innocuous], &secret_rules);
+    assert!(
+        innocuous_report.flags.is_empty(),
+        "no placeholder/indirection should be flagged, got {:?}",
+        innocuous_report.flags
+    );
+}
+
 // -- path scoping -----------------------------------------------------------
 
 #[test]

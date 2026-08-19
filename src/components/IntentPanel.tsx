@@ -2,12 +2,14 @@ import { useState } from "react";
 import * as api from "../ipc/api";
 import {
   canRejectInMode,
+  cardRisk,
   cardTitle,
   groupStagedState,
   importFeedback,
   intentDataHint,
   rejectFeedback,
   rejectReasonError,
+  scopeCreep,
   scorecardLine,
   stagedState,
   unfulfilledCaption,
@@ -23,6 +25,7 @@ import type {
   CardBehavior,
   ComparisonMode,
   Confidence,
+  ErosionFlag,
   FileChange,
   GroupFile,
   GroupKind,
@@ -111,6 +114,33 @@ function BehavioralBadge({ card }: { card: CardBehavior }) {
   );
 }
 
+/**
+ * The quiet risk pill on a card, shown only when {@link cardRisk} elevates it.
+ * The reasons become the tooltip so hovering says exactly why it is flagged.
+ */
+function RiskBadge({ risk }: { risk: { level: "elevated" | "high"; reasons: string[] } }) {
+  // Styled inline so the badge is self-contained: high borrows the fail colour,
+  // elevated stays muted (the quiet default the abstain rule wants).
+  const color = risk.level === "high" ? "var(--fail)" : "var(--text-faint)";
+  return (
+    <span
+      className={`risk-badge ${risk.level}`}
+      title={`Worth a closer look:\n${risk.reasons.map((r) => `• ${r}`).join("\n")}`}
+      style={{
+        fontSize: 10,
+        padding: "1px 5px",
+        marginLeft: 6,
+        borderRadius: 3,
+        border: `1px solid ${color}`,
+        color,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {risk.level === "high" ? "high risk" : "review"}
+    </span>
+  );
+}
+
 export interface IntentPanelProps {
   groups: IntentGroup[];
   /** The per-turn coverage tally, shown above the cards. */
@@ -157,6 +187,12 @@ export interface IntentPanelProps {
    * appear only in the overall section, never pinned to a card.
    */
   behavioral?: BehavioralReport | null;
+  /**
+   * The erosion flags for the current diff, so a card can show a risk badge
+   * when one lands on its own lines. Absent before a scan has run — treated as
+   * none, so the badge simply stays quiet rather than guessing.
+   */
+  erosionFlags?: ErosionFlag[];
 }
 
 export function IntentPanel({
@@ -179,14 +215,17 @@ export function IntentPanel({
   onEnable,
   onImportHistory,
   behavioral,
+  erosionFlags,
 }: IntentPanelProps) {
   const capturing = providers.some((p) => p.capture != null);
+  const flags = erosionFlags ?? [];
   // Attributions keyed by group id, so a card can find its own behavior in O(1).
   const behaviorByGroup = new Map(
     (behavioral?.attributions ?? []).map((card) => [card.groupId, card]),
   );
   const hint = intentDataHint(groups, providers);
   const unfulfilledHeading = unfulfilledCaption(unfulfilled);
+  const scope = scopeCreep(scorecard, groups);
 
   // Open by default until capture is set up. The panel is the only way to turn
   // it on, and a feature nobody can find is a feature that does not exist.
@@ -204,6 +243,7 @@ export function IntentPanel({
       key={group.id}
       group={group}
       behavior={behaviorByGroup.get(group.id) ?? null}
+      risk={cardRisk(group, flags)}
       selected={group.id === selectedGroup}
       selectedPath={group.id === selectedGroup ? selectedPath : null}
       statusFiles={statusFiles}
@@ -317,6 +357,19 @@ export function IntentPanel({
         </div>
       )}
 
+      {scope && (
+        <div
+          className={scope.level === "high" ? "warning" : "muted"}
+          style={{ padding: "2px 8px 6px", fontSize: 11 }}
+          // Informational only: a nudge to glance at scope, never an accusation
+          // that anything is out of place. High styling is reserved for when
+          // both signals are substantial at once.
+          title="A soft scope check derived from the unexplained groups and unattributed lines above — worth a look, not a verdict."
+        >
+          {scope.message}
+        </div>
+      )}
+
       {behavioral && (
         <div className="behavioral-overall">
           <div
@@ -414,6 +467,7 @@ export function IntentPanel({
 function GroupCard({
   group,
   behavior,
+  risk,
   selected,
   selectedPath,
   statusFiles,
@@ -429,6 +483,7 @@ function GroupCard({
 }: {
   group: IntentGroup;
   behavior: CardBehavior | null;
+  risk: { level: "elevated" | "high"; reasons: string[] } | null;
   selected: boolean;
   selectedPath: string | null;
   statusFiles: FileChange[];
@@ -482,6 +537,7 @@ function GroupCard({
         <span className={`kind ${group.kind}`}>{KIND_LABEL[group.kind]}</span>
         <span className="label">{group.label}</span>
         {behavior && <BehavioralBadge card={behavior} />}
+        {risk && <RiskBadge risk={risk} />}
         <StageTag state={groupStagedState(group.files.map((f) => f.path), statusFiles)} />
         <span className="confidence" title={`${group.confidence} confidence`}>
           {CONFIDENCE_MARK[group.confidence]}

@@ -663,7 +663,8 @@ export type ErosionCategory =
   | "unsafeCast"
   | "leftoverStub"
   | "removedSafeguard"
-  | "droppedLog";
+  | "droppedLog"
+  | "secret";
 
 /** One located weakening the scan found (`erosion/scan.rs`). */
 export interface ErosionFlag {

@@ -33,12 +33,26 @@
       `resize: both` + min/max + `cursor: move` in styles.css. Position persists; size
       is CSS-native and not persisted (deferred nicety). 9 new tests.
 
-## Phase 2 — deterministic tier (next)
-- [ ] Secrets-in-diff scanner (regex on Added lines; reuse erosion scan plumbing;
-      cite DiffLine::index). Tests-first with planted secrets. Highest ROI.
-- [ ] Scope-creep alarm from Scorecard `unattributedLines` / `kind:"other"`.
-- [ ] Risk-weighted card badges (path heuristics + erosion + kind); optionally
-      expose per-hunk `AttributedSpan.confidence` (computed, not serialized).
+## Phase 2 — deterministic tier (done)
+- [x] Secrets-in-diff scanner — new `ErosionCategory::Secret` + 6 Added-side
+      built-in rules (AWS/private-key/GitHub/Slack tight; secret-assignment &
+      connection-password tightened to exclude env-var/placeholder indirections
+      and require a long whitespace-free literal). Reuses the category-generic
+      erosion scan; cites DiffLine::index. Frontend: union + CATEGORY_ORDER
+      (first) + label. Tests use the REAL builtins (leaks fire, placeholders
+      don't).
+- [x] Scope-creep alarm — pure `scopeCreep(scorecard, groups)` in
+      intentPanelLogic.ts (no IPC change): unexplained-`other`-group count +
+      unattributed **share of sum(lineCount)** (NOT summed with unattributed —
+      that double-count made "high" unreachable). Informational banner in
+      IntentPanel; abstains below 40 changed lines; "high" needs both signals.
+- [x] Risk-weighted card badges — pure `cardRisk(group, erosionFlags)`: kind
+      `other` / low confidence / boundary-matched sensitive path (dropped
+      `config`, guarded `auth`≠`author`) / erosion flag intersecting the card's
+      own path+lineIndices (secret/removedSafeguard/deletedAssertion ⇒ high).
+      Quiet by default (null ⇒ no badge). ChangesView now scans erosion for the
+      intent view too and clears it on mode change so indices stay aligned.
+      Used group.confidence — did NOT expose AttributedSpan over IPC.
 
 ## Phase 3 — agent-process checks (prompts feeding the button)
 - [ ] Business-rule invariants (extract → `.code-basics/rules/*.md` → verify).
