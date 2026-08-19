@@ -32,6 +32,47 @@
       —/✕ buttons, switches to a top/left anchor; a pure click no longer persists),
       `resize: both` + min/max + `cursor: move` in styles.css. Position persists; size
       is CSS-native and not persisted (deferred nicety). 9 new tests.
+- [x] Persist the resized size too (was the deferred nicety above). `PanelLayout`
+      gains optional width/height (same numeric guards); pure `clampPanelSize`
+      (floor 360×280, ceiling 96vw/92vh, floor wins). `ReviewPanel` seeds size
+      from the layout and captures grip resizes via a `ResizeObserver` (grip fires
+      no pointer event), debounced, only after a real user resize. 6 new tests.
+      Commit 9dc1b54. (styles.css lines 877-880 comment now stale — size IS
+      persisted; left untouched, out of that commit's slice.)
+
+## Capture-side intent attribution (done — commit ad65e93)
+- [x] Live-hook `SubagentStop`: added to `hooks_json::EVENTS` (propagates to
+      install/detect/uninstall/command_line); new `HookEvent::SubagentStop` routed
+      to `ingest_label` like `Stop` — but NEVER through `ask_for_intent` (the
+      pre-existing `event != Stop` guard already excludes it, so a subagent stop
+      can never block/exit-2). Joins to edits via the shipped path-scoped
+      cross-turn binder; no turn-id match needed. 3 tests + the events-recognised
+      test updated to three events.
+- [x] Retroactive sidechain mining in `claude_code::read_transcript`: no longer
+      skips `isSidechain`. First pass builds uuid→(parentUuid,isSidechain); second
+      pass groups each sidechain line by its subagent-root uuid
+      (`resolve_subagent_root`, cached, abstains on cycle/dangling/unknown parent).
+      Shared `TurnState`/`process_entry` drives main (sub_root=None, id unchanged)
+      and each subagent (`claude-history-{session}-sub-{root}-{block}`) so parallel
+      interleaved subagents never share a turn. Labels stay `Inferred`. 5 tests
+      incl. inverted sidechain-skip + interleaved-subagents key case.
+- [x] Fixture fix: `providers_tests::existing_dashboard_hooks` now seeds a
+      pre-existing `SubagentStop` hook so the additive-merge preservation test
+      genuinely covers the new event (was the one full-suite failure).
+
+## Follow-ups (optional, non-blocking)
+- [ ] MANUAL empirical check (tests can't cover): with capture enabled, run a Task
+      subagent that edits + ends with `Intent(paths): …`, inspect `.code-basics/
+      intents/` — confirm a SubagentStop label recorded and Changes→Intent
+      attributes the subagent's hunks. If the live payload lacks
+      `last_assistant_message`, 3a is a no-op and 3b (mining) is the working path.
+- [ ] NIT (review, non-blocking): `ReviewPanel` minimize→restore can persist the
+      CSS-default size (the `first` guard only skips the initial observe). Harmless
+      — value is clamped and equals what's displayed, re-applied identically on
+      reload.
+- [ ] NIT (review, non-blocking): `resolve_subagent_root` caches only the queried
+      uuid, not ancestors climbed — redundant walk for deep lineages, bounded by
+      the cycle guard, correctness unaffected.
 
 ## Phase 2 — deterministic tier (done)
 - [x] Secrets-in-diff scanner — new `ErosionCategory::Secret` + 6 Added-side

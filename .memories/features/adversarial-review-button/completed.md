@@ -1,5 +1,33 @@
 # Completed — Adversarial review button (Phase 1)
 
+## Panel-size + capture-side follow-ups (2026-08-19, branch claude/intent-scope-and-diff-fixes)
+Ran via a workflow (3 parallel implement agents → verify → 2 review agents, all Opus).
+Three focused commits after a standalone `cargo fmt` cleanup (6c35923):
+- **9dc1b54 — panel size persistence.** `reviewLayoutLogic.ts` PanelLayout gains
+  optional width/height (same numeric guards); pure `clampPanelSize` (floor
+  360×280 wins over 96vw/92vh ceiling). `ReviewPanel` seeds size + captures grip
+  resizes via a debounced `ResizeObserver` (grip fires no pointer event), only
+  after a real resize. 6 vitest cases.
+- **ad65e93 — capture-side intent attribution.** (a) `SubagentStop` hook: added to
+  `hooks_json::EVENTS`; new `HookEvent::SubagentStop` → `ingest_label` like `Stop`
+  but never `ask_for_intent` (pre-existing `event != Stop` guard already excludes
+  it, so a subagent stop can't block/exit-2). (b) Retroactive sidechain mining:
+  `claude_code::read_transcript` groups interleaved subagents by `parentUuid`
+  lineage via `resolve_subagent_root` (cached; abstains on cycle/dangling/unknown);
+  shared `TurnState`/`process_entry` keeps main-session turn ids unchanged, subagent
+  ids `claude-history-{session}-sub-{root}-{block}`. (c) Fixture fix in
+  `providers_tests` seeds a pre-existing SubagentStop hook (the one full-suite
+  failure — a fixture gap, not a regression: merge is additive).
+- Gates (independently re-run): `cargo test -p cb-core` 2163 passed / 0 failed;
+  `pnpm test` 825 passed; `pnpm typecheck` clean; clippy only pre-existing
+  rider.rs warning; rustfmt clean; INDEX regenerated.
+- Reviews: both lenses (correctness/IPC, faithfulness/abstain) approved; two
+  non-blocking nits recorded in todos.md. Manual empirical SubagentStop check
+  still open (tests can't cover a live payload) — see todos.md.
+
+---
+
+
 ## What shipped
 An in-app "Review" button (Changes tab) that runs a chosen prompt through a
 detected coding-agent CLI (**Claude Code** or **Codex**) read-only against the
