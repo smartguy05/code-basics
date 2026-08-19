@@ -46,7 +46,7 @@ pub async fn review_agents() -> Result<Vec<ReviewAgentInfo>, String> {
         .map(|a| ReviewAgentInfo {
             id: a.id().to_string(),
             label: a.label().to_string(),
-            models: a.models().iter().map(|m| m.to_string()).collect(),
+            models: review::models_for(a),
         })
         .collect())
 }
@@ -69,8 +69,10 @@ pub async fn start_review(
     let root = state.workspace_root()?;
 
     let agent = ReviewAgent::from_id(&agent_id)?;
-    // Refuse an unknown model rather than silently substituting one.
-    let model = review::resolve_model(agent, model.as_deref())?;
+    // Refuse an unknown model rather than silently substituting one, validating
+    // against the models the agent actually offers (Codex's are read from disk).
+    let available = review::models_for(agent);
+    let model = review::resolve_model(agent, &available, model.as_deref())?;
     // Absent/blank ⇒ read-only; an unknown value is refused, not defaulted.
     let mode = AgentMode::from_id(mode.as_deref())?;
 
@@ -84,7 +86,7 @@ pub async fn start_review(
 
     let invocation = Invocation {
         program: agent.program().to_string(),
-        args: review::agent_args(agent, mode, model, &prompt.body),
+        args: review::agent_args(agent, mode, model.as_deref(), &prompt.body),
         cwd: root,
         env: Default::default(),
         report: None,

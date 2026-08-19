@@ -52,6 +52,52 @@ panel hosted at the App level (survives tab switches).
 - **CLI smoke test**: `claude -p "…" --model haiku --permission-mode plan` runs
   headless, streams, exits 0 — the invocation shape is real, not assumed.
 
+## Phase 1 follow-ups: Codex models + draggable panel (2026-08-18)
+
+Two follow-ups done (a third — "diff into prompt context" — was deselected and
+stays deferred). Implemented via a Workflow (2 parallel Opus agents → verify →
+adversarial review).
+
+- **Codex model selection from `~/.codex/config.toml`** (backend only):
+  - `review.rs`: pure `parse_codex_models(&str)` (real `toml` parse; top-level
+    `model` leads, then each `[profiles.*] model`, deduped first-seen; abstains to
+    empty on missing/blank/non-string/parse-error). `codex_models()` fs wrapper
+    (path via `intents::providers::codex::codex_home`; not unit-tested, like
+    `detect_agents`). `models_for(agent)` single dispatch. `resolve_model` changed
+    to take `available: &[String]` and return `Option<String>` (None/blank → first
+    available else agent default; empty available ignores a request).
+  - `commands/review.rs`: `review_agents` fills each row via `models_for`;
+    `start_review` computes `available` and validates through the new signature.
+    `agent_args` and `ReviewAgentInfo` unchanged → **no `types.ts`/frontend edit**
+    (the picker already shows when `models.length > 0`).
+  - 8 new tests in `review_tests.rs`; existing `resolve_model` tests migrated to
+    the slice signature.
+
+- **Draggable/resizable panel** (frontend only):
+  - New `reviewLayoutLogic.ts` (+ `.test.ts`, 9 tests): `clampPanelPosition`
+    (8px margin, per-axis clamp, oversized pins to origin) and
+    `load/savePanelLayout` under `cb.agentPanel.layout` (mirrors `loadAgentPrefs`).
+  - `ReviewPanel.tsx`: header pointer-drag with capture, ignores the —/✕ buttons,
+    seeds `pos` from stored layout, switches to a top/left inline anchor when
+    dragged. A pure click (no move) does **not** persist — `moved` guard added
+    during review (a reviewer flagged the bottom-right→top-left flip on click).
+  - `styles.css`: `resize: both`, min 360×280 / max 96vw×92vh, `cursor: move` on
+    the header. Position persists; size is CSS-native, not persisted (deferred).
+
+- **Gotcha (recorded):** a workflow agent ran a workspace-wide `cargo fmt` that
+  reformatted ~30 pre-existing-drift files outside both slices. Reverted them with
+  `git restore` to keep the diff focused and the per-hunk intent cards clean; the
+  drift is pre-existing and left as-is.
+
+## Verified (this follow-up)
+- `cargo test -p cb-core --lib review`: 28 passed. `rustfmt --check` on the three
+  changed Rust files: clean. `clippy -p cb-core`: only the pre-existing
+  `rider.rs` `while_let` warning (not in new code).
+- `pnpm test`: 792 passed (incl. 9 new). `pnpm typecheck`: clean.
+- `docs/INDEX.md` regenerated (new pub fns picked up); `docs:check` passed.
+- Manual `pnpm tauri dev` (Codex picker with a real config; drag/resize/persist)
+  left as the manual step.
+
 ## Not done (manual)
 Live end-to-end in `pnpm tauri dev` (click Review → stream → cancel; claude off
 PATH → graceful Failed) — left as the manual verification step.

@@ -19,6 +19,12 @@ import {
   createNdjsonBuffer,
   formatClaudeStream,
 } from "./reviewStreamLogic";
+import {
+  clampPanelPosition,
+  loadPanelLayout,
+  savePanelLayout,
+  type PanelLayout,
+} from "./reviewLayoutLogic";
 
 /**
  * The agent panel: pick an agent (Claude Code / Codex), a prompt, a model and a
@@ -48,6 +54,14 @@ export function ReviewPanel({
   title?: string;
 }) {
   const consoleRef = useRef<ConsoleHandle>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // The panel's dragged position (top/left anchor). Undefined keeps the default
+  // bottom-right CSS anchor; a stored layout seeds it so the panel reopens where
+  // the user last left it.
+  const [pos, setPos] = useState<PanelLayout | undefined>(() => {
+    const saved = loadPanelLayout(localStorage);
+    return saved.left !== undefined && saved.top !== undefined ? saved : undefined;
+  });
   // The last-run selection, remembered across opens (agent/model/prompt only —
   // the edit posture is deliberately never sticky).
   const [prefs] = useState<AgentPrefs>(() => loadAgentPrefs(localStorage));
@@ -183,6 +197,48 @@ export function ReviewPanel({
     onClose();
   };
 
+  // Drag the panel by its header. The minimize/close buttons keep their normal
+  // click behaviour — a press that lands on one of them is not a drag. The
+  // clamp decision is pure (reviewLayoutLogic); this only wires the pointer.
+  const onHeaderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button")) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+
+    const rect = panel.getBoundingClientRect();
+    // Where inside the panel the pointer grabbed, so the panel follows the
+    // cursor without jumping.
+    const grabX = e.clientX - rect.left;
+    const grabY = e.clientY - rect.top;
+    const header = e.currentTarget;
+    header.setPointerCapture(e.pointerId);
+
+    let latest: PanelLayout = { left: rect.left, top: rect.top };
+    // A press that never moves is a click, not a drag: it must not convert the
+    // panel from its default bottom-right anchor to a persisted top/left one.
+    let moved = false;
+    const onMove = (ev: PointerEvent) => {
+      moved = true;
+      const size = { width: panel.offsetWidth, height: panel.offsetHeight };
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      latest = clampPanelPosition(
+        { left: ev.clientX - grabX, top: ev.clientY - grabY },
+        size,
+        viewport,
+      );
+      setPos(latest);
+    };
+    const onUp = () => {
+      header.releasePointerCapture(e.pointerId);
+      header.removeEventListener("pointermove", onMove);
+      header.removeEventListener("pointerup", onUp);
+      if (moved) savePanelLayout(localStorage, latest);
+    };
+    header.addEventListener("pointermove", onMove);
+    header.addEventListener("pointerup", onUp);
+  };
+
   const status = reviewStatus(phase, last);
 
   // Minimized: a compact restore pill. The console stays mounted (hidden) below
@@ -202,8 +258,20 @@ export function ReviewPanel({
         </button>
       )}
 
-      <div className="review-panel" hidden={minimized}>
-        <div className={`review-header${attention ? " attention" : ""}`}>
+      <div
+        className="review-panel"
+        hidden={minimized}
+        ref={panelRef}
+        // Once dragged, switch from the bottom-right anchor to a top-left one so
+        // the native resize grip grows the panel on-screen.
+        style={
+          pos ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" } : undefined
+        }
+      >
+        <div
+          className={`review-header${attention ? " attention" : ""}`}
+          onPointerDown={onHeaderPointerDown}
+        >
           <strong>{title}</strong>
           <span className="faint" style={{ fontSize: 12 }}>
             {running && <span className="review-spinner" aria-hidden style={{ marginRight: 6 }} />}

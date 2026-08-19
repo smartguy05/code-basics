@@ -138,30 +138,103 @@ impl ReviewAgent {
     }
 }
 
-/// Resolve a requested model for `agent`.
+/// The models the picker offers for `agent`.
 ///
-/// `None`/blank takes the agent's default. A named model must be one the agent
-/// offers; an unknown one is refused rather than passed through. An agent that
-/// offers no models ignores any request and yields its own default.
+/// Claude's are the static [`CLAUDE_MODELS`] aliases; Codex's are whatever the
+/// user has configured on disk (see [`codex_models`]). This is the single
+/// dispatch point the command layer uses to fill a picker and to validate a
+/// request through [`resolve_model`].
+pub fn models_for(agent: ReviewAgent) -> Vec<String> {
+    match agent {
+        ReviewAgent::ClaudeCode => CLAUDE_MODELS.iter().map(|m| m.to_string()).collect(),
+        ReviewAgent::Codex => codex_models(),
+    }
+}
+
+/// The Codex models the user has configured in `~/.codex/config.toml`.
+///
+/// Reads the config off disk, so — like [`detect_agents`] — it is not
+/// unit-tested; the pure parse it delegates to ([`parse_codex_models`]) is. Any
+/// failure (no `CODEX_HOME`/home, an unreadable or malformed config, no `model`)
+/// yields an empty list, which hides the picker exactly as before.
+pub fn codex_models() -> Vec<String> {
+    let Some(home) = crate::intents::providers::codex::codex_home() else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(home.join("config.toml")) else {
+        return Vec::new();
+    };
+    parse_codex_models(&text)
+}
+
+/// Parse the Codex model names from a `config.toml`'s text.
+///
+/// Codex's effective default is the top-level `model`, so it leads; then each
+/// `[profiles.<name>] model`, de-duplicated preserving first-seen order. A
+/// missing/blank `model`, a non-string value, or a parse error yields an empty
+/// `Vec` — abstain, no picker, exactly as when Codex reported no models. The
+/// config is genuinely parsed (unlike `codex.rs::is_trusted_in`, which is fuzzy
+/// path-matching), so nested tables and quoting cannot fool it.
+pub fn parse_codex_models(config_toml: &str) -> Vec<String> {
+    let Ok(value) = toml::from_str::<toml::Value>(config_toml) else {
+        return Vec::new();
+    };
+
+    let mut models: Vec<String> = Vec::new();
+    let add = |models: &mut Vec<String>, raw: Option<&str>| {
+        if let Some(name) = raw.map(str::trim) {
+            if !name.is_empty() && !models.iter().any(|m| m == name) {
+                models.push(name.to_string());
+            }
+        }
+    };
+
+    add(
+        &mut models,
+        value.get("model").and_then(toml::Value::as_str),
+    );
+    if let Some(profiles) = value.get("profiles").and_then(toml::Value::as_table) {
+        for profile in profiles.values() {
+            add(
+                &mut models,
+                profile.get("model").and_then(toml::Value::as_str),
+            );
+        }
+    }
+
+    models
+}
+
+/// Resolve a requested model for `agent` against the models it actually offers.
+///
+/// `None`/blank takes the first available model, or the agent's own default when
+/// nothing is available. A named model must exactly match (trimmed,
+/// case-sensitive) an available one; an unknown one is refused rather than passed
+/// through. An agent with no available models ignores any request and yields its
+/// own default.
 pub fn resolve_model(
     agent: ReviewAgent,
+    available: &[String],
     requested: Option<&str>,
-) -> Result<Option<&'static str>, String> {
-    let models = agent.models();
+) -> Result<Option<String>, String> {
     match requested.map(str::trim) {
-        // No request, or an agent with nothing to offer: its own default.
-        None | Some("") => Ok(agent.default_model()),
-        Some(_) if models.is_empty() => Ok(agent.default_model()),
-        Some(name) => models
+        // No request: the first available model, else the agent's own default.
+        None | Some("") => Ok(available
+            .first()
+            .cloned()
+            .or_else(|| agent.default_model().map(str::to_string))),
+        // Nothing to offer: run the agent's default, ignoring a stray request.
+        Some(_) if available.is_empty() => Ok(agent.default_model().map(str::to_string)),
+        Some(name) => available
             .iter()
-            .copied()
-            .find(|candidate| *candidate == name)
+            .find(|candidate| candidate.as_str() == name)
+            .cloned()
             .map(Some)
             .ok_or_else(|| {
                 format!(
                     "unknown {} model {name:?}; choose one of {}",
                     agent.label(),
-                    models.join(", ")
+                    available.join(", ")
                 )
             }),
     }

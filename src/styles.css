@@ -874,7 +874,16 @@ textarea:focus {
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  /* `resize` needs `overflow` to be non-visible (already hidden above). Min/max
+     keep the panel usable and unable to be resized off-screen. The dragged size
+     stays CSS-native and is not persisted — persisting it (via a ResizeObserver)
+     is a deferred nicety; only the position is remembered. */
   overflow: hidden;
+  resize: both;
+  min-width: 360px;
+  min-height: 280px;
+  max-width: 96vw;
+  max-height: 92vh;
 }
 
 /* `display: flex` above beats the UA `[hidden] { display: none }`, so hiding the
@@ -943,6 +952,13 @@ textarea:focus {
   gap: 10px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-strong);
+  /* The header is the drag handle; its buttons stay a normal pointer so they
+     still read as clickable. */
+  cursor: move;
+}
+
+.review-header button {
+  cursor: pointer;
 }
 
 .review-controls {
