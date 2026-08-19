@@ -220,6 +220,48 @@ impl Intents {
         fallback
     }
 
+    /// The label to show for a record, allowing a declared, path-scoped label
+    /// from a *different* turn to bind across turns.
+    ///
+    /// This is what rescues the workflow/subagent case: a subagent records the
+    /// geometry under its own turn with no reason, and the reason is declared
+    /// under a later turn. Same-turn [`label_for`] keeps **top priority**, so
+    /// nothing that already had a label changes. Only an *orphan* record — one
+    /// no same-turn label covers — looks across turns, and only for a
+    /// **Declared** label whose non-empty `paths` cover this file.
+    ///
+    /// It abstains on ambiguity: a wrong label is worse than no label, so two
+    /// or more declared labels covering the file bind nothing. A turn-wide
+    /// (empty-`paths`) label never binds here either — a bare reason bridges
+    /// only through the diff-level single-orphan pass in [`crate::git::coverage`].
+    pub fn effective_scoped_label(
+        &self,
+        record: &IntentRecord,
+        path: &str,
+    ) -> Option<&IntentLabel> {
+        // Same-turn resolution wins outright, preserving all existing behaviour.
+        if let Some(label) = self.label_for(record) {
+            return Some(label);
+        }
+
+        // Orphan record: the only cross-turn signal strong enough to trust is a
+        // declared label the author explicitly scoped to this file. Accept it
+        // only when exactly one such label exists across every turn.
+        let mut found: Option<&IntentLabel> = None;
+        for label in &self.labels {
+            if label.source != LabelSource::Declared || label.paths.is_empty() {
+                continue;
+            }
+            if label.paths.iter().any(|p| scope_covers(p, path)) {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(label);
+            }
+        }
+        found
+    }
+
     /// Records touching one file, oldest first.
     pub fn for_path(&self, path: &str) -> Vec<&IntentRecord> {
         let path = normalise_path(path);
@@ -242,7 +284,7 @@ pub fn normalise_path(path: &str) -> String {
 /// (`Intent(ONEflight.Client.OPS135.Components): …`). The directory match is at
 /// a path segment, so `foo` never covers `foobar/x`. This is decidable rather
 /// than guessed: the scope was author-declared, and containment is a fact.
-fn scope_covers(scope: &str, record_path: &str) -> bool {
+pub(crate) fn scope_covers(scope: &str, record_path: &str) -> bool {
     let scope = normalise_path(scope);
     let scope = scope.trim_end_matches('/');
     record_path == scope

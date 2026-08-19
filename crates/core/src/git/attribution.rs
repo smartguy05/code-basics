@@ -90,6 +90,12 @@ pub struct AttributedSpan {
     /// `None` when there is no label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_source: Option<LabelSource>,
+    /// The turn that owns the label, so grouping and coverage can key on the
+    /// reason's identity even when it was declared in a different turn from the
+    /// one that made the edit. Equals `turn_id` for a same-turn label; the
+    /// declared label's turn for a cross-turn bind; `None` when unlabeled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_turn_id: Option<String>,
     pub seq: u64,
     /// `DiffLine::index` values, ascending. Never contains a context line.
     pub line_indices: Vec<u32>,
@@ -791,11 +797,12 @@ fn rollup(
             .into_iter()
             .map(|(record, (line_indices, confidence))| {
                 let source = prepared[record].record;
-                let label = intents.label_for(source);
+                let label = intents.effective_scoped_label(source, &diff.path);
                 AttributedSpan {
                     turn_id: source.turn_id.clone(),
                     label: label.map(|l| l.label.clone()),
                     label_source: label.map(|l| l.source),
+                    label_turn_id: label.map(|l| l.turn_id.clone()),
                     seq: source.seq,
                     line_indices,
                     confidence,

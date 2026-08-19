@@ -280,13 +280,18 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                     dominant.clone(),
                     span.label.clone(),
                     span.label_source,
+                    span.label_turn_id.clone(),
                     span.confidence,
                 ))
             });
 
             let (key, kind, label, symbol, confidence) = match turn {
-                Some((turn, Some(label), Some(LabelSource::Declared), confidence)) => (
-                    format!("intent:{turn}"),
+                // A declared reason. Keyed by the *label's* identity, not the
+                // turn that made the edit: one orphan geometry turn can carry
+                // two different declared labels (each scoped to different
+                // files), and those are two intents, not one card.
+                Some((turn, Some(label), Some(LabelSource::Declared), label_turn, confidence)) => (
+                    format!("intent:{}:{label}", label_turn.unwrap_or(turn)),
                     GroupKind::Intent,
                     label,
                     None,
@@ -296,7 +301,7 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                 // A sentence mined out of prose. Still the best description
                 // available, so it is shown — but as a description of a turn,
                 // not as a reason the agent gave.
-                Some((turn, Some(label), _, confidence)) => (
+                Some((turn, Some(label), _, _, confidence)) => (
                     format!("turn:{turn}"),
                     GroupKind::SameTurn,
                     label,
@@ -308,7 +313,7 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                 // title is derived from the changes once the bucket is whole
                 // (see `Bucket::derived`), because "2 files" is not knowable
                 // from one hunk.
-                Some((turn, None, _, _)) => (
+                Some((turn, None, _, _, _)) => (
                     format!("turn:{turn}"),
                     GroupKind::SameTurn,
                     String::new(),
