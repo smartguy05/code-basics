@@ -54,7 +54,22 @@
       intent view too and clears it on mode change so indices stay aligned.
       Used group.confidence — did NOT expose AttributedSpan over IPC.
 
-## Phase 3 — agent-process checks (prompts feeding the button)
-- [ ] Business-rule invariants (extract → `.code-basics/rules/*.md` → verify).
-- [ ] Claim/AC verification prompt (reuse behavioral harness for runnable claims).
-- [ ] Security / perf / concurrency / naming-drift prompt variants.
+## Phase 3 — agent-process checks (done)
+- [x] Business-rule invariants — new cb-core `rules` module (`RuleDoc{id,title,body}`,
+      `rules_dir` = `.code-basics/rules`, `load_rules` erosion-style: bad/unreadable
+      file → warning, missing dir → empty; reuses `enhancements::split_front_matter`).
+      `list_rules` command + IPC (`RuleDoc`/`RulesReport`, key-pinned). `extract-rules`
+      (edit-mode) writes the invariants; `verify-rules` (read-only) checks the diff
+      against them; `ReviewPanel` shows `rulesRunHint` (0 rules → run extract first).
+      `.code-basics/rules/` is committed (NOT in config IGNORED); `examples/rules/`
+      as a template.
+- [x] Claim/AC verification — prompt-context injection: `review::compose_prompt`
+      prepends context before a prompt body; `start_review` gained optional
+      `context`. `verify-claims` prompt + a frontend flow (`claimVerifyLogic.ts`:
+      `behavioralReportToPromptContext` renders a `behavioral_diff` report to text,
+      `verifyClaimsAction` gates it) → App opens the agent panel primed with the
+      evidence as `initialContext` (token-keyed remount). No agent gets a live tool;
+      the report is injected as read-only context.
+- [x] Security / perf / concurrency / naming-drift prompt variants — four read-only
+      lens prompts bundled in `src-tauri/resources/prompts/`, each demanding concrete
+      evidence and abstaining ("say so plainly rather than inventing findings").

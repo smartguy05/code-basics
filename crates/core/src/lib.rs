@@ -23,6 +23,7 @@ pub mod lsp;
 pub mod model;
 pub mod process;
 pub mod review;
+pub mod rules;
 pub mod secrets;
 pub mod symbols;
 pub mod testing;

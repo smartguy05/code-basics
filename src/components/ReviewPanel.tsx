@@ -25,6 +25,10 @@ import {
   savePanelLayout,
   type PanelLayout,
 } from "./reviewLayoutLogic";
+import { rulesRunHint } from "./claimVerifyLogic";
+
+/** The bundled prompt whose review reads `.code-basics/rules/*.md`. */
+const VERIFY_RULES_PROMPT_ID = "verify-rules";
 
 /**
  * The agent panel: pick an agent (Claude Code / Codex), a prompt, a model and a
@@ -40,17 +44,21 @@ import {
  *
  * `initialPromptId` pre-selects a prompt (the Run Agent entry); absent, the
  * canonical review prompt leads (the Review entry). `initialMode` seeds the
- * posture toggle. `title` labels the header and pill.
+ * posture toggle. `title` labels the header and pill. `initialContext` is
+ * evidence (e.g. a before/after report) prepended to the prompt when the run
+ * starts — seeded once at mount, so a fresh context is a fresh panel.
  */
 export function ReviewPanel({
   onClose,
   initialPromptId,
   initialMode = "read-only",
+  initialContext,
   title = "Adversarial review",
 }: {
   onClose: () => void;
   initialPromptId?: string;
   initialMode?: AgentMode;
+  initialContext?: string;
   title?: string;
 }) {
   const consoleRef = useRef<ConsoleHandle>(null);
@@ -78,6 +86,13 @@ export function ReviewPanel({
   // The agent needs the user: a permission was denied/blocked, or the run ended
   // while minimized. Flashes the pill until the panel is restored.
   const [attention, setAttention] = useState(false);
+  // Injected evidence, seeded once so re-selecting inputs cannot mutate what a
+  // run will send. A fresh context arrives as a freshly-keyed panel (see App).
+  const [injectedContext] = useState(initialContext);
+  // The guard for a rules review: computed from the loaded rules whenever the
+  // verify-rules prompt is selected, so the user sees "no rules yet" before
+  // spending a run to be told the same thing.
+  const [rulesHint, setRulesHint] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -102,6 +117,28 @@ export function ReviewPanel({
       alive = false;
     };
   }, []);
+
+  // Surface the rules guard when — and only when — the verify-rules prompt is
+  // selected. The decision (0 rules vs unreadable files vs nothing to say)
+  // lives in the tested helper; this only fetches and displays it.
+  useEffect(() => {
+    if (promptId !== VERIFY_RULES_PROMPT_ID) {
+      setRulesHint(null);
+      return;
+    }
+    let alive = true;
+    void api
+      .listRules()
+      .then((report) => {
+        if (alive) setRulesHint(rulesRunHint(report));
+      })
+      .catch(() => {
+        if (alive) setRulesHint(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [promptId]);
 
   const running = phase === "running";
   const models = modelsFor(agents, agentId);
@@ -176,7 +213,7 @@ export function ReviewPanel({
         // Codex output, Claude's stderr, and the started banner pass through the
         // console's own renderer.
         consoleRef.current?.handle(event);
-      })
+      }, injectedContext)
       .catch((e) => {
         setError(String(e));
         setPhase("done");
@@ -366,6 +403,7 @@ export function ReviewPanel({
             Neither Claude Code (`claude`) nor Codex (`codex`) is on your PATH.
           </div>
         )}
+        {rulesHint && <div className="warning">{rulesHint}</div>}
         {error && <div className="warning">{error}</div>}
 
         <div className="review-console">

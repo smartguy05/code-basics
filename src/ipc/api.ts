@@ -40,6 +40,7 @@ import type {
   ReviewAgentInfo,
   RiderImportPreview,
   RootSpec,
+  RulesReport,
   RunConfig,
   RunDump,
   SearchHit,
@@ -208,10 +209,16 @@ export function startReview(
   model: string | undefined,
   mode: AgentMode,
   onEvent: (event: ProcessEvent) => void,
+  /**
+   * Injected context — evidence, business-rule docs — prepended to the prompt so
+   * the agent reads it before the instruction. Blank/absent leaves the prompt
+   * unchanged. Trailing so existing five-argument calls are unaffected.
+   */
+  context?: string,
 ): Promise<void> {
   const channel = new Channel<ProcessEvent>();
   channel.onmessage = onEvent;
-  return invoke<void>("start_review", { promptId, agentId, model, mode, channel });
+  return invoke<void>("start_review", { promptId, agentId, model, mode, context, channel });
 }
 
 export const cancelReview = () => invoke<boolean>("cancel_review");
@@ -365,6 +372,15 @@ export const intentGroups = (mode: ComparisonMode) =>
  */
 export const erosionScan = (mode: ComparisonMode) =>
   invoke<ErosionReport>("erosion_scan", { mode });
+
+/**
+ * Every business-rule doc authored in the workspace's `.code-basics/rules/`.
+ *
+ * These carry no pattern and match nothing on their own — they are prose the
+ * team wrote down, handed to a review as `context` so the agent judges the diff
+ * against the stated invariants. `warnings` lists any file that would not read.
+ */
+export const listRules = () => invoke<RulesReport>("list_rules");
 
 /**
  * Stage everything in one group — or one file's share of it — returning how

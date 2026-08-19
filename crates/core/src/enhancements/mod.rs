@@ -170,7 +170,11 @@ pub fn parse_template(text: &str, default_id: &str) -> Template {
 ///
 /// Returns `(front, body)`. A file that does not open with a `---` fence has no
 /// front matter and the whole text is the body.
-fn split_front_matter(text: &str) -> Option<(String, String)> {
+///
+/// Public because the sibling [`crate::rules`] module parses the same
+/// front-matter-and-body shape and must use the identical splitter, not a
+/// second one that could drift.
+pub fn split_front_matter(text: &str) -> Option<(String, String)> {
     let trimmed = text.trim_start_matches(['\u{feff}']);
     let mut lines = trimmed.split_inclusive('\n');
     let first = lines.next()?;

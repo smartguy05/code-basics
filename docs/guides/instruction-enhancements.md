@@ -124,4 +124,54 @@ once: true
   clicking it asks *"…already ran here — run again?"* before re-running. An
   ordinary prompt (no `once`) never records or confirms.
 
-Bundled starters: `code-review.md` and `write-tests.md`.
+Bundled starters:
+
+| Prompt | Mode | What it does |
+|--------|------|--------------|
+| `code-review.md` | read-only | Reviews the current diff for correctness bugs and cleanup opportunities. |
+| `security-review.md` | read-only | Reviews the diff for injection, authz/authn gaps, secret handling, unsafe deserialization, SSRF/path traversal, and missing validation. |
+| `perf-review.md` | read-only | Reviews the diff for needless allocation, N+1 access, quadratic loops, blocking in async, and missing pagination/index. |
+| `concurrency-review.md` | read-only | Reviews the diff for data races, lock-ordering/deadlock, await-holding-lock, non-atomic check-then-act, and cancellation/teardown gaps. |
+| `naming-drift.md` | read-only | Flags names in the diff that no longer match behavior, terminology inconsistent with the surrounding code, and misleading identifiers. |
+| `write-tests.md` | edits | Writes tests for a change tests-first, watching them fail before implementing. |
+| `extract-rules.md` | edits | Infers the codebase's business-rule invariants and writes each to `.code-basics/rules/<slug>.md`. |
+| `verify-rules.md` | read-only | Checks the diff against the recorded rules in `.code-basics/rules/` and reports violations. |
+| `verify-claims.md` | read-only | Extracts the diff's checkable claims/ACs and judges each against a prepended behavioral before/after report. |
+| `code-knowledge-graph.md` | edits | Builds a local git-history + prose knowledge graph tool under `tools/kg/`. |
+| `setup-docs.md` | edits | Bootstraps a phased `docs/` + `.claude/` agent-readable knowledge layer. |
+
+## Business rules: `.code-basics/rules/`
+
+Two of the bundled prompts work as a pair around an **authored, committed**
+rules directory:
+
+- **Extract Business Rules** (`extract-rules.md`) reads the codebase and writes
+  each business-rule invariant it can point at — a guard, a validation, a
+  constraint the code actually enforces — to its own file under
+  `.code-basics/rules/<slug>.md`, with `id`/`title` front matter, a prose
+  statement of the invariant, and a note of where it is enforced. One rule per
+  file; it abstains rather than inventing rules the code does not enforce.
+- **Verify Business Rules** (`verify-rules.md`) reads every
+  `.code-basics/rules/*.md` and checks the current diff for any change that
+  violates a stated invariant, citing the rule, the file and line, and the
+  concrete scenario in which the invariant breaks. An empty rules directory
+  makes it point you at Extract Business Rules first.
+
+Unlike the gitignored per-workspace state under `.code-basics/` (intents,
+symbols cache, agent-runs), the `rules/` directory is meant to be **authored and
+committed** — it is a shared, reviewable statement of the domain's invariants,
+so it travels with the repo the way `CLAUDE.md` does.
+
+## Verify Claims and the behavioral context flow
+
+**Verify Claims / ACs** (`verify-claims.md`) checks whether the diff does what
+it claims. When it runs, the app may **prepend a before/after behavioral report**
+as context — the same test-result / console-output / HTTP-replay deltas the
+Intent view renders beside the coverage Scorecard, computed by running a config
+against `HEAD` and against the working tree. The prompt treats that report as the
+evidence and the diff plus its stated intents as the claims: it extracts each
+checkable claim, judges it **confirmed / contradicted / unverified** against the
+evidence that speaks to it, and for any claim the evidence does not cover says
+exactly what test or `.http` scenario would confirm it. It never marks a claim
+confirmed without evidence — the same prepend-context-as-input pattern that
+Verify Business Rules uses with the loaded rules.

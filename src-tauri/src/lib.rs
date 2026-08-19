@@ -19,6 +19,7 @@ mod commands {
     pub mod intents;
     pub mod lsp;
     pub mod review;
+    pub mod rules;
     pub mod run;
     pub mod secrets;
     pub mod symbols;
@@ -161,6 +162,7 @@ pub fn run() {
             commands::behavioral::behavioral_diff,
             commands::behavioral::behavioral_clear,
             commands::erosion::erosion_scan,
+            commands::rules::list_rules,
             commands::inspect::inspect_status,
             commands::inspect::inspect_attachable,
             commands::inspect::inspect_run_dump,

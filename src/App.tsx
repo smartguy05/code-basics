@@ -108,11 +108,29 @@ export function App() {
     initialPromptId?: string;
     initialMode: AgentMode;
     title: string;
+    /** Evidence prepended to the prompt (the verify-claims before/after report). */
+    initialContext?: string;
+    /** Bumped per open so a fresh context remounts the panel (see the key below). */
+    token: number;
   } | null>(null);
 
   /** Open the agent panel as an adversarial review (Changes tab + menu bar). */
   const openReview = () =>
-    setAgentPanel({ initialMode: "read-only", title: "Adversarial review" });
+    setAgentPanel({ initialMode: "read-only", title: "Adversarial review", token: nextToken() });
+
+  /**
+   * Open the agent panel primed to verify the diff's claims against the
+   * before/after evidence the Changes tab just gathered. The evidence text is
+   * built in `claimVerifyLogic`; here it only travels into the panel as context.
+   */
+  const openVerifyClaims = (context: string) =>
+    setAgentPanel({
+      initialPromptId: "verify-claims",
+      initialMode: "read-only",
+      title: "Verify claims",
+      initialContext: context,
+      token: nextToken(),
+    });
 
   /** Send the user to the Objects tab with something already chosen to read. */
   function requestInspect(request: InspectRequest) {
@@ -130,6 +148,12 @@ export function App() {
   const [openRequest, setOpenRequest] = useState<OpenFileRequest | null>(null);
   const [selectRequest, setSelectRequest] = useState<SelectConfigRequest | null>(null);
   const requestToken = useRef(0);
+
+  /** A monotonic token, shared by the open/select requests and the agent panel. */
+  function nextToken() {
+    requestToken.current += 1;
+    return requestToken.current;
+  }
 
   /** Send the user to the Run tab with a file open, and a line revealed. */
   function requestOpenFile(path: string, name: string, line?: number) {
@@ -274,7 +298,12 @@ export function App() {
           onOpen={pickFolder}
           onRescan={rescan}
           onRunAgent={(promptId) =>
-            setAgentPanel({ initialPromptId: promptId, initialMode: "read-only", title: "Run agent" })
+            setAgentPanel({
+              initialPromptId: promptId,
+              initialMode: "read-only",
+              title: "Run agent",
+              token: nextToken(),
+            })
           }
           onOpenReview={openReview}
         />
@@ -355,7 +384,11 @@ export function App() {
       </div>
       {tab === "changes" && (
         <div className="body">
-          <ChangesView key={workspace.root} onOpenReview={openReview} />
+          <ChangesView
+            key={workspace.root}
+            onOpenReview={openReview}
+            onVerifyClaims={openVerifyClaims}
+          />
         </div>
       )}
       {tab === "history" && (
@@ -394,10 +427,14 @@ export function App() {
           process on close. Keyed so a new request remounts a fresh panel. */}
       {agentPanel && (
         <ReviewPanel
-          key={`${agentPanel.title}:${agentPanel.initialPromptId ?? ""}`}
+          // The token is part of the key so a fresh open — a new before/after
+          // context in particular — remounts the panel rather than reusing one
+          // that seeded its context from a stale value.
+          key={`${agentPanel.title}:${agentPanel.initialPromptId ?? ""}:${agentPanel.token}`}
           onClose={() => setAgentPanel(null)}
           initialPromptId={agentPanel.initialPromptId}
           initialMode={agentPanel.initialMode}
+          initialContext={agentPanel.initialContext}
           title={agentPanel.title}
         />
       )}

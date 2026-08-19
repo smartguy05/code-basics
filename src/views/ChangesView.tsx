@@ -10,6 +10,10 @@ import { buildSections, statusLetter, type FileSection } from "./changesLogic";
 import { Sidebar } from "../components/Sidebar";
 import { IntentPanel } from "../components/IntentPanel";
 import { pickBehavioralConfig } from "../components/behavioralPanelLogic";
+import {
+  behavioralReportToPromptContext,
+  verifyClaimsAction,
+} from "../components/claimVerifyLogic";
 import { ErosionPanel } from "../components/ErosionPanel";
 import { badgeCount } from "../components/erosionLogic";
 import { StashPanel } from "../components/StashPanel";
@@ -86,7 +90,14 @@ const MODE_LABELS: Record<ComparisonMode, string> = {
   indexToHead: "Staged (vs HEAD)",
 };
 
-export function ChangesView({ onOpenReview }: { onOpenReview: () => void }) {
+export function ChangesView({
+  onOpenReview,
+  onVerifyClaims,
+}: {
+  onOpenReview: () => void;
+  /** Hand the built before/after evidence to the app's agent panel. */
+  onVerifyClaims: (context: string) => void;
+}) {
   const [status, setStatus] = useState<WorkingStatus | null>(null);
   const [mode, setMode] = useState<ComparisonMode>("workingToHead");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -234,6 +245,9 @@ export function ChangesView({ onOpenReview }: { onOpenReview: () => void }) {
   }, []);
 
   const behavioralConfig = pickBehavioralConfig(configs);
+  // Whether "Verify claims" can run, against which config, and why — the whole
+  // decision lives in the tested helper.
+  const verify = verifyClaimsAction(configs);
 
   /**
    * Recompute the intent cards.
@@ -469,6 +483,33 @@ export function ChangesView({ onOpenReview }: { onOpenReview: () => void }) {
       setBehavioralStatus(null);
     });
 
+  /**
+   * Gather the before/after evidence, then hand it to the agent panel primed to
+   * verify the diff's claims against it. The run itself is the same before/after
+   * comparison; only the follow-up — a read-only agent judging claims against
+   * the evidence — is new. The evidence text is built in the tested helper.
+   */
+  const verifyClaims = () =>
+    withBusy(async () => {
+      if (!verify.config) return;
+      setBehavioral(null);
+      setBehavioralStatus("Gathering before/after evidence…");
+      const report = await api.behavioralDiff(verify.config.id, null, (event) => {
+        if (event.type === "started") {
+          setBehavioralStatus(`Running ${event.program}…`);
+        } else if (event.type === "exited") {
+          setBehavioralStatus(
+            event.cancelled ? "Run cancelled." : `Run finished (exit ${event.code ?? "?"}).`,
+          );
+        } else if (event.type === "failed") {
+          setBehavioralStatus(`Run failed: ${event.message}`);
+        }
+      });
+      setBehavioral(report);
+      setBehavioralStatus(null);
+      onVerifyClaims(behavioralReportToPromptContext(report));
+    });
+
   /** Stage or unstage a whole file, whichever one was right-clicked. */
   const stageFile = (path: string, staged: boolean) =>
     withBusy(async () => {
@@ -682,6 +723,13 @@ export function ChangesView({ onOpenReview }: { onOpenReview: () => void }) {
                 }
               >
                 Run before/after
+              </button>
+              <button
+                disabled={busy || !verify.enabled}
+                onClick={() => void verifyClaims()}
+                title={verify.hint}
+              >
+                Verify claims
               </button>
               {behavioralStatus && (
                 <span className="faint" style={{ fontSize: 11 }}>

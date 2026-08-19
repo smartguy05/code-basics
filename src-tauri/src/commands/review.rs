@@ -64,6 +64,7 @@ pub async fn start_review(
     agent_id: String,
     model: Option<String>,
     mode: Option<String>,
+    context: Option<String>,
     channel: Channel<ProcessEvent>,
 ) -> Result<(), String> {
     let root = state.workspace_root()?;
@@ -84,9 +85,14 @@ pub async fn start_review(
         .find(|p| p.id == prompt_id)
         .ok_or_else(|| format!("no review prompt named {prompt_id}"))?;
 
+    // Injected context — evidence, business rules — leads the prompt so the
+    // agent reads it before the instruction that acts on it. Blank/absent
+    // context leaves the body untouched.
+    let full_prompt = review::compose_prompt(context.as_deref(), &prompt.body);
+
     let invocation = Invocation {
         program: agent.program().to_string(),
-        args: review::agent_args(agent, mode, model.as_deref(), &prompt.body),
+        args: review::agent_args(agent, mode, model.as_deref(), &full_prompt),
         cwd: root,
         env: Default::default(),
         report: None,

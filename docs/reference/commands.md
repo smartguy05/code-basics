@@ -77,7 +77,7 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
 | `review_agents` | – | `ReviewAgentInfo[]` | The agents whose CLI is installed (`claude`/`codex`), preference order, each with its offered model aliases (empty ⇒ the agent's own default) |
-| `start_review` | `prompt_id: String`, `agent_id: String`, `model: String?`, `mode: String?`, `channel: Channel<ProcessEvent>` | `()` | Runs a chosen prompt from the prompt library. `mode` picks the posture (default read-only): read-only is Claude `--permission-mode plan` / Codex `--sandbox read-only`; edit is Claude `--permission-mode bypassPermissions` / Codex `--sandbox workspace-write`. Serves both the adversarial Review and Run Agent. Registered as `review:current`; an unknown model or mode is refused; a missing CLI surfaces as a `Failed` event |
+| `start_review` | `prompt_id: String`, `agent_id: String`, `model: String?`, `mode: String?`, `context: String?`, `channel: Channel<ProcessEvent>` | `()` | Runs a chosen prompt from the prompt library. `mode` picks the posture (default read-only): read-only is Claude `--permission-mode plan` / Codex `--sandbox read-only`; edit is Claude `--permission-mode bypassPermissions` / Codex `--sandbox workspace-write`. `context` (evidence, business-rule docs) is prepended to the prompt so the agent reads it before the instruction; blank/absent leaves the prompt unchanged. Serves both the adversarial Review and Run Agent. Registered as `review:current`; an unknown model or mode is refused; a missing CLI surfaces as a `Failed` event |
 | `cancel_review` | – | `bool` | Kills the review process **tree** |
 
 ## Git
@@ -168,6 +168,16 @@ prodOnly = false            # optional; skip files that look like tests
 ```
 
 See `examples/erosion/custom.toml` for a copyable starting point.
+
+## Business rules
+
+`src-tauri/src/commands/rules.rs` — the business-rule invariants a team writes down as plain markdown. Unlike an erosion rule (one regex against one side of a diff), a rule doc carries no pattern and matches nothing on its own; it is prose handed to a review as `context` (see `start_review`) so the agent judges the diff against the stated invariants.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `list_rules` | – | `RulesReport` | Every `*.md` rule doc in `.code-basics/rules/`, sorted deterministically. Each carries `id`/`title`/`body`, parsed from the same `---`-fenced front matter the Enhancements library uses — a file with no front matter abstains to safe fallbacks (the file stem for the id, the first heading or the stem for the title) rather than being dropped. `warnings` lists any file that would not read. A missing directory is an empty report, not an error |
+
+Rule docs are committed like erosion rules and declarative adapters — `rules/` is deliberately not gitignored. See `examples/rules/` for a copyable starting point.
 
 ## Object inspection
 

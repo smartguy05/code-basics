@@ -240,6 +240,23 @@ pub fn resolve_model(
     }
 }
 
+/// A clear divider between injected review context and the prompt that acts on
+/// it. Visually unmistakable so neither half bleeds into the other.
+pub const CONTEXT_SEPARATOR: &str = "\n\n---\n\n";
+
+/// Prepend review context — evidence, business rules — to a prompt body.
+///
+/// The context leads so the agent reads the material *before* the instruction
+/// that acts on it. Blank or absent context is a no-op: the body is returned
+/// unchanged rather than gaining a stray separator with nothing above it. Pure,
+/// so the ordering is pinned by a test rather than discovered in a live run.
+pub fn compose_prompt(context: Option<&str>, body: &str) -> String {
+    match context.map(str::trim).filter(|c| !c.is_empty()) {
+        Some(context) => format!("{context}{CONTEXT_SEPARATOR}{body}"),
+        None => body.to_string(),
+    }
+}
+
 /// The argument vector for the agent, given a posture, a resolved model and the
 /// prompt body.
 ///

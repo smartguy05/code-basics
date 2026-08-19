@@ -2,9 +2,9 @@
 //! an in-app adversarial review.
 
 use crate::review::{
-    agent_args, detect_agents, models_for, parse_codex_models, resolve_model, AgentMode,
-    ReviewAgent, CLAUDE_DEFAULT_MODEL, CLAUDE_EDIT_PERMISSION_MODE, CLAUDE_PERMISSION_MODE,
-    CODEX_EDIT_SANDBOX, CODEX_SANDBOX,
+    agent_args, compose_prompt, detect_agents, models_for, parse_codex_models, resolve_model,
+    AgentMode, ReviewAgent, CLAUDE_DEFAULT_MODEL, CLAUDE_EDIT_PERMISSION_MODE,
+    CLAUDE_PERMISSION_MODE, CODEX_EDIT_SANDBOX, CODEX_SANDBOX,
 };
 
 // --- Agent identity ------------------------------------------------------
@@ -307,6 +307,36 @@ fn the_prompt_is_a_single_argument_for_both_agents() {
             "{agent:?}: whole prompt is one argument: {args:?}"
         );
     }
+}
+
+// --- Prompt composition --------------------------------------------------
+
+#[test]
+fn compose_prompt_returns_the_body_unchanged_when_there_is_no_context() {
+    assert_eq!(compose_prompt(None, "Review the diff."), "Review the diff.");
+}
+
+#[test]
+fn compose_prompt_treats_blank_context_as_none() {
+    assert_eq!(compose_prompt(Some(""), "Review."), "Review.");
+    assert_eq!(compose_prompt(Some("   \n  "), "Review."), "Review.");
+}
+
+#[test]
+fn compose_prompt_puts_the_context_before_the_body_with_a_separator() {
+    let out = compose_prompt(Some("RULE: money is in cents"), "Review the diff.");
+
+    let ctx = out
+        .find("RULE: money is in cents")
+        .expect("context present");
+    let body = out.find("Review the diff.").expect("body present");
+    assert!(ctx < body, "context must precede the body: {out:?}");
+    assert!(
+        out.contains("---"),
+        "a visible separator sits between them: {out:?}"
+    );
+    // The body survives verbatim so nothing the caller wrote is altered.
+    assert!(out.ends_with("Review the diff."));
 }
 
 // --- Detection -----------------------------------------------------------

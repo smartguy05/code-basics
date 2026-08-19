@@ -693,6 +693,30 @@ export interface ErosionReport {
 }
 
 /**
+ * One business-rule invariant, authored as a markdown file (`rules/mod.rs`).
+ *
+ * Prose for a human and for a reviewing agent — no pattern, matches nothing on
+ * its own. Handed to a review as context (`start_review`'s `context`) so the
+ * agent judges the diff against the rules the team stated.
+ */
+export interface RuleDoc {
+  id: string;
+  title: string;
+  /** The markdown body, front matter stripped. */
+  body: string;
+}
+
+/**
+ * Every rule doc loaded from a workspace (`rules::RulesReport`).
+ *
+ * `warnings` carries any file that would not read — surfaced, never dropped.
+ */
+export interface RulesReport {
+  rules: RuleDoc[];
+  warnings: string[];
+}
+
+/**
  * What rejecting a group did (`intents/reject.rs`).
  *
  * `unmarked` is the field the UI must not swallow: those files were reverted,
