@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampPanelPosition,
+  clampPanelSize,
   loadPanelLayout,
   savePanelLayout,
   type PanelLayout,
@@ -63,10 +64,46 @@ describe("clampPanelPosition", () => {
   });
 });
 
+describe("clampPanelSize", () => {
+  const viewport = { width: 1200, height: 800 };
+
+  it("leaves an in-range size unchanged", () => {
+    expect(clampPanelSize({ width: 700, height: 500 }, viewport)).toEqual({
+      width: 700,
+      height: 500,
+    });
+  });
+
+  it("clamps an oversized panel down to the viewport ceiling (96vw/92vh)", () => {
+    const r = clampPanelSize({ width: 5000, height: 5000 }, viewport);
+    expect(r.width).toBe(viewport.width * 0.96);
+    expect(r.height).toBe(viewport.height * 0.92);
+  });
+
+  it("clamps a below-floor panel up to the CSS min (360×280)", () => {
+    const r = clampPanelSize({ width: 100, height: 100 }, viewport);
+    expect(r.width).toBe(360);
+    expect(r.height).toBe(280);
+  });
+
+  it("clamps each axis independently", () => {
+    const r = clampPanelSize({ width: 100, height: 5000 }, viewport);
+    expect(r.width).toBe(360); // below floor → up to min
+    expect(r.height).toBe(viewport.height * 0.92); // oversized → down to ceiling
+  });
+});
+
 describe("panel layout persistence", () => {
   it("round-trips a saved layout", () => {
     const store = fakeStorage();
     const layout: PanelLayout = { left: 120, top: 240 };
+    savePanelLayout(store, layout);
+    expect(loadPanelLayout(store)).toEqual(layout);
+  });
+
+  it("round-trips a saved size alongside the position", () => {
+    const store = fakeStorage();
+    const layout: PanelLayout = { left: 120, top: 240, width: 700, height: 500 };
     savePanelLayout(store, layout);
     expect(loadPanelLayout(store)).toEqual(layout);
   });
@@ -81,6 +118,17 @@ describe("panel layout persistence", () => {
     expect(loadPanelLayout(fakeStorage('{"left":"120","top":240}'))).toEqual({
       left: undefined,
       top: 240,
+    });
+  });
+
+  it("drops string width/height rather than trusting them", () => {
+    expect(
+      loadPanelLayout(fakeStorage('{"width":"700","height":500}')),
+    ).toEqual({
+      left: undefined,
+      top: undefined,
+      width: undefined,
+      height: 500,
     });
   });
 

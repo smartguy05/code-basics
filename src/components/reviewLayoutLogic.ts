@@ -49,13 +49,40 @@ function clampAxis(desired: number, extent: number, available: number): number {
   return Math.min(Math.max(desired, EDGE_MARGIN), max);
 }
 
+// The CSS floor (`.review-panel` min-width/min-height) and the viewport-relative
+// ceiling (max-width: 96vw / max-height: 92vh). Kept in step with styles.css so
+// the persisted size never lands outside what the stylesheet would allow.
+const MIN_WIDTH = 360;
+const MIN_HEIGHT = 280;
+const MAX_WIDTH_FACTOR = 0.96;
+const MAX_HEIGHT_FACTOR = 0.92;
+
+/**
+ * Clamp a measured panel size to the range the stylesheet permits: no smaller
+ * than the CSS floor, no larger than the viewport ceiling. The floor wins on a
+ * conflict (as `min-width` beats `max-width` in CSS), so a tiny viewport still
+ * yields a usable size. Pure arithmetic — the caller supplies the measured rect
+ * and viewport.
+ */
+export function clampPanelSize(size: PanelSize, viewport: PanelViewport): PanelSize {
+  return {
+    width: clampExtent(size.width, MIN_WIDTH, viewport.width * MAX_WIDTH_FACTOR),
+    height: clampExtent(size.height, MIN_HEIGHT, viewport.height * MAX_HEIGHT_FACTOR),
+  };
+}
+
+function clampExtent(desired: number, min: number, max: number): number {
+  return Math.max(min, Math.min(desired, max));
+}
+
 // --- Remembering the panel's position --------------------------------------
 
-/** The persisted panel position. Size is intentionally not persisted — it
- * stays CSS-native (the native resize grip), a deferred nicety to persist. */
+/** The persisted panel layout: its dragged position and its resized size. */
 export interface PanelLayout {
   left?: number;
   top?: number;
+  width?: number;
+  height?: number;
 }
 
 const LAYOUT_KEY = "cb.agentPanel.layout";
@@ -67,10 +94,12 @@ export function loadPanelLayout(storage: Pick<Storage, "getItem">): PanelLayout 
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return {};
-    const { left, top } = parsed as Record<string, unknown>;
+    const { left, top, width, height } = parsed as Record<string, unknown>;
     return {
       left: typeof left === "number" ? left : undefined,
       top: typeof top === "number" ? top : undefined,
+      width: typeof width === "number" ? width : undefined,
+      height: typeof height === "number" ? height : undefined,
     };
   } catch {
     return {};

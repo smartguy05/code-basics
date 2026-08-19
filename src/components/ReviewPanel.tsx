@@ -21,9 +21,11 @@ import {
 } from "./reviewStreamLogic";
 import {
   clampPanelPosition,
+  clampPanelSize,
   loadPanelLayout,
   savePanelLayout,
   type PanelLayout,
+  type PanelSize,
 } from "./reviewLayoutLogic";
 import { rulesRunHint } from "./claimVerifyLogic";
 
@@ -69,6 +71,15 @@ export function ReviewPanel({
   const [pos, setPos] = useState<PanelLayout | undefined>(() => {
     const saved = loadPanelLayout(localStorage);
     return saved.left !== undefined && saved.top !== undefined ? saved : undefined;
+  });
+  // The panel's resized size (from the native resize grip). Undefined keeps the
+  // default CSS size; a stored layout seeds it only when both dimensions are
+  // present, so a partial record never renders a half-sized panel.
+  const [size] = useState<PanelSize | undefined>(() => {
+    const saved = loadPanelLayout(localStorage);
+    return saved.width !== undefined && saved.height !== undefined
+      ? { width: saved.width, height: saved.height }
+      : undefined;
   });
   // The last-run selection, remembered across opens (agent/model/prompt only —
   // the edit posture is deliberately never sticky).
@@ -139,6 +150,43 @@ export function ReviewPanel({
       alive = false;
     };
   }, [promptId]);
+
+  // Persist the size the user drags the native resize grip to. The grip fires
+  // no pointer event, so `onHeaderPointerDown`'s `onUp` can never see a resize —
+  // a ResizeObserver is the only signal for it. The observer fires once on
+  // `observe()` with the default CSS size, and then continuously through a drag,
+  // so skip that first (un-resized) measurement and persist debounced. A hidden
+  // panel (minimized) measures 0×0; never persist that.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || typeof ResizeObserver !== "function") return;
+
+    let first = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const observer = new ResizeObserver(() => {
+      if (first) {
+        first = false;
+        return;
+      }
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        const w = panel.offsetWidth;
+        const h = panel.offsetHeight;
+        if (w === 0 || h === 0) return;
+        const clamped = clampPanelSize(
+          { width: w, height: h },
+          { width: window.innerWidth, height: window.innerHeight },
+        );
+        const saved = loadPanelLayout(localStorage);
+        savePanelLayout(localStorage, { ...saved, ...clamped });
+      }, 200);
+    });
+    observer.observe(panel);
+    return () => {
+      if (timer) clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, []);
 
   const running = phase === "running";
   const models = modelsFor(agents, agentId);
@@ -300,10 +348,12 @@ export function ReviewPanel({
         hidden={minimized}
         ref={panelRef}
         // Once dragged, switch from the bottom-right anchor to a top-left one so
-        // the native resize grip grows the panel on-screen.
-        style={
-          pos ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" } : undefined
-        }
+        // the native resize grip grows the panel on-screen. A remembered size
+        // seeds width/height; absent, the CSS default size applies.
+        style={{
+          ...(pos ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" } : {}),
+          ...(size ? { width: size.width, height: size.height } : {}),
+        }}
       >
         <div
           className={`review-header${attention ? " attention" : ""}`}
