@@ -451,20 +451,188 @@ fn new_prose_starts_a_new_intent_group() {
     assert_eq!(labels[1].label, "Now update the callers to match");
 }
 
-/// A subagent's work is not the main session's.
+/// A subagent's work is retroactively mined too, keyed to its own lineage so
+/// it never collides with the main session. This is the inverse of the old
+/// skip: a sidechain edit with resolvable lineage now produces a record and a
+/// label under a `-sub-<root>-` turn id.
 #[test]
-fn sidechain_entries_are_skipped() {
+fn a_sidechain_edit_is_mined_as_a_subagent_turn() {
     let line = json!({
         "type": "assistant",
         "isSidechain": true,
+        "uuid": "s1",
+        "parentUuid": null,
+        "gitBranch": "main",
         "message": { "content": [ text_block("Move the parser into its own module"), edit_block("t1", "a.rs") ] },
     })
     .to_string();
 
     let (records, labels) = read(&[line]);
 
-    assert!(records.is_empty());
+    assert_eq!(records.len(), 1);
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels[0].turn_id, records[0].turn_id);
+    assert_eq!(labels[0].source, LabelSource::Inferred);
+    assert!(
+        records[0].turn_id.contains("-sub-s1-"),
+        "got: {}",
+        records[0].turn_id
+    );
+}
+
+/// Parallel subagents interleave their lines in one transcript, so contiguity
+/// cannot separate them — the lineage root does. Two subagents whose lines
+/// alternate must land in two distinct turns, each carrying its own prompt.
+#[test]
+fn interleaved_subagents_are_grouped_by_lineage_not_order() {
+    let a_prompt = json!({
+        "type": "user",
+        "isSidechain": true,
+        "uuid": "a1",
+        "parentUuid": null,
+        "message": { "role": "user", "content": [ { "type": "text", "text": "Refactor the parser in module A" } ] },
+    })
+    .to_string();
+    let b_prompt = json!({
+        "type": "user",
+        "isSidechain": true,
+        "uuid": "b1",
+        "parentUuid": null,
+        "message": { "role": "user", "content": [ { "type": "text", "text": "Rename the callers in module B" } ] },
+    })
+    .to_string();
+    let a_edit = json!({
+        "type": "assistant",
+        "isSidechain": true,
+        "uuid": "a2",
+        "parentUuid": "a1",
+        "gitBranch": "main",
+        "message": { "content": [ text_block("Move the parser into its own module"), edit_block("ta", "a.rs") ] },
+    })
+    .to_string();
+    let b_edit = json!({
+        "type": "assistant",
+        "isSidechain": true,
+        "uuid": "b2",
+        "parentUuid": "b1",
+        "gitBranch": "main",
+        "message": { "content": [ text_block("Now update the callers to match"), edit_block("tb", "b.rs") ] },
+    })
+    .to_string();
+
+    // Interleaved line-by-line: A prompt, B prompt, A edit, B edit.
+    let mined = read_mined(&[a_prompt, b_prompt, a_edit, b_edit]);
+
+    assert_eq!(mined.records.len(), 2);
+    let a = mined.records.iter().find(|r| r.path == "a.rs").unwrap();
+    let b = mined.records.iter().find(|r| r.path == "b.rs").unwrap();
+    assert_ne!(
+        a.turn_id, b.turn_id,
+        "interleaved subagents must not share a turn"
+    );
+    assert!(a.turn_id.contains("-sub-a1-"), "got: {}", a.turn_id);
+    assert!(b.turn_id.contains("-sub-b1-"), "got: {}", b.turn_id);
+
+    // Each subagent's prompt joins its own edits, not the other's.
+    let a_prompt_rec = mined
+        .prompts
+        .iter()
+        .find(|p| p.turn_id == a.turn_id)
+        .unwrap();
+    assert!(
+        a_prompt_rec.prompt.contains("module A"),
+        "got: {}",
+        a_prompt_rec.prompt
+    );
+    let b_prompt_rec = mined
+        .prompts
+        .iter()
+        .find(|p| p.turn_id == b.turn_id)
+        .unwrap();
+    assert!(
+        b_prompt_rec.prompt.contains("module B"),
+        "got: {}",
+        b_prompt_rec.prompt
+    );
+    assert_eq!(mined.labels.len(), 2);
+}
+
+/// A wrong grouping is worse than none: a sidechain entry whose parent lineage
+/// cannot be resolved (the parent uuid is not in the file) is skipped, never
+/// misattributed to some other subagent.
+#[test]
+fn a_sidechain_entry_with_an_unresolvable_parent_abstains() {
+    let line = json!({
+        "type": "assistant",
+        "isSidechain": true,
+        "uuid": "x1",
+        "parentUuid": "ghost",
+        "gitBranch": "main",
+        "message": { "content": [ text_block("Move the parser into its own module"), edit_block("t1", "a.rs") ] },
+    })
+    .to_string();
+
+    let (records, labels) = read(&[line]);
+
+    assert!(records.is_empty(), "got: {records:?}");
     assert!(labels.is_empty());
+}
+
+/// No uuid means no lineage to group on, so the entry abstains rather than
+/// guess a turn.
+#[test]
+fn a_sidechain_entry_with_no_uuid_abstains() {
+    let line = json!({
+        "type": "assistant",
+        "isSidechain": true,
+        "gitBranch": "main",
+        "message": { "content": [ text_block("Move the parser into its own module"), edit_block("t1", "a.rs") ] },
+    })
+    .to_string();
+
+    let (records, labels) = read(&[line]);
+
+    assert!(records.is_empty(), "got: {records:?}");
+    assert!(labels.is_empty());
+}
+
+/// Regression: the main-session turn id is unchanged even when a sidechain
+/// shares the transcript. The main path keeps its `claude-history-<session>-<block>`
+/// shape and never grows a `-sub-` segment.
+#[test]
+fn the_main_session_turn_id_is_unchanged_when_a_sidechain_is_present() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = json!({
+        "type": "assistant",
+        "uuid": "m1",
+        "parentUuid": null,
+        "gitBranch": "main",
+        "message": { "content": [ text_block("Move the parser into its own module"), edit_block("t1", "a.rs") ] },
+    })
+    .to_string();
+    let sub = json!({
+        "type": "assistant",
+        "isSidechain": true,
+        "uuid": "s1",
+        "parentUuid": null,
+        "gitBranch": "main",
+        "message": { "content": [ text_block("Now update the callers to match"), edit_block("t2", "b.rs") ] },
+    })
+    .to_string();
+    let path = transcript(dir.path(), "abc-123.jsonl", &[main, sub]);
+
+    let mut seq = 0;
+    let mut mined = HistoryMined::default();
+    read_transcript(&path, &root(), &mut seq, &mut mined);
+
+    let main_rec = mined.records.iter().find(|r| r.path == "a.rs").unwrap();
+    let sub_rec = mined.records.iter().find(|r| r.path == "b.rs").unwrap();
+    assert_eq!(main_rec.turn_id, "claude-history-abc-123-1");
+    assert!(
+        sub_rec.turn_id.contains("-sub-s1-"),
+        "got: {}",
+        sub_rec.turn_id
+    );
 }
 
 #[test]

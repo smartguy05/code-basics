@@ -37,9 +37,10 @@ pub const MARKER: &str = "code-basics-intent";
 
 /// The events we register for, and why each is needed.
 ///
-/// `PostToolUse` gives the geometry of an edit; `Stop` is the only place
-/// either agent exposes the reasoning, via `last_assistant_message`.
-pub const EVENTS: &[&str] = &["PostToolUse", "Stop"];
+/// `PostToolUse` gives the geometry of an edit; `Stop` and `SubagentStop` are
+/// where an agent exposes the reasoning, via `last_assistant_message` — the
+/// latter capturing a subagent's closing message the same way.
+pub const EVENTS: &[&str] = &["PostToolUse", "Stop", "SubagentStop"];
 
 /// Is our hook already configured in this file?
 pub fn is_installed(path: &Path) -> bool {

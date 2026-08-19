@@ -29,6 +29,7 @@ fn existing_dashboard_hooks() -> String {
         "PermissionRequest",
         "PostToolUse",
         "Stop",
+        "SubagentStop",
         "SessionEnd",
     ] {
         hooks.insert(event.to_string(), json!([ { "hooks": [handler.clone()] } ]));
@@ -63,6 +64,7 @@ fn installing_preserves_every_existing_hook_entry() {
         "PermissionRequest",
         "PostToolUse",
         "Stop",
+        "SubagentStop",
         "SessionEnd",
     ] {
         assert!(hooks.contains_key(event), "{event} was dropped");

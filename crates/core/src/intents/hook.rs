@@ -105,6 +105,11 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 pub enum HookEvent {
     PostToolUse,
     Stop,
+    /// A subagent finished. It carries the same closing message a [`Stop`](Self::Stop)
+    /// does, so its label is recorded the same way — but it must **never** go
+    /// through [`ask_for_intent`]: blocking a subagent could hang it, and
+    /// nothing establishes the platform honours a refusal here.
+    SubagentStop,
     /// A git `post-commit` hook fired. Unlike the agent events it carries no
     /// stdin payload — the workspace is always named on the command line — and
     /// its job is to persist the durable-why note for the new commit, not to
@@ -117,6 +122,7 @@ impl HookEvent {
         match name {
             "PostToolUse" => Some(HookEvent::PostToolUse),
             "Stop" => Some(HookEvent::Stop),
+            "SubagentStop" => Some(HookEvent::SubagentStop),
             "PostCommit" => Some(HookEvent::PostCommit),
             _ => None,
         }
@@ -135,7 +141,9 @@ pub fn ingest(
 ) -> Result<usize> {
     match event {
         HookEvent::PostToolUse => ingest_edit(root, provider, payload),
-        HookEvent::Stop => ingest_label(root, provider, payload),
+        // A subagent's closing message is a reason like any other; only the
+        // *asking* path (`ask_for_intent`) is Stop-only, never this one.
+        HookEvent::Stop | HookEvent::SubagentStop => ingest_label(root, provider, payload),
         // A post-commit hook has no payload to ingest — the recorder handles it
         // on its own path before reaching here.
         HookEvent::PostCommit => Ok(0),
