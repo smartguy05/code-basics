@@ -119,7 +119,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/providers/instructions.rs` | 153 | Asking the agent for a reason. |
 | `crates/core/src/intents/providers/instructions_tests.rs` | 204 | Tests for the label request appended to an agent's instruction file. |
 | `crates/core/src/intents/providers/mod.rs` | 272 | Per-agent knowledge: where it keeps its history, and how to ask it to |
-| `crates/core/src/intents/providers/providers_tests.rs` | 837 | Tests for provider detection and hook installation. |
+| `crates/core/src/intents/providers/providers_tests.rs` | 839 | Tests for provider detection and hook installation. |
 | `crates/core/src/intents/reject.rs` | 457 | Rejecting a change: undoing it and leaving the reason where it was. |
 | `crates/core/src/intents/reject_tests.rs` | 371 | Tests for rejecting a change — the marker comment left where code was. |
 | `crates/core/src/intents/whyhook.rs` | 166 | The `post-commit` hook that persists durable intent for external commits. |

@@ -48,6 +48,8 @@ pnpm is the package manager (`pnpm-lock.yaml` is the tracked lockfile; `tauri.co
 
 **These commands are the entire quality gate.** There is no CI — no `.github/` directory exists at all. There is no ESLint, no Prettier, and no `.editorconfig`; the frontend is checked by a strict `tsc --noEmit` plus the vitest suite (`pnpm test`), which covers only the extracted `*Logic.ts` modules — rendering code has no tests. Nothing runs after you push, so run them before you claim done.
 
+**A local `Stop` hook enforces part of this gate automatically.** `.claude/settings.json` registers `.claude/hooks/quality-gate.mjs`, which runs when an agent turn ends and, deterministically (no model reasoning involved): runs `pnpm typecheck` if any `*.ts`/`*.tsx` changed and `cargo fmt --check` if any `*.rs` changed, **blocking the turn** (exit 2, feeding the failure back) until they pass; blocks on any changed file still carrying an unresolved `AI-REJECTED YYYY-MM-DD` note (the same thing the git `pre-commit` hook refuses, surfaced earlier); and prints a **non-blocking** reminder when a turn edited source but touched no `.memories/` file. Heavier Rust checks (`cargo clippy`) are opt-in via `CB_GATE_FULL=1` — off by default because they relink and can hit the "app is running ⇒ Access denied" lock. Decision logic is unit-tested: `node .claude/hooks/quality-gate.test.mjs`. The hook complements, and does not replace, running the full commands yourself before claiming done.
+
 ### Three build failures that are not code failures
 
 All three look like broken code, all three have wasted real time, and the obvious reaction to each is wrong.

@@ -27,3 +27,8 @@ package-lock.json
 /sidecar/**/bin/
 /sidecar/**/obj/
 /src-tauri/resources/inspector/
+
+# Claude Code runtime junk under .claude/. The committed hook config
+# (settings.json, hooks/) is tracked; these are per-session artifacts.
+/.claude/scheduled_tasks.lock
+/.claude/wf/
