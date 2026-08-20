@@ -11,6 +11,7 @@ fn group(id: &str, path: &str) -> IntentGroup {
         id: id.into(),
         kind: GroupKind::Intent,
         label: id.into(),
+        candidates: vec![],
         symbol: None,
         files: vec![GroupFile {
             path: path.into(),

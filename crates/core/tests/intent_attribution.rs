@@ -107,7 +107,7 @@ fn report_attribution_against_this_repository() {
     println!("\nattributed {attributed} / {changed_lines} changed lines ({share:.1}%)");
     println!("unattributed: {unattributed}");
 
-    let groups = grouping::group(&diffs, &attributions);
+    let groups = grouping::group(&diffs, &attributions, &intents);
     println!(
         "\n{hunks} hunk(s) collapsed into {} group(s):",
         groups.len()
@@ -263,7 +263,7 @@ fn grouping_a_repository_with_no_changes_produces_no_groups() {
         .unwrap_or_default();
 
     let attributions = attribution::attribute(&diffs, &Intents::default(), Options::default());
-    let groups = grouping::group(&diffs, &attributions);
+    let groups = grouping::group(&diffs, &attributions, &Intents::default());
 
     assert!(groups.is_empty());
 }

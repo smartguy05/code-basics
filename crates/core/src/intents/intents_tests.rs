@@ -278,6 +278,46 @@ fn a_label_naming_the_file_is_preferred_over_a_turn_wide_one() {
     assert_eq!(found.label, "just this file");
 }
 
+#[test]
+fn scoped_labels_for_path_returns_all_covering_declared_labels() {
+    let intents = Intents {
+        records: Vec::new(),
+        labels: vec![
+            label("a", "reason A", &["dir"]),         // covers by directory
+            label("b", "reason B", &["dir/file.rs"]), // covers by exact path
+            label("c", "elsewhere", &["other"]),      // does not cover
+            IntentLabel {
+                source: LabelSource::Inferred,
+                ..label("d", "inferred", &["dir"])
+            }, // inferred: never claims
+        ],
+    };
+
+    let got: Vec<&str> = intents
+        .scoped_labels_for_path("dir/file.rs")
+        .iter()
+        .map(|l| l.label.as_str())
+        .collect();
+
+    assert_eq!(got, vec!["reason A", "reason B"]);
+    // Unique cross-turn binding abstains when more than one covers.
+    assert!(intents
+        .effective_scoped_label(&record(0, "dir/file.rs", &[], &["x"]), "dir/file.rs")
+        .is_none());
+}
+
+#[test]
+fn scoped_labels_for_path_dedupes_same_turn_and_text() {
+    let intents = Intents {
+        records: Vec::new(),
+        labels: vec![
+            label("t", "same", &["dir"]),
+            label("t", "same", &["dir/f.rs"]),
+        ],
+    };
+    assert_eq!(intents.scoped_labels_for_path("dir/f.rs").len(), 1);
+}
+
 /// An agent that described its turn once still explains every edit in it.
 #[test]
 fn a_turn_wide_label_covers_a_file_it_does_not_name() {

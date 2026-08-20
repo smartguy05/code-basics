@@ -211,7 +211,7 @@ fn working_tree_groups(root: &std::path::Path, repo: &Repo) -> Vec<grouping::Int
         return Vec::new();
     };
     let attributions = attribution::attribute(&diffs, &intents, Options::default());
-    grouping::group(&diffs, &attributions)
+    grouping::group(&diffs, &attributions, &intents)
 }
 
 /// Drive the whole serverful HTTP replay, returning the computed deltas and

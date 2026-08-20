@@ -37,7 +37,7 @@ use specta::Type;
 
 use crate::git::attribution::{Confidence, FileAttribution};
 use crate::git::patch::{FileDiff, Hunk, LineOrigin};
-use crate::intents::LabelSource;
+use crate::intents::{Intents, LabelSource};
 // The declaration heuristic lives in `symbols` because it is a property of
 // source text, not of a repository; what stays here is the hunk-header half.
 use crate::symbols::declarations::{declaration_name, NOT_A_SYMBOL};
@@ -84,8 +84,15 @@ pub struct IntentGroup {
     /// in a command.
     pub id: String,
     pub kind: GroupKind,
-    /// What to show on the card.
+    /// What to show on the card. Empty for an ambiguous intent card, where the
+    /// reasons live in `candidates` instead.
     pub label: String,
+    /// When several declared reasons scope this file and none could be bound
+    /// uniquely, every candidate reason — so the card shows them rather than
+    /// silently dropping the author's intent. Empty in the normal single-reason
+    /// case (the one reason is in `label`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<String>,
     /// The symbol this group sits in, when one was identified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
@@ -245,11 +252,24 @@ fn symbol_is_new(hunk: &Hunk, symbol: &str) -> bool {
 ///
 /// `diffs` and `attributions` are parallel: both come from the same scan, in
 /// the same order.
-pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<IntentGroup> {
+pub fn group(
+    diffs: &[FileDiff],
+    attributions: &[FileAttribution],
+    intents: &Intents,
+) -> Vec<IntentGroup> {
     // Keyed so hunks of the same kind and symbol merge across files.
     let mut buckets: BTreeMap<String, Bucket> = BTreeMap::new();
 
     for (file_index, diff) in diffs.iter().enumerate() {
+        // Declared reasons the author scoped to this file. Used only when the
+        // geometry did not already bind one: a single reason titles the file's
+        // card, several become its candidates. Computed once per file.
+        let covering: Vec<(String, String)> = intents
+            .scoped_labels_for_path(&diff.path)
+            .into_iter()
+            .map(|l| (l.turn_id.clone(), l.label.clone()))
+            .collect();
+
         let attribution = attributions.get(file_index);
 
         for (hunk_index, hunk) in diff.hunks.iter().enumerate() {
@@ -360,6 +380,38 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                 },
             };
 
+            // Surface a declared reason the geometry did not bind. When a hunk
+            // landed as anything but a bound intent (or decidable formatting)
+            // yet the author scoped a declared reason to this file, retitle it:
+            // one reason titles the card, several become candidates rather than
+            // being dropped to a bare symbol name. Confidence is Low — the
+            // reason is stated, not corroborated by matched geometry.
+            let (key, kind, label, symbol, confidence, candidates) =
+                if matches!(kind, GroupKind::Intent | GroupKind::Formatting) || covering.is_empty()
+                {
+                    (key, kind, label, symbol, confidence, Vec::new())
+                } else if covering.len() == 1 {
+                    let (turn_id, reason) = &covering[0];
+                    (
+                        format!("intent:{turn_id}:{reason}"),
+                        GroupKind::Intent,
+                        reason.clone(),
+                        None,
+                        Confidence::Low,
+                        Vec::new(),
+                    )
+                } else {
+                    let reasons: Vec<String> = covering.iter().map(|(_, r)| r.clone()).collect();
+                    (
+                        format!("intent-ambiguous:{}", reasons.join("\u{1f}")),
+                        GroupKind::Intent,
+                        String::new(),
+                        None,
+                        Confidence::Low,
+                        reasons,
+                    )
+                };
+
             // A same-turn card with no reason has no title yet — one hunk
             // cannot know how many files the turn touched.
             let needs_title = kind == GroupKind::SameTurn && label.is_empty();
@@ -368,6 +420,7 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                 id: key,
                 kind,
                 label,
+                candidates,
                 symbol: symbol.clone(),
                 confidence,
                 files: BTreeMap::new(),
@@ -470,6 +523,7 @@ fn collapse_singletons(groups: Vec<IntentGroup>) -> Vec<IntentGroup> {
                     id: format!("other:{path}"),
                     kind: GroupKind::Other,
                     label: format!("Several changes in {}", file_name(&path)),
+                    candidates: Vec::new(),
                     symbol: None,
                     files: group.files,
                     line_count: group.line_count,
@@ -534,6 +588,8 @@ struct Bucket {
     id: String,
     kind: GroupKind,
     label: String,
+    /// Candidate reasons for an ambiguous intent card; empty otherwise.
+    candidates: Vec<String>,
     symbol: Option<String>,
     confidence: Confidence,
     /// path -> (line indices, hunk indices)
@@ -601,6 +657,7 @@ impl Bucket {
             id: self.id,
             kind: self.kind,
             label: self.label,
+            candidates: self.candidates,
             symbol: self.symbol,
             files,
             line_count,

@@ -88,11 +88,39 @@ export type IntentDataHint =
     };
 
 /**
- * The card's hover tooltip. A stated intent shows its own text (the headline is
- * ellipsis-truncated, so hover is where the full intent is read); every other
- * kind is a location, so it keeps its explanatory KIND_TITLE sentence.
+ * True when the card is an intent whose file is scoped by two or more declared
+ * reasons and none could be bound uniquely — so the reasons are shown as
+ * candidates rather than one being guessed.
+ */
+export function isAmbiguousIntent(group: IntentGroup): boolean {
+  return group.kind === "intent" && (group.candidates?.length ?? 0) > 0;
+}
+
+/** The candidate reasons to list under an ambiguous card; empty otherwise. */
+export function cardCandidates(group: IntentGroup): string[] {
+  return isAmbiguousIntent(group) ? group.candidates! : [];
+}
+
+/**
+ * The text shown on the card headline. A single stated intent shows its reason;
+ * an ambiguous one shows a marker (the reasons themselves render as a list
+ * below); every other kind already carries a derived title in `label`.
+ */
+export function cardHeadline(group: IntentGroup): string {
+  return isAmbiguousIntent(group) ? "Ambiguous intent" : group.label;
+}
+
+/**
+ * The card's hover tooltip. A single stated intent shows its own text (the
+ * headline is ellipsis-truncated, so hover is where the full intent is read); an
+ * ambiguous one lists every candidate reason; every other kind is a location, so
+ * it keeps its explanatory KIND_TITLE sentence.
  */
 export function cardTitle(group: IntentGroup, kindTitle: string): string {
+  if (isAmbiguousIntent(group)) {
+    return `Two or more declared reasons scope this file:\n- ${group
+      .candidates!.join("\n- ")}`;
+  }
   return group.kind === "intent" ? group.label : kindTitle;
 }
 

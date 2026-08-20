@@ -479,7 +479,14 @@ export interface GroupFile {
 export interface IntentGroup {
   id: string;
   kind: GroupKind;
+  /** What to show on the card; empty for an ambiguous intent (see `candidates`). */
   label: string;
+  /**
+   * When several declared reasons scope this file and none could be bound
+   * uniquely, every candidate reason — shown instead of dropping the intent to a
+   * symbol title. Absent/empty in the normal single-reason case.
+   */
+  candidates?: string[];
   /** The symbol the group sits in, when one was identified. */
   symbol?: string;
   files: GroupFile[];

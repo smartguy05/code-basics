@@ -485,11 +485,14 @@ fn one_orphan_geometry_turn_splits_into_two_declared_intent_cards() {
     assert!(out.unfulfilled.is_empty());
 }
 
-/// Two declared labels from different turns both scope the same file: the bind
-/// is ambiguous, so nothing is mislabeled. The geometry stays a same-turn card
-/// and both reasons remain honest, unevidenced claims rather than a guess.
+/// Two declared labels from different turns both scope the same file: no single
+/// reason can be *bound* (that would be a guess), but rather than dropping them
+/// to a symbol title the card now lists both as candidates — the author's intent
+/// stays visible. The scorecard is untouched: both remain honest, unevidenced
+/// claims (this is the guard against a synthetic span flipping them to
+/// evidenced).
 #[test]
-fn two_declared_labels_covering_one_file_do_not_cross_turn_bind() {
+fn two_declared_labels_covering_one_file_surface_as_candidates() {
     let diff = simple(
         "f.rs",
         &["+    let an_ambiguous_distinctive_line = go_now();"],
@@ -509,11 +512,17 @@ fn two_declared_labels_covering_one_file_do_not_cross_turn_bind() {
 
     let out = build(&[diff], &intents);
 
-    assert!(
-        !out.groups.iter().any(|g| g.kind == GroupKind::Intent),
-        "no reason should title an Intent card when the bind is ambiguous"
-    );
-    assert!(out.groups.iter().any(|g| g.kind == GroupKind::SameTurn));
+    let card = out
+        .groups
+        .iter()
+        .find(|g| g.kind == GroupKind::Intent)
+        .expect("an ambiguous intent card");
+    assert_eq!(card.label, "", "no single reason titles an ambiguous card");
+    assert_eq!(card.candidates.len(), 2);
+    assert!(card.candidates.contains(&"first reason".to_string()));
+    assert!(card.candidates.contains(&"second reason".to_string()));
+
+    // Scorecard unchanged — the reasons are shown, not evidenced.
     assert_eq!(out.scorecard.evidenced, 0);
     assert_eq!(out.scorecard.claims, 2);
     assert_eq!(out.scorecard.unmatched, 2);
@@ -745,6 +754,9 @@ fn a_path_scoped_claim_whose_content_is_absent_is_unmatched() {
 
     let out = build(&[diff], &intents);
 
+    // The scorecard stays honest: the reason is claimed but has no matched
+    // geometry, so it is unmatched, not evidenced. This is the trap the fix
+    // must not spring — no synthetic span may flip this to evidenced.
     assert_eq!(out.scorecard.claims, 1);
     assert_eq!(out.scorecard.evidenced, 0);
     assert_eq!(out.scorecard.unmatched, 1);
@@ -752,6 +764,16 @@ fn a_path_scoped_claim_whose_content_is_absent_is_unmatched() {
     assert_eq!(out.unfulfilled[0].label, "the scoped reason");
     assert_eq!(out.unfulfilled[0].turn_id, "turnB");
     assert_eq!(out.unfulfilled[0].paths, vec!["f.rs"]);
+
+    // ...but the card now shows the declared reason instead of dropping it to a
+    // symbol/"Other" title, so the reviewer sees the intent.
+    let card = out
+        .groups
+        .iter()
+        .find(|g| g.files.iter().any(|f| f.path == "f.rs"))
+        .expect("a card for the changed file");
+    assert_eq!(card.kind, crate::git::grouping::GroupKind::Intent);
+    assert_eq!(card.label, "the scoped reason");
 }
 
 // -- the IPC contract -------------------------------------------------------

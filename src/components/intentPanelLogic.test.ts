@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   canRejectInMode,
   cardRisk,
+  cardCandidates,
+  cardHeadline,
   cardTitle,
+  isAmbiguousIntent,
   groupStagedState,
   importFeedback,
   intentDataHint,
@@ -69,6 +72,33 @@ describe("cardTitle", () => {
     expect(cardTitle(group("formatting"), "whitespace only")).toBe("whitespace only");
     expect(cardTitle(group("modifiedSymbol"), "body changed")).toBe("body changed");
     expect(cardTitle(group("other"), "grouped by file")).toBe("grouped by file");
+  });
+
+  it("lists every candidate for an ambiguous intent", () => {
+    const g = { ...group("intent"), label: "", candidates: ["reason one", "reason two"] };
+    const title = cardTitle(g, "unused");
+    expect(title).toContain("reason one");
+    expect(title).toContain("reason two");
+  });
+});
+
+describe("ambiguous intent helpers", () => {
+  it("detects an ambiguous intent only when candidates are present", () => {
+    expect(isAmbiguousIntent({ ...group("intent"), candidates: ["a", "b"] })).toBe(true);
+    expect(isAmbiguousIntent(group("intent"))).toBe(false); // single label, no candidates
+    expect(isAmbiguousIntent({ ...group("other"), candidates: ["a", "b"] })).toBe(false); // not intent
+  });
+
+  it("headline shows the label normally and a marker when ambiguous", () => {
+    expect(cardHeadline(group("intent"))).toBe("a intent group");
+    expect(cardHeadline({ ...group("intent"), label: "", candidates: ["a", "b"] })).toBe(
+      "Ambiguous intent",
+    );
+  });
+
+  it("cardCandidates returns the reasons only when ambiguous", () => {
+    expect(cardCandidates({ ...group("intent"), candidates: ["a", "b"] })).toEqual(["a", "b"]);
+    expect(cardCandidates(group("intent"))).toEqual([]);
   });
 });
 

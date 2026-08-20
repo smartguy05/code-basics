@@ -3,6 +3,8 @@ import * as api from "../ipc/api";
 import { PlanPreview } from "./PlanPreview";
 import {
   canRejectInMode,
+  cardCandidates,
+  cardHeadline,
   cardRisk,
   cardTitle,
   groupStagedState,
@@ -539,7 +541,7 @@ function GroupCard({
     >
       <div className="headline">
         <span className={`kind ${group.kind}`}>{KIND_LABEL[group.kind]}</span>
-        <span className="label">{group.label}</span>
+        <span className="label">{cardHeadline(group)}</span>
         {behavior && <BehavioralBadge card={behavior} />}
         {risk && <RiskBadge risk={risk} />}
         <StageTag state={groupStagedState(group.files.map((f) => f.path), statusFiles)} />
@@ -547,6 +549,17 @@ function GroupCard({
           {CONFIDENCE_MARK[group.confidence]}
         </span>
       </div>
+
+      {cardCandidates(group).length > 0 && (
+        <div className="candidates" style={{ fontSize: 11, margin: "2px 0 0" }}>
+          <span className="faint">one of:</span>
+          <ul style={{ margin: "2px 0 0", paddingLeft: 16 }}>
+            {cardCandidates(group).map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="meta">
         {group.files.length} file{group.files.length === 1 ? "" : "s"} · {hunks} hunk

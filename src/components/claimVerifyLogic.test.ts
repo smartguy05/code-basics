@@ -234,6 +234,8 @@ describe("verifyClaimsAction", () => {
     expect(action.enabled).toBe(true);
     expect(action.config?.id).toBe("tests");
     expect(action.hint).toContain("Unit Tests");
+    // Must distinguish it from "Run before/after": it adds an agent that judges.
+    expect(action.hint.toLowerCase()).toContain("agent");
   });
 
   it("is disabled with a hint when there is no config", () => {

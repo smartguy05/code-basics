@@ -42,7 +42,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/architecture/store.rs` | 596 | Diagrams on disk: where they live, how they say where they came from, and |
 | `crates/core/src/architecture/store_tests.rs` | 631 | Tests for [`super::store`]. |
 | `crates/core/src/behavioral/attribute.rs` | 127 | Mapping observable deltas back to the intent card that plausibly caused them. |
-| `crates/core/src/behavioral/attribute_tests.rs` | 138 |  |
+| `crates/core/src/behavioral/attribute_tests.rs` | 139 |  |
 | `crates/core/src/behavioral/compare.rs` | 144 | Diffing two [`TestRunResult`]s by test-case outcome. |
 | `crates/core/src/behavioral/compare_tests.rs` | 126 |  |
 | `crates/core/src/behavioral/console.rs` | 222 | Diffing the console output of the two runs. |
@@ -54,7 +54,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/behavioral/mod.rs` | 161 | Behavioral before/after testing — the *runtime* counterpart to the static |
 | `crates/core/src/behavioral/mod_tests.rs` | 180 | Key-pinning for the behavioral wire types. |
 | `crates/core/src/behavioral/prepare.rs` | 120 | The testable decision seam between the raw deltas and the wire report. |
-| `crates/core/src/behavioral/prepare_tests.rs` | 118 | Tests for the pure report-assembly seam. |
+| `crates/core/src/behavioral/prepare_tests.rs` | 119 | Tests for the pure report-assembly seam. |
 | `crates/core/src/behavioral/replay.rs` | 151 | The one impure corner of behavioral testing: firing HTTP requests. |
 | `crates/core/src/behavioral/replay_tests.rs` | 58 | Socket-free tests for the two decisions replay makes without the network. |
 | `crates/core/src/behavioral/scenario.rs` | 205 | The pure decision seam for serverful HTTP replay. |
@@ -78,9 +78,9 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/git/attribution.rs` | 844 | Deciding which recorded edit produced which line of a diff. |
 | `crates/core/src/git/attribution_tests.rs` | 1044 | Tests for attributing diff lines to recorded edits. |
 | `crates/core/src/git/coverage.rs` | 345 | Auditing the agent's own story about its work. |
-| `crates/core/src/git/coverage_tests.rs` | 812 | Tests for the intent-coverage reverse pass and scorecard. |
-| `crates/core/src/git/grouping.rs` | 614 | Turning hunks into a handful of decisions. |
-| `crates/core/src/git/grouping_tests.rs` | 1040 | Tests for collapsing hunks into cards. |
+| `crates/core/src/git/coverage_tests.rs` | 834 | Tests for the intent-coverage reverse pass and scorecard. |
+| `crates/core/src/git/grouping.rs` | 671 | Turning hunks into a handful of decisions. |
+| `crates/core/src/git/grouping_tests.rs` | 1166 | Tests for collapsing hunks into cards. |
 | `crates/core/src/git/mod.rs` | 34 | Git operations. |
 | `crates/core/src/git/patch.rs` | 487 | Building unified diff patches restricted to a selection of lines. |
 | `crates/core/src/git/repo.rs` | 1789 | Repository reads and mutations. |
@@ -107,14 +107,14 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/guard_tests.rs` | 131 | Tests for the pre-commit guard that keeps rejection notes out of history. |
 | `crates/core/src/intents/hook.rs` | 780 | Turning a hook payload into a record. |
 | `crates/core/src/intents/hook_tests.rs` | 1338 | Tests for ingesting hook payloads. Included by `hook.rs` under `#[cfg(test)]`. |
-| `crates/core/src/intents/intents_tests.rs` | 839 | Tests for recorded agent intent. Included by `mod.rs` under `#[cfg(test)]`. |
-| `crates/core/src/intents/mod.rs` | 543 | What a coding agent said it was doing, and where it wrote it down. |
+| `crates/core/src/intents/intents_tests.rs` | 879 | Tests for recorded agent intent. Included by `mod.rs` under `#[cfg(test)]`. |
+| `crates/core/src/intents/mod.rs` | 565 | What a coding agent said it was doing, and where it wrote it down. |
 | `crates/core/src/intents/patchfmt.rs` | 224 | Reading Codex's patch format. |
 | `crates/core/src/intents/patchfmt_tests.rs` | 223 | Tests for Codex patch parsing. Included by `patchfmt.rs` under `#[cfg(test)]`. |
-| `crates/core/src/intents/providers/claude_code.rs` | 686 | Claude Code: hooks in `settings.json`, history in per-project transcripts. |
-| `crates/core/src/intents/providers/claude_code_tests.rs` | 1117 | Tests for the Claude Code transcript reader. |
+| `crates/core/src/intents/providers/claude_code.rs` | 698 | Claude Code: hooks in `settings.json`, history in per-project transcripts. |
+| `crates/core/src/intents/providers/claude_code_tests.rs` | 1188 | Tests for the Claude Code transcript reader. |
 | `crates/core/src/intents/providers/codex.rs` | 556 | Codex: hooks in `hooks.json`, history in dated rollout files. |
-| `crates/core/src/intents/providers/codex_tests.rs` | 1098 | Tests for reading Codex's rollout files and reporting its configuration. |
+| `crates/core/src/intents/providers/codex_tests.rs` | 1100 | Tests for reading Codex's rollout files and reporting its configuration. |
 | `crates/core/src/intents/providers/hooks_json.rs` | 198 | Merging our hooks into a configuration file the user already owns. |
 | `crates/core/src/intents/providers/instructions.rs` | 153 | Asking the agent for a reason. |
 | `crates/core/src/intents/providers/instructions_tests.rs` | 204 | Tests for the label request appended to an agent's instruction file. |
@@ -162,7 +162,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/process/resolve.rs` | 200 | Windows program-name resolution. |
 | `crates/core/src/qgate/decide_tests.rs` | 166 | Decision-logic tests for the quality gate — the Rust port of the behaviour |
 | `crates/core/src/qgate/install.rs` | 143 | Installing the quality-gate Stop hook — the same method the intent hooks use. |
-| `crates/core/src/qgate/install_tests.rs` | 145 | Installer tests for the quality-gate hook. The behaviour that matters most |
+| `crates/core/src/qgate/install_tests.rs` | 151 | Installer tests for the quality-gate hook. The behaviour that matters most |
 | `crates/core/src/qgate/mod.rs` | 241 | The quality-gate Stop hook: deterministic checks when an agent turn ends. |
 | `crates/core/src/review.rs` | 336 | Assembling the command line for an in-app adversarial review. |
 | `crates/core/src/review_tests.rs` | 353 | Tests for [`crate::review`] — the pure, agent-aware command-line assembly for |
@@ -206,7 +206,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/ErrorBoundary.tsx` | 65 |  |
 | `src/components/FileEditor.tsx` | 946 |  |
 | `src/components/FileTree.tsx` | 118 |  |
-| `src/components/IntentPanel.tsx` | 946 |  |
+| `src/components/IntentPanel.tsx` | 959 |  |
 | `src/components/LspStatus.tsx` | 125 |  |
 | `src/components/MenuBar.tsx` | 381 |  |
 | `src/components/ObjectTree.tsx` | 351 |  |
@@ -223,7 +223,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/TestTree.tsx` | 125 |  |
 | `src/components/behavioralPanelLogic.test.ts` | 200 |  |
 | `src/components/behavioralPanelLogic.ts` | 217 |  |
-| `src/components/claimVerifyLogic.test.ts` | 245 |  |
+| `src/components/claimVerifyLogic.test.ts` | 247 |  |
 | `src/components/claimVerifyLogic.ts` | 150 |  |
 | `src/components/configLogic.test.ts` | 111 |  |
 | `src/components/configLogic.ts` | 48 |  |
@@ -235,8 +235,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/enhancementsLogic.ts` | 100 |  |
 | `src/components/erosionLogic.test.ts` | 78 |  |
 | `src/components/erosionLogic.ts` | 65 |  |
-| `src/components/intentPanelLogic.test.ts` | 468 |  |
-| `src/components/intentPanelLogic.ts` | 404 |  |
+| `src/components/intentPanelLogic.test.ts` | 498 |  |
+| `src/components/intentPanelLogic.ts` | 432 |  |
 | `src/components/language.test.ts` | 114 |  |
 | `src/components/language.ts` | 113 |  |
 | `src/components/lspStatusLogic.test.ts` | 306 |  |
@@ -262,7 +262,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 |  |
 | `src/ipc/api.ts` | 753 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 1579 |  |
+| `src/ipc/types.ts` | 1586 |  |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
@@ -406,7 +406,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/inspect/tree.rs`: `Built`, `build()`
 - `crates/core/src/intents/guard.rs`: `block()`, `hook_path()`, `plan_for()`, `planned_write()`, `is_installed()`, `plan_removal()`, `ensure_executable()`
 - `crates/core/src/intents/hook.rs`: `is_record_invocation()`, `RecorderInvocation`, `parse_recorder_args()`, `HookEvent`, `parse()`, `ingest()`, `ask_for_intent()`, `parse_labels_with_source()`, `parse_declared_labels()`, `parse_labels()`, `looks_like_narration()`, `is_usable_inferred_label()`, `is_enabled()`, `resolve_root()`, `resolve_enabled_root()`
-- `crates/core/src/intents/mod.rs`: `ProviderId`, `as_str()`, `IntentEdit`, `is_empty()`, `IntentRecord`, `LabelSource`, `IntentLabel`, `IntentPrompt`, `Intents`, `is_empty()`, `label_for()`, `effective_scoped_label()`, `for_path()`, `normalise_path()`, `scope_covers()`, `relative_to()`, `intents_dir()`, `edits_path()`, `labels_path()`, `prompts_path()`, `LoadOptions`, `load()`, `load_prompts()`, `prompt_for()`, `append_edit()`, `append_label()`, `append_prompt()`, `next_seq()`, `rebase_seqs()`, `clear()`
+- `crates/core/src/intents/mod.rs`: `ProviderId`, `as_str()`, `IntentEdit`, `is_empty()`, `IntentRecord`, `LabelSource`, `IntentLabel`, `IntentPrompt`, `Intents`, `is_empty()`, `label_for()`, `effective_scoped_label()`, `scoped_labels_for_path()`, `for_path()`, `normalise_path()`, `scope_covers()`, `relative_to()`, `intents_dir()`, `edits_path()`, `labels_path()`, `prompts_path()`, `LoadOptions`, `load()`, `load_prompts()`, `prompt_for()`, `append_edit()`, `append_label()`, `append_prompt()`, `next_seq()`, `rebase_seqs()`, `clear()`
 - `crates/core/src/intents/patchfmt.rs`: `PatchedFile`, `parse_envelope()`, `parse_unified_diff()`, `envelope_from_value()`
 - `crates/core/src/intents/providers/claude_code.rs`: `ClaudeCode`, `new()`, `with_home()`, `claude_home()`, `project_settings_path()`, `user_settings_path()`, `encode_project_dir()`
 - `crates/core/src/intents/providers/codex.rs`: `Codex`, `new()`, `codex_home()`, `detected_in()`, `status_in()`, `install_plan_in()`, `history_in()`, `planned_entries()`

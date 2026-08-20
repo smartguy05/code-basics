@@ -100,7 +100,7 @@ pub fn review(
     let mut attributions = attributions.to_vec();
     let bound_bare = bind_bare_orphan(&mut attributions, intents);
 
-    let groups = grouping::group(diffs, &attributions);
+    let groups = grouping::group(diffs, &attributions, intents);
     let evidenced_set = evidenced_claims(&attributions);
     let claims = claims_in_play(diffs, &attributions, intents, bound_bare.as_ref());
     let claim_total = claims.len() as u32;

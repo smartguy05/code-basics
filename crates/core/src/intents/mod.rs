@@ -244,22 +244,44 @@ impl Intents {
             return Some(label);
         }
 
-        // Orphan record: the only cross-turn signal strong enough to trust is a
-        // declared label the author explicitly scoped to this file. Accept it
-        // only when exactly one such label exists across every turn.
-        let mut found: Option<&IntentLabel> = None;
+        // Orphan record: the only cross-turn signal strong enough to *bind a
+        // single title to* is a declared label the author explicitly scoped to
+        // this file, and only when exactly one such label exists. Two or more
+        // covering labels are ambiguous, so this abstains — the card layer
+        // surfaces them as candidates instead (see [`scoped_labels_for_path`]).
+        let covering = self.scoped_labels_for_path(path);
+        match covering.as_slice() {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+
+    /// Every declared, path-scoped label whose scope covers `path`, deduped by
+    /// `(turn, text)`.
+    ///
+    /// Unlike [`effective_scoped_label`], this does not abstain on ambiguity: it
+    /// returns all covering reasons so the card layer can show a single one as a
+    /// title or several as candidates. Only author-declared, non-empty-`paths`
+    /// labels qualify — a bare turn-wide reason or an inferred sentence never
+    /// claims a file it did not name.
+    pub fn scoped_labels_for_path(&self, path: &str) -> Vec<&IntentLabel> {
+        let mut out: Vec<&IntentLabel> = Vec::new();
         for label in &self.labels {
             if label.source != LabelSource::Declared || label.paths.is_empty() {
                 continue;
             }
-            if label.paths.iter().any(|p| scope_covers(p, path)) {
-                if found.is_some() {
-                    return None;
-                }
-                found = Some(label);
+            if !label.paths.iter().any(|p| scope_covers(p, path)) {
+                continue;
             }
+            if out
+                .iter()
+                .any(|l| l.turn_id == label.turn_id && l.label == label.label)
+            {
+                continue;
+            }
+            out.push(label);
         }
-        found
+        out
     }
 
     /// Records touching one file, oldest first.

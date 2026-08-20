@@ -62,7 +62,7 @@ fn simple(path: &str, lines: &[&str], header: &str) -> FileDiff {
 fn group_without_intent(diffs: &[FileDiff]) -> Vec<IntentGroup> {
     let empty = Intents::default();
     let attributions = attribution::attribute(diffs, &empty, Options::default());
-    group(diffs, &attributions)
+    group(diffs, &attributions, &empty)
 }
 
 // -- formatting detection ---------------------------------------------------
@@ -524,7 +524,7 @@ fn singleton_collapse_merges_into_an_existing_other_bucket_for_the_file() {
 
 fn with_intent(diffs: &[FileDiff], intents: &Intents) -> Vec<IntentGroup> {
     let attributions = attribution::attribute(diffs, intents, Options::default());
-    group(diffs, &attributions)
+    group(diffs, &attributions, intents)
 }
 
 fn record_with_label(path: &str, lines: &[&str], label: &str) -> Intents {
@@ -606,6 +606,103 @@ fn a_declared_label_still_produces_an_intent_card() {
     let groups = with_intent(&[d], &intents);
 
     assert_eq!(groups[0].kind, GroupKind::Intent);
+}
+
+// -- declared reasons surface even without matched geometry ------------------
+
+/// A declared label scoped to files, with no records at all.
+fn scoped_labels(pairs: &[(&str, &str, &[&str])]) -> Intents {
+    Intents {
+        records: Vec::new(),
+        labels: pairs
+            .iter()
+            .map(|(turn, label, paths)| IntentLabel {
+                provider: ProviderId::ClaudeCode,
+                turn_id: (*turn).into(),
+                label: (*label).into(),
+                paths: paths.iter().map(|p| p.to_string()).collect(),
+                anchor: None,
+                source: LabelSource::Declared,
+            })
+            .collect(),
+    }
+}
+
+/// The reported razor bug: a file changed with no captured geometry (edited by
+/// Bash or by hand), but a declared reason names it. The card must show the
+/// reason and carry the changed lines so it can still be staged.
+#[test]
+fn a_declared_reason_titles_a_geometry_less_file() {
+    let d = simple("f.rs", &["+    let x = 1;"], "fn go() {");
+    let intents = scoped_labels(&[("t1", "fix non-resettable cancellation", &["f.rs"])]);
+
+    let groups = with_intent(&[d], &intents);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].kind, GroupKind::Intent);
+    assert_eq!(groups[0].label, "fix non-resettable cancellation");
+    assert!(groups[0].candidates.is_empty());
+    // Stageable: the whole file's changed lines are on the card.
+    assert_eq!(groups[0].files.len(), 1);
+    assert!(!groups[0].files[0].line_indices.is_empty());
+}
+
+/// The reported Autocomplete bug: two declared reasons both scope the file's
+/// directory, so neither binds uniquely. Rather than fall back to a symbol
+/// name, the card lists both as candidates.
+#[test]
+fn two_covering_reasons_become_candidates_not_a_symbol_title() {
+    let d = simple(
+        "dir/Autocomplete.razor.cs",
+        &["+    private CancellationTokenSource _cts = new();"],
+        "class Autocomplete {",
+    );
+    let intents = scoped_labels(&[
+        (
+            "a",
+            "move per-search cancellation into Autocomplete",
+            &["dir"],
+        ),
+        ("b", "move read tracking to owning page", &["dir"]),
+    ]);
+
+    let groups = with_intent(&[d], &intents);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].kind, GroupKind::Intent);
+    assert_eq!(groups[0].label, "");
+    assert_eq!(groups[0].candidates.len(), 2);
+    assert!(groups[0]
+        .candidates
+        .contains(&"move per-search cancellation into Autocomplete".to_string()));
+    assert!(groups[0]
+        .candidates
+        .contains(&"move read tracking to owning page".to_string()));
+}
+
+/// The override must not touch a hunk that is pure formatting — that is
+/// decidable and a stronger statement than a broad directory reason.
+#[test]
+fn a_covering_reason_does_not_relabel_formatting() {
+    // Same tokens, only indentation changed → formatting.
+    let d = simple("dir/x.rs", &["-let a=1;", "+  let a=1;"], "");
+    let intents = scoped_labels(&[("t1", "some broad refactor", &["dir"])]);
+
+    let groups = with_intent(&[d], &intents);
+
+    assert_eq!(groups[0].kind, GroupKind::Formatting);
+}
+
+/// A reason that scopes a *different* directory must not claim this file.
+#[test]
+fn a_reason_scoped_elsewhere_does_not_claim_the_file() {
+    let d = simple("dir/x.rs", &["+    let a = 1;"], "");
+    let intents = scoped_labels(&[("t1", "unrelated reason", &["other"])]);
+
+    let groups = with_intent(&[d], &intents);
+
+    assert_ne!(groups[0].kind, GroupKind::Intent);
+    assert!(groups[0].candidates.is_empty());
 }
 
 /// The grouping is the valuable part and survives having no reason at all: the
@@ -914,6 +1011,7 @@ fn an_intent_group_serialises_with_the_keys_the_ui_reads() {
         id: "intent:turn-1".into(),
         kind: GroupKind::Intent,
         label: "add retry".into(),
+        candidates: Vec::new(),
         symbol: Some("refresh".into()),
         files: vec![GroupFile {
             path: "a.rs".into(),
@@ -948,6 +1046,7 @@ fn a_group_without_a_symbol_omits_the_key_rather_than_sending_null() {
         id: "formatting".into(),
         kind: GroupKind::Formatting,
         label: "Whitespace only".into(),
+        candidates: Vec::new(),
         symbol: None,
         files: Vec::new(),
         line_count: 0,
@@ -955,6 +1054,33 @@ fn a_group_without_a_symbol_omits_the_key_rather_than_sending_null() {
     };
 
     assert!(!keys(&serde_json::to_value(&group).unwrap()).contains(&"symbol".to_string()));
+}
+
+/// Candidates are omitted when empty (the normal case) and present when the
+/// card is ambiguous — the UI reads the key only when it is there.
+#[test]
+fn candidates_key_appears_only_when_non_empty() {
+    let base = IntentGroup {
+        id: "x".into(),
+        kind: GroupKind::Intent,
+        label: String::new(),
+        candidates: Vec::new(),
+        symbol: None,
+        files: Vec::new(),
+        line_count: 0,
+        confidence: Confidence::Low,
+    };
+
+    let empty = serde_json::to_value(&base).unwrap();
+    assert!(!keys(&empty).contains(&"candidates".to_string()));
+
+    let ambiguous = IntentGroup {
+        candidates: vec!["reason one".into(), "reason two".into()],
+        ..base
+    };
+    let value = serde_json::to_value(&ambiguous).unwrap();
+    assert!(keys(&value).contains(&"candidates".to_string()));
+    assert_eq!(value["candidates"][0], "reason one");
 }
 
 #[test]

@@ -73,7 +73,7 @@ fn lines_for(
     let intents = intents::load(root, &LoadOptions { branch }).map_err(|e| format!("{e:#}"))?;
 
     let attributions = attribution::attribute(&diffs, &intents, Options::default());
-    let groups = grouping::group(&diffs, &attributions);
+    let groups = grouping::group(&diffs, &attributions, &intents);
 
     let group = groups
         .into_iter()

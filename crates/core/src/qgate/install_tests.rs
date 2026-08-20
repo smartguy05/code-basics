@@ -104,13 +104,19 @@ fn coexists_with_the_intent_recorder_stop_entry() {
 #[test]
 fn status_reflects_project_install_and_backs_up_on_merge() {
     let dir = tempdir().unwrap();
+    // A fixture home so the user-scope fallback is hermetic — never the real
+    // ~/.claude, which may itself have the gate installed on this machine.
+    let home = tempdir().unwrap();
     let path = dir.path().join(".claude").join("settings.json");
 
-    assert_eq!(status(dir.path(), None), None);
+    assert_eq!(status(dir.path(), Some(home.path())), None);
 
     let plan = install_plan(dir.path(), InstallScope::Project, None).unwrap();
     apply_writes(&plan.writes).unwrap();
-    assert_eq!(status(dir.path(), None), Some(InstallScope::Project));
+    assert_eq!(
+        status(dir.path(), Some(home.path())),
+        Some(InstallScope::Project)
+    );
 
     // A second apply (merges_existing) leaves a .bak of the prior file.
     let second = install_plan(dir.path(), InstallScope::Project, None).unwrap();

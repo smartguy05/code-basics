@@ -7,6 +7,7 @@ fn group(id: &str, paths: &[&str]) -> IntentGroup {
         id: id.into(),
         kind: GroupKind::Intent,
         label: id.into(),
+        candidates: vec![],
         symbol: None,
         files: paths
             .iter()
