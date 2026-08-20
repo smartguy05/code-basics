@@ -240,13 +240,25 @@ fn find_sessions(home: &Path, root: &Path) -> Vec<PathBuf> {
 
     let mut found = Vec::new();
     for dir in dirs {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        // Depth 3 reaches both the flat `<session>.jsonl` transcripts (depth 1)
+        // and the per-session `<session>/subagents/agent-*.jsonl` files (depth 3)
+        // this Claude Code version writes. A file edited only by a subagent has
+        // its geometry *only* in the latter, so a flat read of the project dir
+        // — which this used to do — missed it entirely.
+        for entry in walkdir::WalkDir::new(&dir)
+            .max_depth(3)
+            .into_iter()
+            .flatten()
+        {
             let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            if transcript_cwd(&path).is_some_and(|cwd| cwd.to_lowercase() == wanted) {
-                found.push(path);
+            if transcript_cwd(path).is_some_and(|cwd| cwd.to_lowercase() == wanted) {
+                found.push(path.to_path_buf());
             }
         }
     }

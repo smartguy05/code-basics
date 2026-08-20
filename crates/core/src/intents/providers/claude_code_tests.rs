@@ -878,6 +878,77 @@ impl Fixture {
         })
         .to_string()
     }
+
+    /// A subagent transcript, written where this Claude Code version keeps them:
+    /// `projects/<enc>/<session>/subagents/<agent>.jsonl`, not the flat project
+    /// dir. Every line is a sidechain; the root line carries `parentUuid: null`
+    /// (the spawning Task lives in the main file, which this standalone file does
+    /// not repeat) so its lineage resolves.
+    fn subagent_session(&self, session: &str, agent: &str, relative: &str) {
+        let path = self.root().join(relative);
+        let root_line = json!({
+            "type": "user",
+            "cwd": self.root().to_string_lossy(),
+            "uuid": "sub-root",
+            "parentUuid": null,
+            "isSidechain": true,
+            "message": { "role": "user", "content": "go do the thing" },
+        })
+        .to_string();
+        let edit_line = json!({
+            "type": "assistant",
+            "uuid": "sub-edit",
+            "parentUuid": "sub-root",
+            "isSidechain": true,
+            "gitBranch": "main",
+            "message": { "content": [
+                { "type": "text", "text": "editing the file now" },
+                {
+                    "type": "tool_use",
+                    "id": "se1",
+                    "name": "Edit",
+                    "input": {
+                        "file_path": path.to_string_lossy(),
+                        "old_string": "a",
+                        "new_string": "b",
+                    },
+                },
+            ] },
+        })
+        .to_string();
+        let dir = self
+            .home
+            .path()
+            .join("projects")
+            .join(encode_project_dir(self.root()))
+            .join(session)
+            .join("subagents");
+        write_lines(&dir.join(format!("{agent}.jsonl")), &[root_line, edit_line]);
+    }
+}
+
+#[test]
+fn a_subagent_transcript_is_discovered_and_its_edit_is_mined() {
+    let fixture = Fixture::new();
+    // A normal flat main-session transcript must still be found.
+    fixture.session(
+        "main.jsonl",
+        vec![fixture.edit_turn("do a thing", "t1", "main.rs")],
+    );
+    // A file edited only by a subagent, whose geometry lives one level deeper.
+    fixture.subagent_session("session-1", "agent-abc", "sub.rs");
+
+    let HistoryMined { records, .. } = fixture.provider().history(fixture.root()).unwrap();
+    let paths: Vec<&str> = records.iter().map(|r| r.path.as_str()).collect();
+
+    assert!(
+        paths.iter().any(|p| p.ends_with("main.rs")),
+        "the flat main session is still mined: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|p| p.ends_with("sub.rs")),
+        "the subagent edit is now mined: {paths:?}"
+    );
 }
 
 #[test]
