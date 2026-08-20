@@ -218,4 +218,8 @@ The setup panel has a second, independent hook beside capture: the **quality gat
 
 It installs through the same machinery: **Enable for this repo / for me** previews the exact `.claude/settings.json` write and applies it via the shared `InstallPlan`/`apply_writes` path (additive, backed up first). A distinct `code-basics-qgate` marker lets its `Stop` entry sit alongside the recorder's without either removing the other. Because it runs the release binary, it needs `target/release/cb-app.exe` built — see the [development guide](development.md#quality-gate-stop-hook).
 
+## First-open setup prompt
+
+Opening a workspace that has neither hook installed shows a one-time **modal** offering to set both up at once (`cb_core::setup`), so setup is not forgotten. You pick a scope (this repo / just me), see the exact files that will be written, and confirm — the same preview-before-write contract. Because intent capture and the quality gate both write Claude Code's `settings.json`, the combined plan **chains** the two merges into a single write carrying both markers rather than planning them independently (which would clobber). *Not now* dismisses it for the session; *Don't ask again* is remembered per workspace (in the browser's `localStorage`, so it is per-machine). Once either hook is installed the status check stops raising it. Decision logic: `components/setupPromptLogic.ts`.
+
 Related: [Changes and history](../getting-started/using-the-app.md) · [configuration](../reference/configuration.md) · [commands](../reference/commands.md) · [development guide](development.md#local-agent-hooks)

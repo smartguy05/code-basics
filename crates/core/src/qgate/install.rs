@@ -81,6 +81,13 @@ pub fn install_plan(root: &Path, scope: InstallScope, home: Option<&Path>) -> Re
     })
 }
 
+/// Merge the gate's `Stop` entry into a settings.json **string**, returning the
+/// new text. Used by the combined first-open setup plan to chain the gate merge
+/// on top of the intent recorder's settings.json so both land in one write.
+pub fn merged_into(existing: &str, workspace: Option<&Path>) -> Result<String> {
+    settings_merge::merged_into_text(existing, &entries_for(workspace), MARKER)
+}
+
 /// The `Stop` entry as it should appear in the file.
 fn entries_for(workspace: Option<&Path>) -> Value {
     let entry = json!({

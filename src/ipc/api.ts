@@ -449,6 +449,14 @@ export const qualityGateInstallPlan = (scope: InstallScope) =>
 export const installQualityGate = (scope: InstallScope) =>
   invoke<InstallScope | null>("install_quality_gate", { scope });
 
+/** First-open setup: exactly what installing every hook at `scope` would write. */
+export const setupInstallPlan = (scope: InstallScope) =>
+  invoke<InstallPlan>("setup_install_plan", { scope });
+
+/** Apply a confirmed first-open setup (intent capture + quality gate together). */
+export const installSetup = (scope: InstallScope) =>
+  invoke<void>("install_setup", { scope });
+
 // ---------------------------------------------------------------------------
 // Behavioral before/after testing (`behavioral/`)
 // ---------------------------------------------------------------------------

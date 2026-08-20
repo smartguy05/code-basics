@@ -147,6 +147,15 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `quality_gate_install_plan` | `scope: InstallScope` | `InstallPlan` | The exact final contents of the `settings.json` write. **Touches nothing** — what the confirmation dialog renders |
 | `install_quality_gate` | `scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install. Additive and backed up first; a distinct marker lets it coexist with the intent recorder's `Stop` entry. Returns the new status |
 
+## First-open setup
+
+`src-tauri/src/commands/setup.rs` — the combined install offered when a workspace opens without the hooks. Decisions live in `cb_core::setup`, which chains the intent and quality-gate settings.json merges into one write so neither clobbers the other.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `setup_install_plan` | `scope: InstallScope` | `InstallPlan` | Everything installing intent capture (for every detected agent) + the quality gate at `scope` would write, as one plan. **Touches nothing** — what the setup dialog renders |
+| `install_setup` | `scope: InstallScope` | `()` | Apply the combined plan (backed up first), make the shell hooks executable, and create the intents directory |
+
 ## Behavioral before/after testing
 
 `src-tauri/src/commands/behavioral.rs` — the runtime counterpart to the intent coverage audit: run the same config against `HEAD` and the working tree and diff the observable outcomes. Decisions live in `cb_core::behavioral`.

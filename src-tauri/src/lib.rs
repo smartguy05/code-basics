@@ -23,6 +23,7 @@ mod commands {
     pub mod rules;
     pub mod run;
     pub mod secrets;
+    pub mod setup;
     pub mod symbols;
     pub mod workspace;
 }
@@ -171,6 +172,8 @@ pub fn run() {
             commands::qgate::quality_gate_status,
             commands::qgate::quality_gate_install_plan,
             commands::qgate::install_quality_gate,
+            commands::setup::setup_install_plan,
+            commands::setup::install_setup,
             commands::behavioral::behavioral_diff,
             commands::behavioral::behavioral_clear,
             commands::erosion::erosion_scan,

@@ -26,6 +26,7 @@ pub mod qgate;
 pub mod review;
 pub mod rules;
 pub mod secrets;
+pub mod setup;
 pub mod symbols;
 pub mod testing;
 pub mod workspace;

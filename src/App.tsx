@@ -9,6 +9,8 @@ import { InspectView } from "./views/InspectView";
 import { RunView } from "./views/RunView";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { SearchEverywhere } from "./components/SearchEverywhere";
+import { SetupPrompt } from "./components/SetupPrompt";
+import { shouldPrompt, setDismissed } from "./components/setupPromptLogic";
 import { TestsView } from "./views/TestsView";
 import * as api from "./ipc/api";
 import type { AgentMode } from "./ipc/api";
@@ -95,6 +97,9 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [recents, setRecents] = useState<string[]>(() => loadRecents(localStorage));
   const [loading, setLoading] = useState(true);
+  // First-open prompt: shown when a workspace opens without the agent hooks
+  // installed (and not dismissed for it). Decided by an effect on the root.
+  const [showSetup, setShowSetup] = useState(false);
   /**
    * A contextual Inspect click, held only until the Objects tab has consumed
    * it. It lives here because the views that raise one and the view that
@@ -211,6 +216,27 @@ export function App() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  // On opening a workspace, offer to set up the agent hooks if they are not
+  // installed and the prompt has not been dismissed for this workspace.
+  useEffect(() => {
+    const root = workspace?.root;
+    if (!root) {
+      setShowSetup(false);
+      return;
+    }
+    let live = true;
+    void Promise.all([api.intentCaptureStatus(), api.qualityGateStatus()])
+      .then(([providers, gate]) => {
+        if (live) setShowSetup(shouldPrompt(providers, gate, localStorage, root));
+      })
+      .catch(() => {
+        /* status unavailable — do not prompt */
+      });
+    return () => {
+      live = false;
+    };
+  }, [workspace?.root]);
 
   async function openPath(path: string) {
     try {
@@ -420,6 +446,17 @@ export function App() {
         onOpenFile={requestOpenFile}
         onRunAction={requestSelectConfig}
       />
+
+      {showSetup && (
+        <SetupPrompt
+          onDismiss={() => setShowSetup(false)}
+          onDontAskAgain={() => {
+            setDismissed(localStorage, workspace.root);
+            setShowSetup(false);
+          }}
+          onInstalled={() => setShowSetup(false)}
+        />
+      )}
 
       {/* Hosted here rather than in a tab: the agent runs as a background
           process and its panel minimizes to a pill, so it must outlive a tab

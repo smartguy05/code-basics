@@ -59,22 +59,27 @@ pub fn is_installed(path: &Path, events: &[&str], marker: &str) -> bool {
 pub fn merged_text(path: &Path, ours: &Value, marker: &str) -> Result<(String, bool)> {
     let existing = std::fs::read_to_string(path).ok();
     let merges_existing = existing.is_some();
+    let text = merged_into_text(existing.as_deref().unwrap_or(""), ours, marker)
+        .with_context(|| format!("{} was left untouched", path.display()))?;
+    Ok((text, merges_existing))
+}
 
-    let mut root_value: Value = match &existing {
-        Some(text) if !text.trim().is_empty() => serde_json::from_str(text).with_context(|| {
-            format!(
-                "{} is not valid JSON, so it was left untouched",
-                path.display()
-            )
-        })?,
-        _ => Value::Object(Map::new()),
+/// Merge `ours` into a settings.json **string** (rather than a file on disk),
+/// returning the new text. `existing` may be empty for a fresh file. Bails
+/// without producing output if `existing` is non-empty but not a JSON object,
+/// so a format we do not understand is never destroyed.
+///
+/// This is the seam the combined first-open setup plan uses to chain two merges
+/// (the intent recorder's, then the quality gate's) into one settings.json.
+pub fn merged_into_text(existing: &str, ours: &Value, marker: &str) -> Result<String> {
+    let mut root_value: Value = if existing.trim().is_empty() {
+        Value::Object(Map::new())
+    } else {
+        serde_json::from_str(existing).context("not valid JSON")?
     };
 
     if !root_value.is_object() {
-        anyhow::bail!(
-            "{} does not contain a JSON object, so it was left untouched",
-            path.display()
-        );
+        anyhow::bail!("does not contain a JSON object");
     }
 
     merge_into(&mut root_value, ours, marker);
@@ -83,7 +88,7 @@ pub fn merged_text(path: &Path, ours: &Value, marker: &str) -> Result<(String, b
         .context("failed to serialise the hook configuration")?;
     text.push('\n');
 
-    Ok((text, merges_existing))
+    Ok(text)
 }
 
 /// Add `ours` to whatever is already there, replacing any earlier marked entry.
