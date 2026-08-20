@@ -18,6 +18,7 @@ mod commands {
     pub mod inspect;
     pub mod intents;
     pub mod lsp;
+    pub mod qgate;
     pub mod review;
     pub mod rules;
     pub mod run;
@@ -26,6 +27,7 @@ mod commands {
     pub mod workspace;
 }
 
+mod qgate_run;
 mod recorder;
 
 use state::AppState;
@@ -55,6 +57,13 @@ pub fn run() {
     // without ever creating a window.
     if recorder::is_record_invocation() {
         recorder::run();
+        return;
+    }
+
+    // The quality-gate Stop hook likewise re-invokes this binary rather than a
+    // shipped script; it runs its checks and exits without creating a window.
+    if qgate_run::is_quality_gate_invocation() {
+        qgate_run::run();
         return;
     }
 
@@ -159,6 +168,9 @@ pub fn run() {
             commands::intents::enable_intent_capture,
             commands::intents::import_intent_history,
             commands::intents::clear_intent_history,
+            commands::qgate::quality_gate_status,
+            commands::qgate::quality_gate_install_plan,
+            commands::qgate::install_quality_gate,
             commands::behavioral::behavioral_diff,
             commands::behavioral::behavioral_clear,
             commands::erosion::erosion_scan,

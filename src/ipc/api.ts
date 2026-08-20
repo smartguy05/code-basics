@@ -433,6 +433,23 @@ export const importIntentHistory = () =>
 export const clearIntentHistory = () => invoke<void>("clear_intent_history");
 
 // ---------------------------------------------------------------------------
+// Quality-gate Stop hook (`qgate/`) — installed the same way the intent hooks
+// are: preview a plan, then apply it.
+// ---------------------------------------------------------------------------
+
+/** Where the quality gate is installed for this workspace, if anywhere. */
+export const qualityGateStatus = () =>
+  invoke<InstallScope | null>("quality_gate_status");
+
+/** Exactly what installing the quality gate would write. Touches nothing. */
+export const qualityGateInstallPlan = (scope: InstallScope) =>
+  invoke<InstallPlan>("quality_gate_install_plan", { scope });
+
+/** Perform an install the user has confirmed; returns the new status. */
+export const installQualityGate = (scope: InstallScope) =>
+  invoke<InstallScope | null>("install_quality_gate", { scope });
+
+// ---------------------------------------------------------------------------
 // Behavioral before/after testing (`behavioral/`)
 // ---------------------------------------------------------------------------
 

@@ -212,4 +212,10 @@ Prompts come from **session mining**: *Import past sessions* reads each agent tr
 - **Claude Code only for now.** Codex records and labels are mined, but its rollout user-turn shape is less certain, so Codex prompt mining is a follow-up.
 - **Import-driven, not live.** Prompts appear for turns that have been imported; re-import to pick up new ones. A live `UserPromptSubmit` hook was rejected because its payload keys by session, not the per-turn id the lines need.
 
-Related: [Changes and history](../getting-started/using-the-app.md) · [configuration](../reference/configuration.md) · [commands](../reference/commands.md)
+## The quality gate installs the same way
+
+The setup panel has a second, independent hook beside capture: the **quality gate** (`cb_core::qgate`). It is a Claude Code `Stop` hook that, when an agent turn ends, runs `pnpm typecheck` / `cargo fmt --check` on the changed files and **blocks the turn** (exit 2) until they pass, blocks on an unresolved `AI-REJECTED` note, and reminds — without blocking — when source changed but no `.memories/` file did. Like the recorder it invokes `cb-app.exe quality-gate` rather than a shipped script.
+
+It installs through the same machinery: **Enable for this repo / for me** previews the exact `.claude/settings.json` write and applies it via the shared `InstallPlan`/`apply_writes` path (additive, backed up first). A distinct `code-basics-qgate` marker lets its `Stop` entry sit alongside the recorder's without either removing the other. Because it runs the release binary, it needs `target/release/cb-app.exe` built — see the [development guide](development.md#quality-gate-stop-hook).
+
+Related: [Changes and history](../getting-started/using-the-app.md) · [configuration](../reference/configuration.md) · [commands](../reference/commands.md) · [development guide](development.md#local-agent-hooks)

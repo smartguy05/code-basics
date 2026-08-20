@@ -111,22 +111,23 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/mod.rs` | 543 | What a coding agent said it was doing, and where it wrote it down. |
 | `crates/core/src/intents/patchfmt.rs` | 224 | Reading Codex's patch format. |
 | `crates/core/src/intents/patchfmt_tests.rs` | 223 | Tests for Codex patch parsing. Included by `patchfmt.rs` under `#[cfg(test)]`. |
-| `crates/core/src/intents/providers/claude_code.rs` | 682 | Claude Code: hooks in `settings.json`, history in per-project transcripts. |
+| `crates/core/src/intents/providers/claude_code.rs` | 686 | Claude Code: hooks in `settings.json`, history in per-project transcripts. |
 | `crates/core/src/intents/providers/claude_code_tests.rs` | 1117 | Tests for the Claude Code transcript reader. |
 | `crates/core/src/intents/providers/codex.rs` | 556 | Codex: hooks in `hooks.json`, history in dated rollout files. |
 | `crates/core/src/intents/providers/codex_tests.rs` | 1098 | Tests for reading Codex's rollout files and reporting its configuration. |
-| `crates/core/src/intents/providers/hooks_json.rs` | 310 | Merging our hooks into a configuration file the user already owns. |
+| `crates/core/src/intents/providers/hooks_json.rs` | 198 | Merging our hooks into a configuration file the user already owns. |
 | `crates/core/src/intents/providers/instructions.rs` | 153 | Asking the agent for a reason. |
 | `crates/core/src/intents/providers/instructions_tests.rs` | 204 | Tests for the label request appended to an agent's instruction file. |
-| `crates/core/src/intents/providers/mod.rs` | 272 | Per-agent knowledge: where it keeps its history, and how to ask it to |
+| `crates/core/src/intents/providers/mod.rs` | 273 | Per-agent knowledge: where it keeps its history, and how to ask it to |
 | `crates/core/src/intents/providers/providers_tests.rs` | 839 | Tests for provider detection and hook installation. |
+| `crates/core/src/intents/providers/settings_merge.rs` | 153 | Generic marker-based merging of hook entries into a `settings.json`-shaped |
 | `crates/core/src/intents/reject.rs` | 457 | Rejecting a change: undoing it and leaving the reason where it was. |
 | `crates/core/src/intents/reject_tests.rs` | 371 | Tests for rejecting a change — the marker comment left where code was. |
 | `crates/core/src/intents/whyhook.rs` | 166 | The `post-commit` hook that persists durable intent for external commits. |
 | `crates/core/src/intents/whyhook_tests.rs` | 86 | Tests for the durable-why post-commit hook installer. |
 | `crates/core/src/invocation.rs` | 267 | Turning a run configuration into a command line. |
 | `crates/core/src/invocation_tests.rs` | 455 | Tests for dispatching a configuration to the adapter that owns it. |
-| `crates/core/src/lib.rs` | 40 | Core logic for `code-basics`. |
+| `crates/core/src/lib.rs` | 41 | Core logic for `code-basics`. |
 | `crates/core/src/lsp/client.rs` | 1233 | One language server, from handshake to shutdown, as questions and answers. |
 | `crates/core/src/lsp/client_tests.rs` | 658 | Unit tests for the parts of the client that need no server. |
 | `crates/core/src/lsp/documents.rs` | 370 | What each server has been told about each open document. |
@@ -159,6 +160,10 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/process/kill.rs` | 110 | Platform-specific process *tree* termination. |
 | `crates/core/src/process/mod.rs` | 615 | Process supervision: spawn, stream, cancel. |
 | `crates/core/src/process/resolve.rs` | 200 | Windows program-name resolution. |
+| `crates/core/src/qgate/decide_tests.rs` | 166 | Decision-logic tests for the quality gate — the Rust port of the behaviour |
+| `crates/core/src/qgate/install.rs` | 136 | Installing the quality-gate Stop hook — the same method the intent hooks use. |
+| `crates/core/src/qgate/install_tests.rs` | 145 | Installer tests for the quality-gate hook. The behaviour that matters most |
+| `crates/core/src/qgate/mod.rs` | 241 | The quality-gate Stop hook: deterministic checks when an agent turn ends. |
 | `crates/core/src/review.rs` | 336 | Assembling the command line for an in-app adversarial review. |
 | `crates/core/src/review_tests.rs` | 353 | Tests for [`crate::review`] — the pure, agent-aware command-line assembly for |
 | `crates/core/src/rules/mod.rs` | 149 | Business-rule invariants, authored as markdown and injected as review |
@@ -199,7 +204,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/ErrorBoundary.tsx` | 65 |  |
 | `src/components/FileEditor.tsx` | 946 |  |
 | `src/components/FileTree.tsx` | 118 |  |
-| `src/components/IntentPanel.tsx` | 853 |  |
+| `src/components/IntentPanel.tsx` | 1001 |  |
 | `src/components/LspStatus.tsx` | 125 |  |
 | `src/components/MenuBar.tsx` | 381 |  |
 | `src/components/ObjectTree.tsx` | 351 |  |
@@ -250,7 +255,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/editorFontSize.ts` | 52 |  |
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 |  |
-| `src/ipc/api.ts` | 728 | Typed wrappers over the Tauri command surface. |
+| `src/ipc/api.ts` | 745 | Typed wrappers over the Tauri command surface. |
 | `src/ipc/types.ts` | 1579 |  |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
@@ -299,14 +304,16 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/inspect.rs` | 350 | Object-inspection commands. |
 | `src-tauri/src/commands/intents.rs` | 298 | Agent-intent commands. |
 | `src-tauri/src/commands/lsp.rs` | 434 | Asking this workspace's language servers something, and saying what they do. |
+| `src-tauri/src/commands/qgate.rs` | 45 | Commands behind the installable quality-gate Stop hook. |
 | `src-tauri/src/commands/review.rs` | 119 | Launching an in-app adversarial review. |
 | `src-tauri/src/commands/rules.rs` | 22 | Business-rule-doc command. |
 | `src-tauri/src/commands/run.rs` | 293 | Running applications and tests. |
 | `src-tauri/src/commands/secrets.rs` | 43 | .NET user secrets commands. |
 | `src-tauri/src/commands/symbols.rs` | 234 | The command palette's surface: searching the workspace, and asking after |
 | `src-tauri/src/commands/workspace.rs` | 217 | Workspace and configuration commands. |
-| `src-tauri/src/lib.rs` | 193 | The Tauri shell. |
+| `src-tauri/src/lib.rs` | 205 | The Tauri shell. |
 | `src-tauri/src/main.rs` | 6 | Suppress the extra console window on Windows in release builds. |
+| `src-tauri/src/qgate_run.rs` | 188 | The `quality-gate` mode: deterministic checks when an agent turn ends. |
 | `src-tauri/src/recorder.rs` | 136 | The `record-intent` mode, which is what the installed hooks actually run. |
 | `src-tauri/src/state.rs` | 1881 | Shared application state. |
 | `scripts/build-sidecar.mjs` | 110 |  |
@@ -329,6 +336,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **git** (`src-tauri/src/commands/git.rs`): `git_status`, `git_file_diff`, `git_file_contents`, `git_write_file`, `git_stage_file`, `git_unstage_file`, `git_stage_lines`, `git_unstage_lines`, `git_revert_lines`, `git_discard_file`, `git_commit`, `git_branches`, `git_create_branch`, `git_checkout_branch`, `git_checkout_remote_branch`, `git_delete_branch`, `git_merge_branch`, `git_abort_merge`, `git_history`, `git_commit_diff`, `git_commit_file_contents`, `git_commit_file_why`, `git_stash_save`, `git_stash_list`, `git_stash_pop`, `git_stash_apply`, `git_stash_drop`, `git_stash_clear`, `git_network`
 - **changelists** (`src-tauri/src/commands/changelists.rs`): `git_changelists`, `git_create_changelist`, `git_delete_changelist`, `git_rename_changelist`, `git_assign_to_changelist`
 - **intents** (`src-tauri/src/commands/intents.rs`): `intent_groups`, `stage_intent_group`, `revert_intent_group`, `reject_intent_group`, `intent_capture_status`, `intent_install_plan`, `enable_intent_capture`, `import_intent_history`, `clear_intent_history`
+- **qgate** (`src-tauri/src/commands/qgate.rs`): `quality_gate_status`, `quality_gate_install_plan`, `install_quality_gate`
 - **behavioral** (`src-tauri/src/commands/behavioral.rs`): `behavioral_diff`, `behavioral_clear`
 - **erosion** (`src-tauri/src/commands/erosion.rs`): `erosion_scan`
 - **rules** (`src-tauri/src/commands/rules.rs`): `list_rules`
@@ -339,7 +347,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 
 ## Frontend IPC wrappers (`src/ipc/api.ts`)
 
-`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `runTests`, `lastTestRun`, `startReview`, `cancelReview`, `reviewAgents`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `importIntentHistory`, `clearIntentHistory`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `errorMessage`
+`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `runTests`, `lastTestRun`, `startReview`, `cancelReview`, `reviewAgents`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `importIntentHistory`, `clearIntentHistory`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `errorMessage`
 
 ## Public core API (`cb-core`)
 
@@ -392,11 +400,12 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/intents/hook.rs`: `is_record_invocation()`, `RecorderInvocation`, `parse_recorder_args()`, `HookEvent`, `parse()`, `ingest()`, `ask_for_intent()`, `parse_labels_with_source()`, `parse_declared_labels()`, `parse_labels()`, `looks_like_narration()`, `is_usable_inferred_label()`, `is_enabled()`, `resolve_root()`, `resolve_enabled_root()`
 - `crates/core/src/intents/mod.rs`: `ProviderId`, `as_str()`, `IntentEdit`, `is_empty()`, `IntentRecord`, `LabelSource`, `IntentLabel`, `IntentPrompt`, `Intents`, `is_empty()`, `label_for()`, `effective_scoped_label()`, `for_path()`, `normalise_path()`, `scope_covers()`, `relative_to()`, `intents_dir()`, `edits_path()`, `labels_path()`, `prompts_path()`, `LoadOptions`, `load()`, `load_prompts()`, `prompt_for()`, `append_edit()`, `append_label()`, `append_prompt()`, `next_seq()`, `rebase_seqs()`, `clear()`
 - `crates/core/src/intents/patchfmt.rs`: `PatchedFile`, `parse_envelope()`, `parse_unified_diff()`, `envelope_from_value()`
-- `crates/core/src/intents/providers/claude_code.rs`: `ClaudeCode`, `new()`, `with_home()`, `encode_project_dir()`
+- `crates/core/src/intents/providers/claude_code.rs`: `ClaudeCode`, `new()`, `with_home()`, `claude_home()`, `project_settings_path()`, `user_settings_path()`, `encode_project_dir()`
 - `crates/core/src/intents/providers/codex.rs`: `Codex`, `new()`, `codex_home()`, `detected_in()`, `status_in()`, `install_plan_in()`, `history_in()`, `planned_entries()`
 - `crates/core/src/intents/providers/hooks_json.rs`: `is_installed()`, `commands_for()`, `pinned_workspace()`, `pinned_elsewhere()`, `pinned_caveat()`, `plan_merge()`, `plan_removal()`
 - `crates/core/src/intents/providers/instructions.rs`: `path_for()`, `is_present()`, `planned_write()`
 - `crates/core/src/intents/providers/mod.rs`: `InstallScope`, `ProviderStatus`, `absent()`, `PlannedWrite`, `InstallPlan`, `SessionFile`, `HistoryMined`, `apply_plan()`, `apply_writes()`, `all()`, `statuses()`, `history()`, `guard_write()`, `whyhook_write()`, `home_dir()`
+- `crates/core/src/intents/providers/settings_merge.rs`: `contains_marker()`, `is_installed()`, `merged_text()`, `plan_removal()`
 - `crates/core/src/intents/reject.rs`: `comment_prefix()`, `sanitise_reason()`, `marker_block()`, `is_marker_line()`, `anchors()`, `insert_markers()`, `iso_date()`, `FileRejection`, `RejectSummary`, `record()`, `reject_file()`
 - `crates/core/src/intents/whyhook.rs`: `block()`, `hook_path()`, `plan_for()`, `planned_write()`, `is_installed()`, `ensure_executable()`, `plan_removal()`
 - `crates/core/src/invocation.rs`: `build()`, `rerun_filter()`, `plan_compound()`
@@ -418,6 +427,8 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/process/kill.rs`: `configure_process_group()`, `kill_tree()`
 - `crates/core/src/process/mod.rs`: `Stream`, `ProcessEvent`, `Supervisor`, `new()`, `run()`, `cancel()`, `running_ids()`, `pid()`, `running()`, `is_running()`
 - `crates/core/src/process/resolve.rs`: `resolve_program()`
+- `crates/core/src/qgate/install.rs`: `status()`, `install_plan()`
+- `crates/core/src/qgate/mod.rs`: `Gate`, `label()`, `command()`, `gates_for_changes()`, `touched_source()`, `touched_memories()`, `should_remind_memories()`, `has_unresolved_rejection()`, `should_skip_for_loop()`, `has_typecheck_script()`, `is_quality_gate_invocation()`, `QGateInvocation`, `parse_qgate_args()`
 - `crates/core/src/review.rs`: `ReviewAgent`, `AgentMode`, `id()`, `from_id()`, `id()`, `label()`, `program()`, `models()`, `default_model()`, `from_id()`, `models_for()`, `codex_models()`, `parse_codex_models()`, `resolve_model()`, `compose_prompt()`, `agent_args()`, `detect_agents()`
 - `crates/core/src/rules/mod.rs`: `RuleDoc`, `RulesReport`, `rules_dir()`, `parse_rule_doc()`, `load_rules()`
 - `crates/core/src/secrets.rs`: `ProjectSecrets`, `resolve_project_path()`, `secrets_path()`, `user_secrets_id()`, `read()`, `ensure_id()`, `write()`

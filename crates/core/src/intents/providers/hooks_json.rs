@@ -26,10 +26,10 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::{json, Map, Value};
 
-use super::EDIT_TOOL_MATCHER;
+use super::{settings_merge, EDIT_TOOL_MATCHER};
 
 /// Present in every command we write, so our own entries can be recognised
 /// again later without depending on their exact text.
@@ -44,33 +44,7 @@ pub const EVENTS: &[&str] = &["PostToolUse", "Stop", "SubagentStop"];
 
 /// Is our hook already configured in this file?
 pub fn is_installed(path: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&text) else {
-        return false;
-    };
-
-    EVENTS.iter().all(|event| {
-        value
-            .get("hooks")
-            .and_then(|h| h.get(event))
-            .and_then(Value::as_array)
-            .is_some_and(|entries| entries.iter().any(contains_marker))
-    })
-}
-
-fn contains_marker(entry: &Value) -> bool {
-    entry
-        .get("hooks")
-        .and_then(Value::as_array)
-        .is_some_and(|handlers| {
-            handlers.iter().any(|h| {
-                h.get("command")
-                    .and_then(Value::as_str)
-                    .is_some_and(|c| c.contains(MARKER))
-            })
-        })
+    settings_merge::is_installed(path, EVENTS, MARKER)
 }
 
 /// The hook entries as they should appear in the file.
@@ -215,96 +189,10 @@ pub fn plan_merge(path: &Path, workspace: Option<&Path>) -> Result<(String, bool
         "claudeCode"
     };
 
-    let existing = std::fs::read_to_string(path).ok();
-    let merges_existing = existing.is_some();
-
-    let mut root_value: Value = match &existing {
-        Some(text) if !text.trim().is_empty() => serde_json::from_str(text).with_context(|| {
-            format!(
-                "{} is not valid JSON, so it was left untouched",
-                path.display()
-            )
-        })?,
-        _ => Value::Object(Map::new()),
-    };
-
-    if !root_value.is_object() {
-        anyhow::bail!(
-            "{} does not contain a JSON object, so it was left untouched",
-            path.display()
-        );
-    }
-
-    merge_into(&mut root_value, &commands_for(workspace, provider));
-
-    let mut text = serde_json::to_string_pretty(&root_value)
-        .context("failed to serialise the hook configuration")?;
-    text.push('\n');
-
-    Ok((text, merges_existing))
-}
-
-/// Add our entries to whatever is already there.
-fn merge_into(root_value: &mut Value, ours: &Value) {
-    let object = root_value
-        .as_object_mut()
-        .expect("checked to be an object by the caller");
-
-    let hooks = object
-        .entry("hooks")
-        .or_insert_with(|| Value::Object(Map::new()));
-
-    // A `hooks` key holding something other than an object belongs to a
-    // format we do not understand; replacing it would destroy it.
-    let Some(hooks) = hooks.as_object_mut() else {
-        return;
-    };
-
-    for (event, entries) in ours.as_object().into_iter().flatten() {
-        let slot = hooks
-            .entry(event.clone())
-            .or_insert_with(|| Value::Array(Vec::new()));
-
-        let Some(existing) = slot.as_array_mut() else {
-            continue;
-        };
-
-        // Ours may already be here from an earlier install.
-        existing.retain(|entry| !contains_marker(entry));
-
-        if let Some(new_entries) = entries.as_array() {
-            existing.extend(new_entries.iter().cloned());
-        }
-    }
+    settings_merge::merged_text(path, &commands_for(workspace, provider), MARKER)
 }
 
 /// Remove our entries again, leaving everything else untouched.
 pub fn plan_removal(path: &Path) -> Result<Option<String>> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Ok(None);
-    };
-
-    let mut value: Value = serde_json::from_str(&text)
-        .with_context(|| format!("{} is not valid JSON", path.display()))?;
-
-    let Some(hooks) = value
-        .as_object_mut()
-        .and_then(|o| o.get_mut("hooks"))
-        .and_then(Value::as_object_mut)
-    else {
-        return Ok(None);
-    };
-
-    for event in EVENTS {
-        if let Some(entries) = hooks.get_mut(*event).and_then(Value::as_array_mut) {
-            entries.retain(|entry| !contains_marker(entry));
-        }
-    }
-    hooks.retain(|_, v| !v.as_array().is_some_and(|a| a.is_empty()));
-
-    let mut out = serde_json::to_string_pretty(&value)
-        .context("failed to serialise the hook configuration")?;
-    out.push('\n');
-
-    Ok(Some(out))
+    settings_merge::plan_removal(path, EVENTS, MARKER)
 }

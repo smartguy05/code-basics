@@ -63,15 +63,19 @@ impl ClaudeCode {
     }
 }
 
-fn claude_home() -> Option<PathBuf> {
+/// `~/.claude`, the Claude Code home directory. Also used by the quality-gate
+/// installer, which lives beside the recorder in the same settings file.
+pub fn claude_home() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".claude"))
 }
 
-fn project_settings_path(root: &Path) -> PathBuf {
+/// `<root>/.claude/settings.json` — the repo-scope hook file.
+pub fn project_settings_path(root: &Path) -> PathBuf {
     root.join(".claude").join("settings.json")
 }
 
-fn user_settings_path(home: &Path) -> PathBuf {
+/// `<home>/settings.json` — the user-scope hook file.
+pub fn user_settings_path(home: &Path) -> PathBuf {
     home.join("settings.json")
 }
 

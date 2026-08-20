@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as api from "../ipc/api";
 import {
   canRejectInMode,
@@ -286,12 +286,15 @@ export function IntentPanel({
       </button>
 
       {setupOpen && (
-        <CaptureSetup
-          providers={providers}
-          busy={busy}
-          onEnable={onEnable}
-          onImportHistory={runImport}
-        />
+        <>
+          <CaptureSetup
+            providers={providers}
+            busy={busy}
+            onEnable={onEnable}
+            onImportHistory={runImport}
+          />
+          <QualityGateSetup busy={busy} />
+        </>
       )}
 
       {feedback && (
@@ -812,41 +815,186 @@ function CaptureSetup({
       {error && <div className="error" style={{ fontSize: 11 }}>{error}</div>}
 
       {plan && (
-        <div style={{ marginTop: 8 }}>
-          <div style={{ fontSize: 12, marginBottom: 4 }}>
-            This will write {plan.writes.length} file
-            {plan.writes.length === 1 ? "" : "s"}:
-          </div>
+        <PlanPreview
+          plan={plan}
+          busy={busy}
+          onConfirm={() => void confirm()}
+          onCancel={() => setPlan(null)}
+        />
+      )}
+    </div>
+  );
+}
 
-          {plan.caveats?.map((caveat) => (
-            <div key={caveat} className="warning" style={{ fontSize: 11, marginBottom: 4 }}>
-              {caveat}
-            </div>
-          ))}
+/**
+ * The confirmation view for an {@link InstallPlan}: what will be written, with
+ * the exact final contents of each file, before anything touches disk. Shared
+ * by intent capture and the quality gate — both write outside this view's
+ * control, into files a team shares.
+ */
+function PlanPreview({
+  plan,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  plan: InstallPlan;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ fontSize: 12, marginBottom: 4 }}>
+        This will write {plan.writes.length} file
+        {plan.writes.length === 1 ? "" : "s"}:
+      </div>
 
-          {plan.writes.map((write) => (
-            <details key={write.path}>
-              <summary style={{ fontSize: 11, cursor: "pointer" }}>
-                {write.path}
-                {write.mergesExisting && (
-                  <span className="badge" style={{ marginLeft: 4 }}>
-                    merges into existing
-                  </span>
-                )}
-              </summary>
-              <pre>{write.content}</pre>
-            </details>
-          ))}
-
-          <div className="actions">
-            <button disabled={busy} onClick={() => void confirm()}>
-              Write these files
-            </button>
-            <button disabled={busy} onClick={() => setPlan(null)}>
-              Cancel
-            </button>
-          </div>
+      {plan.caveats?.map((caveat) => (
+        <div key={caveat} className="warning" style={{ fontSize: 11, marginBottom: 4 }}>
+          {caveat}
         </div>
+      ))}
+
+      {plan.writes.map((write) => (
+        <details key={write.path}>
+          <summary style={{ fontSize: 11, cursor: "pointer" }}>
+            {write.path}
+            {write.mergesExisting && (
+              <span className="badge" style={{ marginLeft: 4 }}>
+                merges into existing
+              </span>
+            )}
+          </summary>
+          <pre>{write.content}</pre>
+        </details>
+      ))}
+
+      <div className="actions">
+        <button disabled={busy} onClick={onConfirm}>
+          Write these files
+        </button>
+        <button disabled={busy} onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Turning the quality gate on. Installed the same way capture is — a previewed
+ * plan applied to `.claude/settings.json` — but self-contained: it owns its own
+ * status, since it is a single Claude Code hook rather than a per-agent matrix.
+ *
+ * The gate blocks a turn that ends with a failing `pnpm typecheck` / `cargo fmt`
+ * on changed files, an unresolved rejection note, and reminds (without blocking)
+ * when source changed but no `.memories/` file did.
+ */
+function QualityGateSetup({ busy }: { busy: boolean }) {
+  const [scope, setScope] = useState<InstallScope | null>(null);
+  const [plan, setPlan] = useState<InstallPlan | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    void api
+      .qualityGateStatus()
+      .then((s) => {
+        if (live) {
+          setScope(s);
+          setLoaded(true);
+        }
+      })
+      .catch(() => live && setLoaded(true));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const preview = async (target: InstallScope) => {
+    try {
+      setPlan(await api.qualityGateInstallPlan(target));
+      setError(null);
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
+  };
+
+  const confirm = async () => {
+    if (!plan) return;
+    try {
+      setScope(await api.installQualityGate(plan.scope));
+      setPlan(null);
+      setError(null);
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
+  };
+
+  if (!loaded) return null;
+
+  return (
+    <div className="intent-panel">
+      <div className="provider">
+        <div className="provider-name">
+          <strong>Quality gate</strong>
+          {scope ? (
+            <span className="badge" title={`Stop hook installed at ${scope} level`}>
+              on ({scope})
+            </span>
+          ) : (
+            <span className="faint" style={{ fontSize: 11 }}>
+              off
+            </span>
+          )}
+        </div>
+
+        <div className="faint" style={{ fontSize: 11 }}>
+          Blocks a turn that ends with a failing typecheck / cargo fmt on changed
+          files, or an unresolved rejection note; reminds about `.memories/`.
+        </div>
+
+        <div className="actions">
+          {!scope ? (
+            <>
+              <button
+                disabled={busy}
+                onClick={() => void preview("project")}
+                title="Write the Stop hook into this repository, shared with anyone who clones it"
+              >
+                Enable for this repo…
+              </button>
+              <button
+                disabled={busy}
+                onClick={() => void preview("user")}
+                title="Write the Stop hook into your own configuration, covering every repository"
+              >
+                Enable for me…
+              </button>
+            </>
+          ) : (
+            <button
+              disabled={busy}
+              onClick={() => void preview(scope)}
+              title="Re-write the hook at the same level — useful after an update changed the command"
+            >
+              Re-apply…
+            </button>
+          )}
+        </div>
+      </div>
+
+      {error && <div className="error" style={{ fontSize: 11 }}>{error}</div>}
+
+      {plan && (
+        <PlanPreview
+          plan={plan}
+          busy={busy}
+          onConfirm={() => void confirm()}
+          onCancel={() => setPlan(null)}
+        />
       )}
     </div>
   );

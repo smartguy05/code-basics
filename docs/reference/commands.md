@@ -137,6 +137,16 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `import_intent_history` | – | `usize` | Read what the agents already recorded, with no setup: edits, coarse labels, and the user prompts mined from session transcripts (keyed to the same turn id so they join). Returns the total record count afterwards |
 | `clear_intent_history` | – | `()` | Forget everything recorded for this workspace |
 
+## Quality-gate hook
+
+`src-tauri/src/commands/qgate.rs` — installing the quality-gate `Stop` hook, the same way the intent hooks install. Decisions live in `cb_core::qgate`.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `quality_gate_status` | – | `InstallScope \| null` | Where the gate is installed for this workspace (project wins over user), or `null` |
+| `quality_gate_install_plan` | `scope: InstallScope` | `InstallPlan` | The exact final contents of the `settings.json` write. **Touches nothing** — what the confirmation dialog renders |
+| `install_quality_gate` | `scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install. Additive and backed up first; a distinct marker lets it coexist with the intent recorder's `Stop` entry. Returns the new status |
+
 ## Behavioral before/after testing
 
 `src-tauri/src/commands/behavioral.rs` — the runtime counterpart to the intent coverage audit: run the same config against `HEAD` and the working tree and diff the observable outcomes. Decisions live in `cb_core::behavioral`.

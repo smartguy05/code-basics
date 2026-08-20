@@ -48,15 +48,15 @@ Two kinds of hook run automatically while an AI agent works in this repo. Both a
 
 ### Quality-gate Stop hook
 
-`.claude/settings.json` registers `.claude/hooks/quality-gate.mjs`, a Node script that runs when an agent turn ends and inspects the working-tree change set (`git diff --name-only HEAD` plus untracked files). It:
+`.claude/settings.json` registers `cb-app.exe quality-gate` — a self-invoking subcommand (like `record-intent`), not a shipped script — which runs when an agent turn ends and inspects the working-tree change set (`git diff --name-only HEAD` plus untracked files). It:
 
 - runs `pnpm typecheck` if any `*.ts`/`*.tsx` changed, and `cargo fmt --check` if any `*.rs` changed — **blocking the turn** (exit 2, feeding the failure back to the agent) until they pass;
 - **blocks** on any changed file that still carries an unresolved `AI-REJECTED <date>` note — the same thing the git `pre-commit` hook refuses, surfaced at turn end instead of at commit time;
 - prints a **non-blocking** reminder when a turn edited source but touched no `.memories/` file.
 
-It short-circuits on the `stop_hook_active` payload flag so a blocked-then-fixed turn cannot loop. Heavier Rust checks (`cargo clippy --workspace --all-targets -D warnings`) are opt-in via `CB_GATE_FULL=1` — off by default because they relink and can hit the "app is running ⇒ Access denied" lock. `cargo fmt --check` never relinks, which is why it is the default Rust gate.
+It short-circuits on the `stop_hook_active` payload flag so a blocked-then-fixed turn cannot loop. Heavier Rust checks (`cargo clippy --workspace --all-targets -D warnings`) are opt-in via `CB_GATE_FULL=1` — off by default because they relink and can hit the "app is running ⇒ Access denied" lock. `cargo fmt --check` never relinks, which is why it is the default Rust gate. A gate only runs where the change set *and* the repo's tooling call for it (no `typecheck` script / no `Cargo.toml` ⇒ that gate is skipped), so a user-scope install that fires in every repository stays quiet where it does not apply.
 
-The gate's decision logic is pure and unit-tested — `node .claude/hooks/quality-gate.test.mjs` (plain `node:test`, no deps). It complements, and does not replace, running the full command set yourself before claiming done.
+All decisions live in `crates/core/src/qgate/` and are unit-tested there (`cargo test -p cb-core qgate::`); the thin runner that reads the payload and spawns the checks is `src-tauri/src/qgate_run.rs`. The gate is **installable from the app** exactly like the intent hooks — Changes → Intent → *Set up agent intent capture* → **Quality gate** (Enable for this repo / for me), which previews the `settings.json` write and applies it through the same `InstallPlan`/`apply_writes` path (backup-then-write, a distinct `code-basics-qgate` marker so it coexists with the recorder's `Stop` entry). Because it runs `target/release/cb-app.exe`, rebuild release after changing `qgate/`. It complements, and does not replace, running the full command set yourself before claiming done.
 
 ### Intent-capture hooks
 

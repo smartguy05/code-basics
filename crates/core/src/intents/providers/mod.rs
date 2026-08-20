@@ -28,6 +28,7 @@ pub mod claude_code;
 pub mod codex;
 pub mod hooks_json;
 pub mod instructions;
+pub mod settings_merge;
 
 /// One matcher covering both agents' edit tools.
 ///

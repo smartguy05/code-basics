@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/quality-gate.mjs\"",
+            "command": "\"C:\\Users\\AnthonyJames\\Documents\\Code\\code-basics\\target\\release\\cb-app.exe\" quality-gate --code-basics-qgate --workspace \"C:\\Users\\AnthonyJames\\Documents\\Code\\code-basics\"",
             "timeout": 180
           }
         ]
