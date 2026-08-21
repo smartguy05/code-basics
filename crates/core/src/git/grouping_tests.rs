@@ -102,15 +102,40 @@ fn a_line_ending_change_is_recognised_as_formatting_only() {
     assert!(is_formatting_only(&d.hunks[0], &d.path));
 }
 
+/// Reordering identical lines is NOT formatting: the detector cannot tell a
+/// cosmetic import shuffle from a statement reorder that changes behaviour, and
+/// the abstain rule ("a wrong label is worse than none") means a real change
+/// hidden as "whitespace only" is the costlier mistake. So a pure relocation —
+/// same characters, different order — is refused the formatting label.
 #[test]
-fn reordering_lines_without_changing_them_is_formatting_only() {
+fn reordering_lines_without_changing_them_is_not_formatting() {
     let d = simple(
         "a.rs",
         &["-use beta;", "-use alpha;", "+use alpha;", "+use beta;"],
         "",
     );
 
-    assert!(is_formatting_only(&d.hunks[0], &d.path));
+    assert!(!is_formatting_only(&d.hunks[0], &d.path));
+}
+
+/// Regression: swapping two adjacent statements reorders execution — the
+/// assignment now runs before the await, not after — yet both lines are
+/// byte-identical, so a multiset compare that ignores order used to call it
+/// "whitespace only". It is a logic change.
+#[test]
+fn swapping_two_statements_is_not_formatting() {
+    let d = simple(
+        "a.rs",
+        &[
+            "-        await GetFlightPlanItineraryFullAsync();",
+            "-        ShouldReloadFlight = false;",
+            "+        ShouldReloadFlight = false;",
+            "+        await GetFlightPlanItineraryFullAsync();",
+        ],
+        "",
+    );
+
+    assert!(!is_formatting_only(&d.hunks[0], &d.path));
 }
 
 #[test]
@@ -608,6 +633,80 @@ fn a_declared_label_still_produces_an_intent_card() {
     assert_eq!(groups[0].kind, GroupKind::Intent);
 }
 
+/// A user note (a `usernote:` turn with a declared label and the highest seq)
+/// titles the card, marks it `user_authored`, and — because it outranks the
+/// agent record on the same line — overrides the agent's stated intent.
+#[test]
+fn a_user_note_wins_the_line_and_marks_the_card() {
+    let d = simple("a.rs", &["+    let x = compute_the_thing();"], "fn go() {");
+
+    let line = "    let x = compute_the_thing();";
+    let agent = IntentRecord {
+        provider: ProviderId::ClaudeCode,
+        turn_id: "t1".into(),
+        tool_use_id: "agent".into(),
+        seq: 1,
+        path: "a.rs".into(),
+        edit: IntentEdit {
+            old_lines: Vec::new(),
+            new_lines: vec![line.into()],
+            whole_file: false,
+        },
+        branch: None,
+    };
+    // The user note, as `intents::user` would merge it: same line content, a
+    // higher seq so it wins the tie, a `usernote:` turn and a declared label.
+    let note = IntentRecord {
+        provider: ProviderId::User,
+        turn_id: "usernote:u0".into(),
+        tool_use_id: "usernote:u0:0".into(),
+        seq: 100,
+        path: "a.rs".into(),
+        edit: IntentEdit {
+            old_lines: Vec::new(),
+            new_lines: vec![line.into()],
+            whole_file: false,
+        },
+        branch: None,
+    };
+    let intents = Intents {
+        records: vec![agent, note],
+        labels: vec![
+            IntentLabel {
+                provider: ProviderId::ClaudeCode,
+                turn_id: "t1".into(),
+                label: "what the agent said".into(),
+                paths: Vec::new(),
+                anchor: None,
+                source: LabelSource::Declared,
+            },
+            IntentLabel {
+                provider: ProviderId::User,
+                turn_id: "usernote:u0".into(),
+                label: "what I say it is for".into(),
+                paths: vec!["a.rs".into()],
+                anchor: None,
+                source: LabelSource::Declared,
+            },
+        ],
+    };
+
+    let groups = with_intent(&[d], &intents);
+
+    let card = groups
+        .iter()
+        .find(|g| g.user_authored)
+        .expect("the card is marked user-authored");
+    assert_eq!(card.kind, GroupKind::Intent);
+    assert_eq!(card.label, "what I say it is for");
+    // The agent's reason did not also survive as its own card: the note took
+    // the only changed line.
+    assert!(
+        groups.iter().all(|g| g.label != "what the agent said"),
+        "the user note overrode the agent's stated intent"
+    );
+}
+
 // -- declared reasons surface even without matched geometry ------------------
 
 /// A declared label scoped to files, with no records at all.
@@ -645,6 +744,221 @@ fn a_declared_reason_titles_a_geometry_less_file() {
     // Stageable: the whole file's changed lines are on the card.
     assert_eq!(groups[0].files.len(), 1);
     assert!(!groups[0].files[0].line_indices.is_empty());
+}
+
+/// Two records, each declaring its own reason, both matched within one file.
+fn two_declared_records(path: &str, a_lines: &[&str], b_lines: &[&str]) -> Intents {
+    let record = |turn: &str, seq: u64, lines: &[&str]| IntentRecord {
+        provider: ProviderId::ClaudeCode,
+        turn_id: turn.into(),
+        tool_use_id: format!("tool-{turn}"),
+        seq,
+        path: path.to_string(),
+        edit: IntentEdit {
+            old_lines: Vec::new(),
+            new_lines: lines.iter().map(|s| s.to_string()).collect(),
+            whole_file: false,
+        },
+        branch: None,
+    };
+    let label = |turn: &str, reason: &str| IntentLabel {
+        provider: ProviderId::ClaudeCode,
+        turn_id: turn.into(),
+        label: reason.into(),
+        paths: Vec::new(),
+        anchor: None,
+        source: LabelSource::Declared,
+    };
+    Intents {
+        records: vec![record("tA", 1, a_lines), record("tB", 2, b_lines)],
+        labels: vec![
+            label("tA", "make cohort filter sargable"),
+            label("tB", "trust DB for gate"),
+        ],
+    }
+}
+
+/// When attribution ties lines in a single hunk to two distinct declared
+/// intents and neither holds a majority, each intent becomes its own card
+/// carrying only the lines the matcher gave it — not one "ambiguous" card, and
+/// not both intents silently dropped to a location card (which is what happened
+/// before, leaving them counted as unmatched).
+#[test]
+fn two_evidenced_intents_in_one_hunk_split_into_separate_cards() {
+    let d = simple(
+        "svc.rs",
+        &[
+            "+    let alpha_one = compute_alpha_one();",
+            "+    let alpha_two = compute_alpha_two();",
+            "+    let beta_one = compute_beta_one();",
+            "+    let beta_two = compute_beta_two();",
+        ],
+        "fn go() {",
+    );
+    let intents = two_declared_records(
+        "svc.rs",
+        &[
+            "    let alpha_one = compute_alpha_one();",
+            "    let alpha_two = compute_alpha_two();",
+        ],
+        &[
+            "    let beta_one = compute_beta_one();",
+            "    let beta_two = compute_beta_two();",
+        ],
+    );
+
+    let groups = with_intent(&[d], &intents);
+
+    let intents_cards: Vec<_> = groups
+        .iter()
+        .filter(|g| g.kind == GroupKind::Intent)
+        .collect();
+    assert_eq!(intents_cards.len(), 2, "one card per declared intent");
+    // Neither is an ambiguous candidates card.
+    assert!(groups.iter().all(|g| g.candidates.is_empty()));
+
+    let by_label = |label: &str| {
+        intents_cards
+            .iter()
+            .find(|g| g.label == label)
+            .unwrap_or_else(|| panic!("missing card for {label}"))
+    };
+    // Each card carries exactly its own two lines — the split is by evidence,
+    // not by duplicating the whole hunk onto both.
+    assert_eq!(
+        by_label("make cohort filter sargable").files[0].line_indices,
+        vec![0, 1]
+    );
+    assert_eq!(
+        by_label("trust DB for gate").files[0].line_indices,
+        vec![2, 3]
+    );
+}
+
+/// Lines the matcher tied to no declared intent, when a hunk is split between
+/// intents, are left as their own location card — never re-attached to one of
+/// the split intents, which would claim lines it has no evidence for.
+#[test]
+fn unattributed_remainder_of_a_split_hunk_is_not_claimed_by_either_intent() {
+    let d = simple(
+        "svc.rs",
+        &[
+            "+    let alpha_one = compute_alpha_one();",
+            "+    let alpha_two = compute_alpha_two();",
+            "+    let beta_one = compute_beta_one();",
+            "+    let beta_two = compute_beta_two();",
+            "+    let orphan = something_unrecorded();",
+        ],
+        "fn go() {",
+    );
+    let intents = two_declared_records(
+        "svc.rs",
+        &[
+            "    let alpha_one = compute_alpha_one();",
+            "    let alpha_two = compute_alpha_two();",
+        ],
+        &[
+            "    let beta_one = compute_beta_one();",
+            "    let beta_two = compute_beta_two();",
+        ],
+    );
+
+    let groups = with_intent(&[d], &intents);
+
+    // The orphan line (index 4) belongs to neither intent card.
+    for group in groups.iter().filter(|g| g.kind == GroupKind::Intent) {
+        assert!(!group.files[0].line_indices.contains(&4));
+    }
+    // It lands on a non-intent card instead.
+    assert!(groups.iter().any(
+        |g| g.kind != GroupKind::Intent && g.files.iter().any(|f| f.line_indices.contains(&4))
+    ));
+}
+
+/// A reason that already has an evidenced (bound) card must not also appear as
+/// a candidate on an ambiguous card for a different, unbound hunk it scopes: it
+/// is a known intent, not a guess, so it is dropped from the candidate list.
+#[test]
+fn an_evidenced_reason_is_not_repeated_as_an_ambiguous_candidate() {
+    // Hunk 1 matches reason R's recorded edit → R binds and gets its own card.
+    // Hunk 2 matches nothing, but R, S and T all scope the file by path. R is
+    // already evidenced, so hunk 2's ambiguous card lists only S and T.
+    let d = file(
+        "f.rs",
+        vec![
+            {
+                let mut i = 0;
+                hunk(
+                    &["+    let bound = compute_bound_value();"],
+                    &mut i,
+                    "fn one() {",
+                )
+            },
+            {
+                let mut i = 10;
+                hunk(
+                    &["+    let mystery = 1;", "+    let puzzle = 2;"],
+                    &mut i,
+                    "fn two() {",
+                )
+            },
+        ],
+    );
+
+    let record = IntentRecord {
+        provider: ProviderId::ClaudeCode,
+        turn_id: "tR".into(),
+        tool_use_id: "tool-R".into(),
+        seq: 1,
+        path: "f.rs".into(),
+        edit: IntentEdit {
+            old_lines: Vec::new(),
+            new_lines: vec!["    let bound = compute_bound_value();".into()],
+            whole_file: false,
+        },
+        branch: None,
+    };
+    let label = |turn: &str, reason: &str| IntentLabel {
+        provider: ProviderId::ClaudeCode,
+        turn_id: turn.into(),
+        label: reason.into(),
+        paths: vec!["f.rs".into()],
+        anchor: None,
+        source: LabelSource::Declared,
+    };
+    let intents = Intents {
+        records: vec![record],
+        labels: vec![
+            label("tR", "Remove redundant flight plan fetches"),
+            label("tS", "move read tracking to owning page"),
+            label("tT", "cancel superseded table reads"),
+        ],
+    };
+
+    let groups = with_intent(&[d], &intents);
+
+    // R has its own card, with no candidates.
+    let bound = groups
+        .iter()
+        .find(|g| g.label == "Remove redundant flight plan fetches")
+        .expect("R should have its own evidenced card");
+    assert!(bound.candidates.is_empty());
+
+    // The ambiguous card lists only the two unevidenced reasons — never R.
+    let ambiguous = groups
+        .iter()
+        .find(|g| !g.candidates.is_empty())
+        .expect("the unbound hunk should still be an ambiguous card");
+    assert_eq!(ambiguous.candidates.len(), 2);
+    assert!(!ambiguous
+        .candidates
+        .contains(&"Remove redundant flight plan fetches".to_string()));
+    assert!(ambiguous
+        .candidates
+        .contains(&"move read tracking to owning page".to_string()));
+    assert!(ambiguous
+        .candidates
+        .contains(&"cancel superseded table reads".to_string()));
 }
 
 /// The reported Autocomplete bug: two declared reasons both scope the file's
@@ -1020,6 +1334,7 @@ fn an_intent_group_serialises_with_the_keys_the_ui_reads() {
         }],
         line_count: 2,
         confidence: Confidence::High,
+        user_authored: false,
     };
 
     let value = serde_json::to_value(&group).unwrap();
@@ -1051,6 +1366,7 @@ fn a_group_without_a_symbol_omits_the_key_rather_than_sending_null() {
         files: Vec::new(),
         line_count: 0,
         confidence: Confidence::High,
+        user_authored: false,
     };
 
     assert!(!keys(&serde_json::to_value(&group).unwrap()).contains(&"symbol".to_string()));
@@ -1069,6 +1385,7 @@ fn candidates_key_appears_only_when_non_empty() {
         files: Vec::new(),
         line_count: 0,
         confidence: Confidence::Low,
+        user_authored: false,
     };
 
     let empty = serde_json::to_value(&base).unwrap();

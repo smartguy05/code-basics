@@ -28,6 +28,11 @@ pub struct ConsoleNormalization {
     pub strip_ansi: bool,
     pub mask_timestamps: bool,
     pub mask_hex_ids: bool,
+    /// Mask elapsed durations — bracketed test times (`[2 ms]`, `[< 1 ms]`) and
+    /// the `N Seconds`/`N ms` spellings runners print. These vary every run and
+    /// are the single biggest source of false console deltas for a test suite
+    /// whose *outcomes* did not change at all.
+    pub mask_durations: bool,
     /// Absolute paths (both run roots, temp dirs) collapsed to `<root>`, so the
     /// mere fact that the two sides ran in different directories is never itself
     /// a difference. Longest first is applied by [`diff_console`].
@@ -46,6 +51,7 @@ impl Default for ConsoleNormalization {
             strip_ansi: true,
             mask_timestamps: true,
             mask_hex_ids: true,
+            mask_durations: true,
             roots: Vec::new(),
             ignore_ordering: false,
             heavy_mask_fraction: 0.5,
@@ -91,6 +97,25 @@ fn long_hex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\b(?:0x)?[0-9a-fA-F]{16,}\b").unwrap())
 }
 
+/// A bracketed elapsed time, as test runners print per case: `[2 ms]`,
+/// `[< 1 ms]`, `[1.5 s]`. The brackets disambiguate, so single-letter units
+/// (`s`/`m`/`h`) are safe to mask here.
+fn bracket_dur() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\[\s*<?\s*\d+(?:\.\d+)?\s*(?:ns|us|µs|ms|s|m|h)\s*\]").unwrap())
+}
+
+/// A bare elapsed time in the verbose spellings runners use for totals
+/// (`2.5478 Seconds`, `31 ms`). Only unambiguous units are masked here — never
+/// a bare `s`/`m`/`h`, which would swallow ordinary text.
+fn word_dur() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"\b\d+(?:\.\d+)?\s*(?:ns|us|µs|ms|Milliseconds?|Seconds?|Minutes?|Hours?)\b")
+            .unwrap()
+    })
+}
+
 /// Mask everything except ANSI (that is stripped separately, up front).
 fn mask_content(line: &str, norm: &ConsoleNormalization, roots_sorted: &[String]) -> String {
     let mut s = line.to_string();
@@ -111,6 +136,10 @@ fn mask_content(line: &str, norm: &ConsoleNormalization, roots_sorted: &[String]
     if norm.mask_hex_ids {
         s = guid().replace_all(&s, "<id>").into_owned();
         s = long_hex().replace_all(&s, "<id>").into_owned();
+    }
+    if norm.mask_durations {
+        s = bracket_dur().replace_all(&s, "[<dur>]").into_owned();
+        s = word_dur().replace_all(&s, "<dur>").into_owned();
     }
     s
 }

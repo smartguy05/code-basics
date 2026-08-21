@@ -51,6 +51,7 @@ pub mod hook;
 pub mod patchfmt;
 pub mod providers;
 pub mod reject;
+pub mod user;
 pub mod whyhook;
 
 /// Directory under `.code-basics/` holding recorded intent.
@@ -69,6 +70,10 @@ pub const PROMPTS_FILE: &str = "prompts.jsonl";
 pub enum ProviderId {
     ClaudeCode,
     Codex,
+    /// The user, writing their own intent on a card — not an agent. Used for
+    /// annotations the user adds when no hook recorded a reason (a manual edit,
+    /// or an agent that did not follow the hooks). See [`user`].
+    User,
 }
 
 impl ProviderId {
@@ -76,6 +81,7 @@ impl ProviderId {
         match self {
             ProviderId::ClaudeCode => "claudeCode",
             ProviderId::Codex => "codex",
+            ProviderId::User => "user",
         }
     }
 }
@@ -387,7 +393,9 @@ pub fn load(root: &Path, options: &LoadOptions) -> Result<Intents> {
     let records = load_edits(root, options)?;
     let labels = load_labels(root)?;
 
-    Ok(Intents { records, labels })
+    let mut intents = Intents { records, labels };
+    user::merge_into(root, &mut intents)?;
+    Ok(intents)
 }
 
 /// Read the recorded user prompts, keyed by turn id.

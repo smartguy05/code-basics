@@ -37,6 +37,39 @@ fn both_worktree_roots_mask_to_same_token() {
 }
 
 #[test]
+fn per_test_durations_are_masked() {
+    // dotnet vstest prints each test with its own run-to-run-varying duration;
+    // the same test list must read as "no change", not one delta per test.
+    let base = "Passed OrdersThemByCategory [2 ms]\nPassed ReturnsEmpty [< 1 ms]";
+    let work = "Passed OrdersThemByCategory [< 1 ms]\nPassed ReturnsEmpty [7 ms]";
+    let d = diff_console(base, work, &norm());
+    assert!(
+        !d.is_change(),
+        "duration-only differences are noise: added={:?} removed={:?}",
+        d.added_lines,
+        d.removed_lines
+    );
+    assert_eq!(d.confidence, Confidence::High);
+}
+
+#[test]
+fn total_time_line_is_masked() {
+    let base = "Total time: 2.5478 Seconds";
+    let work = "Total time: 2.6195 Seconds";
+    let d = diff_console(base, work, &norm());
+    assert!(!d.is_change(), "total-time differences are noise: {d:?}");
+}
+
+#[test]
+fn a_non_duration_bracket_still_differs() {
+    // Masking durations must not swallow a genuine bracketed value change.
+    let base = "cache [size=10]";
+    let work = "cache [size=20]";
+    let d = diff_console(base, work, &norm());
+    assert!(d.is_change(), "a real bracketed change must survive: {d:?}");
+}
+
+#[test]
 fn ansi_is_stripped_before_compare() {
     let base = "\x1b[31mFAILED\x1b[0m one";
     let work = "FAILED one";

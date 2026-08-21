@@ -102,12 +102,58 @@ export function cardCandidates(group: IntentGroup): string[] {
 }
 
 /**
+ * What editing a card's intent should do, decided from the card alone.
+ *
+ * A user can write their own reason on any card — to annotate a change made
+ * manually or by an agent that did not record one. This decides three things
+ * the editor UI needs, so the component only wires inputs to them:
+ *
+ *  - `initial`: what to prefill. The user's own note or an agent's stated reason
+ *    is offered for editing; a *derived location title* (a symbol name, "Other
+ *    changes in x") is not a reason, so the field starts blank rather than
+ *    seeding the note with a description.
+ *  - `confirm`: the confirmation to show before saving would replace an
+ *    **agent's** stated intent — the user asked to be warned before clobbering a
+ *    recorded reason. `null` when there is nothing to overwrite (a location card)
+ *    or when it is the user's own earlier note (editing it is not a clobber).
+ *  - `hasUserNote`: whether a "Clear note" action should be offered.
+ */
+export function intentEditPlan(group: IntentGroup): {
+  initial: string;
+  confirm: string | null;
+  hasUserNote: boolean;
+} {
+  const hasUserNote = group.userAuthored === true;
+  const ambiguous = isAmbiguousIntent(group);
+  // An agent's stated intent is the intent kind, not user-authored. Ambiguous
+  // cards have several stated reasons and an empty label.
+  const agentStated = group.kind === "intent" && !hasUserNote;
+
+  const initial = hasUserNote || (agentStated && !ambiguous) ? group.label : "";
+
+  let confirm: string | null = null;
+  if (agentStated) {
+    const what = ambiguous
+      ? `the ${group.candidates!.length} stated intents on this card`
+      : `the stated intent “${group.label}”`;
+    confirm = `This overwrites ${what}. Your note will title this card instead. Continue?`;
+  }
+
+  return { initial, confirm, hasUserNote };
+}
+
+/**
  * The text shown on the card headline. A single stated intent shows its reason;
  * an ambiguous one shows a marker (the reasons themselves render as a list
  * below); every other kind already carries a derived title in `label`.
  */
 export function cardHeadline(group: IntentGroup): string {
-  return isAmbiguousIntent(group) ? "Ambiguous intent" : group.label;
+  if (!isAmbiguousIntent(group)) return group.label;
+  // Not "Ambiguous intent" — the reasons themselves are perfectly good, they
+  // just could not be told apart line by line here. Say plainly how many share
+  // this file; the reasons render as a list below.
+  const n = group.candidates!.length;
+  return `${n} stated intents for this file`;
 }
 
 /**

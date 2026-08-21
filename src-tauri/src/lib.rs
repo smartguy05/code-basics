@@ -169,6 +169,8 @@ pub fn run() {
             commands::intents::enable_intent_capture,
             commands::intents::import_intent_history,
             commands::intents::clear_intent_history,
+            commands::intents::set_card_intent,
+            commands::intents::clear_card_intent,
             commands::qgate::quality_gate_status,
             commands::qgate::quality_gate_install_plan,
             commands::qgate::install_quality_gate,

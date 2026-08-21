@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ArchitectureView } from "./views/ArchitectureView";
 import { BranchMenu } from "./components/BranchMenu";
+import { BehavioralPanel } from "./components/BehavioralPanel";
 import { ChangesView } from "./views/ChangesView";
 import { MenuBar } from "./components/MenuBar";
 import { HistoryView } from "./views/HistoryView";
@@ -17,7 +18,7 @@ import type { AgentMode } from "./ipc/api";
 import { applyEditorFontSize, loadEditorFontSize } from "./editorFontSize";
 import { DEFAULT_EDITOR_FONT_SIZE, recogniseFontSizeShortcut, stepFontSize } from "./editorFontSizeLogic";
 import { loadRecents, rememberRecent } from "./recentsLogic";
-import type { InspectTarget, RootSpec, Workspace } from "./ipc/types";
+import type { BehavioralReport, InspectTarget, RootSpec, Workspace } from "./ipc/types";
 
 type Tab = "tests" | "run" | "changes" | "history" | "architecture" | "inspect";
 
@@ -118,6 +119,23 @@ export function App() {
     /** Bumped per open so a fresh context remounts the panel (see the key below). */
     token: number;
   } | null>(null);
+
+  // The before/after run and its report live in a floating panel hosted here
+  // (like the agent panel), so the run survives a tab switch and its full
+  // report is shown in a window rather than condensed into the Changes sidebar.
+  // One slot, keyed by token so a fresh open restarts the run.
+  const [behavioralPanel, setBehavioralPanel] = useState<{
+    configId: string;
+    verify: boolean;
+    token: number;
+  } | null>(null);
+  // The finished report, passed back to the Changes tab so each intent card can
+  // show the deltas attributed to it.
+  const [behavioralReport, setBehavioralReport] = useState<BehavioralReport | null>(null);
+
+  /** Open the before/after window for a config; `verify` chains it to the agent. */
+  const openBehavioral = (configId: string, verify: boolean) =>
+    setBehavioralPanel({ configId, verify, token: nextToken() });
 
   /** Open the agent panel as an adversarial review (Changes tab + menu bar). */
   const openReview = () =>
@@ -376,7 +394,9 @@ export function App() {
           processes and their consoles, which must survive a tab switch.
           Changes, History and Architecture re-mount so they re-read what is on
           disk on every visit — git state for the first two, and for
-          Architecture the manifests every diagram is derived from. */}
+          Architecture the manifests every diagram is derived from. The
+          before/after run is not tied to this: it lives in a floating panel
+          hosted below, so it survives even while Changes is unmounted. */}
       <div className="body" hidden={tab !== "run"}>
         {/* `onNavigate` is an editor jump — Go to definition, a usage row — and
             is the third caller of this one request path, after the palette and
@@ -412,8 +432,10 @@ export function App() {
         <div className="body">
           <ChangesView
             key={workspace.root}
+            behavioral={behavioralReport}
             onOpenReview={openReview}
-            onVerifyClaims={openVerifyClaims}
+            onRunBehavioral={(configId) => openBehavioral(configId, false)}
+            onVerifyClaims={(configId) => openBehavioral(configId, true)}
           />
         </div>
       )}
@@ -473,6 +495,21 @@ export function App() {
           initialMode={agentPanel.initialMode}
           initialContext={agentPanel.initialContext}
           title={agentPanel.title}
+        />
+      )}
+
+      {/* The before/after run window. Hosted here (not in the Changes tab) so
+          the run outlives a tab switch and its report shows in full. Keyed by
+          token so re-running remounts a fresh run. When opened to verify, it
+          hands its evidence to the agent panel above on completion. */}
+      {behavioralPanel && (
+        <BehavioralPanel
+          key={behavioralPanel.token}
+          configId={behavioralPanel.configId}
+          verify={behavioralPanel.verify}
+          onReport={setBehavioralReport}
+          onVerify={openVerifyClaims}
+          onClose={() => setBehavioralPanel(null)}
         />
       )}
     </div>

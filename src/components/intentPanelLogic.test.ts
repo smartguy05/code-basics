@@ -5,6 +5,7 @@ import {
   cardCandidates,
   cardHeadline,
   cardTitle,
+  intentEditPlan,
   isAmbiguousIntent,
   groupStagedState,
   importFeedback,
@@ -89,11 +90,16 @@ describe("ambiguous intent helpers", () => {
     expect(isAmbiguousIntent({ ...group("other"), candidates: ["a", "b"] })).toBe(false); // not intent
   });
 
-  it("headline shows the label normally and a marker when ambiguous", () => {
+  it("headline shows the label normally and a plain count when ambiguous", () => {
     expect(cardHeadline(group("intent"))).toBe("a intent group");
+    // No scary "Ambiguous" wording: the stated reasons are real, just not
+    // separable line by line — so the headline just counts them.
     expect(cardHeadline({ ...group("intent"), label: "", candidates: ["a", "b"] })).toBe(
-      "Ambiguous intent",
+      "2 stated intents for this file",
     );
+    expect(
+      cardHeadline({ ...group("intent"), label: "", candidates: ["a", "b", "c"] }),
+    ).toBe("3 stated intents for this file");
   });
 
   it("cardCandidates returns the reasons only when ambiguous", () => {
@@ -494,5 +500,41 @@ describe("cardRisk", () => {
     const g = mkGroup({ files: [gfile("src/util/math.ts", [4, 5])] });
     expect(cardRisk(g, [eflag({ path: "src/util/math.ts", index: 9, category: "secret" })])).toBeNull();
     expect(cardRisk(g, [eflag({ path: "src/other.ts", index: 5, category: "secret" })])).toBeNull();
+  });
+});
+
+describe("intentEditPlan", () => {
+  it("prompts to overwrite a single agent stated intent, prefilled with it", () => {
+    const plan = intentEditPlan(mkGroup({ kind: "intent", label: "add retry" }));
+    expect(plan.initial).toBe("add retry");
+    expect(plan.hasUserNote).toBe(false);
+    expect(plan.confirm).toContain("overwrites");
+    expect(plan.confirm).toContain("add retry");
+  });
+
+  it("prompts to overwrite an ambiguous card's several stated intents", () => {
+    const plan = intentEditPlan(
+      mkGroup({ kind: "intent", label: "", candidates: ["a", "b"] }),
+    );
+    expect(plan.initial).toBe("");
+    expect(plan.confirm).toContain("2 stated intents");
+  });
+
+  it("does not prompt when editing the user's own note, and offers a clear", () => {
+    const plan = intentEditPlan(
+      mkGroup({ kind: "intent", label: "my note", userAuthored: true }),
+    );
+    expect(plan.confirm).toBeNull();
+    expect(plan.initial).toBe("my note");
+    expect(plan.hasUserNote).toBe(true);
+  });
+
+  it("does not prompt and starts blank on a location card (no stated intent)", () => {
+    for (const kind of ["other", "modifiedSymbol", "newSymbol", "sameTurn", "formatting"] as const) {
+      const plan = intentEditPlan(mkGroup({ kind, label: "Other changes in x.ts" }));
+      expect(plan.confirm, kind).toBeNull();
+      expect(plan.initial, kind).toBe("");
+      expect(plan.hasUserNote, kind).toBe(false);
+    }
   });
 });

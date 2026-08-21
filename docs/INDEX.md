@@ -42,11 +42,11 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/architecture/store.rs` | 596 | Diagrams on disk: where they live, how they say where they came from, and |
 | `crates/core/src/architecture/store_tests.rs` | 631 | Tests for [`super::store`]. |
 | `crates/core/src/behavioral/attribute.rs` | 127 | Mapping observable deltas back to the intent card that plausibly caused them. |
-| `crates/core/src/behavioral/attribute_tests.rs` | 139 |  |
+| `crates/core/src/behavioral/attribute_tests.rs` | 140 |  |
 | `crates/core/src/behavioral/compare.rs` | 144 | Diffing two [`TestRunResult`]s by test-case outcome. |
 | `crates/core/src/behavioral/compare_tests.rs` | 126 |  |
-| `crates/core/src/behavioral/console.rs` | 222 | Diffing the console output of the two runs. |
-| `crates/core/src/behavioral/console_tests.rs` | 88 |  |
+| `crates/core/src/behavioral/console.rs` | 251 | Diffing the console output of the two runs. |
+| `crates/core/src/behavioral/console_tests.rs` | 121 |  |
 | `crates/core/src/behavioral/http.rs` | 218 | Diffing two HTTP responses for one replayed request. |
 | `crates/core/src/behavioral/http_tests.rs` | 111 |  |
 | `crates/core/src/behavioral/httpfile.rs` | 321 | Parsing `.http` / `.rest` scenario files (VS Code REST Client / JetBrains |
@@ -54,13 +54,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/behavioral/mod.rs` | 161 | Behavioral before/after testing — the *runtime* counterpart to the static |
 | `crates/core/src/behavioral/mod_tests.rs` | 180 | Key-pinning for the behavioral wire types. |
 | `crates/core/src/behavioral/prepare.rs` | 120 | The testable decision seam between the raw deltas and the wire report. |
-| `crates/core/src/behavioral/prepare_tests.rs` | 119 | Tests for the pure report-assembly seam. |
+| `crates/core/src/behavioral/prepare_tests.rs` | 120 | Tests for the pure report-assembly seam. |
 | `crates/core/src/behavioral/replay.rs` | 151 | The one impure corner of behavioral testing: firing HTTP requests. |
 | `crates/core/src/behavioral/replay_tests.rs` | 58 | Socket-free tests for the two decisions replay makes without the network. |
 | `crates/core/src/behavioral/scenario.rs` | 205 | The pure decision seam for serverful HTTP replay. |
 | `crates/core/src/behavioral/scenario_tests.rs` | 204 |  |
-| `crates/core/src/behavioral/worktree.rs` | 277 | An on-demand, isolated checkout of a commit to build and test against. |
-| `crates/core/src/behavioral/worktree_tests.rs` | 90 |  |
+| `crates/core/src/behavioral/worktree.rs` | 326 | An on-demand, isolated checkout of a commit to build and test against. |
+| `crates/core/src/behavioral/worktree_tests.rs` | 135 |  |
 | `crates/core/src/bin/fake_lsp.rs` | 752 | A scripted stand-in for a language server, used only by the transport tests. |
 | `crates/core/src/changelists.rs` | 203 | Change groups: named buckets for the files in a working tree. |
 | `crates/core/src/changelists_tests.rs` | 344 | Tests for change groups. Included by `changelists.rs` under `#[cfg(test)]`. |
@@ -79,8 +79,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/git/attribution_tests.rs` | 1044 | Tests for attributing diff lines to recorded edits. |
 | `crates/core/src/git/coverage.rs` | 345 | Auditing the agent's own story about its work. |
 | `crates/core/src/git/coverage_tests.rs` | 834 | Tests for the intent-coverage reverse pass and scorecard. |
-| `crates/core/src/git/grouping.rs` | 671 | Turning hunks into a handful of decisions. |
-| `crates/core/src/git/grouping_tests.rs` | 1166 | Tests for collapsing hunks into cards. |
+| `crates/core/src/git/grouping.rs` | 895 | Turning hunks into a handful of decisions. |
+| `crates/core/src/git/grouping_tests.rs` | 1483 | Tests for collapsing hunks into cards. |
 | `crates/core/src/git/mod.rs` | 34 | Git operations. |
 | `crates/core/src/git/patch.rs` | 487 | Building unified diff patches restricted to a selection of lines. |
 | `crates/core/src/git/repo.rs` | 1789 | Repository reads and mutations. |
@@ -108,7 +108,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/hook.rs` | 780 | Turning a hook payload into a record. |
 | `crates/core/src/intents/hook_tests.rs` | 1338 | Tests for ingesting hook payloads. Included by `hook.rs` under `#[cfg(test)]`. |
 | `crates/core/src/intents/intents_tests.rs` | 879 | Tests for recorded agent intent. Included by `mod.rs` under `#[cfg(test)]`. |
-| `crates/core/src/intents/mod.rs` | 565 | What a coding agent said it was doing, and where it wrote it down. |
+| `crates/core/src/intents/mod.rs` | 573 | What a coding agent said it was doing, and where it wrote it down. |
 | `crates/core/src/intents/patchfmt.rs` | 224 | Reading Codex's patch format. |
 | `crates/core/src/intents/patchfmt_tests.rs` | 223 | Tests for Codex patch parsing. Included by `patchfmt.rs` under `#[cfg(test)]`. |
 | `crates/core/src/intents/providers/claude_code.rs` | 698 | Claude Code: hooks in `settings.json`, history in per-project transcripts. |
@@ -116,13 +116,15 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/providers/codex.rs` | 556 | Codex: hooks in `hooks.json`, history in dated rollout files. |
 | `crates/core/src/intents/providers/codex_tests.rs` | 1100 | Tests for reading Codex's rollout files and reporting its configuration. |
 | `crates/core/src/intents/providers/hooks_json.rs` | 198 | Merging our hooks into a configuration file the user already owns. |
-| `crates/core/src/intents/providers/instructions.rs` | 153 | Asking the agent for a reason. |
+| `crates/core/src/intents/providers/instructions.rs` | 155 | Asking the agent for a reason. |
 | `crates/core/src/intents/providers/instructions_tests.rs` | 204 | Tests for the label request appended to an agent's instruction file. |
 | `crates/core/src/intents/providers/mod.rs` | 273 | Per-agent knowledge: where it keeps its history, and how to ask it to |
 | `crates/core/src/intents/providers/providers_tests.rs` | 839 | Tests for provider detection and hook installation. |
 | `crates/core/src/intents/providers/settings_merge.rs` | 158 | Generic marker-based merging of hook entries into a `settings.json`-shaped |
 | `crates/core/src/intents/reject.rs` | 457 | Rejecting a change: undoing it and leaving the reason where it was. |
 | `crates/core/src/intents/reject_tests.rs` | 371 | Tests for rejecting a change — the marker comment left where code was. |
+| `crates/core/src/intents/user.rs` | 248 | User-authored intents: a note the user writes on a card when no agent hook |
+| `crates/core/src/intents/user_tests.rs` | 193 |  |
 | `crates/core/src/intents/whyhook.rs` | 166 | The `post-commit` hook that persists durable intent for external commits. |
 | `crates/core/src/intents/whyhook_tests.rs` | 86 | Tests for the durable-why post-commit hook installer. |
 | `crates/core/src/invocation.rs` | 267 | Turning a run configuration into a command line. |
@@ -197,7 +199,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/lsp_session.rs` | 962 | Every language server for one workspace, behind one actor, against `cb-fake-lsp`. |
 | `crates/core/tests/lsp_transport.rs` | 935 | The transport against a live process, one test per way a server misbehaves. |
 | `crates/core/tests/reject_markers.rs` | 359 | Rejection end to end: against a real repository, with the real `git`. |
-| `src/App.tsx` | 480 |  |
+| `src/App.tsx` | 517 |  |
+| `src/components/BehavioralPanel.tsx` | 297 |  |
 | `src/components/BranchMenu.tsx` | 386 |  |
 | `src/components/ConfigEditor.tsx` | 313 |  |
 | `src/components/DiffView.tsx` | 761 |  |
@@ -206,7 +209,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/ErrorBoundary.tsx` | 65 |  |
 | `src/components/FileEditor.tsx` | 946 |  |
 | `src/components/FileTree.tsx` | 118 |  |
-| `src/components/IntentPanel.tsx` | 959 |  |
+| `src/components/IntentPanel.tsx` | 1115 |  |
 | `src/components/LspStatus.tsx` | 125 |  |
 | `src/components/MenuBar.tsx` | 381 |  |
 | `src/components/ObjectTree.tsx` | 351 |  |
@@ -235,8 +238,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/enhancementsLogic.ts` | 100 |  |
 | `src/components/erosionLogic.test.ts` | 78 |  |
 | `src/components/erosionLogic.ts` | 65 |  |
-| `src/components/intentPanelLogic.test.ts` | 498 |  |
-| `src/components/intentPanelLogic.ts` | 432 |  |
+| `src/components/intentPanelLogic.test.ts` | 540 |  |
+| `src/components/intentPanelLogic.ts` | 478 |  |
 | `src/components/language.test.ts` | 114 |  |
 | `src/components/language.ts` | 113 |  |
 | `src/components/lspStatusLogic.test.ts` | 306 |  |
@@ -261,13 +264,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/editorFontSize.ts` | 52 |  |
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 |  |
-| `src/ipc/api.ts` | 753 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 1586 |  |
+| `src/ipc/api.ts` | 765 | Typed wrappers over the Tauri command surface. |
+| `src/ipc/types.ts` | 1592 |  |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
 | `src/views/ArchitectureView.tsx` | 677 |  |
-| `src/views/ChangesView.tsx` | 1118 |  |
+| `src/views/ChangesView.tsx` | 1192 |  |
 | `src/views/HistoryView.tsx` | 556 |  |
 | `src/views/InspectView.tsx` | 1062 |  |
 | `src/views/RunView.tsx` | 1469 |  |
@@ -308,7 +311,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/files.rs` | 245 | Workspace file commands, for the Run tab's directory tree and file editor. |
 | `src-tauri/src/commands/git.rs` | 362 | Git commands. |
 | `src-tauri/src/commands/inspect.rs` | 350 | Object-inspection commands. |
-| `src-tauri/src/commands/intents.rs` | 298 | Agent-intent commands. |
+| `src-tauri/src/commands/intents.rs` | 407 | Agent-intent commands. |
 | `src-tauri/src/commands/lsp.rs` | 434 | Asking this workspace's language servers something, and saying what they do. |
 | `src-tauri/src/commands/qgate.rs` | 45 | Commands behind the installable quality-gate Stop hook. |
 | `src-tauri/src/commands/review.rs` | 119 | Launching an in-app adversarial review. |
@@ -318,7 +321,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/setup.rs` | 57 | First-open setup: preview and apply the combined agent-hook install (intent |
 | `src-tauri/src/commands/symbols.rs` | 234 | The command palette's surface: searching the workspace, and asking after |
 | `src-tauri/src/commands/workspace.rs` | 217 | Workspace and configuration commands. |
-| `src-tauri/src/lib.rs` | 208 | The Tauri shell. |
+| `src-tauri/src/lib.rs` | 210 | The Tauri shell. |
 | `src-tauri/src/main.rs` | 6 | Suppress the extra console window on Windows in release builds. |
 | `src-tauri/src/qgate_run.rs` | 188 | The `quality-gate` mode: deterministic checks when an agent turn ends. |
 | `src-tauri/src/recorder.rs` | 136 | The `record-intent` mode, which is what the installed hooks actually run. |
@@ -342,7 +345,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **review** (`src-tauri/src/commands/review.rs`): `start_review`, `cancel_review`, `review_agents`
 - **git** (`src-tauri/src/commands/git.rs`): `git_status`, `git_file_diff`, `git_file_contents`, `git_write_file`, `git_stage_file`, `git_unstage_file`, `git_stage_lines`, `git_unstage_lines`, `git_revert_lines`, `git_discard_file`, `git_commit`, `git_branches`, `git_create_branch`, `git_checkout_branch`, `git_checkout_remote_branch`, `git_delete_branch`, `git_merge_branch`, `git_abort_merge`, `git_history`, `git_commit_diff`, `git_commit_file_contents`, `git_commit_file_why`, `git_stash_save`, `git_stash_list`, `git_stash_pop`, `git_stash_apply`, `git_stash_drop`, `git_stash_clear`, `git_network`
 - **changelists** (`src-tauri/src/commands/changelists.rs`): `git_changelists`, `git_create_changelist`, `git_delete_changelist`, `git_rename_changelist`, `git_assign_to_changelist`
-- **intents** (`src-tauri/src/commands/intents.rs`): `intent_groups`, `stage_intent_group`, `revert_intent_group`, `reject_intent_group`, `intent_capture_status`, `intent_install_plan`, `enable_intent_capture`, `import_intent_history`, `clear_intent_history`
+- **intents** (`src-tauri/src/commands/intents.rs`): `intent_groups`, `stage_intent_group`, `revert_intent_group`, `reject_intent_group`, `intent_capture_status`, `intent_install_plan`, `enable_intent_capture`, `import_intent_history`, `clear_intent_history`, `set_card_intent`, `clear_card_intent`
 - **qgate** (`src-tauri/src/commands/qgate.rs`): `quality_gate_status`, `quality_gate_install_plan`, `install_quality_gate`
 - **setup** (`src-tauri/src/commands/setup.rs`): `setup_install_plan`, `install_setup`
 - **behavioral** (`src-tauri/src/commands/behavioral.rs`): `behavioral_diff`, `behavioral_clear`
@@ -355,7 +358,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 
 ## Frontend IPC wrappers (`src/ipc/api.ts`)
 
-`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `runTests`, `lastTestRun`, `startReview`, `cancelReview`, `reviewAgents`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `importIntentHistory`, `clearIntentHistory`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `errorMessage`
+`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `runTests`, `lastTestRun`, `startReview`, `cancelReview`, `reviewAgents`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `importIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `errorMessage`
 
 ## Public core API (`cb-core`)
 
@@ -392,7 +395,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/files.rs`: `DirEntry`, `list_dir()`, `read_file()`, `write_file()`
 - `crates/core/src/git/attribution.rs`: `MatchLevel`, `Confidence`, `AttributedSpan`, `HunkAttribution`, `FileAttribution`, `is_empty()`, `Options`, `anchor_key()`, `attribute_file()`, `attribute()`
 - `crates/core/src/git/coverage.rs`: `UnfulfilledClaim`, `Scorecard`, `IntentReview`, `review()`
-- `crates/core/src/git/grouping.rs`: `GroupKind`, `GroupFile`, `IntentGroup`, `hunk_count()`, `is_formatting_only()`, `enclosing_symbol()`, `group()`
+- `crates/core/src/git/grouping.rs`: `GroupKind`, `GroupFile`, `IntentGroup`, `hunk_count()`, `is_formatting_only()`, `enclosing_symbol()`, `changed_content()`, `group()`
 - `crates/core/src/git/patch.rs`: `LineOrigin`, `DiffLine`, `Hunk`, `FileDiff`, `changed_line_indices()`, `hunk_line_indices()`, `Direction`, `build_patch()`
 - `crates/core/src/git/repo.rs`: `clear_readonly_directories()`, `clear_readonly_directories()`, `ComparisonMode`, `ChangeKind`, `FileContents`, `FileChange`, `is_conflicted()`, `WorkingStatus`, `Branch`, `Commit`, `StashEntry`, `MergeOutcome`, `MergeReport`, `StageTarget`, `Repo`, `open()`, `workdir()`, `head_oid()`, `hooks_dir()`, `status()`, `file_diff()`, `diff_all()`, `baseline_content()`, `working_content()`, `write_working_file()`, `stage_file()`, `unstage_file()`, `stage_lines()`, `unstage_lines()`, `revert_lines()`, `discard_file()`, `commit()`, `merge_branch()`, `abort_merge()`, `branches()`, `create_branch()`, `checkout_branch()`, `create_branch_from()`, `checkout_remote_branch()`, `delete_branch()`, `history()`, `commit_diff()`, `commit_file_contents()`, `write_why_note()`, `read_why_note()`, `why_for_file()`, `stash_save()`, `stash_list()`, `stash_pop()`, `stash_apply()`, `stash_drop()`, `stash_clear()`, `network_command()`, `NetworkOperation`, `NetworkKind`, `resolve_network()`
 - `crates/core/src/git/why.rs`: `WhyEntry`, `FileWhy`, `DurableWhy`, `is_empty()`, `LineIntent`, `content_hash()`, `build_for_commit()`, `resolve_lines()`, `file_in()`, `record_note()`
@@ -415,6 +418,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/intents/providers/mod.rs`: `InstallScope`, `ProviderStatus`, `absent()`, `PlannedWrite`, `InstallPlan`, `SessionFile`, `HistoryMined`, `apply_plan()`, `apply_writes()`, `all()`, `statuses()`, `history()`, `guard_write()`, `whyhook_write()`, `home_dir()`
 - `crates/core/src/intents/providers/settings_merge.rs`: `contains_marker()`, `is_installed()`, `merged_text()`, `merged_into_text()`, `plan_removal()`
 - `crates/core/src/intents/reject.rs`: `comment_prefix()`, `sanitise_reason()`, `marker_block()`, `is_marker_line()`, `anchors()`, `insert_markers()`, `iso_date()`, `FileRejection`, `RejectSummary`, `record()`, `reject_file()`
+- `crates/core/src/intents/user.rs`: `UserEdit`, `UserIntent`, `turn_id()`, `is_empty()`, `overlaps()`, `upsert()`, `remove_overlapping()`, `next_id()`, `to_intents()`, `merge_into()`, `user_intents_path()`, `load()`, `save()`
 - `crates/core/src/intents/whyhook.rs`: `block()`, `hook_path()`, `plan_for()`, `planned_write()`, `is_installed()`, `ensure_executable()`, `plan_removal()`
 - `crates/core/src/invocation.rs`: `build()`, `rerun_filter()`, `plan_compound()`
 - `crates/core/src/lsp/client.rs`: `ReadyState`, `is_ready()`, `StartFailure`, `RequestError`, `Client`, `start()`, `start_with_ceiling()`, `spec()`, `root()`, `root_uri()`, `capabilities()`, `pid()`, `death()`, `stderr_tail()`, `readiness()`, `wait_ready()`, `shutdown()`, `did_open()`, `did_change()`, `did_close()`, `document_version()`, `references()`, `definition()`, `implementation()`, `type_definition()`, `document_symbols()`

@@ -102,6 +102,12 @@ pub struct IntentGroup {
     /// The weakest confidence of any hunk in the group, so a card never looks
     /// more certain than its shakiest member.
     pub confidence: Confidence,
+    /// The label is a note the *user* wrote (see [`crate::intents::user`]),
+    /// rather than a recorded or inferred agent reason. The UI uses this to
+    /// distinguish editing your own note from overwriting an agent's intent.
+    /// Omitted from the wire when false, like the other optional card fields.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub user_authored: bool,
 }
 
 impl IntentGroup {
@@ -134,14 +140,23 @@ impl IntentGroup {
 pub fn is_formatting_only(hunk: &Hunk, path: &str) -> bool {
     let significant = indentation_is_significant(path);
 
-    let mut removed: Vec<String> = Vec::new();
-    let mut added: Vec<String> = Vec::new();
+    // For each changed line, keep both the raw characters and the
+    // whitespace-normalised form. The raw form is what tells a line that only
+    // *moved* — identical characters in a new position — apart from one whose
+    // whitespace genuinely changed. Reordering statements changes what the
+    // program does, so only the second is formatting.
+    let mut removed: Vec<(String, String)> = Vec::new();
+    let mut added: Vec<(String, String)> = Vec::new();
 
     for line in &hunk.lines {
         let normalised = ignore_whitespace(&line.content, significant);
+        // The raw line, verbatim: any real whitespace change (a reindent, a
+        // collapsed run of spaces, a stripped `\r`) alters it, while a pure
+        // relocation leaves it byte-for-byte identical.
+        let raw = line.content.clone();
         match line.origin {
-            LineOrigin::Deletion => removed.push(normalised),
-            LineOrigin::Addition => added.push(normalised),
+            LineOrigin::Deletion => removed.push((raw, normalised)),
+            LineOrigin::Addition => added.push((raw, normalised)),
             LineOrigin::Context => {}
         }
     }
@@ -152,15 +167,32 @@ pub fn is_formatting_only(hunk: &Hunk, path: &str) -> bool {
     }
 
     // Blank-line churn alone is still formatting.
-    removed.retain(|l| !l.trim().is_empty());
-    added.retain(|l| !l.trim().is_empty());
+    removed.retain(|(_, n)| !n.trim().is_empty());
+    added.retain(|(_, n)| !n.trim().is_empty());
     if removed.is_empty() && added.is_empty() {
         return true;
     }
 
-    removed.sort();
-    added.sort();
-    removed == added
+    // The normalised content must match as a multiset, or real code changed.
+    let mut removed_norm: Vec<&String> = removed.iter().map(|(_, n)| n).collect();
+    let mut added_norm: Vec<&String> = added.iter().map(|(_, n)| n).collect();
+    removed_norm.sort();
+    added_norm.sort();
+    if removed_norm != added_norm {
+        return false;
+    }
+
+    // The normalised content matches — but so it would for a pure reorder,
+    // where identical lines merely swapped places. Tell the two apart by the
+    // raw characters: if the raw multiset is unchanged too, nothing's
+    // whitespace actually changed and the lines only moved. A relocation is a
+    // logic change (an assignment now runs before an await, an early return
+    // moves), not formatting, so refuse the label.
+    let mut removed_raw: Vec<&String> = removed.iter().map(|(r, _)| r).collect();
+    let mut added_raw: Vec<&String> = added.iter().map(|(r, _)| r).collect();
+    removed_raw.sort();
+    added_raw.sort();
+    removed_raw != added_raw
 }
 
 /// Languages where leading whitespace carries meaning.
@@ -248,6 +280,33 @@ fn symbol_is_new(hunk: &Hunk, symbol: &str) -> bool {
     declared_in(LineOrigin::Addition) && !declared_in(LineOrigin::Deletion)
 }
 
+/// The changed-line *content* of one file, restricted to a set of diff line
+/// indices — the geometry a user annotation stores so it can rebind to the diff
+/// by content after the lines move (see [`crate::intents::user`]).
+///
+/// Returns `(removed, added)` in diff order. Context lines are skipped: only the
+/// lines the card actually claims are the annotation's evidence.
+pub fn changed_content(
+    diff: &FileDiff,
+    line_indices: &std::collections::BTreeSet<u32>,
+) -> (Vec<String>, Vec<String>) {
+    let mut removed = Vec::new();
+    let mut added = Vec::new();
+    for hunk in &diff.hunks {
+        for line in &hunk.lines {
+            if !line_indices.contains(&line.index) {
+                continue;
+            }
+            match line.origin {
+                LineOrigin::Deletion => removed.push(line.content.clone()),
+                LineOrigin::Addition => added.push(line.content.clone()),
+                LineOrigin::Context => {}
+            }
+        }
+    }
+    (removed, added)
+}
+
 /// Build the cards for a working tree.
 ///
 /// `diffs` and `attributions` are parallel: both come from the same scan, in
@@ -260,14 +319,37 @@ pub fn group(
     // Keyed so hunks of the same kind and symbol merge across files.
     let mut buckets: BTreeMap<String, Bucket> = BTreeMap::new();
 
+    // Declared intents that attribution actually bound to changed lines
+    // *somewhere* in this diff, keyed by the reason's identity. A reason that is
+    // demonstrably real — it has its own evidenced card — must never also be
+    // offered as a mere "candidate" on an ambiguous card for an unbound hunk it
+    // happens to scope: that presents a known intent as a guess and duplicates
+    // it. Such reasons are filtered out of `covering` below.
+    let evidenced_intents: BTreeSet<(String, String)> = attributions
+        .iter()
+        .flat_map(|fa| &fa.hunks)
+        .flat_map(|h| &h.spans)
+        .filter_map(|s| {
+            if s.label_source != Some(LabelSource::Declared) {
+                return None;
+            }
+            let turn = s.label_turn_id.clone().unwrap_or_else(|| s.turn_id.clone());
+            Some((turn, s.label.clone()?))
+        })
+        .collect();
+
     for (file_index, diff) in diffs.iter().enumerate() {
         // Declared reasons the author scoped to this file. Used only when the
         // geometry did not already bind one: a single reason titles the file's
         // card, several become its candidates. Computed once per file.
+        //
+        // Reasons already evidenced elsewhere are dropped: they have real cards,
+        // so listing them as a "maybe" here would duplicate a known intent.
         let covering: Vec<(String, String)> = intents
             .scoped_labels_for_path(&diff.path)
             .into_iter()
             .map(|l| (l.turn_id.clone(), l.label.clone()))
+            .filter(|pair| !evidenced_intents.contains(pair))
             .collect();
 
         let attribution = attributions.get(file_index);
@@ -284,6 +366,140 @@ pub fn group(
             }
 
             let hunk_attribution = attribution.and_then(|a| a.hunks.get(hunk_index));
+
+            // Evidenced split. When attribution tied lines in this one hunk to
+            // two or more *distinct declared intents*, each intent becomes its
+            // own card carrying only the lines the matcher actually gave it.
+            //
+            // This is the one place a hunk's lines are divided across cards, and
+            // it is safe precisely because it is driven by per-line evidence:
+            // staging and reverting already act on a card's `line_indices`, not
+            // on whole hunks. Without it, such a hunk either lands wholly on its
+            // dominant intent (absorbing the others' lines) or — with no
+            // majority — falls through to a location card while every intent
+            // shows as unmatched. A hunk merely *scoped* by several declared
+            // reasons with no matched geometry has no per-line evidence and is
+            // left to the covering path below, which abstains to one card.
+            if let Some(hunk_attr) = hunk_attribution {
+                let changed_set: BTreeSet<u32> = changed.iter().copied().collect();
+                // Declared intents in this hunk's spans, keyed by the reason's
+                // identity (the turn that declared it) so the same intent merges
+                // across hunks and files, each with the lines it claimed here.
+                let mut per_intent: BTreeMap<(String, String), (Vec<u32>, Confidence)> =
+                    BTreeMap::new();
+                let mut claimed: BTreeSet<u32> = BTreeSet::new();
+                for span in &hunk_attr.spans {
+                    let (Some(label), Some(LabelSource::Declared)) =
+                        (span.label.as_ref(), span.label_source)
+                    else {
+                        continue;
+                    };
+                    let turn = span
+                        .label_turn_id
+                        .clone()
+                        .unwrap_or_else(|| span.turn_id.clone());
+                    let lines: Vec<u32> = span
+                        .line_indices
+                        .iter()
+                        .copied()
+                        .filter(|i| changed_set.contains(i))
+                        .collect();
+                    if lines.is_empty() {
+                        continue;
+                    }
+                    claimed.extend(lines.iter().copied());
+                    let entry = per_intent
+                        .entry((turn, label.clone()))
+                        .or_insert_with(|| (Vec::new(), Confidence::High));
+                    entry.0.extend(lines);
+                    entry.1 = entry.1.min(span.confidence);
+                }
+
+                if per_intent.len() >= 2 {
+                    for ((turn, label), (mut lines, confidence)) in per_intent {
+                        lines.sort_unstable();
+                        lines.dedup();
+                        let key = format!("intent:{turn}:{label}");
+                        let bucket = buckets.entry(key.clone()).or_insert_with(|| Bucket {
+                            id: key,
+                            kind: GroupKind::Intent,
+                            label: label.clone(),
+                            candidates: Vec::new(),
+                            symbol: None,
+                            confidence,
+                            files: BTreeMap::new(),
+                            needs_title: false,
+                            symbols: BTreeSet::new(),
+                        });
+                        bucket.symbols.insert(String::new());
+                        bucket.confidence = bucket.confidence.min(confidence);
+                        let entry = bucket
+                            .files
+                            .entry(diff.path.clone())
+                            .or_insert_with(|| (Vec::new(), Vec::new()));
+                        entry.0.extend(lines);
+                        if !entry.1.contains(&hunk_index) {
+                            entry.1.push(hunk_index);
+                        }
+                    }
+
+                    // Lines the matcher tied to no declared intent are genuinely
+                    // unexplained here: the stated intents are already their own
+                    // cards, so re-attaching these to one would claim lines it
+                    // has no evidence for. Group them by where they sit instead.
+                    let remainder: Vec<u32> = changed
+                        .iter()
+                        .copied()
+                        .filter(|i| !claimed.contains(i))
+                        .collect();
+                    if !remainder.is_empty() {
+                        let (key, kind, label, symbol) = match enclosing_symbol(hunk) {
+                            Some(symbol) => {
+                                let kind = if symbol_is_new(hunk, &symbol) {
+                                    GroupKind::NewSymbol
+                                } else {
+                                    GroupKind::ModifiedSymbol
+                                };
+                                (
+                                    format!("symbol:{}:{symbol}", kind_key(kind)),
+                                    kind,
+                                    symbol.clone(),
+                                    Some(symbol),
+                                )
+                            }
+                            None => (
+                                format!("other:{}", diff.path),
+                                GroupKind::Other,
+                                format!("Other changes in {}", file_name(&diff.path)),
+                                None,
+                            ),
+                        };
+                        let bucket = buckets.entry(key.clone()).or_insert_with(|| Bucket {
+                            id: key,
+                            kind,
+                            label,
+                            candidates: Vec::new(),
+                            symbol: symbol.clone(),
+                            confidence: Confidence::Low,
+                            files: BTreeMap::new(),
+                            needs_title: false,
+                            symbols: BTreeSet::new(),
+                        });
+                        bucket.symbols.insert(symbol.unwrap_or_default());
+                        bucket.confidence = bucket.confidence.min(Confidence::Low);
+                        let entry = bucket
+                            .files
+                            .entry(diff.path.clone())
+                            .or_insert_with(|| (Vec::new(), Vec::new()));
+                        entry.0.extend(remainder);
+                        if !entry.1.contains(&hunk_index) {
+                            entry.1.push(hunk_index);
+                        }
+                    }
+
+                    continue;
+                }
+            }
 
             // 1. The turn that made this hunk, when one turn made most of it.
             //
@@ -528,6 +744,7 @@ fn collapse_singletons(groups: Vec<IntentGroup>) -> Vec<IntentGroup> {
                     files: group.files,
                     line_count: group.line_count,
                     confidence: Confidence::Low,
+                    user_authored: false,
                 });
             }
         }
@@ -653,6 +870,12 @@ impl Bucket {
             })
             .collect();
 
+        // A user note becomes a declared-intent bucket keyed
+        // `intent:usernote:{id}:{label}` (see [`crate::intents::user`]); the
+        // prefix is distinctive, so recognising it here needs no extra field
+        // threaded through every bucket.
+        let user_authored = self.id.starts_with("intent:usernote:");
+
         IntentGroup {
             id: self.id,
             kind: self.kind,
@@ -662,6 +885,7 @@ impl Bucket {
             files,
             line_count,
             confidence: self.confidence,
+            user_authored,
         }
     }
 }

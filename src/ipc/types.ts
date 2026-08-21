@@ -364,8 +364,8 @@ export interface RiderImportPreview {
 // Agent intent (`intents/`, `git/attribution.rs`, `git/grouping.rs`)
 // ---------------------------------------------------------------------------
 
-/** Which coding agent recorded an edit. */
-export type ProviderId = "claudeCode" | "codex";
+/** Which coding agent recorded an edit — or the user, for a note they wrote. */
+export type ProviderId = "claudeCode" | "codex" | "user";
 
 /** Where an agent's hook configuration is written. */
 export type InstallScope = "project" | "user";
@@ -494,6 +494,12 @@ export interface IntentGroup {
   lineCount: number;
   /** The weakest confidence of any hunk in the group. */
   confidence: Confidence;
+  /**
+   * The label is a note the user wrote (not an agent reason). Present only when
+   * true, so it is safe to read as falsy. Distinguishes editing your own note
+   * from overwriting an agent's stated intent.
+   */
+  userAuthored?: boolean;
 }
 
 /**

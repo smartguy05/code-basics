@@ -124,7 +124,7 @@ export function verifyClaimsAction(configs: RunConfig[]): VerifyClaimsAction {
   return {
     enabled: true,
     config,
-    hint: `Same run as "Run before/after" ("${config.name}"), then a read-only agent checks whether the diff's changes are borne out by the results`,
+    hint: `Runs its own before/after of "${config.name}" (no need to run before/after first), then a read-only agent checks whether the diff's changes are borne out by the results`,
   };
 }
 

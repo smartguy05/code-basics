@@ -77,8 +77,10 @@ a `pre-commit` hook.
 /// The instruction file each agent reads.
 pub fn path_for(provider: ProviderId, root: &Path) -> PathBuf {
     match provider {
-        ProviderId::ClaudeCode => root.join("CLAUDE.md"),
         ProviderId::Codex => root.join("AGENTS.md"),
+        // ClaudeCode reads CLAUDE.md. `User` is not an installable agent and
+        // never reaches provider install, but the match must be total.
+        ProviderId::ClaudeCode | ProviderId::User => root.join("CLAUDE.md"),
     }
 }
 

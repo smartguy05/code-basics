@@ -88,3 +88,48 @@ fn create_is_cache_hit_at_same_oid() {
     assert!(warnings.is_empty(), "clear_all warnings: {warnings:?}");
     assert!(!path.exists(), "clear_all should remove the whole cache");
 }
+
+#[test]
+fn failure_message_prefers_stderr_when_present() {
+    let msg = describe_process_failure("git worktree add for abc", Some(128), "fatal: bad object");
+    assert_eq!(msg, "git worktree add for abc failed: fatal: bad object");
+}
+
+#[test]
+fn failure_message_trims_stderr() {
+    let msg = describe_process_failure("op", Some(1), "  boom  \n");
+    assert_eq!(msg, "op failed: boom");
+}
+
+#[test]
+fn failure_message_surfaces_exit_code_when_stderr_empty() {
+    // A child that dies before writing anything: the exit code is the only clue,
+    // so it must appear rather than a bare "failed:".
+    let msg = describe_process_failure("op", Some(1), "   ");
+    assert!(msg.contains("exit code 1"), "got: {msg}");
+    assert!(!msg.contains("failed: "), "no empty message tail: {msg}");
+}
+
+#[test]
+fn failure_message_explains_windows_dll_init_failure() {
+    // -1073741502 == 0xC0000142 == STATUS_DLL_INIT_FAILED: the child could not
+    // initialise and wrote nothing. The message must name it and point at the
+    // real cause rather than blaming the diff.
+    let msg = describe_process_failure("git worktree add for abc", Some(-1073741502), "");
+    assert!(msg.contains("0xc0000142"), "hex status: {msg}");
+    assert!(
+        msg.to_lowercase().contains("could not initialise")
+            || msg.to_lowercase().contains("could not initialize"),
+        "names the init failure: {msg}"
+    );
+    assert!(
+        msg.contains("Restart"),
+        "points at the fix (restart/reboot): {msg}"
+    );
+}
+
+#[test]
+fn failure_message_handles_signal_termination() {
+    let msg = describe_process_failure("op", None, "");
+    assert!(msg.contains("signal"), "got: {msg}");
+}

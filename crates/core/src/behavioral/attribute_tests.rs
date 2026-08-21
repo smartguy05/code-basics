@@ -19,6 +19,7 @@ fn group(id: &str, paths: &[&str]) -> IntentGroup {
             .collect(),
         line_count: 0,
         confidence: Confidence::High,
+        user_authored: false,
     }
 }
 

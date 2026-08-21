@@ -171,9 +171,58 @@ fn worktree_add(repo_root: &Path, dir: &Path, oid: &str) -> Result<()> {
         .context("failed to run `git worktree add` (is git on PATH?)")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git worktree add for {} failed: {}", oid, stderr.trim());
+        bail!(
+            "{}",
+            describe_process_failure(
+                &format!("git worktree add for {oid}"),
+                output.status.code(),
+                &stderr,
+            )
+        );
     }
     Ok(())
+}
+
+/// Format a spawned command's failure, surfacing the exit code when the child
+/// wrote nothing.
+///
+/// git normally explains itself on stderr, but a child that dies *before it can
+/// initialise* writes nothing at all — and then a bare "failed:" is the only
+/// trace, which is impossible to diagnose. The specific case seen in the wild
+/// on Windows is `STATUS_DLL_INIT_FAILED` (`0xC0000142`, surfaced as the exit
+/// code `-1073741502`): the process could not start, usually because the
+/// interactive window station's desktop heap is exhausted after long uptime or
+/// many spawned processes, or an antivirus hook blocked process creation.
+/// Neither is a problem with the diff, so the message says so.
+fn describe_process_failure(what: &str, code: Option<i32>, stderr: &str) -> String {
+    let stderr = stderr.trim();
+    if !stderr.is_empty() {
+        return format!("{what} failed: {stderr}");
+    }
+    match code {
+        None => format!("{what} failed (terminated by a signal) with no output"),
+        Some(code) => match windows_status_hint(code) {
+            Some(hint) => format!(
+                "{what} failed with exit code {code} ({:#010x}) and no output — {hint}",
+                code as u32
+            ),
+            None => format!("{what} failed with exit code {code} and no output"),
+        },
+    }
+}
+
+/// A human explanation for the Windows NTSTATUS codes a failed-to-start child
+/// reports as its exit code, or `None` for anything not specifically known.
+fn windows_status_hint(code: i32) -> Option<&'static str> {
+    match code as u32 {
+        0xC000_0142 => Some(
+            "the child process could not initialise (STATUS_DLL_INIT_FAILED). This is usually \
+             Windows desktop-heap exhaustion after long uptime or many spawned processes, or an \
+             antivirus hook blocking process creation — not a problem with the diff. Restart the \
+             app to free the desktop heap, and reboot if it recurs.",
+        ),
+        _ => None,
+    }
 }
 
 /// Remove a baseline checkout, tolerating the Windows locks / read-only

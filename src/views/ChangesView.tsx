@@ -10,10 +10,7 @@ import { buildSections, statusLetter, type FileSection } from "./changesLogic";
 import { Sidebar } from "../components/Sidebar";
 import { IntentPanel } from "../components/IntentPanel";
 import { pickBehavioralConfig } from "../components/behavioralPanelLogic";
-import {
-  behavioralReportToPromptContext,
-  verifyClaimsAction,
-} from "../components/claimVerifyLogic";
+import { verifyClaimsAction } from "../components/claimVerifyLogic";
 import { ErosionPanel } from "../components/ErosionPanel";
 import { badgeCount } from "../components/erosionLogic";
 import { StashPanel } from "../components/StashPanel";
@@ -60,6 +57,15 @@ const GROUPING_KEY = "code-basics.changesGrouping";
 const COLLAPSE_KEY = "code-basics.diffCollapseUnchanged";
 const WHITESPACE_KEY = "code-basics.diffIgnoreWhitespace";
 
+/**
+ * How often the Changes tab re-reads the working tree while it is showing, so
+ * edits made outside the app (by an agent, a terminal, another tool) appear
+ * without switching tabs. Gentle on purpose: each tick re-runs the intent and
+ * erosion scans, and the results are de-churned so nothing re-renders unless
+ * the working tree actually changed.
+ */
+const POLL_MS = 2000;
+
 /** How the sidebar organises the working tree. */
 type Grouping = "files" | "intent" | "stashes" | "erosion";
 
@@ -91,12 +97,22 @@ const MODE_LABELS: Record<ComparisonMode, string> = {
 };
 
 export function ChangesView({
+  behavioral,
   onOpenReview,
+  onRunBehavioral,
   onVerifyClaims,
 }: {
+  /**
+   * The finished before/after report, owned by `App` (the run itself happens in
+   * the floating `BehavioralPanel`). Held here only to badge each intent card
+   * with the deltas attributed to it; `null` until a run completes.
+   */
+  behavioral: BehavioralReport | null;
   onOpenReview: () => void;
-  /** Hand the built before/after evidence to the app's agent panel. */
-  onVerifyClaims: (context: string) => void;
+  /** Open the before/after window for `configId` (the run streams there). */
+  onRunBehavioral: (configId: string) => void;
+  /** Open the before/after window, then hand its evidence to the claim agent. */
+  onVerifyClaims: (configId: string) => void;
 }) {
   const [status, setStatus] = useState<WorkingStatus | null>(null);
   const [mode, setMode] = useState<ComparisonMode>("workingToHead");
@@ -142,6 +158,22 @@ export function ChangesView({
   const diffHandle = useRef<DiffViewHandle | null>(null);
 
   /**
+   * State the background poll reads without wanting to re-fire on every change.
+   *
+   * `busyRef` mirrors `busy` so the interval can skip a tick while an action is
+   * in flight, without the interval effect resubscribing each time `busy`
+   * flips. The `*Signature` refs hold a serialisation of the last committed
+   * result for each scan, so a poll that finds nothing changed skips the
+   * setState entirely — no re-render, no card recompute — while a real change
+   * still goes through.
+   */
+  const busyRef = useRef(false);
+  const statusSignature = useRef<string | null>(null);
+  const intentSignature = useRef<string | null>(null);
+  const erosionSignature = useRef<string | null>(null);
+  busyRef.current = busy;
+
+  /**
    * F7 / Shift+F7 step through the changes, as they do in Rider.
    *
    * Window-level and capture phase, matching `SearchEverywhere`: the focus is
@@ -173,8 +205,8 @@ export function ChangesView({
    * streamed output is condensed into a one-line status rather than shown raw.
    */
   const [configs, setConfigs] = useState<RunConfig[]>([]);
-  const [behavioral, setBehavioral] = useState<BehavioralReport | null>(null);
-  const [behavioralStatus, setBehavioralStatus] = useState<string | null>(null);
+  /** The compact before/after actions menu in the intent header. */
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   /** Diff lines to preselect, so opening a card lands on its lines. */
   const [highlight, setHighlight] = useState<number[]>([]);
@@ -222,8 +254,15 @@ export function ChangesView({
         // never used them simply has none.
         api.gitChangelists().catch(() => ({ version: 1, groups: [] })),
       ]);
-      setStatus(nextStatus);
-      setGroups(nextGroups.groups);
+      // De-churn: the poll calls this on a timer, and replacing state with an
+      // identical value would re-render the list for nothing. Only commit when
+      // the working tree actually changed.
+      const signature = JSON.stringify([nextStatus, nextGroups]);
+      if (signature !== statusSignature.current) {
+        statusSignature.current = signature;
+        setStatus(nextStatus);
+        setGroups(nextGroups.groups);
+      }
       setError(null);
     } catch (e) {
       setError(api.errorMessage(e));
@@ -262,10 +301,17 @@ export function ChangesView({
         api.intentGroups(mode),
         api.intentCaptureStatus().catch(() => [] as ProviderStatus[]),
       ]);
-      setIntentGroups(review.groups);
-      setScorecard(review.scorecard);
-      setUnfulfilled(review.unfulfilled);
-      setProviders(status);
+      // De-churn (see refreshStatus): the poll recomputes the cards every tick
+      // to catch edits to files already in the list, so only commit — and only
+      // re-render the panel — when the result changed.
+      const signature = JSON.stringify([review, status]);
+      if (signature !== intentSignature.current) {
+        intentSignature.current = signature;
+        setIntentGroups(review.groups);
+        setScorecard(review.scorecard);
+        setUnfulfilled(review.unfulfilled);
+        setProviders(status);
+      }
     } catch (e) {
       setError(api.errorMessage(e));
     }
@@ -284,7 +330,12 @@ export function ChangesView({
   const refreshErosion = useCallback(async () => {
     if (grouping !== "erosion" && grouping !== "intent") return;
     try {
-      setErosion(await api.erosionScan(mode));
+      const report = await api.erosionScan(mode);
+      const signature = JSON.stringify(report);
+      if (signature !== erosionSignature.current) {
+        erosionSignature.current = signature;
+        setErosion(report);
+      }
     } catch (e) {
       setError(api.errorMessage(e));
     }
@@ -300,7 +351,34 @@ export function ChangesView({
   // effect above then rescans for the new mode.
   useEffect(() => {
     setErosion(null);
+    // The intent and erosion signatures are keyed to the diff's line numbering,
+    // which is per-mode; clear them so the next scan is never suppressed by a
+    // match against the previous mode's result.
+    erosionSignature.current = null;
+    intentSignature.current = null;
   }, [mode]);
+
+  /**
+   * Poll the working tree while this tab is showing, so changes made outside
+   * the app appear without switching tabs. This view is mounted only while the
+   * Changes tab is active (see `App.tsx`), so the interval is naturally scoped
+   * to the tab and torn down on leave.
+   *
+   * Each of the three refreshers de-churns its own result, so a quiet tick does
+   * no work beyond the read; the open diff pane is deliberately left alone, so
+   * an unsaved edit in the editor is never discarded under the user. A tick is
+   * skipped while an action is in flight or the window is hidden, and while the
+   * stash view (which owns its own refresh) is showing.
+   */
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (busyRef.current || document.hidden || grouping === "stashes") return;
+      void refreshStatus();
+      void refreshIntent();
+      void refreshErosion();
+    }, POLL_MS);
+    return () => window.clearInterval(id);
+  }, [refreshStatus, refreshIntent, refreshErosion, grouping]);
 
   const loadFile = useCallback(
     async (path: string, comparison: ComparisonMode) => {
@@ -406,6 +484,24 @@ export function ChangesView({
       await refreshAll();
     });
 
+  /**
+   * Write the user's own intent on a card, then re-read so the card retitles.
+   * The note binds to the card's current changed lines by content (see
+   * `cb_core::intents::user`) and wins over any agent reason there.
+   */
+  const setCardIntent = (group: IntentGroup, label: string) =>
+    withBusy(async () => {
+      await api.setCardIntent(group.id, label, mode);
+      await refreshAll();
+    });
+
+  /** Remove the user's note from a card, restoring its previous title. */
+  const clearCardIntent = (group: IntentGroup) =>
+    withBusy(async () => {
+      await api.clearCardIntent(group.id, mode);
+      await refreshAll();
+    });
+
   const stageGroupFile = (group: IntentGroup, file: GroupFile) =>
     withBusy(async () => {
       const staged = await api.stageIntentGroup(group.id, file.path);
@@ -457,58 +553,17 @@ export function ChangesView({
   };
 
   /**
-   * Run the current config against HEAD and the working tree, then diff the
-   * observable outcomes. The two runs stream their output here; with no console
-   * in this view, each event is condensed into a one-line status.
+   * Both before/after actions run in the floating {@link BehavioralPanel} at the
+   * app level (so the run survives a tab switch and its report is shown in full,
+   * not condensed into this sidebar). These only pick the config and open the
+   * window; "Verify claims" opens it primed to chain into the claim-check agent.
    */
-  const runBehavioral = () =>
-    withBusy(async () => {
-      if (!behavioralConfig) return;
-      setBehavioral(null);
-      setBehavioralStatus("Running before/after comparison…");
-      const report = await api.behavioralDiff(behavioralConfig.id, null, (event) => {
-        if (event.type === "started") {
-          setBehavioralStatus(`Running ${event.program}…`);
-        } else if (event.type === "exited") {
-          setBehavioralStatus(
-            event.cancelled
-              ? "Run cancelled."
-              : `Run finished (exit ${event.code ?? "?"}).`,
-          );
-        } else if (event.type === "failed") {
-          setBehavioralStatus(`Run failed: ${event.message}`);
-        }
-      });
-      setBehavioral(report);
-      setBehavioralStatus(null);
-    });
-
-  /**
-   * Gather the before/after evidence, then hand it to the agent panel primed to
-   * verify the diff's claims against it. The run itself is the same before/after
-   * comparison; only the follow-up — a read-only agent judging claims against
-   * the evidence — is new. The evidence text is built in the tested helper.
-   */
-  const verifyClaims = () =>
-    withBusy(async () => {
-      if (!verify.config) return;
-      setBehavioral(null);
-      setBehavioralStatus("Gathering before/after evidence…");
-      const report = await api.behavioralDiff(verify.config.id, null, (event) => {
-        if (event.type === "started") {
-          setBehavioralStatus(`Running ${event.program}…`);
-        } else if (event.type === "exited") {
-          setBehavioralStatus(
-            event.cancelled ? "Run cancelled." : `Run finished (exit ${event.code ?? "?"}).`,
-          );
-        } else if (event.type === "failed") {
-          setBehavioralStatus(`Run failed: ${event.message}`);
-        }
-      });
-      setBehavioral(report);
-      setBehavioralStatus(null);
-      onVerifyClaims(behavioralReportToPromptContext(report));
-    });
+  const runBehavioral = () => {
+    if (behavioralConfig) onRunBehavioral(behavioralConfig.id);
+  };
+  const verifyClaims = () => {
+    if (verify.config) onVerifyClaims(verify.config.id);
+  };
 
   /** Stage or unstage a whole file, whichever one was right-clicked. */
   const stageFile = (path: string, staged: boolean) =>
@@ -685,14 +740,59 @@ export function ChangesView({
   return (
     <>
       <Sidebar className="file-list">
+        {/* The branch name lives in the titlebar branch widget, so it is not
+            repeated here — this row is just the ahead/behind badge and the
+            runtime-evidence / review actions. */}
         <div className="group-label" style={{ display: "flex", alignItems: "center" }}>
-          <span>{status?.branch ?? "no branch"}</span>
           {status && (status.ahead > 0 || status.behind > 0) && (
-            <span className="badge" style={{ marginLeft: 6 }}>
+            <span className="badge">
               ↑{status.ahead} ↓{status.behind}
             </span>
           )}
           <span style={{ flex: 1 }} />
+          {grouping === "intent" && (
+            <div className="evidence-menu" style={{ position: "relative" }}>
+              <button
+                onClick={() => setEvidenceOpen((v) => !v)}
+                title="Runtime evidence: run the code against HEAD and your working tree and compare the observable outcomes — with or without an agent judging the diff's claims"
+              >
+                Evidence ▾
+              </button>
+              {evidenceOpen && (
+                <>
+                  <div className="dropdown-backdrop" onClick={() => setEvidenceOpen(false)} />
+                  <div className="dropdown-menu" style={{ right: 0, left: "auto" }}>
+                    <div
+                      className={`dropdown-item${behavioralConfig ? "" : " disabled"}`}
+                      title={
+                        behavioralConfig
+                          ? `Run "${behavioralConfig.name}" against HEAD and your working tree, then show what changed in the observable outcomes — test results, console output, HTTP responses. No agent involved.`
+                          : "No run configuration is available to replay before/after"
+                      }
+                      onClick={() => {
+                        if (!behavioralConfig) return;
+                        setEvidenceOpen(false);
+                        runBehavioral();
+                      }}
+                    >
+                      Run before/after
+                    </div>
+                    <div
+                      className={`dropdown-item${verify.enabled ? "" : " disabled"}`}
+                      title={verify.hint}
+                      onClick={() => {
+                        if (!verify.enabled) return;
+                        setEvidenceOpen(false);
+                        verifyClaims();
+                      }}
+                    >
+                      Verify claims
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <button
             onClick={onOpenReview}
             title="Run an adversarial review of the current changes (Claude Code or Codex)"
@@ -709,34 +809,6 @@ export function ChangesView({
 
         {grouping === "intent" && (
           <>
-            <div
-              className="behavioral-run"
-              style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px" }}
-            >
-              <button
-                disabled={busy || !behavioralConfig}
-                onClick={() => void runBehavioral()}
-                title={
-                  behavioralConfig
-                    ? `Run "${behavioralConfig.name}" against HEAD and the working tree, then diff the outcomes`
-                    : "No run configuration is available to replay before/after"
-                }
-              >
-                Run before/after
-              </button>
-              <button
-                disabled={busy || !verify.enabled}
-                onClick={() => void verifyClaims()}
-                title={verify.hint}
-              >
-                Verify claims
-              </button>
-              {behavioralStatus && (
-                <span className="faint" style={{ fontSize: 11 }}>
-                  {behavioralStatus}
-                </span>
-              )}
-            </div>
             <IntentPanel
               groups={intentGroups}
               scorecard={scorecard}
@@ -756,6 +828,8 @@ export function ChangesView({
               onReject={rejectGroup}
               onEnable={enableCapture}
               onImportHistory={importHistory}
+              onSetIntent={setCardIntent}
+              onClearIntent={clearCardIntent}
               behavioral={behavioral}
               erosionFlags={erosion?.flags}
             />

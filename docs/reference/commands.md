@@ -135,7 +135,9 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `intent_install_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact final contents of every file an install would write. **Touches nothing** — this is what the confirmation dialog renders |
 | `enable_intent_capture` | `provider: ProviderId, scope: InstallScope` | `ProviderStatus[]` | Perform a confirmed install. Additive: existing hooks are preserved and the file is backed up first. Also installs the `pre-commit` guard and the durable-why `post-commit` hook, and makes both executable |
 | `import_intent_history` | – | `usize` | Read what the agents already recorded, with no setup: edits, coarse labels, and the user prompts mined from session transcripts (keyed to the same turn id so they join). Returns the total record count afterwards |
-| `clear_intent_history` | – | `()` | Forget everything recorded for this workspace |
+| `clear_intent_history` | – | `()` | Forget everything recorded for this workspace (agent history only; user notes survive) |
+| `set_card_intent` | `group: String, label: String, mode: ComparisonMode` | `()` | Write (or overwrite) the user's own intent for one card. Stored as the card's changed-line content plus the label, so it rebinds by content on the next refresh and titles the card — winning over any agent reason on those lines. Re-annotating the same change replaces the previous note |
+| `clear_card_intent` | `group: String, mode: ComparisonMode` | `bool` | Remove the user's note from one card, restoring the reason or title it had before. Returns whether a note was found |
 
 ## Quality-gate hook
 

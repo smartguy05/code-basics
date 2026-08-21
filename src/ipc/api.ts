@@ -432,6 +432,18 @@ export const importIntentHistory = () =>
 
 export const clearIntentHistory = () => invoke<void>("clear_intent_history");
 
+/**
+ * Write (or overwrite) the user's own intent for one card. The note is stored
+ * as the card's changed-line content, so it rebinds by content on the next
+ * refresh and titles the card, overriding any agent reason there.
+ */
+export const setCardIntent = (group: string, label: string, mode: ComparisonMode) =>
+  invoke<void>("set_card_intent", { group, label, mode });
+
+/** Remove the user's note from one card. Returns whether one was found. */
+export const clearCardIntent = (group: string, mode: ComparisonMode) =>
+  invoke<boolean>("clear_card_intent", { group, mode });
+
 // ---------------------------------------------------------------------------
 // Quality-gate Stop hook (`qgate/`) — installed the same way the intent hooks
 // are: preview a plan, then apply it.

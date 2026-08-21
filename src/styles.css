@@ -393,6 +393,24 @@ textarea:focus {
   background: var(--border);
 }
 
+/* The intent header's "Evidence ▾" trigger: keep the label and its caret on one
+   line and don't let the flex row squeeze it (a long branch name otherwise wraps
+   the caret to a second row). */
+.evidence-menu {
+  flex: 0 0 auto;
+}
+.evidence-menu > button {
+  white-space: nowrap;
+}
+
+.dropdown-item.disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+.dropdown-item.disabled:hover {
+  background: transparent;
+}
+
 .dropdown-item.selected {
   background: var(--accent-dim);
 }
@@ -579,11 +597,49 @@ textarea:focus {
 .behavioral-delta.warning { color: var(--fail); }
 .behavioral-delta.neutral { color: var(--text-faint); }
 
-.behavioral-run {
+/* The assembled before/after report, shown below the console in the floating
+   BehavioralPanel. Scrolls on its own so a long report never pushes the console
+   off-screen. */
+.behavioral-report {
+  border-top: 1px solid var(--border);
+  padding: 8px 10px;
+  overflow: auto;
+  max-height: 40%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.behavioral-report-score {
+  font-weight: 600;
+}
+.behavioral-report-line {
+  color: var(--text);
+}
+.behavioral-report-section {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 4px 8px;
+}
+.behavioral-report-heading {
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.behavioral-report-card {
+  padding-left: 6px;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* The folded coverage summary (scorecard, scope check, unfulfilled claims):
+   set off from the cards below so it reads as a secondary block. */
+.intent-summary {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 2px;
 }
 
 .spinner {
@@ -1776,7 +1832,8 @@ textarea:focus {
 /* Composing a rejection. Set apart from the card's other actions because it
    writes into the file rather than only changing what is staged, and warns that
    the commit stays blocked until the note is dealt with. */
-.intent-card .reject-prompt {
+.intent-card .reject-prompt,
+.intent-card .intent-edit-prompt {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1787,7 +1844,8 @@ textarea:focus {
   background: var(--bg);
 }
 
-.intent-card .reject-prompt input {
+.intent-card .reject-prompt input,
+.intent-card .intent-edit-prompt input {
   width: 100%;
   box-sizing: border-box;
   font-size: 11px;

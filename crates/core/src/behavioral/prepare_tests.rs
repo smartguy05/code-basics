@@ -20,6 +20,7 @@ fn group(id: &str, path: &str) -> IntentGroup {
         }],
         line_count: 1,
         confidence: Confidence::High,
+        user_authored: false,
     }
 }
 

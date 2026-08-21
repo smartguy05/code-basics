@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as api from "../ipc/api";
 import { PlanPreview } from "./PlanPreview";
 import {
@@ -10,6 +10,7 @@ import {
   groupStagedState,
   importFeedback,
   intentDataHint,
+  intentEditPlan,
   rejectFeedback,
   rejectReasonError,
   scopeCreep,
@@ -105,6 +106,8 @@ const CONFIDENCE_MARK: Record<Confidence, string> = {
 const PROVIDER_LABEL: Record<ProviderId, string> = {
   claudeCode: "Claude Code",
   codex: "Codex",
+  // Not an installable agent; present so the map is total over ProviderId.
+  user: "You",
 };
 
 /** The small before/after pill on a card, coloured by `behavioralBadge`. */
@@ -184,6 +187,10 @@ export interface IntentPanelProps {
   onEnable: (provider: ProviderId, scope: InstallScope) => Promise<void>;
   /** Resolves with how many records the import found, so the panel can say so. */
   onImportHistory: () => Promise<number>;
+  /** Write (or overwrite) the user's own intent for a card. */
+  onSetIntent: (group: IntentGroup, label: string) => void;
+  /** Remove the user's note from a card. */
+  onClearIntent: (group: IntentGroup) => void;
   /**
    * The runtime before/after comparison, when one has been run. Its
    * per-card attributions badge the matching cards; its unattributed deltas
@@ -217,6 +224,8 @@ export function IntentPanel({
   onReject,
   onEnable,
   onImportHistory,
+  onSetIntent,
+  onClearIntent,
   behavioral,
   erosionFlags,
 }: IntentPanelProps) {
@@ -230,16 +239,36 @@ export function IntentPanel({
   const unfulfilledHeading = unfulfilledCaption(unfulfilled);
   const scope = scopeCreep(scorecard, groups);
 
-  // Open by default until capture is set up. The panel is the only way to turn
-  // it on, and a feature nobody can find is a feature that does not exist.
+  // Collapsed once capture is confirmed on — a working feature does not need its
+  // setup pane taking up the top of the panel — and open while it is off, so the
+  // one control that turns it on stays visible. This follows capture
+  // *transitions* rather than being a one-shot initial value, because providers
+  // load asynchronously: the first status lands after mount and flips
+  // `capturing` off its empty-list default, and the pane must react to that.
   const [setupOpen, setSetupOpen] = useState(!capturing);
+  const lastCapturing = useRef(capturing);
+  useEffect(() => {
+    if (lastCapturing.current !== capturing) {
+      setSetupOpen(!capturing);
+      lastCapturing.current = capturing;
+    }
+  }, [capturing]);
+
   const [feedback, setFeedback] = useState<string | null>(null);
+  // The scorecard, scope check and unfulfilled-claim list answer "did the agent
+  // stay on task" — worth having, but not what this view is for. They fold away
+  // behind the group count so the cards themselves are what the tab shows.
+  const [summaryOpen, setSummaryOpen] = useState(false);
   // The unexplained cards are collected under one collapsible section — they
   // sort to the top and can be a wall of noise a reviewer wants to fold away.
   const [unexplainedCollapsed, setUnexplainedCollapsed] = useState(false);
 
   const unexplained = groups.filter((g) => g.kind === "other");
   const explained = groups.filter((g) => g.kind !== "other");
+  // Whether the folded summary has anything in it — no twisty, no click target
+  // when there is nothing to reveal.
+  const hasSummaryDetails =
+    groups.length > 0 || scope != null || unfulfilledHeading != null;
 
   const renderCard = (group: IntentGroup) => (
     <GroupCard
@@ -259,6 +288,8 @@ export function IntentPanel({
       onStageFile={onStageFile}
       onRevertFile={onRevertFile}
       onReject={(group, reason, file) => void runReject(group, reason, file)}
+      onSetIntent={onSetIntent}
+      onClearIntent={onClearIntent}
     />
   );
 
@@ -339,7 +370,22 @@ export function IntentPanel({
         </div>
       )}
 
-      <div className="group-label" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <div
+        className="group-label intent-summary-head"
+        onClick={() => hasSummaryDetails && setSummaryOpen((open) => !open)}
+        title={
+          hasSummaryDetails
+            ? "Coverage: claims evidenced, a soft scope check, and any stated intents with no matching change in this diff"
+            : undefined
+        }
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          cursor: hasSummaryDetails ? "pointer" : "default",
+        }}
+      >
+        {hasSummaryDetails && <span className="twisty">{summaryOpen ? "▾" : "▸"}</span>}
         <span style={{ flex: 1 }}>
           {groups.length} group{groups.length === 1 ? "" : "s"}
         </span>
@@ -353,26 +399,55 @@ export function IntentPanel({
         )}
       </div>
 
-      {groups.length > 0 && (
-        <div
-          className="muted"
-          style={{ padding: "2px 8px 6px", fontSize: 11 }}
-          title="Claims are declared intents; evidenced means a matching change was found. Hunks and unattributed count the diff itself."
-        >
-          {scorecardLine(scorecard)}
-        </div>
-      )}
+      {summaryOpen && hasSummaryDetails && (
+        <div className="intent-summary">
+          {groups.length > 0 && (
+            <div
+              className="muted"
+              style={{ padding: "2px 8px 6px", fontSize: 11 }}
+              title="Claims are declared intents; evidenced means a matching change was found. Hunks and unattributed count the diff itself."
+            >
+              {scorecardLine(scorecard)}
+            </div>
+          )}
 
-      {scope && (
-        <div
-          className={scope.level === "high" ? "warning" : "muted"}
-          style={{ padding: "2px 8px 6px", fontSize: 11 }}
-          // Informational only: a nudge to glance at scope, never an accusation
-          // that anything is out of place. High styling is reserved for when
-          // both signals are substantial at once.
-          title="A soft scope check derived from the unexplained groups and unattributed lines above — worth a look, not a verdict."
-        >
-          {scope.message}
+          {scope && (
+            <div
+              className={scope.level === "high" ? "warning" : "muted"}
+              style={{ padding: "2px 8px 6px", fontSize: 11 }}
+              // Informational only: a nudge to glance at scope, never an
+              // accusation that anything is out of place. High styling is
+              // reserved for when both signals are substantial at once.
+              title="A soft scope check derived from the unexplained groups and unattributed lines above — worth a look, not a verdict."
+            >
+              {scope.message}
+            </div>
+          )}
+
+          {unfulfilledHeading && (
+            <div className="warning" style={{ fontSize: 12 }}>
+              <div style={{ marginBottom: 4 }}>{unfulfilledHeading}</div>
+              {unfulfilled.map((claim) => (
+                <div
+                  key={`${claim.turnId}:${claim.label}`}
+                  style={{ fontSize: 11, marginTop: 2 }}
+                  // These are informational: there is nothing in the tree to act
+                  // on, and a stated intent may simply have landed and moved past
+                  // the matcher's reach rather than being undone.
+                  title={
+                    "The agent stated this, but no changed hunk matches it here. " +
+                    "It may be committed, later overwritten, hand-reverted, or " +
+                    "reformatted past the matcher — reported, not assumed undone."
+                  }
+                >
+                  <span className="label">{claim.label}</span>
+                  {claim.paths.length > 0 && (
+                    <span className="faint"> — {claim.paths.join(", ")}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -413,31 +488,6 @@ export function IntentPanel({
           {behavioral.warnings.map((warning) => (
             <div key={warning} className="warning" style={{ fontSize: 11 }}>
               {warning}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {unfulfilledHeading && (
-        <div className="warning" style={{ fontSize: 12 }}>
-          <div style={{ marginBottom: 4 }}>{unfulfilledHeading}</div>
-          {unfulfilled.map((claim) => (
-            <div
-              key={`${claim.turnId}:${claim.label}`}
-              style={{ fontSize: 11, marginTop: 2 }}
-              // These are informational: there is nothing in the tree to act on,
-              // and a stated intent may simply have landed and moved past the
-              // matcher's reach rather than being undone.
-              title={
-                "The agent stated this, but no changed hunk matches it here. " +
-                "It may be committed, later overwritten, hand-reverted, or " +
-                "reformatted past the matcher — reported, not assumed undone."
-              }
-            >
-              <span className="label">{claim.label}</span>
-              {claim.paths.length > 0 && (
-                <span className="faint"> — {claim.paths.join(", ")}</span>
-              )}
             </div>
           ))}
         </div>
@@ -486,6 +536,8 @@ function GroupCard({
   onStageFile,
   onRevertFile,
   onReject,
+  onSetIntent,
+  onClearIntent,
 }: {
   group: IntentGroup;
   behavior: CardBehavior | null;
@@ -502,8 +554,41 @@ function GroupCard({
   onStageFile: (group: IntentGroup, file: GroupFile) => void;
   onRevertFile: (group: IntentGroup, file: GroupFile) => void;
   onReject: (group: IntentGroup, reason: string, file?: GroupFile) => void;
+  onSetIntent: (group: IntentGroup, label: string) => void;
+  onClearIntent: (group: IntentGroup) => void;
 }) {
   const hunks = group.files.reduce((total, file) => total + file.hunks.length, 0);
+
+  // Writing (or overwriting) the user's own intent on this card. `plan` decides
+  // the prefill, whether saving overwrites an agent intent (so a confirm is
+  // shown), and whether a "Clear note" action is offered.
+  const plan = intentEditPlan(group);
+  const [editing, setEditing] = useState(false);
+  const [label, setLabel] = useState("");
+  const [confirming, setConfirming] = useState(false);
+
+  const openEdit = () => {
+    setLabel(plan.initial);
+    setConfirming(false);
+    setEditing(true);
+  };
+  const saveIntent = () => {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    // First Save on a card with an agent intent asks to confirm the overwrite.
+    if (plan.confirm && !confirming) {
+      setConfirming(true);
+      return;
+    }
+    setEditing(false);
+    setConfirming(false);
+    onSetIntent(group, trimmed);
+  };
+  const intentButtonLabel = plan.hasUserNote
+    ? "Edit note…"
+    : plan.confirm
+      ? "Override intent…"
+      : "Add intent…";
 
   // Which reject is being composed: the whole group, or one file of it. `null`
   // means no prompt is open.
@@ -552,7 +637,7 @@ function GroupCard({
 
       {cardCandidates(group).length > 0 && (
         <div className="candidates" style={{ fontSize: 11, margin: "2px 0 0" }}>
-          <span className="faint">one of:</span>
+          <span className="faint">could be any of:</span>
           <ul style={{ margin: "2px 0 0", paddingLeft: 16 }}>
             {cardCandidates(group).map((reason) => (
               <li key={reason}>{reason}</li>
@@ -657,7 +742,78 @@ function GroupCard({
             >
               Reject group…
             </button>
+            <button
+              disabled={busy}
+              onClick={(e) => {
+                e.stopPropagation();
+                openEdit();
+              }}
+              title={
+                plan.confirm
+                  ? "Write your own intent for this change (overwrites the stated one)"
+                  : "Write your own intent for this change — for a manual edit or an agent that recorded none"
+              }
+            >
+              {intentButtonLabel}
+            </button>
+            {plan.hasUserNote && (
+              <button
+                disabled={busy}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClearIntent(group);
+                }}
+                title="Remove your note, restoring the reason or title it had before"
+              >
+                Clear note
+              </button>
+            )}
           </div>
+
+          {editing && (
+            <div className="intent-edit-prompt" onClick={(e) => e.stopPropagation()}>
+              <label style={{ fontSize: 11 }}>What is this change for?</label>
+              <input
+                autoFocus
+                value={label}
+                placeholder="e.g. cache the quote lookup per request"
+                onChange={(e) => {
+                  setLabel(e.target.value);
+                  setConfirming(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveIntent();
+                  if (e.key === "Escape") {
+                    setEditing(false);
+                    setConfirming(false);
+                  }
+                }}
+              />
+              {confirming && plan.confirm && (
+                <div className="warning" style={{ fontSize: 11 }}>
+                  {plan.confirm}
+                </div>
+              )}
+              <div className="faint" style={{ fontSize: 11 }}>
+                Titles this card as your stated intent. It binds to these exact
+                changed lines and wins over any agent reason.
+              </div>
+              <div className="actions">
+                <button disabled={busy || !label.trim()} onClick={saveIntent}>
+                  {confirming ? "Overwrite" : "Save"}
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={() => {
+                    setEditing(false);
+                    setConfirming(false);
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {rejecting && (
             <div className="reject-prompt" onClick={(e) => e.stopPropagation()}>
