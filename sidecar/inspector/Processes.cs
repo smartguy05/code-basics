@@ -46,6 +46,11 @@ internal static class Processes
         // the entire process table.
         var parents = ParentMap(result.Warnings);
 
+        // Likewise one command-line snapshot for the whole listing. On Windows
+        // that is a single WMI query rather than one per process, which would
+        // be far heavier on a polled path.
+        var commandLines = CommandLineMap(result.Warnings);
+
         foreach (var pid in published)
         {
             // The inspector is itself a .NET process and so appears in its own
@@ -56,7 +61,7 @@ internal static class Processes
                 continue;
             }
 
-            result.Processes.Add(Describe(pid, parents, result.Warnings));
+            result.Processes.Add(Describe(pid, parents, commandLines, result.Warnings));
         }
 
         return result;
@@ -83,7 +88,11 @@ internal static class Processes
     /// published a channel. Both were confident claims produced by a silent
     /// omission.
     /// </summary>
-    private static ProcessDto Describe(int pid, IReadOnlyDictionary<int, int>? parents, List<string> warnings)
+    private static ProcessDto Describe(
+        int pid,
+        IReadOnlyDictionary<int, int>? parents,
+        IReadOnlyDictionary<int, string>? commandLines,
+        List<string> warnings)
     {
         var row = new ProcessDto { Pid = pid, Name = UnknownName };
 
@@ -92,6 +101,14 @@ internal static class Processes
         if (parents is not null && parents.TryGetValue(pid, out var parentPid))
         {
             row.ParentPid = parentPid;
+        }
+
+        // The command line comes from the same one-shot snapshot. Absent for a
+        // process across an elevation or session boundary, where it is omitted
+        // rather than guessed — its only use is preselection.
+        if (commandLines is not null && commandLines.TryGetValue(pid, out var commandLine))
+        {
+            row.CommandLine = commandLine;
         }
 
         Process handle;
@@ -167,6 +184,33 @@ internal static class Processes
             warnings.Add(
                 "the parent of each process could not be read, so processes started by " +
                 $"code-basics cannot be told apart from the rest: {e.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Every pid's command line, or null when the platform will not say. Null is
+    /// propagated out as an omitted field: the command line only lets a
+    /// `dotnet run` child be preselected over the SDK's own build tools, so its
+    /// absence costs preselection and never correctness. A total failure is
+    /// warned about once, here; a single unreadable process is simply absent
+    /// from the map.
+    /// </summary>
+    private static IReadOnlyDictionary<int, string>? CommandLineMap(List<string> warnings)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                return WindowsCommandLines();
+            }
+            return ProcFsCommandLines();
+        }
+        catch (Exception e)
+        {
+            warnings.Add(
+                "the command line of each process could not be read, so a `dotnet run` child " +
+                $"cannot be preselected over the .NET SDK's own build tools: {e.Message}");
             return null;
         }
     }
@@ -256,6 +300,39 @@ internal static class Processes
         }
     }
 
+    /// <summary>
+    /// Every process's command line, in one WMI query.
+    ///
+    /// There is no command line in the ToolHelp32 snapshot and no managed API
+    /// for another process's, so this is a single
+    /// <c>SELECT ProcessId, CommandLine FROM Win32_Process</c> for the whole
+    /// listing rather than a per-process call. <c>Win32_Process.CommandLine</c>
+    /// is null across an elevation or session boundary; such rows are skipped,
+    /// which leaves the pid without a command line rather than failing the map.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static IReadOnlyDictionary<int, string>? WindowsCommandLines()
+    {
+        var map = new Dictionary<int, string>();
+        using var searcher = new System.Management.ManagementObjectSearcher(
+            "SELECT ProcessId, CommandLine FROM Win32_Process");
+        using var results = searcher.Get();
+        foreach (var obj in results)
+        {
+            using var entry = obj;
+            if (entry["ProcessId"] is not { } pidValue
+                || entry["CommandLine"] is not string commandLine
+                || commandLine.Length == 0)
+            {
+                continue;
+            }
+
+            map[Convert.ToInt32(pidValue, CultureInfo.InvariantCulture)] = commandLine;
+        }
+
+        return map;
+    }
+
     // -- Linux and anything else with /proc ---------------------------------
 
     /// <summary>
@@ -309,5 +386,50 @@ internal static class Processes
         }
 
         return parents;
+    }
+
+    /// <summary>
+    /// Every process's command line, from <c>/proc/&lt;pid&gt;/cmdline</c>. The
+    /// arguments are NUL-separated there; they are joined with spaces so the
+    /// Rust side sees the same shape Windows produces. A process that exited
+    /// mid-walk, or is not ours to read, is skipped rather than failing the map.
+    /// </summary>
+    private static IReadOnlyDictionary<int, string>? ProcFsCommandLines()
+    {
+        if (!Directory.Exists("/proc"))
+        {
+            return null;
+        }
+
+        var map = new Dictionary<int, string>();
+        foreach (var dir in Directory.EnumerateDirectories("/proc"))
+        {
+            var leaf = System.IO.Path.GetFileName(dir);
+            if (!int.TryParse(leaf, NumberStyles.None, CultureInfo.InvariantCulture, out var pid))
+            {
+                continue;
+            }
+
+            string raw;
+            try
+            {
+                raw = File.ReadAllText(System.IO.Path.Combine(dir, "cmdline"));
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            // A kernel thread has an empty cmdline; nothing to preselect on.
+            var commandLine = raw.Replace('\0', ' ').Trim();
+            if (commandLine.Length == 0)
+            {
+                continue;
+            }
+
+            map[pid] = commandLine;
+        }
+
+        return map;
     }
 }

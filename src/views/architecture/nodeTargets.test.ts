@@ -9,6 +9,7 @@ import {
 } from "./nodeTargets";
 import type { IndexEntry } from "./nodeTargets";
 import type { ArchGraph, ArchNode } from "../../ipc/types";
+import mermaidIds from "../../../crates/core/fixtures/architecture/mermaid_ids.json";
 
 function node(partial: Partial<ArchNode> & { id: string }): ArchNode {
   return {
@@ -386,5 +387,21 @@ describe("targetsForAuthored", () => {
 
   it("returns an empty map for an empty index", () => {
     expect(targetsForAuthored('flowchart TD\n  A["Api"]', []).size).toBe(0);
+  });
+});
+
+describe("mermaidIdOf cross-language fixture", () => {
+  // The single canonical id list lives in the cb-core guard
+  // `mermaid_id_matches_committed_fixture` (mermaid_tests.rs): it computes
+  // `mermaid_id` for each id and pins the pairs into the committed JSON imported
+  // here. This side derives ids from the fixture only — it never re-declares
+  // them — so the Rust `mermaid_id` and TS `mermaidIdOf` are held to one table
+  // and any escaping change in either language breaks a test. Regenerate with
+  // `UPDATE_FIXTURES=1 cargo test -p cb-core mermaid_id_matches_committed_fixture`.
+  it("matches mermaid_id for every id in the committed cb-core fixture", () => {
+    expect(mermaidIds.length).toBeGreaterThan(0);
+    for (const { id, mermaidId } of mermaidIds) {
+      expect(mermaidIdOf(id)).toBe(mermaidId);
+    }
   });
 });

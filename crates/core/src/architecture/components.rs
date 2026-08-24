@@ -50,32 +50,30 @@
 //! Everything else that was seen is a warning. Nothing here reads a
 //! [`framework::Detail`] as a reason to draw anything.
 //!
-//! # Why there is no project → project arrow, and where that fact went instead
+//! # The service → service arrow, and the one node rule it obeys
 //!
-//! This is the deliberate omission most likely to be read as a gap, so it is
-//! argued rather than left to be discovered.
+//! There is a project → project arrow — [`EdgeKind::ServiceCall`] — and it is
+//! worth stating exactly what earns it, because it is the one edge here that
+//! starts life as a line of source and it must not be mistaken for a licence to
+//! draw arrows from source in general.
 //!
-//! [`super::signals::dotnet`] does match an `AddHttpClient` registration's
-//! literal `BaseAddress` against another project's `launchSettings.json`
-//! `applicationUrl`, and when exactly one project answers on that `host:port`
-//! it emits a signal saying so. That signal is **MEDIUM**, because its evidence
-//! is a line in a `.cs` file, and [`framework::admit`] will not let a MEDIUM
-//! signal bring anything into existence. Drawing the arrow anyway would mean
-//! this file reaching past the gate every other claim in the phase goes
-//! through — and it would have to do it by *parsing the prose* in
-//! [`framework::Detail::text`], since `admit` deliberately returns no
-//! edge-shaped MEDIUM result at all. Both halves of that are exactly the
-//! discipline [`super::signals`] exists to enforce.
+//! [`super::signals::dotnet`] matches an `AddHttpClient` registration's literal
+//! `BaseAddress` against another project's `launchSettings.json`
+//! `applicationUrl`, and when exactly one project answers on that `host:port` it
+//! emits a [`framework::Signal::call`]. That signal is **HIGH**, and the reason
+//! it can be is precise: it does not cite the `.cs` line it read the address
+//! from. It cites the *callee's* `launchSettings.json`, a declaration file, so
+//! the identity of the thing being called rests on something the author wrote
+//! down. [`framework::admit`] routes it to [`framework::Admitted::service_calls`]
+//! rather than into the component loop, so it can never build a box.
 //!
-//! The fact is not thrown away. Every MEDIUM detail whose project is **not**
-//! one of the projects that earned the component becomes a warning naming the
-//! caller, the callee and the file it was read from — see
-//! [`cross_project_notes`]. So a reader is told "`Orders.Web` calls
-//! `Orders.Api`, read from `Program.cs:14`, and it was not drawn as an arrow
-//! because a supporting signal may not create one", which is a weaker claim
-//! than an arrow and is the claim the evidence supports. If that arrow is
-//! wanted on the diagram, the fix is in the producer — cite the
-//! `launchSettings.json` line, which is a declaration file — and not here.
+//! Drawing it is still gated on the one rule that governs every edge in this
+//! file: **never invent a node.** The `DataAccess` pass draws an arrow only when
+//! [`Projects::resolve`] finds the declaring project; the service-call pass goes
+//! one step further and draws its arrow only when *both* endpoints already exist
+//! as service nodes an earlier pass created. A call whose callee earned no
+//! service box is not drawn — it becomes a warning naming the caller, the callee
+//! and the file the call was read from. The evidence never quotes the address.
 //!
 //! Details from a project's *own* signals — its route list, its launch profile
 //! urls, the connection-string keys it declares — are not reported at all. They
@@ -145,6 +143,11 @@ pub fn component_graph(workspace: &Workspace, index: &SymbolIndex) -> ArchGraph 
     // project that is both a service and a data-store consumer be filed as an
     // ordinary project. Ordering the two passes is the whole mechanism; there
     // is no second place where a node's kind is decided.
+    //
+    // The service node ids are collected as they are drawn, because the
+    // service-call pass below may only connect boxes this pass created — see
+    // there.
+    let mut service_ids: BTreeSet<&str> = BTreeSet::new();
     for component in &admitted.components {
         if component.kind != ComponentKind::HttpService {
             continue;
@@ -152,6 +155,7 @@ pub fn component_graph(workspace: &Workspace, index: &SymbolIndex) -> ArchGraph 
         for usage in &component.usages {
             if let Some(project) = projects.resolve(&usage.project_id, &mut builder) {
                 builder.add_node(project_node(workspace, project, ArchKind::Service));
+                service_ids.insert(project.id.as_str());
             }
         }
     }
@@ -166,6 +170,42 @@ pub fn component_graph(workspace: &Workspace, index: &SymbolIndex) -> ArchGraph 
                 builder.add_node(project_node(workspace, project, ArchKind::Project));
                 builder.add_edge(&project.id, &component.id, EdgeKind::DataAccess);
             }
+        }
+    }
+
+    // Service → service calls, drawn last and only between boxes that already
+    // exist. This is where the "never invent a node" guard lives — the same
+    // place, and for the same reason, the `DataAccess` pass above gates on
+    // `Projects::resolve`: this is the only layer that knows which nodes were
+    // drawn. Both endpoints must resolve to a single project *and* have earned a
+    // service node; anything else abstains with a warning rather than forging a
+    // box to hang the arrow on.
+    for call in admitted.service_calls() {
+        // Resolved one at a time: each `resolve` borrows the builder to warn on
+        // an ambiguous id, so both cannot be in flight at once. A missing or
+        // ambiguous endpoint is already reported by `resolve` itself.
+        let Some(caller) = projects.resolve(&call.from_project, &mut builder) else {
+            continue;
+        };
+        let Some(callee) = projects.resolve(&call.to_project, &mut builder) else {
+            continue;
+        };
+        if service_ids.contains(caller.id.as_str()) && service_ids.contains(callee.id.as_str()) {
+            builder.add_edge(&caller.id, &callee.id, EdgeKind::ServiceCall);
+        } else {
+            builder.warn(format!(
+                "{} calls {} over HTTP (read from {}), but it was not drawn as an arrow because \
+                 {} is not a service box in this map — a call is only drawn between two services \
+                 the map already contains",
+                projects.display_name(&call.from_project),
+                projects.display_name(&call.to_project),
+                display_path(&call.evidence.path),
+                projects.display_name(if service_ids.contains(callee.id.as_str()) {
+                    &call.from_project
+                } else {
+                    &call.to_project
+                }),
+            ));
         }
     }
 
@@ -322,10 +362,12 @@ fn store_node(component: &Component) -> ArchNode {
 ///
 /// The test for "another project" is set membership, not string matching: a
 /// detail belongs to the component's own projects when its project id is one of
-/// the ids that earned the box through a HIGH signal. `AddHttpClient` and the
-/// Aspire app host are the two producers that fail it today, and both fail it
-/// for the same real reason — they are one project saying something about a
-/// different one.
+/// the ids that earned the box through a HIGH signal. The Aspire app host is the
+/// producer that fails it today — it is one project saying something about a
+/// different one. (`AddHttpClient` used to fail it too, as a MEDIUM note; it now
+/// emits a HIGH [`framework::Signal::call`] drawn as a real
+/// [`EdgeKind::ServiceCall`] arrow, so a matched call is an edge and never a
+/// note.)
 ///
 /// # These are the only details reported
 ///

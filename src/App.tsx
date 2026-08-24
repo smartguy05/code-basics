@@ -2,17 +2,23 @@ import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ArchitectureView } from "./views/ArchitectureView";
 import { BranchMenu } from "./components/BranchMenu";
+import { BehavioralPanel } from "./components/BehavioralPanel";
 import { ChangesView } from "./views/ChangesView";
+import { MenuBar } from "./components/MenuBar";
 import { HistoryView } from "./views/HistoryView";
 import { InspectView } from "./views/InspectView";
 import { RunView } from "./views/RunView";
+import { ReviewPanel } from "./components/ReviewPanel";
 import { SearchEverywhere } from "./components/SearchEverywhere";
+import { SetupPrompt } from "./components/SetupPrompt";
+import { shouldPrompt, setDismissed } from "./components/setupPromptLogic";
 import { TestsView } from "./views/TestsView";
 import * as api from "./ipc/api";
+import type { AgentMode } from "./ipc/api";
 import { applyEditorFontSize, loadEditorFontSize } from "./editorFontSize";
 import { DEFAULT_EDITOR_FONT_SIZE, recogniseFontSizeShortcut, stepFontSize } from "./editorFontSizeLogic";
 import { loadRecents, rememberRecent } from "./recentsLogic";
-import type { InspectTarget, RootSpec, Workspace } from "./ipc/types";
+import type { BehavioralReport, InspectTarget, RootSpec, Workspace } from "./ipc/types";
 
 type Tab = "tests" | "run" | "changes" | "history" | "architecture" | "inspect";
 
@@ -92,12 +98,64 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [recents, setRecents] = useState<string[]>(() => loadRecents(localStorage));
   const [loading, setLoading] = useState(true);
+  // First-open prompt: shown when a workspace opens without the agent hooks
+  // installed (and not dismissed for it). Decided by an effect on the root.
+  const [showSetup, setShowSetup] = useState(false);
   /**
    * A contextual Inspect click, held only until the Objects tab has consumed
    * it. It lives here because the views that raise one and the view that
    * serves it are siblings.
    */
   const [inspectRequest, setInspectRequest] = useState<InspectRequest | null>(null);
+  // The agent panel (adversarial Review + Enhancements "Run Agent") is hosted
+  // here, not in a tab, so a running agent survives switching tabs. One slot,
+  // one agent at a time; a new request replaces the previous panel.
+  const [agentPanel, setAgentPanel] = useState<{
+    initialPromptId?: string;
+    initialMode: AgentMode;
+    title: string;
+    /** Evidence prepended to the prompt (the verify-claims before/after report). */
+    initialContext?: string;
+    /** Bumped per open so a fresh context remounts the panel (see the key below). */
+    token: number;
+  } | null>(null);
+
+  // The before/after run and its report live in a floating panel hosted here
+  // (like the agent panel), so the run survives a tab switch and its full
+  // report is shown in a window rather than condensed into the Changes sidebar.
+  // One slot, keyed by token so a fresh open restarts the run.
+  const [behavioralPanel, setBehavioralPanel] = useState<{
+    configId: string;
+    /** Explicit `.http` files to replay, or null to let the backend discover. */
+    httpFiles: string[] | null;
+    verify: boolean;
+    token: number;
+  } | null>(null);
+  // The finished report, passed back to the Changes tab so each intent card can
+  // show the deltas attributed to it.
+  const [behavioralReport, setBehavioralReport] = useState<BehavioralReport | null>(null);
+
+  /** Open the before/after window for a config; `verify` chains it to the agent. */
+  const openBehavioral = (configId: string, httpFiles: string[] | null, verify: boolean) =>
+    setBehavioralPanel({ configId, httpFiles, verify, token: nextToken() });
+
+  /** Open the agent panel as an adversarial review (Changes tab + menu bar). */
+  const openReview = () =>
+    setAgentPanel({ initialMode: "read-only", title: "Adversarial review", token: nextToken() });
+
+  /**
+   * Open the agent panel primed to verify the diff's claims against the
+   * before/after evidence the Changes tab just gathered. The evidence text is
+   * built in `claimVerifyLogic`; here it only travels into the panel as context.
+   */
+  const openVerifyClaims = (context: string) =>
+    setAgentPanel({
+      initialPromptId: "verify-claims",
+      initialMode: "read-only",
+      title: "Verify claims",
+      initialContext: context,
+      token: nextToken(),
+    });
 
   /** Send the user to the Objects tab with something already chosen to read. */
   function requestInspect(request: InspectRequest) {
@@ -115,6 +173,12 @@ export function App() {
   const [openRequest, setOpenRequest] = useState<OpenFileRequest | null>(null);
   const [selectRequest, setSelectRequest] = useState<SelectConfigRequest | null>(null);
   const requestToken = useRef(0);
+
+  /** A monotonic token, shared by the open/select requests and the agent panel. */
+  function nextToken() {
+    requestToken.current += 1;
+    return requestToken.current;
+  }
 
   /** Send the user to the Run tab with a file open, and a line revealed. */
   function requestOpenFile(path: string, name: string, line?: number) {
@@ -172,6 +236,29 @@ export function App() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  // On opening a workspace, offer to set up the agent hooks if they are not
+  // installed and the prompt has not been dismissed for this workspace.
+  useEffect(() => {
+    const root = workspace?.root;
+    if (!root) {
+      setShowSetup(false);
+      return;
+    }
+    let live = true;
+    // The combined first-open setup installs the gate as Claude Code's Stop hook,
+    // so the prompt decision reads that provider's gate status.
+    void Promise.all([api.intentCaptureStatus(), api.qualityGateStatus("claudeCode")])
+      .then(([providers, gate]) => {
+        if (live) setShowSetup(shouldPrompt(providers, gate, localStorage, root));
+      })
+      .catch(() => {
+        /* status unavailable — do not prompt */
+      });
+    return () => {
+      live = false;
+    };
+  }, [workspace?.root]);
 
   async function openPath(path: string) {
     try {
@@ -253,6 +340,22 @@ export function App() {
   return (
     <div className="app">
       <div className="titlebar">
+        {/* File (Open / Rescan / Exit) and Enhancements (Instructions / Prompts).
+            The standalone Open…/Rescan buttons below remain as shortcuts. */}
+        <MenuBar
+          onOpen={pickFolder}
+          onRescan={rescan}
+          onRunAgent={(promptId) =>
+            setAgentPanel({
+              initialPromptId: promptId,
+              initialMode: "read-only",
+              title: "Run agent",
+              token: nextToken(),
+            })
+          }
+          onOpenReview={openReview}
+        />
+
         <span className="workspace-name">{workspace.name}</span>
         <span className="faint mono" style={{ fontSize: 11 }}>
           {workspace.root}
@@ -295,7 +398,9 @@ export function App() {
           processes and their consoles, which must survive a tab switch.
           Changes, History and Architecture re-mount so they re-read what is on
           disk on every visit — git state for the first two, and for
-          Architecture the manifests every diagram is derived from. */}
+          Architecture the manifests every diagram is derived from. The
+          before/after run is not tied to this: it lives in a floating panel
+          hosted below, so it survives even while Changes is unmounted. */}
       <div className="body" hidden={tab !== "run"}>
         {/* `onNavigate` is an editor jump — Go to definition, a usage row — and
             is the third caller of this one request path, after the palette and
@@ -304,6 +409,7 @@ export function App() {
             `requestToken` makes a jump *inside the file already showing* fire at
             all. See `OpenFileRequest` above. */}
         <RunView
+          key={workspace.root}
           workspace={workspace}
           onWorkspaceChange={setWorkspace}
           onInspect={requestInspect}
@@ -312,6 +418,7 @@ export function App() {
           pendingSelect={selectRequest}
           onSelectConsumed={() => setSelectRequest(null)}
           onNavigate={requestOpenFile}
+          active={tab === "run"}
         />
       </div>
       <div className="body" hidden={tab !== "tests"}>
@@ -327,7 +434,13 @@ export function App() {
       </div>
       {tab === "changes" && (
         <div className="body">
-          <ChangesView key={workspace.root} />
+          <ChangesView
+            key={workspace.root}
+            behavioral={behavioralReport}
+            onOpenReview={openReview}
+            onRunBehavioral={(configId, httpFiles) => openBehavioral(configId, httpFiles, false)}
+            onVerifyClaims={(configId, httpFiles) => openBehavioral(configId, httpFiles, true)}
+          />
         </div>
       )}
       {tab === "history" && (
@@ -359,6 +472,51 @@ export function App() {
         onOpenFile={requestOpenFile}
         onRunAction={requestSelectConfig}
       />
+
+      {showSetup && (
+        <SetupPrompt
+          onDismiss={() => setShowSetup(false)}
+          onDontAskAgain={() => {
+            setDismissed(localStorage, workspace.root);
+            setShowSetup(false);
+          }}
+          onInstalled={() => setShowSetup(false)}
+        />
+      )}
+
+      {/* Hosted here rather than in a tab: the agent runs as a background
+          process and its panel minimizes to a pill, so it must outlive a tab
+          switch. Mounted only while open (or minimized), and it cancels its
+          process on close. Keyed so a new request remounts a fresh panel. */}
+      {agentPanel && (
+        <ReviewPanel
+          // The token is part of the key so a fresh open — a new before/after
+          // context in particular — remounts the panel rather than reusing one
+          // that seeded its context from a stale value.
+          key={`${agentPanel.title}:${agentPanel.initialPromptId ?? ""}:${agentPanel.token}`}
+          onClose={() => setAgentPanel(null)}
+          initialPromptId={agentPanel.initialPromptId}
+          initialMode={agentPanel.initialMode}
+          initialContext={agentPanel.initialContext}
+          title={agentPanel.title}
+        />
+      )}
+
+      {/* The before/after run window. Hosted here (not in the Changes tab) so
+          the run outlives a tab switch and its report shows in full. Keyed by
+          token so re-running remounts a fresh run. When opened to verify, it
+          hands its evidence to the agent panel above on completion. */}
+      {behavioralPanel && (
+        <BehavioralPanel
+          key={behavioralPanel.token}
+          configId={behavioralPanel.configId}
+          httpFiles={behavioralPanel.httpFiles}
+          verify={behavioralPanel.verify}
+          onReport={setBehavioralReport}
+          onVerify={openVerifyClaims}
+          onClose={() => setBehavioralPanel(null)}
+        />
+      )}
     </div>
   );
 }

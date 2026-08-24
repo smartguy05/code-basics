@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { editorColors, languageFor } from "../../components/language";
 import { lineToPos } from "../../components/searchLogic";
 import { diagramBody, inDocumentFrame } from "./frontMatterLogic";
@@ -184,8 +185,11 @@ export function DiagramEditor({
     const extensions: Extension[] = [
       lineNumbers(),
       history(),
+      search({ top: true }),
+      highlightSelectionMatches(),
       keymap.of([
         { key: "Mod-s", run: save },
+        ...searchKeymap,
         indentWithTab,
         ...defaultKeymap,
         ...historyKeymap,

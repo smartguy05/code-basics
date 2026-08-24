@@ -393,6 +393,24 @@ textarea:focus {
   background: var(--border);
 }
 
+/* The intent header's "Evidence ▾" trigger: keep the label and its caret on one
+   line and don't let the flex row squeeze it (a long branch name otherwise wraps
+   the caret to a second row). */
+.evidence-menu {
+  flex: 0 0 auto;
+}
+.evidence-menu > button {
+  white-space: nowrap;
+}
+
+.dropdown-item.disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+.dropdown-item.disabled:hover {
+  background: transparent;
+}
+
 .dropdown-item.selected {
   background: var(--accent-dim);
 }
@@ -443,6 +461,75 @@ textarea:focus {
   color: var(--text);
 }
 
+/* ---- Menu bar (File / Enhancements) ---------------------------------- */
+
+/* Kept above the dropdown backdrop (z-index 40) so its buttons stay
+   interactive while a menu is open — that is what lets hovering one
+   top-level menu switch to it, classic menu-bar behaviour. */
+.menubar {
+  position: relative;
+  z-index: 42;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.menu-button {
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.menu-button:hover,
+.menu-button.open {
+  background: var(--border);
+}
+
+/* The Enhancements menu holds fly-out submenus, so it must not clip them —
+   its own list is short enough not to need scrolling. */
+.dropdown-menu.has-submenus {
+  overflow: visible;
+}
+
+.dropdown-submenu {
+  position: relative;
+}
+
+/* A submenu's caret, pushed to the right edge of its parent row. */
+.dropdown-submenu .submenu-caret {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--text-faint);
+}
+
+/* The fly-out itself, opening to the right of its parent row. */
+.dropdown-submenu > .dropdown-menu {
+  top: -5px;
+  left: 100%;
+  margin-left: 2px;
+}
+
+/* Inline confirmation before an instruction is written to shared files. */
+.dropdown-item.confirm-row {
+  gap: 6px;
+  cursor: default;
+  white-space: normal;
+}
+
+.confirm-row .confirm-yes,
+.confirm-row .confirm-no {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.confirm-row .confirm-yes {
+  background: var(--accent-dim);
+}
+
 /* Favourite toggle inside a .row (a span, since rows are buttons). */
 .star {
   flex: 0 0 auto;
@@ -479,6 +566,81 @@ textarea:focus {
 .dot.failed { background: var(--fail); }
 .dot.skipped { background: var(--skip); }
 .dot.other { background: var(--text-faint); }
+
+/* Behavioral before/after evidence, shown in the Intent view. Tone maps to the
+   same pass/fail palette the test tree uses: a regression reads red, a fix
+   green, everything else stays muted (the abstain default). */
+.behavioral-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.behavioral-badge.positive { border-color: var(--pass); color: var(--pass); }
+.behavioral-badge.warning { border-color: var(--fail); color: var(--fail); }
+.behavioral-badge.neutral { color: var(--text-faint); }
+
+.behavioral-overall {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+.behavioral-delta {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.behavioral-delta.positive { color: var(--pass); }
+.behavioral-delta.warning { color: var(--fail); }
+.behavioral-delta.neutral { color: var(--text-faint); }
+
+/* The assembled before/after report, shown below the console in the floating
+   BehavioralPanel. Scrolls on its own so a long report never pushes the console
+   off-screen. */
+.behavioral-report {
+  border-top: 1px solid var(--border);
+  padding: 8px 10px;
+  overflow: auto;
+  max-height: 40%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.behavioral-report-score {
+  font-weight: 600;
+}
+.behavioral-report-line {
+  color: var(--text);
+}
+.behavioral-report-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.behavioral-report-heading {
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.behavioral-report-card {
+  padding-left: 6px;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* The folded coverage summary (scorecard, scope check, unfulfilled claims):
+   set off from the cards below so it reads as a secondary block. */
+.intent-summary {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 2px;
+}
 
 .spinner {
   width: 10px;
@@ -715,6 +877,28 @@ textarea:focus {
   border-color: var(--border);
 }
 
+/* The pinned file tabs get their own band above the normal strip. */
+.console-tabs.pinned-tabs {
+  background: var(--bg-raised);
+}
+
+/* The pin control: hidden until the tab is hovered, but always shown once the
+   file is pinned — the same "faint metadata" weight as the × close control. */
+.console-tabs .row-action.pin {
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.console-tabs button:hover .row-action.pin {
+  opacity: 0.55;
+}
+
+.console-tabs .row-action.pin.pinned,
+.console-tabs .row-action.pin:hover {
+  opacity: 1;
+}
+
 .tab-status {
   font-size: 11px;
   flex: 0 0 auto;
@@ -727,6 +911,133 @@ textarea:focus {
 .console-host {
   position: relative;
   height: 100%;
+}
+
+/* Adversarial-review panel ----------------------------------------------- */
+
+/* A floating window, deliberately NOT a modal: no backdrop, so the rest of the
+   app stays usable while a review runs in the background. */
+.review-panel {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 60vw);
+  height: min(560px, 70vh);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  /* `resize` needs `overflow` to be non-visible (already hidden above). Min/max
+     keep the panel usable and unable to be resized off-screen. The dragged size
+     stays CSS-native and is not persisted — persisting it (via a ResizeObserver)
+     is a deferred nicety; only the position is remembered. */
+  overflow: hidden;
+  resize: both;
+  min-width: 360px;
+  min-height: 280px;
+  max-width: 96vw;
+  max-height: 92vh;
+}
+
+/* `display: flex` above beats the UA `[hidden] { display: none }`, so hiding the
+   panel to minimize it needs an explicit rule. It stays mounted (not unmounted)
+   so its console keeps receiving the running review's output. */
+.review-panel[hidden] {
+  display: none;
+}
+
+/* The minimized restore pill. */
+.review-pill {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+
+/* A small indeterminate spinner shown while a review is running. */
+.review-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent, #6ea8fe);
+  border-radius: 50%;
+  animation: review-spin 0.8s linear infinite;
+}
+
+@keyframes review-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Flash for attention: a denied/blocked action, or the run ending while
+   minimized. Draws the eye to the pill (or the header if the panel is open). */
+.review-pill.attention,
+.review-header.attention {
+  animation: review-flash 0.9s ease-in-out infinite;
+}
+
+@keyframes review-flash {
+  0%,
+  100% {
+    background: var(--bg-raised);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  }
+  50% {
+    background: #7a4b00;
+    box-shadow: 0 0 0 2px #ffb020, 0 6px 20px rgba(0, 0, 0, 0.4);
+  }
+}
+
+.review-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-strong);
+  /* The header is the drag handle; its buttons stay a normal pointer so they
+     still read as clickable. */
+  cursor: move;
+}
+
+.review-header button {
+  cursor: pointer;
+}
+
+.review-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.review-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* xterm fights a scrollbar, so the console pane is strictly overflow:hidden. */
+.review-console {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--border-strong);
 }
 
 .console-search {
@@ -802,6 +1113,20 @@ textarea:focus {
   grid-column: 1;
   min-height: 0;
   overflow: auto;
+}
+
+/* The drag handle between the two side-by-side panes. It is inserted into
+   `@codemirror/merge`'s own flex row (`.cm-mergeViewEditors`), so `flex: 0 0`
+   keeps it a fixed-width column that the panes size around. */
+.diff-host .cm-mergeViewEditors .diff-pane-resizer {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: var(--border);
+  z-index: 5;
+}
+
+.diff-host .cm-mergeViewEditors .diff-pane-resizer:hover {
+  background: var(--accent-dim);
 }
 
 /* The panes' own horizontal scrollbars sit at the bottom of the *document*,
@@ -933,6 +1258,81 @@ textarea:focus {
 
 .cm-editor .cm-nonmatchingBracket {
   background: rgba(224, 85, 97, 0.3);
+}
+
+/* @codemirror/search find panel (Ctrl+F in the file, diff and diagram editors).
+   The library's default panel is light-themed; bring it to the app palette so
+   it reads like the console's own find bar. */
+.cm-editor .cm-panels {
+  background: var(--bg-raised);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.cm-editor .cm-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-family: var(--font);
+  font-size: 12px;
+}
+.cm-editor .cm-search .cm-textfield,
+.cm-editor .cm-search input {
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font: inherit;
+}
+.cm-editor .cm-search input:focus {
+  outline: 1px solid var(--accent);
+}
+.cm-editor .cm-search .cm-button,
+.cm-editor .cm-search button {
+  background: var(--bg-inset);
+  background-image: none;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.cm-editor .cm-search .cm-button:hover,
+.cm-editor .cm-search button:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+.cm-editor .cm-search label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-dim);
+}
+.cm-editor .cm-panel.cm-search [name="close"] {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+}
+.cm-editor .cm-panel.cm-search [name="close"]:hover {
+  color: var(--text);
+}
+
+/* The matches themselves: the current one in accent, the rest in amber (the
+   same amber the console search and .warning use). */
+.cm-editor .cm-searchMatch {
+  background: rgba(201, 162, 39, 0.28);
+  outline: 1px solid rgba(201, 162, 39, 0.5);
+}
+.cm-editor .cm-searchMatch-selected {
+  background: rgba(90, 120, 220, 0.45);
+  outline: 1px solid var(--accent);
+}
+.cm-editor .cm-selectionMatch {
+  background: rgba(120, 140, 200, 0.18);
 }
 
 /* Selected-for-revert lines, driven by a CodeMirror decoration.
@@ -1393,6 +1793,32 @@ textarea:focus {
   text-align: left;
 }
 
+/* Staged/partial pill on a card headline or file row: the Intent view's stand-in
+   for the Files view's Staged section. */
+.stage-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.stage-tag.staged {
+  color: var(--pass);
+  border-color: var(--pass);
+  background: color-mix(in srgb, var(--pass) 14%, transparent);
+}
+
+.stage-tag.partial {
+  color: var(--skip);
+  border-color: var(--skip);
+  background: color-mix(in srgb, var(--skip) 14%, transparent);
+}
+
 .intent-card .group-file .file-actions {
   display: none;
   gap: 4px;
@@ -1406,7 +1832,8 @@ textarea:focus {
 /* Composing a rejection. Set apart from the card's other actions because it
    writes into the file rather than only changing what is staged, and warns that
    the commit stays blocked until the note is dealt with. */
-.intent-card .reject-prompt {
+.intent-card .reject-prompt,
+.intent-card .intent-edit-prompt {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1417,7 +1844,8 @@ textarea:focus {
   background: var(--bg);
 }
 
-.intent-card .reject-prompt input {
+.intent-card .reject-prompt input,
+.intent-card .intent-edit-prompt input {
   width: 100%;
   box-sizing: border-box;
   font-size: 11px;
@@ -2110,4 +2538,15 @@ textarea:focus {
   color: var(--text-faint);
   font-size: 11px;
   z-index: 2;
+}
+
+/* The durable-intent hover tooltip in the History diff. */
+.cm-tooltip .cm-why-tooltip {
+  max-width: 480px;
+  padding: 6px 9px;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg-raised);
 }

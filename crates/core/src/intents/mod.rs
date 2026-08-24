@@ -51,11 +51,14 @@ pub mod hook;
 pub mod patchfmt;
 pub mod providers;
 pub mod reject;
+pub mod user;
+pub mod whyhook;
 
 /// Directory under `.code-basics/` holding recorded intent.
 pub const INTENTS_DIR: &str = "intents";
 pub const EDITS_FILE: &str = "edits.jsonl";
 pub const LABELS_FILE: &str = "labels.jsonl";
+pub const PROMPTS_FILE: &str = "prompts.jsonl";
 
 /// Which agent recorded an edit.
 ///
@@ -67,6 +70,10 @@ pub const LABELS_FILE: &str = "labels.jsonl";
 pub enum ProviderId {
     ClaudeCode,
     Codex,
+    /// The user, writing their own intent on a card — not an agent. Used for
+    /// annotations the user adds when no hook recorded a reason (a manual edit,
+    /// or an agent that did not follow the hooks). See [`user`].
+    User,
 }
 
 impl ProviderId {
@@ -74,6 +81,7 @@ impl ProviderId {
         match self {
             ProviderId::ClaudeCode => "claudeCode",
             ProviderId::Codex => "codex",
+            ProviderId::User => "user",
         }
     }
 }
@@ -169,6 +177,20 @@ pub struct IntentLabel {
     pub source: LabelSource,
 }
 
+/// The user's prompt for one turn.
+///
+/// The turn's edits carry the agent's short label; this carries the human's
+/// original request — the reasoning and constraints the label drops. Joined to
+/// edits and labels on the same `turn_id`, so the durable-why note can show why
+/// a line exists in the words that asked for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct IntentPrompt {
+    pub provider: ProviderId,
+    pub turn_id: String,
+    pub prompt: String,
+}
+
 /// Everything recorded for a workspace, already filtered and joined.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -193,7 +215,7 @@ impl Intents {
             if label.turn_id != record.turn_id {
                 continue;
             }
-            if label.paths.iter().any(|p| normalise_path(p) == record.path) {
+            if label.paths.iter().any(|p| scope_covers(p, &record.path)) {
                 return Some(label);
             }
             if label.paths.is_empty() && fallback.is_none() {
@@ -202,6 +224,70 @@ impl Intents {
         }
 
         fallback
+    }
+
+    /// The label to show for a record, allowing a declared, path-scoped label
+    /// from a *different* turn to bind across turns.
+    ///
+    /// This is what rescues the workflow/subagent case: a subagent records the
+    /// geometry under its own turn with no reason, and the reason is declared
+    /// under a later turn. Same-turn [`label_for`] keeps **top priority**, so
+    /// nothing that already had a label changes. Only an *orphan* record — one
+    /// no same-turn label covers — looks across turns, and only for a
+    /// **Declared** label whose non-empty `paths` cover this file.
+    ///
+    /// It abstains on ambiguity: a wrong label is worse than no label, so two
+    /// or more declared labels covering the file bind nothing. A turn-wide
+    /// (empty-`paths`) label never binds here either — a bare reason bridges
+    /// only through the diff-level single-orphan pass in [`crate::git::coverage`].
+    pub fn effective_scoped_label(
+        &self,
+        record: &IntentRecord,
+        path: &str,
+    ) -> Option<&IntentLabel> {
+        // Same-turn resolution wins outright, preserving all existing behaviour.
+        if let Some(label) = self.label_for(record) {
+            return Some(label);
+        }
+
+        // Orphan record: the only cross-turn signal strong enough to *bind a
+        // single title to* is a declared label the author explicitly scoped to
+        // this file, and only when exactly one such label exists. Two or more
+        // covering labels are ambiguous, so this abstains — the card layer
+        // surfaces them as candidates instead (see [`scoped_labels_for_path`]).
+        let covering = self.scoped_labels_for_path(path);
+        match covering.as_slice() {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+
+    /// Every declared, path-scoped label whose scope covers `path`, deduped by
+    /// `(turn, text)`.
+    ///
+    /// Unlike [`effective_scoped_label`], this does not abstain on ambiguity: it
+    /// returns all covering reasons so the card layer can show a single one as a
+    /// title or several as candidates. Only author-declared, non-empty-`paths`
+    /// labels qualify — a bare turn-wide reason or an inferred sentence never
+    /// claims a file it did not name.
+    pub fn scoped_labels_for_path(&self, path: &str) -> Vec<&IntentLabel> {
+        let mut out: Vec<&IntentLabel> = Vec::new();
+        for label in &self.labels {
+            if label.source != LabelSource::Declared || label.paths.is_empty() {
+                continue;
+            }
+            if !label.paths.iter().any(|p| scope_covers(p, path)) {
+                continue;
+            }
+            if out
+                .iter()
+                .any(|l| l.turn_id == label.turn_id && l.label == label.label)
+            {
+                continue;
+            }
+            out.push(label);
+        }
+        out
     }
 
     /// Records touching one file, oldest first.
@@ -217,6 +303,22 @@ impl Intents {
 /// reports, whichever side wrote it. Mirrors `changelists::normalise`.
 pub fn normalise_path(path: &str) -> String {
     path.replace('\\', "/")
+}
+
+/// Does a declared scope entry cover a record's path?
+///
+/// A scope may name the file exactly, or a directory the file sits beneath —
+/// the latter is how an agent groups a cohesive set of edits under one folder
+/// (`Intent(ONEflight.Client.OPS135.Components): …`). The directory match is at
+/// a path segment, so `foo` never covers `foobar/x`. This is decidable rather
+/// than guessed: the scope was author-declared, and containment is a fact.
+pub(crate) fn scope_covers(scope: &str, record_path: &str) -> bool {
+    let scope = normalise_path(scope);
+    let scope = scope.trim_end_matches('/');
+    record_path == scope
+        || record_path
+            .strip_prefix(scope)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// Make a path recorded by a hook relative to the workspace.
@@ -268,6 +370,10 @@ pub fn labels_path(root: &Path) -> PathBuf {
     intents_dir(root).join(LABELS_FILE)
 }
 
+pub fn prompts_path(root: &Path) -> PathBuf {
+    intents_dir(root).join(PROMPTS_FILE)
+}
+
 /// How records are filtered as they load.
 #[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
@@ -287,7 +393,26 @@ pub fn load(root: &Path, options: &LoadOptions) -> Result<Intents> {
     let records = load_edits(root, options)?;
     let labels = load_labels(root)?;
 
-    Ok(Intents { records, labels })
+    let mut intents = Intents { records, labels };
+    user::merge_into(root, &mut intents)?;
+    Ok(intents)
+}
+
+/// Read the recorded user prompts, keyed by turn id.
+///
+/// Kept separate from [`Intents`] (which is a widely-constructed value type) so
+/// callers that need prompts — only the durable-why note today — load them
+/// explicitly. Reuses the crash-tolerant reader.
+pub fn load_prompts(root: &Path) -> Result<Vec<IntentPrompt>> {
+    read_jsonl::<IntentPrompt>(&prompts_path(root))
+}
+
+/// The user's prompt for a turn within a loaded set, when one was recorded.
+pub fn prompt_for<'a>(prompts: &'a [IntentPrompt], turn_id: &str) -> Option<&'a str> {
+    prompts
+        .iter()
+        .find(|p| p.turn_id == turn_id)
+        .map(|p| p.prompt.as_str())
 }
 
 /// Read the labels, dropping inferred ones that do not read like a reason.
@@ -378,6 +503,10 @@ pub fn append_label(root: &Path, label: &IntentLabel) -> Result<()> {
     append_line(&labels_path(root), label, root)
 }
 
+pub fn append_prompt(root: &Path, prompt: &IntentPrompt) -> Result<()> {
+    append_line(&prompts_path(root), prompt, root)
+}
+
 fn append_line<T: Serialize>(path: &Path, value: &T, root: &Path) -> Result<()> {
     use std::io::Write;
 
@@ -430,7 +559,7 @@ pub fn rebase_seqs(records: &mut [IntentRecord], base: u64) -> u64 {
 
 /// Forget everything recorded for a workspace.
 pub fn clear(root: &Path) -> Result<()> {
-    for path in [edits_path(root), labels_path(root)] {
+    for path in [edits_path(root), labels_path(root), prompts_path(root)] {
         if path.exists() {
             std::fs::remove_file(&path)
                 .with_context(|| format!("failed to remove {}", path.display()))?;

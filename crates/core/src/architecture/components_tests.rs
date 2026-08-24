@@ -17,7 +17,7 @@
 use std::collections::BTreeSet;
 
 use super::components::component_graph;
-use super::graph::{ArchGraph, ArchKind, ArchNode, EdgeKind};
+use super::graph::{ArchEdge, ArchGraph, ArchKind, ArchNode, EdgeKind};
 use crate::symbols::index::{build, SymbolIndex};
 use crate::workspace::{scan, Workspace};
 
@@ -425,12 +425,15 @@ fn a_route_never_brings_a_service_into_existence() {
 }
 
 #[test]
-fn a_matched_base_address_is_reported_as_a_note_and_never_drawn_as_an_arrow() {
+fn a_matched_base_address_draws_a_service_call_arrow() {
     // The strongest cross-project inference the phase can make: a literal
     // `BaseAddress` matching exactly one other project's `applicationUrl`.
-    // Both halves are strings an author wrote, and it is still refused as an
-    // edge, because the line it was read from is a `.cs` file rather than a
-    // manifest. The fact is reported instead of being drawn.
+    // Both halves are strings an author wrote. It *is* now drawn as an arrow,
+    // because the producer anchors the claim's evidence on the callee's
+    // `launchSettings.json` — a declaration file — rather than on the caller's
+    // `.cs`, and both endpoints already exist as service boxes their own web
+    // SDK earned. This is the exact fixture that used to be refused as a "note
+    // rather than an arrow"; that behaviour is inverted here.
     let (_dir, graph) = mapped(&[
         ("src/Orders.Api/Orders.Api.csproj", &web_csproj(&[])),
         (
@@ -450,52 +453,50 @@ fn a_matched_base_address_is_reported_as_a_note_and_never_drawn_as_an_arrow() {
     services.sort();
     assert_eq!(services, ["Orders.Api", "Orders.Web"]);
     assert!(
-        graph.edges.is_empty(),
-        "a supporting signal must never bring an edge into existence: {:?}",
+        graph.edges.contains(&ArchEdge {
+            from: id_of(&graph, "Orders.Web").to_string(),
+            to: id_of(&graph, "Orders.Api").to_string(),
+            kind: EdgeKind::ServiceCall,
+            label: None,
+        }),
+        "the matched call must be drawn as a service-call arrow: {:?}",
         graph.edges
     );
     assert!(
-        warned_about(
-            &graph,
-            &[
-                "called over HTTP by Orders.Web",
-                "Orders.Api",
-                "note rather than an arrow"
-            ],
-        ),
-        "the call has to be reported since it is not drawn: {:?}",
+        !warned_about(&graph, &["note rather than an arrow"]),
+        "a matched call is now an arrow, not a note: {:?}",
         graph.warnings
     );
 }
 
 /// One warning list, one vocabulary — the one printed on the boxes.
 ///
-/// The producers' warnings have always named `Orders.Web`, the project's
-/// display name, because they hold the [`crate::model::Project`]. This file's
-/// notes named `src-Orders.Web-Orders.Web.csproj`, the scan's internal id,
-/// because a [`super::signals::framework::Detail`] carries only that. Both land
-/// in `ArchGraph::warnings` side by side, and the id is the half a reader
-/// cannot match to anything on the diagram — it is not drawn, not labelled, and
-/// not a path they can open.
+/// The producers' warnings have always named a project by its display name,
+/// because they hold the [`crate::model::Project`]. This file's notes named the
+/// scan's internal id (`samples-Foo-Foo.csproj`), because a
+/// [`super::signals::framework::Detail`] carries only that. Both land in
+/// `ArchGraph::warnings` side by side, and the id is the half a reader cannot
+/// match to anything on the diagram — it is not drawn, not labelled, and not a
+/// path they can open.
+///
+/// A matched `AddHttpClient` call is now an *arrow*, not a note, so this pins
+/// the vocabulary on the remaining cross-project note there is: a launch-profile
+/// detail attaching to a box a *different* project earned. That needs two
+/// projects sharing a `Project::name` — the ordinary `samples/` copy — so the
+/// `sample`'s launch profile enriches the box the real project owns.
 #[test]
 fn a_cross_project_note_names_the_project_the_way_the_diagram_labels_it() {
     let (_dir, graph) = mapped(&[
-        ("src/Orders.Api/Orders.Api.csproj", &web_csproj(&[])),
+        ("src/Foo/Foo.csproj", &web_csproj(&[])),
+        ("samples/Foo/Foo.csproj", &lib_csproj(&[])),
         (
-            "src/Orders.Api/Properties/launchSettings.json",
+            "samples/Foo/Properties/launchSettings.json",
             &launch_settings("http://localhost:5102"),
-        ),
-        ("src/Orders.Web/Orders.Web.csproj", &web_csproj(&[])),
-        (
-            "src/Orders.Web/Program.cs",
-            "var b = WebApplication.CreateBuilder(args);\n\
-             b.Services.AddHttpClient(\"orders\", c =>\n{\n\
-             \x20   c.BaseAddress = new Uri(\"http://localhost:5102\");\n});\n",
         ),
     ]);
 
     assert!(
-        warned_about(&graph, &["Orders.Web: 'called over HTTP by Orders.Web'"]),
+        warned_about(&graph, &["Foo: ", "note rather than an arrow"]),
         "the note has to open with the name on the box: {:?}",
         graph.warnings
     );
@@ -503,7 +504,7 @@ fn a_cross_project_note_names_the_project_the_way_the_diagram_labels_it() {
         !graph
             .warnings
             .iter()
-            .any(|w| w.contains("src-Orders.Web-Orders.Web.csproj")),
+            .any(|w| w.contains("samples-Foo-Foo.csproj")),
         "a raw project id reached a warning a person reads: {:?}",
         graph.warnings
     );

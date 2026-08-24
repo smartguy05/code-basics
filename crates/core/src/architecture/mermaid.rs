@@ -373,6 +373,10 @@ fn write_edge(
             key.data_access = true;
             "==>"
         }
+        EdgeKind::ServiceCall => {
+            key.service_call = true;
+            "--x"
+        }
     };
     let from = mermaid_id(&edge.from);
     let to = mermaid_id(&edge.to);
@@ -405,6 +409,7 @@ struct Key {
     package: bool,
     contains: bool,
     data_access: bool,
+    service_call: bool,
 }
 
 impl Key {
@@ -420,6 +425,7 @@ impl Key {
             self.package,
             self.contains,
             self.data_access,
+            self.service_call,
         ]
         .into_iter()
         .filter(|drawn| *drawn)
@@ -547,6 +553,9 @@ fn write_legend(out: &mut String, key: &Key) {
         // *Declares*, not *uses*: a client library reference in a manifest is
         // the whole of what was read.
         (key.data_access.then_some("==>"), "declares a client for"),
+        // A runtime call, not a compile-time reference: the caller's
+        // `AddHttpClient` base address matched the callee's launch profile.
+        (key.service_call.then_some("--x"), "calls over HTTP"),
     ] {
         let Some(arrow) = arrow else { continue };
         if declared {
@@ -580,7 +589,12 @@ fn is_container(kind: ArchKind) -> bool {
 /// contains an underscore and an unescaped run never does. The leading `n`
 /// keeps the identifier away from a leading digit and from Mermaid's own
 /// keywords.
-fn mermaid_id(id: &str) -> String {
+///
+/// `pub(crate)` so `mermaid_tests.rs` can pin its output into the committed
+/// cross-language fixture the frontend's `mermaidIdOf` is held against — this
+/// is the escaping the two implementations must agree on, character for
+/// character.
+pub(crate) fn mermaid_id(id: &str) -> String {
     let mut out = String::with_capacity(id.len() + 1);
     out.push('n');
     for ch in id.chars() {

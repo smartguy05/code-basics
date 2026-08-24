@@ -51,6 +51,11 @@ workspace-relative, comma-separated:
 Intent(src/api.ts, src/apiLogic.test.ts): <why, for those files>
 ```
 
+Each entry is a workspace-relative path with forward slashes — a specific file,
+or a directory to cover everything you edited beneath it (e.g.
+`Intent(src/components): …`). Prefer naming the specific files; reach for a
+directory only when the turn's edits are one cohesive set under it.
+
 A scoped line covers the files it names; one plain line may cover the rest.
 Keep each label short enough to read at a glance — it titles a group of hunks
 in the Changes tab, not a commit message.
@@ -72,8 +77,10 @@ a `pre-commit` hook.
 /// The instruction file each agent reads.
 pub fn path_for(provider: ProviderId, root: &Path) -> PathBuf {
     match provider {
-        ProviderId::ClaudeCode => root.join("CLAUDE.md"),
         ProviderId::Codex => root.join("AGENTS.md"),
+        // ClaudeCode reads CLAUDE.md. `User` is not an installable agent and
+        // never reaches provider install, but the match must be total.
+        ProviderId::ClaudeCode | ProviderId::User => root.join("CLAUDE.md"),
     }
 }
 

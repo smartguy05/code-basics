@@ -37,7 +37,7 @@ use specta::Type;
 
 use crate::git::attribution::{Confidence, FileAttribution};
 use crate::git::patch::{FileDiff, Hunk, LineOrigin};
-use crate::intents::LabelSource;
+use crate::intents::{Intents, LabelSource};
 // The declaration heuristic lives in `symbols` because it is a property of
 // source text, not of a repository; what stays here is the hunk-header half.
 use crate::symbols::declarations::{declaration_name, NOT_A_SYMBOL};
@@ -84,8 +84,15 @@ pub struct IntentGroup {
     /// in a command.
     pub id: String,
     pub kind: GroupKind,
-    /// What to show on the card.
+    /// What to show on the card. Empty for an ambiguous intent card, where the
+    /// reasons live in `candidates` instead.
     pub label: String,
+    /// When several declared reasons scope this file and none could be bound
+    /// uniquely, every candidate reason — so the card shows them rather than
+    /// silently dropping the author's intent. Empty in the normal single-reason
+    /// case (the one reason is in `label`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<String>,
     /// The symbol this group sits in, when one was identified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
@@ -95,6 +102,12 @@ pub struct IntentGroup {
     /// The weakest confidence of any hunk in the group, so a card never looks
     /// more certain than its shakiest member.
     pub confidence: Confidence,
+    /// The label is a note the *user* wrote (see [`crate::intents::user`]),
+    /// rather than a recorded or inferred agent reason. The UI uses this to
+    /// distinguish editing your own note from overwriting an agent's intent.
+    /// Omitted from the wire when false, like the other optional card fields.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub user_authored: bool,
 }
 
 impl IntentGroup {
@@ -127,14 +140,23 @@ impl IntentGroup {
 pub fn is_formatting_only(hunk: &Hunk, path: &str) -> bool {
     let significant = indentation_is_significant(path);
 
-    let mut removed: Vec<String> = Vec::new();
-    let mut added: Vec<String> = Vec::new();
+    // For each changed line, keep both the raw characters and the
+    // whitespace-normalised form. The raw form is what tells a line that only
+    // *moved* — identical characters in a new position — apart from one whose
+    // whitespace genuinely changed. Reordering statements changes what the
+    // program does, so only the second is formatting.
+    let mut removed: Vec<(String, String)> = Vec::new();
+    let mut added: Vec<(String, String)> = Vec::new();
 
     for line in &hunk.lines {
         let normalised = ignore_whitespace(&line.content, significant);
+        // The raw line, verbatim: any real whitespace change (a reindent, a
+        // collapsed run of spaces, a stripped `\r`) alters it, while a pure
+        // relocation leaves it byte-for-byte identical.
+        let raw = line.content.clone();
         match line.origin {
-            LineOrigin::Deletion => removed.push(normalised),
-            LineOrigin::Addition => added.push(normalised),
+            LineOrigin::Deletion => removed.push((raw, normalised)),
+            LineOrigin::Addition => added.push((raw, normalised)),
             LineOrigin::Context => {}
         }
     }
@@ -145,15 +167,32 @@ pub fn is_formatting_only(hunk: &Hunk, path: &str) -> bool {
     }
 
     // Blank-line churn alone is still formatting.
-    removed.retain(|l| !l.trim().is_empty());
-    added.retain(|l| !l.trim().is_empty());
+    removed.retain(|(_, n)| !n.trim().is_empty());
+    added.retain(|(_, n)| !n.trim().is_empty());
     if removed.is_empty() && added.is_empty() {
         return true;
     }
 
-    removed.sort();
-    added.sort();
-    removed == added
+    // The normalised content must match as a multiset, or real code changed.
+    let mut removed_norm: Vec<&String> = removed.iter().map(|(_, n)| n).collect();
+    let mut added_norm: Vec<&String> = added.iter().map(|(_, n)| n).collect();
+    removed_norm.sort();
+    added_norm.sort();
+    if removed_norm != added_norm {
+        return false;
+    }
+
+    // The normalised content matches — but so it would for a pure reorder,
+    // where identical lines merely swapped places. Tell the two apart by the
+    // raw characters: if the raw multiset is unchanged too, nothing's
+    // whitespace actually changed and the lines only moved. A relocation is a
+    // logic change (an assignment now runs before an await, an early return
+    // moves), not formatting, so refuse the label.
+    let mut removed_raw: Vec<&String> = removed.iter().map(|(r, _)| r).collect();
+    let mut added_raw: Vec<&String> = added.iter().map(|(r, _)| r).collect();
+    removed_raw.sort();
+    added_raw.sort();
+    removed_raw != added_raw
 }
 
 /// Languages where leading whitespace carries meaning.
@@ -241,15 +280,78 @@ fn symbol_is_new(hunk: &Hunk, symbol: &str) -> bool {
     declared_in(LineOrigin::Addition) && !declared_in(LineOrigin::Deletion)
 }
 
+/// The changed-line *content* of one file, restricted to a set of diff line
+/// indices — the geometry a user annotation stores so it can rebind to the diff
+/// by content after the lines move (see [`crate::intents::user`]).
+///
+/// Returns `(removed, added)` in diff order. Context lines are skipped: only the
+/// lines the card actually claims are the annotation's evidence.
+pub fn changed_content(
+    diff: &FileDiff,
+    line_indices: &std::collections::BTreeSet<u32>,
+) -> (Vec<String>, Vec<String>) {
+    let mut removed = Vec::new();
+    let mut added = Vec::new();
+    for hunk in &diff.hunks {
+        for line in &hunk.lines {
+            if !line_indices.contains(&line.index) {
+                continue;
+            }
+            match line.origin {
+                LineOrigin::Deletion => removed.push(line.content.clone()),
+                LineOrigin::Addition => added.push(line.content.clone()),
+                LineOrigin::Context => {}
+            }
+        }
+    }
+    (removed, added)
+}
+
 /// Build the cards for a working tree.
 ///
 /// `diffs` and `attributions` are parallel: both come from the same scan, in
 /// the same order.
-pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<IntentGroup> {
+pub fn group(
+    diffs: &[FileDiff],
+    attributions: &[FileAttribution],
+    intents: &Intents,
+) -> Vec<IntentGroup> {
     // Keyed so hunks of the same kind and symbol merge across files.
     let mut buckets: BTreeMap<String, Bucket> = BTreeMap::new();
 
+    // Declared intents that attribution actually bound to changed lines
+    // *somewhere* in this diff, keyed by the reason's identity. A reason that is
+    // demonstrably real — it has its own evidenced card — must never also be
+    // offered as a mere "candidate" on an ambiguous card for an unbound hunk it
+    // happens to scope: that presents a known intent as a guess and duplicates
+    // it. Such reasons are filtered out of `covering` below.
+    let evidenced_intents: BTreeSet<(String, String)> = attributions
+        .iter()
+        .flat_map(|fa| &fa.hunks)
+        .flat_map(|h| &h.spans)
+        .filter_map(|s| {
+            if s.label_source != Some(LabelSource::Declared) {
+                return None;
+            }
+            let turn = s.label_turn_id.clone().unwrap_or_else(|| s.turn_id.clone());
+            Some((turn, s.label.clone()?))
+        })
+        .collect();
+
     for (file_index, diff) in diffs.iter().enumerate() {
+        // Declared reasons the author scoped to this file. Used only when the
+        // geometry did not already bind one: a single reason titles the file's
+        // card, several become its candidates. Computed once per file.
+        //
+        // Reasons already evidenced elsewhere are dropped: they have real cards,
+        // so listing them as a "maybe" here would duplicate a known intent.
+        let covering: Vec<(String, String)> = intents
+            .scoped_labels_for_path(&diff.path)
+            .into_iter()
+            .map(|l| (l.turn_id.clone(), l.label.clone()))
+            .filter(|pair| !evidenced_intents.contains(pair))
+            .collect();
+
         let attribution = attributions.get(file_index);
 
         for (hunk_index, hunk) in diff.hunks.iter().enumerate() {
@@ -264,6 +366,140 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
             }
 
             let hunk_attribution = attribution.and_then(|a| a.hunks.get(hunk_index));
+
+            // Evidenced split. When attribution tied lines in this one hunk to
+            // two or more *distinct declared intents*, each intent becomes its
+            // own card carrying only the lines the matcher actually gave it.
+            //
+            // This is the one place a hunk's lines are divided across cards, and
+            // it is safe precisely because it is driven by per-line evidence:
+            // staging and reverting already act on a card's `line_indices`, not
+            // on whole hunks. Without it, such a hunk either lands wholly on its
+            // dominant intent (absorbing the others' lines) or — with no
+            // majority — falls through to a location card while every intent
+            // shows as unmatched. A hunk merely *scoped* by several declared
+            // reasons with no matched geometry has no per-line evidence and is
+            // left to the covering path below, which abstains to one card.
+            if let Some(hunk_attr) = hunk_attribution {
+                let changed_set: BTreeSet<u32> = changed.iter().copied().collect();
+                // Declared intents in this hunk's spans, keyed by the reason's
+                // identity (the turn that declared it) so the same intent merges
+                // across hunks and files, each with the lines it claimed here.
+                let mut per_intent: BTreeMap<(String, String), (Vec<u32>, Confidence)> =
+                    BTreeMap::new();
+                let mut claimed: BTreeSet<u32> = BTreeSet::new();
+                for span in &hunk_attr.spans {
+                    let (Some(label), Some(LabelSource::Declared)) =
+                        (span.label.as_ref(), span.label_source)
+                    else {
+                        continue;
+                    };
+                    let turn = span
+                        .label_turn_id
+                        .clone()
+                        .unwrap_or_else(|| span.turn_id.clone());
+                    let lines: Vec<u32> = span
+                        .line_indices
+                        .iter()
+                        .copied()
+                        .filter(|i| changed_set.contains(i))
+                        .collect();
+                    if lines.is_empty() {
+                        continue;
+                    }
+                    claimed.extend(lines.iter().copied());
+                    let entry = per_intent
+                        .entry((turn, label.clone()))
+                        .or_insert_with(|| (Vec::new(), Confidence::High));
+                    entry.0.extend(lines);
+                    entry.1 = entry.1.min(span.confidence);
+                }
+
+                if per_intent.len() >= 2 {
+                    for ((turn, label), (mut lines, confidence)) in per_intent {
+                        lines.sort_unstable();
+                        lines.dedup();
+                        let key = format!("intent:{turn}:{label}");
+                        let bucket = buckets.entry(key.clone()).or_insert_with(|| Bucket {
+                            id: key,
+                            kind: GroupKind::Intent,
+                            label: label.clone(),
+                            candidates: Vec::new(),
+                            symbol: None,
+                            confidence,
+                            files: BTreeMap::new(),
+                            needs_title: false,
+                            symbols: BTreeSet::new(),
+                        });
+                        bucket.symbols.insert(String::new());
+                        bucket.confidence = bucket.confidence.min(confidence);
+                        let entry = bucket
+                            .files
+                            .entry(diff.path.clone())
+                            .or_insert_with(|| (Vec::new(), Vec::new()));
+                        entry.0.extend(lines);
+                        if !entry.1.contains(&hunk_index) {
+                            entry.1.push(hunk_index);
+                        }
+                    }
+
+                    // Lines the matcher tied to no declared intent are genuinely
+                    // unexplained here: the stated intents are already their own
+                    // cards, so re-attaching these to one would claim lines it
+                    // has no evidence for. Group them by where they sit instead.
+                    let remainder: Vec<u32> = changed
+                        .iter()
+                        .copied()
+                        .filter(|i| !claimed.contains(i))
+                        .collect();
+                    if !remainder.is_empty() {
+                        let (key, kind, label, symbol) = match enclosing_symbol(hunk) {
+                            Some(symbol) => {
+                                let kind = if symbol_is_new(hunk, &symbol) {
+                                    GroupKind::NewSymbol
+                                } else {
+                                    GroupKind::ModifiedSymbol
+                                };
+                                (
+                                    format!("symbol:{}:{symbol}", kind_key(kind)),
+                                    kind,
+                                    symbol.clone(),
+                                    Some(symbol),
+                                )
+                            }
+                            None => (
+                                format!("other:{}", diff.path),
+                                GroupKind::Other,
+                                format!("Other changes in {}", file_name(&diff.path)),
+                                None,
+                            ),
+                        };
+                        let bucket = buckets.entry(key.clone()).or_insert_with(|| Bucket {
+                            id: key,
+                            kind,
+                            label,
+                            candidates: Vec::new(),
+                            symbol: symbol.clone(),
+                            confidence: Confidence::Low,
+                            files: BTreeMap::new(),
+                            needs_title: false,
+                            symbols: BTreeSet::new(),
+                        });
+                        bucket.symbols.insert(symbol.unwrap_or_default());
+                        bucket.confidence = bucket.confidence.min(Confidence::Low);
+                        let entry = bucket
+                            .files
+                            .entry(diff.path.clone())
+                            .or_insert_with(|| (Vec::new(), Vec::new()));
+                        entry.0.extend(remainder);
+                        if !entry.1.contains(&hunk_index) {
+                            entry.1.push(hunk_index);
+                        }
+                    }
+
+                    continue;
+                }
+            }
 
             // 1. The turn that made this hunk, when one turn made most of it.
             //
@@ -280,13 +516,18 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                     dominant.clone(),
                     span.label.clone(),
                     span.label_source,
+                    span.label_turn_id.clone(),
                     span.confidence,
                 ))
             });
 
             let (key, kind, label, symbol, confidence) = match turn {
-                Some((turn, Some(label), Some(LabelSource::Declared), confidence)) => (
-                    format!("intent:{turn}"),
+                // A declared reason. Keyed by the *label's* identity, not the
+                // turn that made the edit: one orphan geometry turn can carry
+                // two different declared labels (each scoped to different
+                // files), and those are two intents, not one card.
+                Some((turn, Some(label), Some(LabelSource::Declared), label_turn, confidence)) => (
+                    format!("intent:{}:{label}", label_turn.unwrap_or(turn)),
                     GroupKind::Intent,
                     label,
                     None,
@@ -296,7 +537,7 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                 // A sentence mined out of prose. Still the best description
                 // available, so it is shown — but as a description of a turn,
                 // not as a reason the agent gave.
-                Some((turn, Some(label), _, confidence)) => (
+                Some((turn, Some(label), _, _, confidence)) => (
                     format!("turn:{turn}"),
                     GroupKind::SameTurn,
                     label,
@@ -308,7 +549,7 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                 // title is derived from the changes once the bucket is whole
                 // (see `Bucket::derived`), because "2 files" is not knowable
                 // from one hunk.
-                Some((turn, None, _, _)) => (
+                Some((turn, None, _, _, _)) => (
                     format!("turn:{turn}"),
                     GroupKind::SameTurn,
                     String::new(),
@@ -355,6 +596,38 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                 },
             };
 
+            // Surface a declared reason the geometry did not bind. When a hunk
+            // landed as anything but a bound intent (or decidable formatting)
+            // yet the author scoped a declared reason to this file, retitle it:
+            // one reason titles the card, several become candidates rather than
+            // being dropped to a bare symbol name. Confidence is Low — the
+            // reason is stated, not corroborated by matched geometry.
+            let (key, kind, label, symbol, confidence, candidates) =
+                if matches!(kind, GroupKind::Intent | GroupKind::Formatting) || covering.is_empty()
+                {
+                    (key, kind, label, symbol, confidence, Vec::new())
+                } else if covering.len() == 1 {
+                    let (turn_id, reason) = &covering[0];
+                    (
+                        format!("intent:{turn_id}:{reason}"),
+                        GroupKind::Intent,
+                        reason.clone(),
+                        None,
+                        Confidence::Low,
+                        Vec::new(),
+                    )
+                } else {
+                    let reasons: Vec<String> = covering.iter().map(|(_, r)| r.clone()).collect();
+                    (
+                        format!("intent-ambiguous:{}", reasons.join("\u{1f}")),
+                        GroupKind::Intent,
+                        String::new(),
+                        None,
+                        Confidence::Low,
+                        reasons,
+                    )
+                };
+
             // A same-turn card with no reason has no title yet — one hunk
             // cannot know how many files the turn touched.
             let needs_title = kind == GroupKind::SameTurn && label.is_empty();
@@ -363,6 +636,7 @@ pub fn group(diffs: &[FileDiff], attributions: &[FileAttribution]) -> Vec<Intent
                 id: key,
                 kind,
                 label,
+                candidates,
                 symbol: symbol.clone(),
                 confidence,
                 files: BTreeMap::new(),
@@ -465,10 +739,12 @@ fn collapse_singletons(groups: Vec<IntentGroup>) -> Vec<IntentGroup> {
                     id: format!("other:{path}"),
                     kind: GroupKind::Other,
                     label: format!("Several changes in {}", file_name(&path)),
+                    candidates: Vec::new(),
                     symbol: None,
                     files: group.files,
                     line_count: group.line_count,
                     confidence: Confidence::Low,
+                    user_authored: false,
                 });
             }
         }
@@ -493,15 +769,19 @@ fn absorb(into: &mut IntentGroup, other: IntentGroup) {
     into.confidence = into.confidence.min(other.confidence);
 }
 
-/// Intent first because it is the only kind that explains *why*; formatting
-/// last because it is the one a reviewer can safely skim.
+/// Ordered by review risk, highest first. This deliberately reverses the older
+/// "intent first" rule: the card that carries the *most* risk is the one
+/// nothing accounts for — an `Other` hunk is a change no stated intent explains,
+/// which is exactly what a reviewer must not skim past — so it leads. A stated
+/// intent, having been explained, comes next, and formatting, which changed no
+/// code, trails as the one kind that is safe to skim.
 fn kind_order(kind: GroupKind) -> u8 {
     match kind {
-        GroupKind::Intent => 0,
-        GroupKind::SameTurn => 1,
-        GroupKind::NewSymbol => 2,
-        GroupKind::ModifiedSymbol => 3,
-        GroupKind::Other => 4,
+        GroupKind::Other => 0,
+        GroupKind::Intent => 1,
+        GroupKind::SameTurn => 2,
+        GroupKind::NewSymbol => 3,
+        GroupKind::ModifiedSymbol => 4,
         GroupKind::Formatting => 5,
     }
 }
@@ -525,6 +805,8 @@ struct Bucket {
     id: String,
     kind: GroupKind,
     label: String,
+    /// Candidate reasons for an ambiguous intent card; empty otherwise.
+    candidates: Vec<String>,
     symbol: Option<String>,
     confidence: Confidence,
     /// path -> (line indices, hunk indices)
@@ -588,14 +870,22 @@ impl Bucket {
             })
             .collect();
 
+        // A user note becomes a declared-intent bucket keyed
+        // `intent:usernote:{id}:{label}` (see [`crate::intents::user`]); the
+        // prefix is distinctive, so recognising it here needs no extra field
+        // threaded through every bucket.
+        let user_authored = self.id.starts_with("intent:usernote:");
+
         IntentGroup {
             id: self.id,
             kind: self.kind,
             label: self.label,
+            candidates: self.candidates,
             symbol: self.symbol,
             files,
             line_count,
             confidence: self.confidence,
+            user_authored,
         }
     }
 }

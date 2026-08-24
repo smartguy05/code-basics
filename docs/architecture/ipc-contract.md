@@ -29,7 +29,7 @@ Renaming a Rust field fails one of these tests, and the failure message points a
 - `a_list_that_could_not_be_completed_carries_its_warnings`
 - `a_dotnet_process_serialises_with_the_keys_the_sidecar_writes`
 - `a_run_dump_serialises_with_the_keys_the_ui_reads`
-- `a_request_carries_the_schema_version_and_does_not_suspend_by_default`
+- `a_request_carries_the_schema_version`
 - `a_default_inspector_config_stays_out_of_the_checked_in_file`
 
 The symbol palette's types pin their keys beside their own modules too — `search_hit_serialises_with_the_keys_the_ui_reads` in `symbols/search_tests.rs`, and `a_symbol_index_status_serialises_with_the_keys_the_ui_reads` in `symbols/index_tests.rs`. Both were written a phase before the TypeScript mirror existed, deliberately: fixing the shape while it was still cheap to change is what the mirror was then written against.

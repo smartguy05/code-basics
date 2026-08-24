@@ -45,7 +45,7 @@ The list is refreshed when the tab is opened, when a run starts or stops, and on
 This is the one part of the feature that reaches into a process you care about while it is serving traffic, so the price is stated beside the button rather than after the pause:
 
 - **The snapshot clones the process's working set.** Expect a pause of the order of a second and memory use roughly doubling for as long as the copy exists. On a machine already short of memory that is a real cost.
-- **Your application is not stopped.** ClrMD can instead attach with every thread frozen until the capture finishes; the request carries a `suspend` flag for it, it is opt-in, and this app never sets it. A service being inspected keeps serving.
+- **Your application is not stopped.** ClrMD can instead attach with every thread frozen until the capture finishes; this app never does that, always taking the snapshot attach instead. A service being inspected keeps serving.
 - **The price of not stopping it is staleness.** A live capture is a moment in time. By the time the tree renders, the field you are reading may already hold something else, and expanding a node past a cap is a genuinely *new* snapshot of a process that has moved on — the tab says so in a band you cannot miss. Dumps are exempt, because two reads of a file are the same bytes.
 
 ### Catching a caught exception
@@ -75,6 +75,15 @@ catch (Exception)
 ```
 
 The filename shape matters: the dumps list decodes `<executable>_<pid>_<unix seconds>.dmp` and a dump named anything else is invisible to this tab.
+
+**VSTest blame-crash dumps are a known exception — they are not listable here.**
+`--blame-crash-collect-always` writes its dump under the test run's results directory with a
+name of its own that carries no pid, executable, or timestamp (not the
+`<executable>_<pid>_<unix seconds>` shape above), and VSTest offers no way to redirect it out of
+`--results-directory` or to rename it. The dump is within the byte budget and the run warns where
+it landed, but the Objects tab cannot list it: synthesising a pid/executable/timestamp it does not
+carry would be exactly the fabrication this feature refuses. Open such a dump from disk in another
+tool, or use the guaranteed `catch`-site capture below, which writes a decodable name.
 
 ### The pid is not always your application
 

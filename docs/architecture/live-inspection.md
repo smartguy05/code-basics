@@ -126,7 +126,7 @@ The list is refreshed on mount, on visibility, and when a run starts or stops �
 
 `session::attach_caveats()` returns the sentences about the snapshot cloning the working set and about the list holding every .NET process on the machine rather than only this app's, and `InspectStatus` carries them. The Run tab renders them **beside the button**, before the click, because a warning shown by the Objects tab arrives after the pause it was meant to warn about. Keeping the words in `cb-core` is what makes the picker, the Run tab and the capture header say the same thing rather than three similar things — and the per-row launcher caveat is derived in `session::launcher_caveat` for the same reason, rather than written into a view.
 
-`suspend` exists on `InspectRequest` and the sidecar honours it with `AttachToProcess(pid, suspend: true)`. Nothing in the app sets it. Freezing a service to read a field is a decision that needs a person behind it, and the default has to be the one that cannot surprise anybody.
+The sidecar always attaches with `CreateSnapshotAndAttach(pid)`, which clones the process image so the application keeps running. A suspending attach — freezing every thread until the capture finishes — is never used: stopping a service to read a field is a decision that needs a person behind it, and the default has to be the one that cannot surprise anybody.
 
 ## The abstain rule in the types
 

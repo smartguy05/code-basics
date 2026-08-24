@@ -8,8 +8,11 @@
 
 pub mod adapters;
 pub mod architecture;
+pub mod behavioral;
 pub mod changelists;
 pub mod config;
+pub mod enhancements;
+pub mod erosion;
 pub mod files;
 pub mod git;
 pub mod importers;
@@ -19,7 +22,11 @@ pub mod invocation;
 pub mod lsp;
 pub mod model;
 pub mod process;
+pub mod qgate;
+pub mod review;
+pub mod rules;
 pub mod secrets;
+pub mod setup;
 pub mod symbols;
 pub mod testing;
 pub mod workspace;
@@ -27,5 +34,9 @@ pub mod workspace;
 #[cfg(test)]
 #[path = "invocation_tests.rs"]
 mod invocation_tests;
+
+#[cfg(test)]
+#[path = "review_tests.rs"]
+mod review_tests;
 
 pub use model::*;

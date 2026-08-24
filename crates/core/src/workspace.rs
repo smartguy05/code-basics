@@ -41,9 +41,13 @@ const SKIP_DIRS: &[&str] = &[
     ".code-basics",
 ];
 
-/// How deep to descend. Deep enough for a conventional `src/Area/Project`
-/// layout, shallow enough that a stray large directory cannot stall a scan.
-const MAX_DEPTH: usize = 10;
+/// How deep to descend. Generous enough for the buried layouts monorepos and
+/// generated trees produce — well past a conventional `src/Area/Project` — yet
+/// shallow enough that a stray large directory cannot stall a scan. The runaway
+/// cases are bounded elsewhere regardless of this number: `SKIP_DIRS` prunes
+/// build output and vendored trees, nested checkouts are excluded, and
+/// [`crate::symbols`] caps the index at `Limits::max_files` (50_000).
+const MAX_DEPTH: usize = 50;
 
 /// Everything discovered about an opened workspace.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
@@ -83,7 +87,7 @@ pub(crate) fn should_skip(name: &str) -> bool {
 /// symbol in `bin/` or in a vendored checkout that the project list has never
 /// heard of, or, worse, silently miss files that a scan does see. The rules
 /// are not obvious enough to be re-derived correctly twice: `SKIP_DIRS`,
-/// `MAX_DEPTH` of 10, and the exclusion of any directory carrying its own
+/// `MAX_DEPTH` of 50, and the exclusion of any directory carrying its own
 /// `.git` entry.
 ///
 /// The iterator is returned unconsumed and unfiltered by file type. Callers
@@ -974,6 +978,24 @@ mod tests {
 
         assert_eq!(ws.projects.len(), 1);
         assert_eq!(ws.projects[0].name, "app");
+    }
+
+    #[test]
+    fn a_project_nested_deeper_than_ten_levels_is_discovered() {
+        // Monorepos and generated trees bury real projects well past a
+        // conventional `src/Area/Project` depth. A package twelve directories
+        // down (past the old limit of 10) must still be found.
+        let dir = workspace_with(&[(
+            "d01/d02/d03/d04/d05/d06/d07/d08/d09/d10/d11/d12/package.json",
+            r#"{"name":"deep","scripts":{"dev":"vite"}}"#,
+        )]);
+        let ws = scan(dir.path()).unwrap();
+
+        assert!(
+            ws.projects.iter().any(|p| p.name == "deep"),
+            "deeply nested project must be discovered: {:?}",
+            ws.projects.iter().map(|p| &p.name).collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "snapshotId": "snap-dict01",
+  "capturedAt": "2026-08-24T10:00:00.0000000Z",
+  "target": {
+    "target": { "kind": "dump", "path": "C:\\src\\quotes\\.code-basics\\dumps\\Quotes.Api_1_1.dmp" },
+    "bitness": "x64",
+    "runtimeVersion": "9.0.3",
+    "processName": "Quotes.Api"
+  },
+  "caps": { "maxDepth": 5, "maxChildren": 100, "maxStringLength": 512, "maxNodes": 5000 },
+  "nodes": [
+    {
+      "id": "root",
+      "label": "rates",
+      "kind": "reference",
+      "typeName": "System.Collections.Generic.Dictionary<System.String, System.Int32>",
+      "address": "0x7ff6ad094000",
+      "childCountTotal": 2
+    },
+    {
+      "id": "root[0]",
+      "parent": "root",
+      "label": "[0]",
+      "kind": "pair"
+    },
+    {
+      "id": "root[0].key",
+      "parent": "root[0]",
+      "label": "Key",
+      "kind": "text",
+      "typeName": "System.String",
+      "text": "USD"
+    },
+    {
+      "id": "root[0].value",
+      "parent": "root[0]",
+      "label": "Value",
+      "kind": "primitive",
+      "typeName": "System.Int32",
+      "text": "1"
+    },
+    {
+      "id": "root[1]",
+      "parent": "root",
+      "label": "[1]",
+      "kind": "pair"
+    },
+    {
+      "id": "root[1].key",
+      "parent": "root[1]",
+      "label": "Key",
+      "kind": "text",
+      "typeName": "System.String",
+      "text": "EUR"
+    },
+    {
+      "id": "root[1].value",
+      "parent": "root[1]",
+      "label": "Value",
+      "kind": "primitive",
+      "typeName": "System.Int32",
+      "text": "2"
+    }
+  ]
+}

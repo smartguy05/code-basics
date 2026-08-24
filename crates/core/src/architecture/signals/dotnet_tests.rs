@@ -505,6 +505,87 @@ fn an_aspire_add_project_enriches_the_referenced_service() {
     );
 }
 
+/// A hyphenated project name resolves end-to-end, and the near-miss directory
+/// does not steal it.
+///
+/// This pins the whole path from `Projects.web_frontend` in the app host down to
+/// the `web-frontend.csproj` the scan found: `aspire_class_name` maps the `-` to
+/// `_` (the SDK's `\W` rule), and the match is decided on the *transformed
+/// stem*, so the sibling `webfrontend.csproj` — whose transform is `webfrontend`
+/// and does not equal `web_frontend` — must not be enriched. Asserting on
+/// [`details_of`] rather than the flattened [`details`] is the point: the decoy
+/// is only a decoy if the test can tell *which* box the Aspire detail landed on.
+#[test]
+fn an_aspire_add_project_resolves_a_hyphenated_project_name() {
+    let (_dir, _out, gated) = admitted(&[
+        (
+            "AppHost/AppHost.csproj",
+            &csproj("<IsAspireHost>true</IsAspireHost>", &[]),
+        ),
+        (
+            "AppHost/Program.cs",
+            "var builder = DistributedApplication.CreateBuilder(args);\n\
+             builder.AddProject<Projects.web_frontend>(\"web\");\n\
+             builder.Build().Run();\n",
+        ),
+        ("src/web-frontend/web-frontend.csproj", &web_csproj(&[])),
+        // The decoy: its stem transforms to `webfrontend`, not `web_frontend`,
+        // so it must never be chosen for `Projects.web_frontend`.
+        ("src/webfrontend/webfrontend.csproj", &web_csproj(&[])),
+    ]);
+
+    assert!(
+        details_of(&gated, "web-frontend")
+            .iter()
+            .any(|d| d.contains("Aspire")),
+        "the hyphenated project was not resolved end-to-end: {:?}",
+        details_of(&gated, "web-frontend")
+    );
+    assert!(
+        details_of(&gated, "webfrontend").is_empty(),
+        "the near-miss directory was enriched by the app host reference: {:?}",
+        details_of(&gated, "webfrontend")
+    );
+}
+
+/// Two projects whose file stems collide *after* the transform are not
+/// disambiguated by guesswork.
+///
+/// `Orders.Api.csproj` and `Orders_Api.csproj` both transform to `Orders_Api`,
+/// so `Projects.Orders_Api` matches both. The `many` arm refuses to attribute
+/// the reference to either and warns instead — a wrong arrow is worse than none.
+#[test]
+fn an_aspire_add_project_ambiguous_after_the_transform_is_not_attributed() {
+    let (_dir, out, gated) = admitted(&[
+        (
+            "AppHost/AppHost.csproj",
+            &csproj("<IsAspireHost>true</IsAspireHost>", &[]),
+        ),
+        (
+            "AppHost/Program.cs",
+            "builder.AddProject<Projects.Orders_Api>(\"orders\");\n",
+        ),
+        ("src/OrdersApi/Orders.Api.csproj", &web_csproj(&[])),
+        (
+            "src/OrdersApiUnderscore/Orders_Api.csproj",
+            &web_csproj(&[]),
+        ),
+    ]);
+
+    assert!(
+        !details(&gated).iter().any(|d| d.contains("Aspire")),
+        "an ambiguous reference was attributed to a guessed project: {:?}",
+        details(&gated)
+    );
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("Orders_Api") && w.contains("2 scanned projects")),
+        "the collision was not reported as a two-way ambiguity: {:?}",
+        out.warnings
+    );
+}
+
 #[test]
 fn an_aspire_add_project_naming_no_scanned_project_is_a_warning_and_not_a_component() {
     let (_dir, out, gated) = admitted(&[
@@ -820,8 +901,15 @@ fn an_httpclient_base_address_bound_to_configuration_yields_no_signal() {
 }
 
 #[test]
-fn an_httpclient_base_address_matching_an_application_url_enriches_that_service() {
-    let (_dir, _out, gated) = admitted(&[
+fn an_httpclient_base_address_matching_an_application_url_emits_a_high_call_citing_launch_settings()
+{
+    // Inverted from the old `..._enriches_that_service`: a matched base address
+    // is no longer a MEDIUM enrichment note. It is a HIGH *call* candidate, and
+    // the evidence it cites is the callee's `launchSettings.json` — a
+    // declaration file the author wrote — rather than the caller's `.cs`. That
+    // anchoring is what lets it survive the gate as a service call without ever
+    // letting a source line be treated as a declared fact.
+    let (_dir, out, gated) = admitted(&[
         ("src/Orders.Api/Orders.Api.csproj", &web_csproj(&[])),
         (
             "src/Orders.Api/Program.cs",
@@ -837,10 +925,37 @@ fn an_httpclient_base_address_matching_an_application_url_enriches_that_service(
         ),
     ]);
 
-    let details = details(&gated);
+    let call = out
+        .signals
+        .iter()
+        .find(|s| s.target_project.is_some())
+        .expect("a call candidate must be emitted for the matched base address");
+    assert_eq!(
+        call.strength,
+        Strength::High,
+        "a matched call is a declared fact once anchored on a config file: {call:?}"
+    );
     assert!(
-        details.iter().any(|d| d.contains("Orders.Api")),
-        "the caller was not recorded against the service it calls: {details:?}"
+        call.evidence
+            .path
+            .to_string_lossy()
+            .ends_with("launchSettings.json"),
+        "the call must cite the callee's declaration file, not the caller's source: {:?}",
+        call.evidence
+    );
+    assert_eq!(
+        gated.service_calls().len(),
+        1,
+        "the HIGH call must survive the gate as one service call: {:?}",
+        gated.service_calls()
+    );
+    // The matched call is no longer a MEDIUM detail on the callee's box.
+    assert!(
+        details(&gated)
+            .iter()
+            .all(|d| !d.contains("called over HTTP")),
+        "a matched call must not also enrich the callee as a note: {:?}",
+        details(&gated)
     );
 }
 

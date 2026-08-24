@@ -204,6 +204,13 @@ pub enum ObjectValue {
         truncated: bool,
     },
     Null,
+    /// A dictionary entry: a container whose two children are the `Key` and the
+    /// `Value`. It carries no address of its own — it groups the pair rather
+    /// than being an object on the heap — so it can neither be expanded nor
+    /// matched for a cycle, which is exactly why it is its own marker variant
+    /// rather than a [`ObjectValue::Reference`] (which would abstain with no
+    /// address). The children are ordinary nodes, shaped by [`super::tree`].
+    Pair,
     /// A reference to another object, expandable when the walk stopped here.
     Reference {
         address: String,
@@ -330,10 +337,6 @@ pub struct InspectRequest {
     pub target: InspectTarget,
     pub root: RootSpec,
     pub caps: Caps,
-    /// Suspend the target rather than snapshotting it. Opt-in, because it
-    /// stops the user's application until the capture finishes.
-    #[serde(default)]
-    pub suspend: bool,
 }
 
 /// The schema version this build of the app writes and expects back. Bumped
@@ -348,7 +351,6 @@ impl InspectRequest {
             target,
             root,
             caps,
-            suspend: false,
         }
     }
 }
@@ -407,6 +409,15 @@ pub struct DotnetProcess {
     /// get one wrong.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
+    /// The full command line, when it could be read. This is the only place the
+    /// application assembly appears for a `dotnet run` child launched as
+    /// `dotnet exec <output>.dll` — its OS name is just `dotnet` — so it is what
+    /// distinguishes the real application from the SDK's own `dotnet`-named
+    /// build tools. `None` means *unknown*: reading another process's command
+    /// line is refused across an elevation or session boundary, and its absence
+    /// costs only preselection, never correctness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_line: Option<String>,
 }
 
 /// How a process was linked to a run configuration.

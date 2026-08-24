@@ -69,7 +69,9 @@ fn report_attribution_against_this_repository() {
     }
 
     // What each agent already recorded, with no setup at all.
-    let (records, labels) = providers::history(&root);
+    let mined = providers::history(&root);
+    let records = mined.records;
+    let labels = mined.labels;
     println!(
         "history: {} record(s), {} label(s)",
         records.len(),
@@ -105,7 +107,7 @@ fn report_attribution_against_this_repository() {
     println!("\nattributed {attributed} / {changed_lines} changed lines ({share:.1}%)");
     println!("unattributed: {unattributed}");
 
-    let groups = grouping::group(&diffs, &attributions);
+    let groups = grouping::group(&diffs, &attributions, &intents);
     println!(
         "\n{hunks} hunk(s) collapsed into {} group(s):",
         groups.len()
@@ -155,6 +157,86 @@ fn report_attribution_against_this_repository() {
     );
 }
 
+/// The workflow/subagent case end-to-end through the public API: geometry
+/// recorded under a subagent's turn with no reason, the reason declared under a
+/// later turn and path-scoped. The declared label must bind across turns so the
+/// review shows an Intent card and an evidenced claim, not an orphan turn.
+#[test]
+fn a_declared_reason_binds_across_turns_through_the_public_review() {
+    use cb_core::git::coverage;
+    use cb_core::git::grouping::GroupKind;
+    use cb_core::git::patch::{DiffLine, FileDiff, Hunk, LineOrigin};
+    use cb_core::intents::{IntentEdit, IntentLabel, IntentRecord, LabelSource, ProviderId};
+
+    let line = "    let a_distinctive_cross_turn_line = compute_the_value();";
+    let diff = FileDiff {
+        path: "f.rs".into(),
+        old_path: None,
+        is_binary: false,
+        hunks: vec![Hunk {
+            old_start: 1,
+            old_lines: 0,
+            new_start: 1,
+            new_lines: 1,
+            header: String::new(),
+            lines: vec![DiffLine {
+                index: 0,
+                origin: LineOrigin::Addition,
+                content: line.into(),
+                old_lineno: None,
+                new_lineno: Some(1),
+                no_newline: false,
+            }],
+        }],
+    };
+
+    let intents = Intents {
+        // Geometry under the subagent's turn — no label of its own.
+        records: vec![IntentRecord {
+            provider: ProviderId::ClaudeCode,
+            turn_id: "subagent-turn".into(),
+            tool_use_id: "tool-1".into(),
+            seq: 1,
+            path: "f.rs".into(),
+            edit: IntentEdit {
+                old_lines: Vec::new(),
+                new_lines: vec![line.into()],
+                whole_file: false,
+            },
+            branch: None,
+        }],
+        // The reason, declared under a later main turn, correctly scoped.
+        labels: vec![IntentLabel {
+            provider: ProviderId::ClaudeCode,
+            turn_id: "main-turn".into(),
+            label: "declared cross-turn reason".into(),
+            paths: vec!["f.rs".into()],
+            anchor: None,
+            source: LabelSource::Declared,
+        }],
+    };
+
+    let attributions = attribution::attribute(&[diff.clone()], &intents, Options::default());
+    let review = coverage::review(&[diff], &attributions, &intents);
+
+    assert!(
+        review
+            .groups
+            .iter()
+            .any(|g| g.kind == GroupKind::Intent && g.label == "declared cross-turn reason"),
+        "expected a cross-turn Intent card, got {:?}",
+        review
+            .groups
+            .iter()
+            .map(|g| (&g.kind, &g.label))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(review.scorecard.claims, 1);
+    assert_eq!(review.scorecard.evidenced, 1);
+    assert_eq!(review.scorecard.unmatched, 0);
+    assert!(review.unfulfilled.is_empty());
+}
+
 fn truncate(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_string();
@@ -181,7 +263,7 @@ fn grouping_a_repository_with_no_changes_produces_no_groups() {
         .unwrap_or_default();
 
     let attributions = attribution::attribute(&diffs, &Intents::default(), Options::default());
-    let groups = grouping::group(&diffs, &attributions);
+    let groups = grouping::group(&diffs, &attributions, &Intents::default());
 
     assert!(groups.is_empty());
 }

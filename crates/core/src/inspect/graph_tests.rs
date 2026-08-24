@@ -76,6 +76,15 @@ fn well_formed_values_classify_as_themselves() {
     );
 }
 
+/// A dictionary entry the sidecar emits as a `pair` container is a value in its
+/// own right — it groups a Key and a Value and has no address — so it must
+/// classify as [`ObjectValue::Pair`] rather than falling through to the
+/// unrecognised-kind abstention.
+#[test]
+fn a_dictionary_entry_classifies_as_a_pair() {
+    assert_eq!(classify(&raw("pair")), ObjectValue::Pair);
+}
+
 #[test]
 fn every_elision_reason_survives_the_round_trip() {
     // These three strings are the wire contract with the sidecar; if one is

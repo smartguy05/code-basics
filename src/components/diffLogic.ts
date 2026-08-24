@@ -1,5 +1,54 @@
 import type { FileDiff, Hunk } from "../ipc/types";
 
+/**
+ * Line endings normalised to `\n`.
+ *
+ * The diff view compares a baseline read from git (a blob, always `\n`) against
+ * the working file read from disk (`\r\n` on Windows right after an
+ * `autocrlf=true` checkout). `@codemirror/merge` diffs the two raw strings, so a
+ * bare ending mismatch marks **every** line changed and paints the whole pane
+ * green — a change git itself filters out. Both sides are brought to `\n` before
+ * the comparison so only real content differences show. Lone `\r` (old Mac) is
+ * folded too, so the normalisation is total rather than CRLF-only.
+ */
+export function normaliseEndings(source: string): string {
+  return source.replace(/\r\n?/g, "\n");
+}
+
+/**
+ * The working document with only `hunks` reverted to their baseline.
+ *
+ * Feeding this as the diff's left side (against the unchanged working copy on
+ * the right) makes every region *outside* those hunks identical on both sides,
+ * so the merge view highlights only the hunks named — the rest is unchanged and
+ * folds away. This is what scopes an intent card's diff to the card's own
+ * change instead of every change in the file, while keeping real line numbers.
+ *
+ * `working` must already be `\n`-normalised, since the hunk line content came
+ * from git as `\n`; mixing the two would splice mismatched endings back in.
+ * Hunks are applied bottom-up so an earlier splice cannot shift a later hunk's
+ * position. A hunk whose position falls outside the document is skipped rather
+ * than throwing — the diff can lag the file by a write.
+ */
+export function focusedBaseline(working: string, hunks: Hunk[]): string {
+  const lines = working.split("\n");
+
+  for (const hunk of [...hunks].sort((a, b) => b.newStart - a.newStart)) {
+    const start = hunk.newStart - 1;
+    if (start < 0 || start > lines.length) continue;
+
+    // The baseline side of the hunk: everything the working copy did not add,
+    // in order, which is exactly what those working lines replaced.
+    const baselineLines = hunk.lines
+      .filter((line) => line.origin !== "addition")
+      .map((line) => line.content);
+
+    lines.splice(start, hunk.newLines, ...baselineLines);
+  }
+
+  return lines.join("\n");
+}
+
 /** Every changed line index in a diff, for "select all". */
 export function allChangedIndices(diff: FileDiff): number[] {
   return diff.hunks
@@ -271,4 +320,60 @@ export function scrollLeftForThumb(metrics: ScrollMetrics, thumbLeft: number): n
 
   const progress = Math.min(1, Math.max(0, thumbLeft / travel));
   return overflow * progress;
+}
+
+/**
+ * The side-by-side pane divider position, remembered across files and sessions.
+ *
+ * The value is the left (baseline) pane's share of the width, held inside a
+ * range where both panes stay wide enough to read — a pane dragged to nothing
+ * is not a review layout, and a stored fraction from a corrupt entry that fell
+ * outside the range would hide one side with nothing logged.
+ */
+export const DEFAULT_DIFF_SPLIT = 0.5;
+const MIN_DIFF_SPLIT = 0.15;
+const MAX_DIFF_SPLIT = 0.85;
+const DIFF_SPLIT_KEY = "code-basics.diffSplit";
+
+/** Only the two methods this module needs, so a fake is trivial in a test. */
+type SplitStorage = Pick<Storage, "getItem" | "setItem">;
+
+/**
+ * Hold the left pane's fraction inside the visible range.
+ *
+ * A non-finite fraction becomes {@link DEFAULT_DIFF_SPLIT} rather than
+ * propagating: `Math.min`/`Math.max` pass `NaN` straight through, and a `NaN`
+ * flex-grow makes a pane vanish.
+ */
+export function clampDiffSplit(frac: number): number {
+  if (!Number.isFinite(frac)) return DEFAULT_DIFF_SPLIT;
+  return Math.min(MAX_DIFF_SPLIT, Math.max(MIN_DIFF_SPLIT, frac));
+}
+
+/** The left pane's fraction for a pointer at `clientX` over a track `[left, left + width]`. */
+export function diffSplitFraction(clientX: number, left: number, width: number): number {
+  if (!(width > 0)) return DEFAULT_DIFF_SPLIT;
+  return clampDiffSplit((clientX - left) / width);
+}
+
+/** The remembered divider fraction, or the even split when nothing usable is stored. */
+export function loadDiffSplit(storage: SplitStorage): number {
+  try {
+    const raw = storage.getItem(DIFF_SPLIT_KEY);
+    if (raw === null || raw.trim() === "") return DEFAULT_DIFF_SPLIT;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? clampDiffSplit(parsed) : DEFAULT_DIFF_SPLIT;
+  } catch {
+    return DEFAULT_DIFF_SPLIT;
+  }
+}
+
+/** Remember the divider position; an unavailable storage is nothing worth reporting. */
+export function saveDiffSplit(storage: SplitStorage, frac: number): void {
+  if (!Number.isFinite(frac)) return;
+  try {
+    storage.setItem(DIFF_SPLIT_KEY, String(clampDiffSplit(frac)));
+  } catch {
+    /* the divider is on screen and behaving; only its memory is not */
+  }
 }

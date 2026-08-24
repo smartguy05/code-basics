@@ -339,6 +339,19 @@ export interface Commit {
   time: number;
 }
 
+/**
+ * One entry in the stash list (`repo.rs::StashEntry`). A stash is stored as a
+ * commit, so `id` feeds the ordinary `gitCommitDiff`/`gitCommitFileContents`
+ * preview path.
+ */
+export interface StashEntry {
+  index: number;
+  id: string;
+  message: string;
+  branch: string | null;
+  time: number;
+}
+
 export type NetworkKind = "fetch" | "pull" | "push" | "pushSetUpstream";
 
 export interface RiderImportPreview {
@@ -351,8 +364,8 @@ export interface RiderImportPreview {
 // Agent intent (`intents/`, `git/attribution.rs`, `git/grouping.rs`)
 // ---------------------------------------------------------------------------
 
-/** Which coding agent recorded an edit. */
-export type ProviderId = "claudeCode" | "codex";
+/** Which coding agent recorded an edit — or the user, for a note they wrote. */
+export type ProviderId = "claudeCode" | "codex" | "user";
 
 /** Where an agent's hook configuration is written. */
 export type InstallScope = "project" | "user";
@@ -394,6 +407,46 @@ export interface InstallPlan {
   caveats?: string[];
 }
 
+/**
+ * One instruction template in the Enhancements menu (`enhancements::EnhancementInfo`).
+ */
+export interface EnhancementInfo {
+  id: string;
+  title: string;
+  /** Present in CLAUDE.md or AGENTS.md in the current workspace. */
+  installed: boolean;
+}
+
+/** One prompt in the Enhancements → Run Agent submenu (`enhancements::PromptInfo`). */
+export interface PromptInfo {
+  id: string;
+  title: string;
+  /**
+   * Declared run-once (`once: true`): the menu records a successful run per
+   * workspace and confirms before re-running.
+   */
+  once: boolean;
+  /** The prompt text run as an agent (front matter stripped). */
+  body: string;
+}
+
+/** One prompt's last successful run in this workspace (`enhancements::runs::PromptRun`). */
+export interface PromptRun {
+  /** When the run finished, in milliseconds since the Unix epoch. */
+  lastRunAtMs: number;
+}
+
+/** Run-once records keyed by prompt id (`enhancements::runs::PromptRuns`). */
+export type PromptRuns = Record<string, PromptRun>;
+
+/** An installed review agent (`commands::review::ReviewAgentInfo`). */
+export interface ReviewAgentInfo {
+  id: string;
+  label: string;
+  /** Model aliases the picker may offer; empty means the agent's own default. */
+  models: string[];
+}
+
 /** Why a set of hunks belongs together (`git/grouping.rs`). */
 export type GroupKind =
   | "intent"
@@ -426,7 +479,14 @@ export interface GroupFile {
 export interface IntentGroup {
   id: string;
   kind: GroupKind;
+  /** What to show on the card; empty for an ambiguous intent (see `candidates`). */
   label: string;
+  /**
+   * When several declared reasons scope this file and none could be bound
+   * uniquely, every candidate reason — shown instead of dropping the intent to a
+   * symbol title. Absent/empty in the normal single-reason case.
+   */
+  candidates?: string[];
   /** The symbol the group sits in, when one was identified. */
   symbol?: string;
   files: GroupFile[];
@@ -434,6 +494,239 @@ export interface IntentGroup {
   lineCount: number;
   /** The weakest confidence of any hunk in the group. */
   confidence: Confidence;
+  /**
+   * The label is a note the user wrote (not an agent reason). Present only when
+   * true, so it is safe to read as falsy. Distinguishes editing your own note
+   * from overwriting an agent's stated intent.
+   */
+  userAuthored?: boolean;
+}
+
+/**
+ * A declared intent for which no changed hunk shows matching content
+ * (`git/coverage.rs`).
+ *
+ * NOT an accusation: the edit may be committed, later overwritten,
+ * hand-reverted, or transformed past the matcher's normalisation ladder.
+ * Reported as unmatched, never as undone.
+ */
+export interface UnfulfilledClaim {
+  turnId: string;
+  /** The declared label's text. */
+  label: string;
+  provider: ProviderId;
+  /** Files in this diff the claim's turn touched. */
+  paths: string[];
+}
+
+/**
+ * The per-turn tally shown above the cards (`git/coverage.rs`): the direct
+ * answer to "did the agent do what it told me it did".
+ */
+export interface Scorecard {
+  /** Declared intents whose turn edited a file in this diff. */
+  claims: number;
+  /** Claims evidenced by at least one matched change anywhere in the diff. */
+  evidenced: number;
+  /** Claims with no matching change — always equal to `unfulfilled.length`. */
+  unmatched: number;
+  /** Changed hunks across the tree. */
+  hunks: number;
+  /** Hunks with at least one attributed span. */
+  attributedHunks: number;
+  /** Changed lines across the tree that no record claimed. */
+  unattributedLines: number;
+}
+
+/** Grouping plus the two coverage failures and the aggregate (`git/coverage.rs`). */
+export interface IntentReview {
+  groups: IntentGroup[];
+  unfulfilled: UnfulfilledClaim[];
+  scorecard: Scorecard;
+}
+
+// ---------------------------------------------------------------------------
+// Behavioral before/after testing (`behavioral/`) — the runtime counterpart to
+// the static intent Scorecard above.
+// ---------------------------------------------------------------------------
+
+/** How one test case's outcome moved between the HEAD and working-tree runs. */
+export type CaseTransition =
+  | "unchanged"
+  | "fixed"
+  | "regressed"
+  | "stillFailing"
+  | "added"
+  | "removed";
+
+/** One test case's before/after outcome (`behavioral/compare.rs`). */
+export interface CaseDelta {
+  fullName: string;
+  base: TestOutcome | null;
+  work: TestOutcome | null;
+  transition: CaseTransition;
+  /** Source files this case plausibly exercises; filled in during attribution. */
+  filesHint: string[];
+}
+
+/** Every case whose outcome changed, plus before/after summaries. */
+export interface TestDelta {
+  cases: CaseDelta[];
+  summaryBefore: TestSummary;
+  summaryAfter: TestSummary;
+}
+
+/** A difference in captured console output, after masking known noise. */
+export interface ConsoleDelta {
+  addedLines: string[];
+  removedLines: string[];
+  normalized: boolean;
+  confidence: Confidence;
+}
+
+/** One header whose presence or value changed between the two responses. */
+export interface HeaderChange {
+  name: string;
+  before: string | null;
+  after: string | null;
+}
+
+/** A difference in a response body, after type-aware normalisation. */
+export interface BodyDelta {
+  addedLines: string[];
+  removedLines: string[];
+  normalized: boolean;
+}
+
+/** A difference between the HEAD and working-tree responses for one `.http` request. */
+export interface HttpDelta {
+  name: string;
+  /** `[before, after]` status codes, only when they differ. */
+  status: [number, number] | null;
+  headerChanges: HeaderChange[];
+  body: BodyDelta | null;
+  confidence: Confidence;
+}
+
+/** One observable difference, internally tagged on `kind` (`behavioral/mod.rs`). */
+export type BehavioralDelta =
+  | ({ kind: "test" } & CaseDelta)
+  | ({ kind: "console" } & ConsoleDelta)
+  | ({ kind: "http" } & HttpDelta);
+
+/** The behavioral deltas attributed to one intent card. */
+export interface CardBehavior {
+  groupId: string;
+  deltas: BehavioralDelta[];
+  confidence: Confidence;
+}
+
+/** The per-run tally shown beside the static {@link Scorecard}. */
+export interface BehavioralScorecard {
+  outcomesCompared: number;
+  deltas: number;
+  attributedDeltas: number;
+  unattributedDeltas: number;
+  abstained: number;
+}
+
+/** The whole before/after comparison — runtime twin of {@link IntentReview}. */
+export interface BehavioralReport {
+  tests: TestDelta | null;
+  console: ConsoleDelta | null;
+  http: HttpDelta[];
+  attributions: CardBehavior[];
+  unattributed: BehavioralDelta[];
+  scorecard: BehavioralScorecard;
+  warnings: string[];
+}
+
+/** Whether a label was declared by the agent or mined from its prose (`intents/`). */
+export type LabelSource = "declared" | "inferred";
+
+/**
+ * The recorded reason behind one line of a past commit (`git/why.rs`).
+ *
+ * Content-keyed and durable: it survives reformatting and rebase because the
+ * key is the line's normalised skeleton, never its position. Absent for any
+ * line whose content matches no stored key — the History tab shows the empty
+ * state rather than a guessed reason.
+ */
+export interface LineIntent {
+  /** 1-based line number in the committed file. */
+  line: number;
+  label?: string;
+  labelSource?: LabelSource;
+  turnId: string;
+  confidence: Confidence;
+  /** The user prompt that caused it, when captured; currently always absent. */
+  prompt?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Erosion detector (`erosion/`)
+// ---------------------------------------------------------------------------
+
+/** The kind of weakening the erosion scan detects (`erosion/rules.rs`). */
+export type ErosionCategory =
+  | "deletedAssertion"
+  | "ignoredTest"
+  | "widenedCatch"
+  | "removedNullCheck"
+  | "unsafeCast"
+  | "leftoverStub"
+  | "removedSafeguard"
+  | "droppedLog"
+  | "secret";
+
+/** One located weakening the scan found (`erosion/scan.rs`). */
+export interface ErosionFlag {
+  path: string;
+  /** Source line number, for display as `path:line`. */
+  line: number;
+  /** `DiffLine.index` of the offending line, for highlighting in the diff pane. */
+  index: number;
+  origin: LineOrigin;
+  category: ErosionCategory;
+  ruleId: string;
+  message: string;
+  /** The offending line, trimmed, for display. */
+  content: string;
+}
+
+/**
+ * Everything the erosion scan found (`erosion/scan.rs`).
+ *
+ * `warnings` carries rules whose TOML would not parse or whose regex would not
+ * compile — surfaced to the user, never silently dropped.
+ */
+export interface ErosionReport {
+  flags: ErosionFlag[];
+  warnings: string[];
+}
+
+/**
+ * One business-rule invariant, authored as a markdown file (`rules/mod.rs`).
+ *
+ * Prose for a human and for a reviewing agent — no pattern, matches nothing on
+ * its own. Handed to a review as context (`start_review`'s `context`) so the
+ * agent judges the diff against the rules the team stated.
+ */
+export interface RuleDoc {
+  id: string;
+  title: string;
+  /** The markdown body, front matter stripped. */
+  body: string;
+}
+
+/**
+ * Every rule doc loaded from a workspace (`rules::RulesReport`).
+ *
+ * `warnings` carries any file that would not read — surfaced, never dropped.
+ */
+export interface RulesReport {
+  rules: RuleDoc[];
+  warnings: string[];
 }
 
 /**
@@ -495,6 +788,9 @@ export type ObjectValue =
   | { kind: "primitive"; text: string }
   | { kind: "text"; text: string; truncated: boolean }
   | { kind: "null" }
+  /** A dictionary entry: a container with no value of its own; its `Key` and
+   * `Value` children carry everything. */
+  | { kind: "pair" }
   | { kind: "reference"; address: string; typeName: string; expandable: boolean }
   /** Already shown at `path`; a leaf, so rendering never recurses. */
   | { kind: "cycle"; address: string; path: string }
@@ -551,8 +847,6 @@ export interface InspectRequest {
   target: InspectTarget;
   root: RootSpec;
   caps: Caps;
-  /** Suspends the user's application while capturing. Opt-in. */
-  suspend: boolean;
 }
 
 /** A crash dump under `.code-basics/dumps/`. */
@@ -581,6 +875,14 @@ export interface DotnetProcess {
   parentPid?: number;
   /** ISO-8601, exactly as the enumerator wrote it. */
   startedAt?: string;
+  /**
+   * Full command line, when it could be read. The only place a `dotnet run`
+   * child's assembly appears — its OS name is just `dotnet` — so it is what
+   * separates the real application from the SDK's own build tools. Omitted when
+   * unknown (reading another process's command line is refused across an
+   * elevation or session boundary), which costs only preselection.
+   */
+  commandLine?: string;
 }
 
 /**
@@ -871,12 +1173,20 @@ export type ArchKind =
  * `dataAccess` runs project → `dataStore` and appears only in a component map.
  * It asserts that the project's manifest names a client library for that
  * technology — capability, not runtime use, and never a shared instance.
+ *
+ * `serviceCall` runs service → service and appears only in a component map. It
+ * asserts that the caller's `AddHttpClient` registration wrote a literal base
+ * address matching exactly one other project's `launchSettings.json`
+ * `applicationUrl`. The caller's address is read from source, but the callee's
+ * identity rests on that declaration file, which is what lets the arrow be
+ * drawn; it is only ever drawn between two boxes that already exist.
  */
 export type EdgeKind =
   | "projectReference"
   | "packageDependency"
   | "contains"
-  | "dataAccess";
+  | "dataAccess"
+  | "serviceCall";
 
 /**
  * Where a graph came from, and therefore how much of it can be trusted.

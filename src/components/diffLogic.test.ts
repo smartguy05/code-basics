@@ -2,11 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   allChangedIndices,
   changeMarks,
+  clampDiffSplit,
+  DEFAULT_DIFF_SPLIT,
+  diffSplitFraction,
+  focusedBaseline,
   hunkIndices,
+  loadDiffSplit,
   mapOffset,
   nextChangeLine,
+  normaliseEndings,
   normaliseWhitespace,
   onlyHunks,
+  saveDiffSplit,
   scrollLeftForThumb,
   scrollThumb,
 } from "./diffLogic";
@@ -351,5 +358,115 @@ describe("scrollThumb", () => {
     const thumb = scrollThumb({ contentWidth: 1000, viewportWidth: 0, scrollLeft: 0, trackWidth: 0 });
     expect(Number.isFinite(thumb.left)).toBe(true);
     expect(Number.isFinite(thumb.width)).toBe(true);
+  });
+});
+
+describe("normaliseEndings", () => {
+  it("brings CRLF, lone CR and LF all to LF", () => {
+    expect(normaliseEndings("a\r\nb\rc\nd")).toBe("a\nb\nc\nd");
+  });
+
+  it("leaves an already-LF document untouched", () => {
+    expect(normaliseEndings("a\nb\nc\n")).toBe("a\nb\nc\n");
+  });
+});
+
+describe("focusedBaseline", () => {
+  /** A diff line with explicit content and working-side line number. */
+  function ln(origin: LineOrigin, content: string, newLineno: number | null): DiffLine {
+    return { index: 0, origin, content, oldLineno: null, newLineno, noNewline: false };
+  }
+
+  it("reverts only the named hunk, leaving the rest of the file identical", () => {
+    // Working file: an insertion of two lines and a replaced line, framed by
+    // unchanged text above and below.
+    const working = "top\nINS-1\nINS-2\nkeep\nbottom";
+    const h: Hunk = {
+      oldStart: 2,
+      oldLines: 2,
+      newStart: 2,
+      newLines: 3, // INS-1, INS-2, keep
+      header: "",
+      lines: [
+        ln("addition", "INS-1", 2),
+        ln("addition", "INS-2", 3),
+        ln("deletion", "OLD", null),
+        ln("context", "keep", 4),
+      ],
+    };
+
+    // The hunk is reverted (additions gone, deletion restored); top/bottom stay.
+    expect(focusedBaseline(working, [h])).toBe("top\nOLD\nkeep\nbottom");
+  });
+
+  it("applies several hunks without their positions drifting", () => {
+    const working = "a\nADD-1\nb\nADD-2\nc";
+    const first: Hunk = {
+      oldStart: 2, oldLines: 0, newStart: 2, newLines: 1, header: "",
+      lines: [ln("addition", "ADD-1", 2)],
+    };
+    const second: Hunk = {
+      oldStart: 3, oldLines: 0, newStart: 4, newLines: 1, header: "",
+      lines: [ln("addition", "ADD-2", 4)],
+    };
+
+    // Both insertions removed; the surviving lines keep their order.
+    expect(focusedBaseline(working, [first, second])).toBe("a\nb\nc");
+  });
+
+  it("skips a hunk pointing past the end rather than throwing", () => {
+    const working = "a\nb";
+    const stale: Hunk = {
+      oldStart: 99, oldLines: 0, newStart: 99, newLines: 1, header: "",
+      lines: [ln("addition", "gone", 99)],
+    };
+    expect(focusedBaseline(working, [stale])).toBe("a\nb");
+  });
+});
+
+describe("diff pane split", () => {
+  it("clamps a fraction into the visible range", () => {
+    expect(clampDiffSplit(0.5)).toBe(0.5);
+    expect(clampDiffSplit(0.01)).toBe(0.15);
+    expect(clampDiffSplit(0.99)).toBe(0.85);
+  });
+
+  it("falls back to the even split for a non-finite fraction", () => {
+    expect(clampDiffSplit(NaN)).toBe(DEFAULT_DIFF_SPLIT);
+    expect(clampDiffSplit(Infinity)).toBe(DEFAULT_DIFF_SPLIT);
+  });
+
+  it("turns a pointer position into a clamped fraction of the track", () => {
+    expect(diffSplitFraction(150, 100, 200)).toBeCloseTo(0.25);
+    expect(diffSplitFraction(90, 100, 200)).toBe(0.15); // left of the track, clamped
+    expect(diffSplitFraction(400, 100, 200)).toBe(0.85); // right of the track, clamped
+  });
+
+  it("returns the even split when the track has no width", () => {
+    expect(diffSplitFraction(150, 100, 0)).toBe(DEFAULT_DIFF_SPLIT);
+  });
+
+  function storage(initial?: string) {
+    const map = new Map<string, string>();
+    if (initial !== undefined) map.set("code-basics.diffSplit", initial);
+    return {
+      map,
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => void map.set(k, v),
+    };
+  }
+
+  it("round-trips a saved fraction", () => {
+    const store = storage();
+    saveDiffSplit(store, 0.3);
+    expect(loadDiffSplit(store)).toBeCloseTo(0.3);
+  });
+
+  it("clamps what it stores and defaults when nothing is stored", () => {
+    const store = storage();
+    saveDiffSplit(store, 0.99);
+    expect(loadDiffSplit(store)).toBe(0.85);
+    expect(loadDiffSplit(storage())).toBe(DEFAULT_DIFF_SPLIT);
+    expect(loadDiffSplit(storage("not a number"))).toBe(DEFAULT_DIFF_SPLIT);
   });
 });

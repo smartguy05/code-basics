@@ -538,6 +538,7 @@ fn process(pid: u32, name: &str, parent: Option<u32>) -> DotnetProcess {
         path: None,
         parent_pid: parent,
         started_at: None,
+        command_line: None,
     }
 }
 
@@ -545,6 +546,14 @@ fn process(pid: u32, name: &str, parent: Option<u32>) -> DotnetProcess {
 fn process_at(pid: u32, name: &str, parent: Option<u32>, started_at: &str) -> DotnetProcess {
     DotnetProcess {
         started_at: Some(started_at.to_string()),
+        ..process(pid, name, parent)
+    }
+}
+
+/// A published .NET process that also reported its command line.
+fn process_with_cmd(pid: u32, name: &str, parent: Option<u32>, cmd: &str) -> DotnetProcess {
+    DotnetProcess {
+        command_line: Some(cmd.to_string()),
         ..process(pid, name, parent)
     }
 }
@@ -1100,6 +1109,80 @@ fn a_launcher_with_several_children_marks_none_of_them_as_the_application() {
             entry(&found, pid)
         );
     }
+}
+
+#[test]
+fn a_dotnet_run_child_running_the_config_assembly_is_named_as_the_application() {
+    // A `dotnet run` of a `UseAppHost=false` project starts the application as a
+    // child `dotnet exec <output>.dll`, whose OS name is just "dotnet" — so the
+    // name alone puts it in `is_build_tool` beside VBCSCompiler, and with two
+    // children the launcher would abstain and preselect nothing. The command
+    // line is the only place the application assembly appears, and matching it
+    // against the configuration's project stem is what lets the real child be
+    // named.
+    let mut cfg = config("api", "Api");
+    cfg.project = Some("Api/Api.csproj".into());
+
+    let found = attribute(
+        &[
+            process(8352, "dotnet", None),
+            process(9000, "VBCSCompiler", Some(8352)),
+            process_with_cmd(
+                9960,
+                "dotnet",
+                Some(8352),
+                "dotnet exec C:/src/Api/bin/Debug/net8.0/Api.dll",
+            ),
+        ],
+        &[("api".to_string(), Some(8352))],
+        &[cfg],
+    );
+
+    assert!(
+        entry(&found, 9960).is_application,
+        "the child running the configuration's assembly is the application: {:?}",
+        entry(&found, 9960)
+    );
+
+    let caveat = entry(&found, 8352)
+        .launcher_caveat
+        .as_deref()
+        .expect("the CLI still holds none of the user's objects");
+    assert!(
+        caveat.contains("(pid 9960)"),
+        "the caveat must point the user at the real application child: {caveat}"
+    );
+}
+
+#[test]
+fn a_dotnet_child_whose_command_line_names_a_different_assembly_is_not_preselected() {
+    // Guard against the command-line match being taken as "any .dll counts". The
+    // child runs Other.dll, the configuration targets Api — so nothing here is
+    // known to be the application and none may be preselected. (An AssemblyName
+    // override lands here too: the stem will not match and the honest answer is
+    // to abstain rather than parse the .csproj on a polled path.)
+    let mut cfg = config("api", "Api");
+    cfg.project = Some("Api/Api.csproj".into());
+
+    let found = attribute(
+        &[
+            process(8352, "dotnet", None),
+            process_with_cmd(
+                9960,
+                "dotnet",
+                Some(8352),
+                "dotnet exec C:/src/Other/bin/Debug/net8.0/Other.dll",
+            ),
+        ],
+        &[("api".to_string(), Some(8352))],
+        &[cfg],
+    );
+
+    assert!(
+        !entry(&found, 9960).is_application,
+        "a child running a different assembly must not be preselected: {:?}",
+        entry(&found, 9960)
+    );
 }
 
 #[test]

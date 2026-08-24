@@ -29,6 +29,7 @@ fn existing_dashboard_hooks() -> String {
         "PermissionRequest",
         "PostToolUse",
         "Stop",
+        "SubagentStop",
         "SessionEnd",
     ] {
         hooks.insert(event.to_string(), json!([ { "hooks": [handler.clone()] } ]));
@@ -63,6 +64,7 @@ fn installing_preserves_every_existing_hook_entry() {
         "PermissionRequest",
         "PostToolUse",
         "Stop",
+        "SubagentStop",
         "SessionEnd",
     ] {
         assert!(hooks.contains_key(event), "{event} was dropped");
@@ -231,6 +233,147 @@ fn removing_our_hooks_leaves_the_users_own_alone() {
     assert!(!text.contains(hooks_json::MARKER));
     assert!(text.contains("usb_lcd_dashboard"));
     assert!(!hooks_json::is_installed(&path));
+}
+
+/// Disabling one agent's capture must remove only that agent's own hook-config
+/// entries, never the other agent's. The two live in separate files, and a
+/// disable that reached into the wrong one would silently stop the agent the
+/// user did not touch.
+#[test]
+fn disable_removes_only_that_providers_entries() {
+    let dir = workspace();
+    let claude_path = dir.path().join(".claude").join("settings.json");
+    let codex_path = dir.path().join(".codex").join("hooks.json");
+
+    // Both agents' recorders installed into their own project hook files.
+    for path in [&claude_path, &codex_path] {
+        let (content, _) = hooks_json::plan_merge(path, Some(dir.path())).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+    assert!(hooks_json::is_installed(&claude_path));
+    assert!(hooks_json::is_installed(&codex_path));
+
+    // Disable only Claude Code.
+    let plan = uninstall_plan(ProviderId::ClaudeCode, dir.path(), InstallScope::Project).unwrap();
+
+    // The plan rewrites Claude's file, removing its marker, and never names
+    // Codex's file at all.
+    let claude_write = plan
+        .writes
+        .iter()
+        .find(|w| w.path == claude_path)
+        .expect("Claude's settings.json is in the plan");
+    assert!(!claude_write.content.contains(hooks_json::MARKER));
+    assert!(
+        plan.writes.iter().all(|w| w.path != codex_path),
+        "disabling Claude must not touch Codex's hooks.json: {:?}",
+        plan.writes.iter().map(|w| &w.path).collect::<Vec<_>>()
+    );
+
+    // Applying it leaves Codex's recorder installed and Claude's gone.
+    apply_writes(&plan.writes).unwrap();
+    assert!(!hooks_json::is_installed(&claude_path));
+    assert!(hooks_json::is_installed(&codex_path));
+}
+
+// -- shared repo-level hooks: gated on whether another agent still captures --
+
+/// A fresh git repository, so the shared `pre-commit`/`post-commit` hooks have
+/// somewhere to live — `guard::hook_path`/`whyhook::hook_path` resolve to `None`
+/// outside a repository.
+fn git_workspace() -> tempfile::TempDir {
+    let dir = workspace();
+    git2::Repository::init(dir.path()).unwrap();
+    dir
+}
+
+/// The pre-commit guard and post-commit why-hook are seeded by *both* providers'
+/// installs, so disabling one agent must take them with it only when no *other*
+/// agent is still capturing here. This pins that decision against the real
+/// `status(root).capture` check the orchestration uses, in whichever direction
+/// this machine's installed agents put it: shared-hook removal appears in the
+/// plan exactly when nothing else still captures.
+#[test]
+fn shared_hooks_are_removed_only_when_no_other_provider_still_captures() {
+    let dir = git_workspace();
+    let root = dir.path();
+
+    // Installing Claude Code intent capture also seeds the two shared hooks.
+    let plan = claude_code::ClaudeCode::new()
+        .install_plan(root, InstallScope::Project)
+        .unwrap();
+    apply_writes(&plan.writes).unwrap();
+
+    let guard_hook = crate::intents::guard::hook_path(root).expect("a pre-commit path in a repo");
+    let why_hook = crate::intents::whyhook::hook_path(root).expect("a post-commit path in a repo");
+    assert!(
+        crate::intents::guard::is_installed(&guard_hook),
+        "the guard was seeded"
+    );
+    assert!(why_hook.exists(), "the why-hook was seeded");
+
+    // The exact signal the orchestration gates on: any *other* provider capturing.
+    let another_captures = all()
+        .iter()
+        .filter(|p| p.id() != ProviderId::ClaudeCode)
+        .any(|p| p.status(root).capture.is_some());
+
+    let plan = uninstall_plan(ProviderId::ClaudeCode, root, InstallScope::Project).unwrap();
+    let removes_guard = plan.writes.iter().any(|w| w.path == guard_hook);
+    let removes_why = plan.writes.iter().any(|w| w.path == why_hook);
+
+    assert_eq!(
+        removes_guard, !another_captures,
+        "guard removal must track 'no other provider captures' (another={another_captures})"
+    );
+    assert_eq!(
+        removes_why, !another_captures,
+        "why-hook removal must track 'no other provider captures' (another={another_captures})"
+    );
+}
+
+/// The part (b) case made concrete: with a second agent (Codex) also capturing
+/// at project scope, disabling Claude Code must leave the shared hooks in place.
+/// Codex reports capture only where it is installed on this machine, so — like
+/// the sibling `statuses` test — the leave-in-place assertion is made where
+/// Codex is present and the last-agent fallback is checked where it is not.
+#[test]
+fn a_second_capturing_agent_keeps_the_shared_hooks_in_place() {
+    let dir = git_workspace();
+    let root = dir.path();
+
+    // Both agents' capture installed at project scope; either install seeds the
+    // shared hooks (the second finds the block current and adds nothing).
+    for provider in all() {
+        let plan = provider.install_plan(root, InstallScope::Project).unwrap();
+        apply_writes(&plan.writes).unwrap();
+    }
+
+    let guard_hook = crate::intents::guard::hook_path(root).unwrap();
+    let why_hook = crate::intents::whyhook::hook_path(root).unwrap();
+
+    // Exactly the "another provider" the gate weighs when Claude Code is disabled.
+    let codex_still_captures = codex::Codex::new().status(root).capture.is_some();
+
+    let plan = uninstall_plan(ProviderId::ClaudeCode, root, InstallScope::Project).unwrap();
+    let removes_shared = plan
+        .writes
+        .iter()
+        .any(|w| w.path == guard_hook || w.path == why_hook);
+
+    if codex_still_captures {
+        assert!(
+            !removes_shared,
+            "Codex still captures, so the shared hooks must be left in place: {:?}",
+            plan.writes.iter().map(|w| &w.path).collect::<Vec<_>>()
+        );
+    } else {
+        assert!(
+            removes_shared,
+            "no other agent captures, so disabling the last one takes the shared hooks"
+        );
+    }
 }
 
 // -- applying a plan --------------------------------------------------------
@@ -768,7 +911,9 @@ fn a_project_install_shows_up_in_the_statuses_row_where_codex_is_installed() {
 fn a_workspace_no_agent_has_run_in_has_no_merged_history() {
     let dir = workspace();
 
-    let (records, labels) = history(dir.path());
+    let HistoryMined {
+        records, labels, ..
+    } = history(dir.path());
 
     assert!(records.is_empty(), "got: {records:?}");
     assert!(labels.is_empty(), "got: {labels:?}");
@@ -780,7 +925,7 @@ fn a_workspace_no_agent_has_run_in_has_no_merged_history() {
 fn merged_history_comes_back_sorted_by_sequence() {
     let dir = workspace();
 
-    let (records, _) = history(dir.path());
+    let HistoryMined { records, .. } = history(dir.path());
 
     let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
     let mut sorted = seqs.clone();

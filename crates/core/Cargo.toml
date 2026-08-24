@@ -22,6 +22,12 @@ toml.workspace = true
 regex.workspace = true
 specta.workspace = true
 uuid.workspace = true
+yaml-rust2.workspace = true
+
+# HTTP replay for behavioral before/after testing. Blocking client only (the
+# replay layer is synchronous and the command wraps it in `spawn_blocking`);
+# rustls so no system OpenSSL is needed on Windows.
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls", "json"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

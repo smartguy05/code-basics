@@ -14,10 +14,15 @@
 //! * `Sdk="Microsoft.NET.Sdk.Web"` and `<IsAspireHost>` are **HIGH**: an SDK
 //!   attribute is the author declaring what kind of program this is.
 //! * An `applicationUrl` in `launchSettings.json`, a `connectionStrings` key in
-//!   `appsettings*.json`, an Aspire `AddProject<Projects.X>()` and an
-//!   `AddHttpClient` registration are **MEDIUM**. Each of them can label
-//!   something that already exists; none of them may bring anything into
-//!   existence.
+//!   `appsettings*.json` and an Aspire `AddProject<Projects.X>()` are
+//!   **MEDIUM**. Each of them can label something that already exists; none of
+//!   them may bring anything into existence.
+//! * An `AddHttpClient` registration whose literal base address matches exactly
+//!   one other project's `applicationUrl` is a **HIGH call** — a
+//!   [`Signal::call`], not a component signal. It claims a service → service
+//!   edge, and it is HIGH because its evidence cites the *callee's*
+//!   `launchSettings.json` (a declaration file) rather than the caller's `.cs`.
+//!   See [`http_clients`] for why that is not the workaround it might look like.
 //!
 //! # Why nothing read out of a `.cs` file can ever be HIGH
 //!
@@ -25,16 +30,20 @@
 //! [`admit`](super::framework::admit) refuses a HIGH signal whose evidence
 //! cites a file that is not a manifest or a configuration file
 //! (`DiscardReason::UnverifiableEvidence`), and `.cs` is not on that list. So
-//! the Aspire and `AddHttpClient` rules below, whose evidence is always a line
-//! of C#, are structurally incapable of drawing an arrow no matter how
-//! confident the match is. They enrich a component that a manifest already
-//! earned, or they produce a warning.
+//! the Aspire rule below, whose evidence is always a line of C#, is
+//! structurally incapable of drawing an arrow no matter how confident the
+//! match is. It enriches a component that a manifest already earned, or it
+//! produces a warning.
 //!
-//! That is the right answer rather than an obstacle to work around, and it is
-//! worth stating plainly because the obvious workaround — citing the project
-//! file while having actually read the source — would defeat the gate by
-//! lying to it. `an_httpclient_never_produces_a_high_signal_from_a_source_file`
-//! pins it.
+//! The `AddHttpClient` call rule reaches a HIGH signal without breaking this,
+//! and the distinction is exact: it does *not* cite the source line it read the
+//! address from. It reads the address out of the `.cs`, uses it only to look up
+//! which project's `launchSettings.json` declares that binding, and then cites
+//! **that** file as its evidence. The claim therefore rests on a declaration
+//! the author wrote, not on source — which is the opposite of the workaround
+//! (citing a manifest while having actually read the source) the gate exists to
+//! refuse. `an_httpclient_never_produces_a_high_signal_from_a_source_file` pins
+//! that no signal citing a `.cs` file is ever HIGH.
 //!
 //! # Why the symbol index is not consulted
 //!
@@ -461,15 +470,32 @@ fn http_service(read: &Read<'_>, out: &mut DotnetSignals) {
 /// `launchSettings.json` and a committed diagram.
 struct Bindings {
     /// `(host, port)` → the projects whose launch profiles claim it. A `Vec`
-    /// rather than a single project because two projects may well declare the
+    /// rather than a single binding because two projects may well declare the
     /// same port in different profiles, and that ambiguity has to be visible to
     /// the matcher rather than silently resolved by whichever was scanned first.
-    by_authority: BTreeMap<(String, u16), Vec<String>>,
+    by_authority: BTreeMap<(String, u16), Vec<Binding>>,
+}
+
+/// One project's claim on a `(host, port)`, with the receipt for it.
+///
+/// The receipt is what lets an `AddHttpClient` match be drawn as a real arrow:
+/// the callee's identity rests on its own `launchSettings.json`, a declaration
+/// file, rather than on the caller's source. Everything needed to cite that
+/// file — the project id it belongs to, the workspace-relative path, and the
+/// `applicationUrl` line — is captured here where the file is read, so the
+/// matcher never has to touch the disk again or quote the url.
+struct Binding {
+    project_name: String,
+    project_id: String,
+    /// Workspace-relative, forward-slashed — the callee's launch settings file.
+    launch_settings: PathBuf,
+    /// 1-based line of the `applicationUrl` this binding came from.
+    line: Option<u32>,
 }
 
 impl Bindings {
     fn of(workspace: &Workspace, reads: &[Read<'_>], out: &mut DotnetSignals) -> Self {
-        let mut by_authority: BTreeMap<(String, u16), Vec<String>> = BTreeMap::new();
+        let mut by_authority: BTreeMap<(String, u16), Vec<Binding>> = BTreeMap::new();
 
         for read in reads {
             let path = read
@@ -499,25 +525,32 @@ impl Bindings {
 
                 for url in urls.split(';') {
                     if let Some(authority) = authority(url.trim()) {
-                        by_authority
-                            .entry(authority)
-                            .or_default()
-                            .push(read.project.name.clone());
+                        by_authority.entry(authority).or_default().push(Binding {
+                            project_name: read.project.name.clone(),
+                            project_id: read.project.id.clone(),
+                            launch_settings: relative.clone(),
+                            line,
+                        });
                     }
                 }
             }
         }
 
-        for projects in by_authority.values_mut() {
-            projects.sort();
-            projects.dedup();
+        for bindings in by_authority.values_mut() {
+            bindings.sort_by(|a, b| a.project_name.cmp(&b.project_name));
+            bindings.dedup_by(|a, b| a.project_id == b.project_id);
         }
         Self { by_authority }
     }
 
-    fn project_at(&self, authority: &(String, u16)) -> Option<&str> {
+    /// The binding on an authority when exactly one project claims it.
+    ///
+    /// Abstains at zero or more than one, the same rule the matcher relies on:
+    /// a call resolves to a service only when a single project answers on that
+    /// `host:port`, because anything else is a guess about which one was meant.
+    fn project_at(&self, authority: &(String, u16)) -> Option<&Binding> {
         match self.by_authority.get(authority) {
-            Some(projects) if projects.len() == 1 => Some(projects[0].as_str()),
+            Some(bindings) if bindings.len() == 1 => Some(&bindings[0]),
             _ => None,
         }
     }
@@ -966,23 +999,31 @@ fn aspire_projects(
 /// exactly one other project's `applicationUrl`. Both halves of that are
 /// strings the author wrote down, and they either match or they do not.
 ///
-/// # This still never draws an arrow
+/// # This draws an arrow, and here is why it is allowed to
 ///
-/// The evidence is a `.cs` file, so the signal is MEDIUM and the gate will
-/// refuse to create anything from it. What it does is annotate the callee's
-/// component — which that project's own `Microsoft.NET.Sdk.Web` earned — with
-/// the name of the caller. If the callee is not a web project, nothing exists
-/// to annotate and the gate counts the refusal.
+/// A matched base address emits a [`Signal::call`], which is HIGH, and the gate
+/// admits it as a service → service call. The subtlety that makes this honest:
+/// the caller's address is read from a `.cs` file, which could never be HIGH on
+/// its own — but the *identity of the callee* is resolved through that project's
+/// own `launchSettings.json`, a declaration file the author wrote, and the
+/// signal's evidence cites **that file**, not the source line. So the claim
+/// rests on a declaration, and [`super::framework::admit`]'s HIGH
+/// declaration-file screen passes rather than being lied to.
 ///
-/// # Why the base address is quoted in the evidence but never in a warning
+/// The arrow is still only drawn when both endpoints already exist as service
+/// boxes — the caller and the callee both have to have earned a service node —
+/// and that check is [`super::super::components`]'s, not this producer's. If the
+/// callee is not a web project, no box exists to point at and the assembly step
+/// abstains with a warning.
 ///
-/// The excerpt is the line that carried the fact, which is the strongest
-/// receipt available. It is only ever produced on the path where the address
-/// *matched* a `launchSettings.json` binding already checked into this
-/// repository, so it reveals nothing the workspace did not already contain. On
-/// every other path — including an address pointing at a real internal host —
-/// no signal is emitted and the warning describes the failure without repeating
-/// the address.
+/// # The base address is never quoted, anywhere
+///
+/// Unlike the earlier design, the caller's source line is *not* the evidence:
+/// the evidence is [`Evidence::elided_value`] over the callee's
+/// `launchSettings.json`, so no url is quoted even on the matched path. On every
+/// path that does not match — including an address pointing at a real internal
+/// host — no signal is emitted and the warning describes the failure without
+/// repeating the address.
 fn http_clients(
     read: &Read<'_>,
     path: &Path,
@@ -1009,7 +1050,7 @@ fn http_clients(
                     .map(|c| (*number, text.trim().to_string(), c[1].to_string()))
             });
 
-        let Some((address_line, excerpt, url)) = found else {
+        let Some((_address_line, _excerpt, url)) = found else {
             out.warnings.push(format!(
                 "{}: the AddHttpClient registration at {}:{number} was not attributed to a \
                  service because no literal base address is written there",
@@ -1029,22 +1070,26 @@ fn http_clients(
             continue;
         };
 
+        // The call cites the *callee's* `launchSettings.json`, a declaration
+        // file, which is what makes the signal HIGH and the arrow drawable. The
+        // caller's `.cs` line (`_address_line`, `_excerpt`) is deliberately not
+        // the evidence: a source line could never survive the gate's HIGH
+        // declaration-file screen, and anchoring on it would be lying to the
+        // gate to get an arrow it would otherwise refuse.
         match services.project_at(&authority) {
-            Some(target) if target == read.project.name => out.warnings.push(format!(
+            Some(binding) if binding.project_name == read.project.name => {
+                out.warnings.push(format!(
                 "{}: the AddHttpClient registration at {}:{number} addresses this project's own \
                  launch profile, so no call between services was recorded",
                 read.project.name,
                 display(path)
+            ))
+            }
+            Some(binding) => out.signals.push(Signal::call(
+                &read.project.id,
+                &binding.project_id,
+                Evidence::elided_value(&binding.launch_settings, binding.line, "applicationUrl"),
             )),
-            Some(target) => out.signals.push(
-                Signal::medium(
-                    ComponentKind::HttpService,
-                    target,
-                    &read.project.id,
-                    Evidence::new(path, Some(address_line), excerpt),
-                )
-                .with_detail(format!("called over HTTP by {}", read.project.name)),
-            ),
             None => out.warnings.push(format!(
                 "{}: the AddHttpClient registration at {}:{number} has a literal base address \
                  that matches no launch profile url in this workspace, so the service it calls \

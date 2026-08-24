@@ -22,12 +22,13 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use super::{IntentLabel, IntentRecord, ProviderId};
+use super::{IntentLabel, IntentPrompt, IntentRecord, ProviderId};
 
 pub mod claude_code;
 pub mod codex;
 pub mod hooks_json;
 pub mod instructions;
+pub mod settings_merge;
 
 /// One matcher covering both agents' edit tools.
 ///
@@ -125,9 +126,20 @@ pub trait Provider {
 
     /// Read past sessions for this workspace into records.
     ///
-    /// Labels come back too where the agent's own history makes them
-    /// recoverable, but they are necessarily coarser than hook-captured ones.
-    fn history(&self, root: &Path) -> Result<(Vec<IntentRecord>, Vec<IntentLabel>)>;
+    /// Labels and the user's prompts come back too where the agent's own
+    /// history makes them recoverable. Labels are necessarily coarser than
+    /// hook-captured ones; prompts are keyed to the same synthesised turn id as
+    /// the records from that turn, so they join.
+    fn history(&self, root: &Path) -> Result<HistoryMined>;
+}
+
+/// What a session sweep recovered: records, coarse labels, and user prompts —
+/// each keyed to the same synthesised turn id so they join.
+#[derive(Debug, Default)]
+pub struct HistoryMined {
+    pub records: Vec<IntentRecord>,
+    pub labels: Vec<IntentLabel>,
+    pub prompts: Vec<IntentPrompt>,
 }
 
 /// Perform a plan, writing every file it names.
@@ -136,9 +148,18 @@ pub trait Provider {
 /// clever: the plan already computed the exact final contents, precisely so
 /// that what the user approved is what gets written.
 pub fn apply_plan(plan: &InstallPlan) -> Result<()> {
+    apply_writes(&plan.writes)
+}
+
+/// Perform a set of planned writes, backing up any file being merged into first.
+///
+/// Split out from [`apply_plan`] so callers that assemble writes without a full
+/// [`InstallPlan`] — the instruction-template library — reuse the same
+/// backup-then-write behaviour rather than reimplementing it.
+pub fn apply_writes(writes: &[PlannedWrite]) -> Result<()> {
     use anyhow::Context;
 
-    for write in &plan.writes {
+    for write in writes {
         if let Some(parent) = write.path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -188,19 +209,94 @@ pub fn statuses(root: &Path) -> Vec<ProviderStatus> {
 /// One provider failing — an unreadable home directory, a format that moved —
 /// must not cost the other's history, so failures are dropped rather than
 /// propagated.
-pub fn history(root: &Path) -> (Vec<IntentRecord>, Vec<IntentLabel>) {
-    let mut records = Vec::new();
-    let mut labels = Vec::new();
+pub fn history(root: &Path) -> HistoryMined {
+    let mut merged = HistoryMined::default();
 
     for provider in all() {
-        if let Ok((r, l)) = provider.history(root) {
-            records.extend(r);
-            labels.extend(l);
+        if let Ok(mined) = provider.history(root) {
+            merged.records.extend(mined.records);
+            merged.labels.extend(mined.labels);
+            merged.prompts.extend(mined.prompts);
         }
     }
 
-    records.sort_by_key(|r| r.seq);
-    (records, labels)
+    merged.records.sort_by_key(|r| r.seq);
+    merged
+}
+
+/// Everything disabling `provider`'s intent capture would do, computed without
+/// touching disk. Mirrors the install path and is previewed and applied through
+/// the same [`InstallPlan`] / [`apply_writes`] machinery.
+///
+/// Removes only that provider's own marked hook-config entries, from the same
+/// settings file its install targeted (Claude Code's `settings.json`, Codex's
+/// `hooks.json`). The other agent's file is never named.
+///
+/// The repository-level commit guard (`pre-commit`) and durable-why hook
+/// (`post-commit`) are shared: **both** agents' installs add them. They are
+/// removed here only when no *other* provider is still capturing in this
+/// workspace, so disabling one agent never yanks a hook the other still relies
+/// on. The `CLAUDE.md` / `AGENTS.md` instruction section is inert prose and is
+/// deliberately left in place.
+pub fn uninstall_plan(
+    provider: ProviderId,
+    root: &Path,
+    scope: InstallScope,
+) -> Result<InstallPlan> {
+    // The recorder and the gate share one file per provider+scope; that path
+    // resolver is the same one C2 added for the gate installer.
+    let path = crate::qgate::install::settings_path(provider, root, scope, None)?;
+
+    let mut writes = Vec::new();
+    if let Some(content) = hooks_json::plan_removal(&path)? {
+        writes.push(PlannedWrite {
+            path,
+            content,
+            merges_existing: true,
+        });
+    }
+
+    // Only the last capturing agent takes the shared repo-level hooks with it.
+    if !another_provider_capturing(provider, root) {
+        if let Some(hook) = super::guard::hook_path(root) {
+            if let Some(content) = super::guard::plan_removal(&hook)? {
+                writes.push(PlannedWrite {
+                    path: hook,
+                    content,
+                    merges_existing: true,
+                });
+            }
+        }
+        if let Some(hook) = super::whyhook::hook_path(root) {
+            if let Some(content) = super::whyhook::plan_removal(&hook)? {
+                writes.push(PlannedWrite {
+                    path: hook,
+                    content,
+                    merges_existing: true,
+                });
+            }
+        }
+    }
+
+    Ok(InstallPlan {
+        provider,
+        scope,
+        writes,
+        caveats: Vec::new(),
+    })
+}
+
+/// Is any agent *other than* `provider` still capturing in this workspace?
+///
+/// This is the signal that the shared repo-level hooks must be left in place
+/// when `provider` is disabled — checked against the other providers' live
+/// status so the decision reflects what is actually installed, not an
+/// assumption.
+fn another_provider_capturing(provider: ProviderId, root: &Path) -> bool {
+    all()
+        .iter()
+        .filter(|p| p.id() != provider)
+        .any(|p| p.status(root).capture.is_some())
 }
 
 /// The commit guard, as an extra write on an install plan.
@@ -215,6 +311,24 @@ pub(crate) fn guard_write(root: &Path, caveats: &mut Vec<String>) -> Option<Plan
     caveats.push(format!(
         "A guard is added to {} so a commit that still carries a rejection note \
          is refused. Commit with CB_ALLOW_REJECTED=1 to override it.",
+        write.path.display()
+    ));
+
+    Some(write)
+}
+
+/// The durable-why post-commit hook, as an extra write on an install plan.
+///
+/// Repository-level like the guard, and for the same reason: a commit made from
+/// the command line — including by an agent — goes through the system `git`,
+/// which the in-app commit's note-writing never reaches. Installing from both
+/// providers is harmless — the second plan finds the block already current.
+pub(crate) fn whyhook_write(root: &Path, caveats: &mut Vec<String>) -> Option<PlannedWrite> {
+    let write = super::whyhook::planned_write(root)?;
+
+    caveats.push(format!(
+        "A post-commit hook is added to {} so commits made from the command line \
+         also persist the intent behind each line into a durable git note.",
         write.path.display()
     ));
 

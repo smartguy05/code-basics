@@ -8,17 +8,32 @@ React 19 + TypeScript, built with Vite, rendered inside the native Tauri window 
 src/
 ├── main.tsx              entry: mounts <App/> in an ErrorBoundary; suppresses the
 │                         webview context menu (editable fields keep the native one)
-├── App.tsx               titlebar (branch widget, run-config slot) + tab row (Run
+├── App.tsx               titlebar (menu bar, branch widget, run-config slot) + tab row (Run
 │                         first), workspace open/reopen, recents (localStorage);
 │                         Run + Tests stay mounted while hidden so running
 │                         processes keep their consoles
 ├── views/
-│   ├── RunView.tsx       file-tree sidebar, editor pane over per-run console tabs,
+│   ├── RunView.tsx       file-tree sidebar, editor pane (back/forward file
+│   │                     history + pinnable tabs) over per-run console tabs,
 │   │                     config dropdown (portaled to the titlebar), env picker,
 │   │                     build actions, secrets
+│   ├── editorNavLogic.ts editor back/forward stack + tab pin/partition (pure)
 │   ├── TestsView.tsx     test configs, run / re-run failed, live progress + tree
-│   ├── ChangesView.tsx   git status, comparison modes, side-by-side/inline diff
-│   ├── HistoryView.tsx   commit log, per-commit diffs, branches, push/pull/fetch
+│   ├── ChangesView.tsx   git status, comparison modes, side-by-side/inline diff;
+│   │                     a Files / Intent / Stashes / Erosion toggle over the file
+│   │                     list (IntentPanel with staged badges + before/after
+│   │                     behavioral evidence, StashPanel stash manager, ErosionPanel
+│   │                     rules scan)
+│   ├── behavioralPanelLogic.ts  the Intent view's runtime-evidence decisions:
+│   │                     per-card badge, score line, delta/status tone (tested)
+│   ├── ErosionPanel.tsx  the cb_core::erosion scan grouped by category, each flag
+│   │                     clicking through to its diff line; a bad-rule warning banner
+│   ├── erosionLogic.ts   the erosion decisions (tested): groupByCategory, badgeCount,
+│   │                     categoryLabel, category order
+│   ├── HistoryView.tsx   commit log, per-commit diffs, a branch folder tree
+│   │                     (Local/Remote, multi-select bulk delete), push/pull/fetch
+│   ├── historyLogic.ts   its decisions: commit-time formatting, and the
+│   │                     sequential best-effort bulk branch delete + its summary
 │   ├── ArchitectureView.tsx  the Architecture tab: diagram list (two built-ins +
 │   │                     saved files), canvas, editor, save-a-copy
 │   ├── architecture/     that tab's parts — see below
@@ -44,15 +59,22 @@ src/
 │   ├── ObjectTree.tsx    inspected object graph: one distinct rendering per
 │                         ObjectValue, so "null" never looks like "unreadable"
 │   ├── DiffView.tsx      CodeMirror diff (side-by-side MergeView or unified),
-│   │                     per-line selection
+│   │                     per-line selection, Ctrl+F in-file search (both panes)
 │   ├── ConfigEditor.tsx  RunConfig form (project, launch profile dropdown, args,
 │   │                     env, cwd, ...; Delete lives in its footer)
 │   ├── BranchMenu.tsx    titlebar branch widget: tree, sections, fetch/pull/push,
 │   │                     right-click create-from / merge-into, abort-merge
+│   ├── treeLogic.ts      the slash-name → folder-tree builder (buildTree /
+│   │                     ancestorPaths), shared by BranchMenu and HistoryView
+│   ├── MenuBar.tsx       menu bar: File (Open/Rescan/Exit) + Enhancements with
+│   │                     fly-out Add Instructions/Run Agent submenus (enhancementsLogic.ts)
+│   ├── enhancementsLogic.ts  the Enhancements decisions: add/remove action, badges,
+│   │                     empty-state text, run-once click/badge + confirm messages
 │   ├── RunConfigMenu.tsx titlebar run-config dropdown: status dots, favourites,
 │   │                     reorder, new/import items (portal from RunView)
 │   ├── FileTree.tsx      lazy workspace directory tree (one fs_list_dir per expand)
-│   ├── FileEditor.tsx    CodeMirror editor over one file; Ctrl+S saves, reports dirty,
+│   ├── FileEditor.tsx    CodeMirror editor over one file; Ctrl+S saves, Ctrl+F finds
+│   │                     in-file (@codemirror/search), reports dirty,
 │   │                     reveals a requested line (clamped, token-guarded), and owns
 │   │                     the whole language-server client (didOpen/didChange/didClose,
 │   │                     the inline usages rows, both overlays)
@@ -108,6 +130,14 @@ Three details that differ from `inspectRequest`, all forced by the same fact —
 - Each request carries a monotonic **`token`**. Choosing a symbol in a file that is *already open* changes neither the path nor the mount, so an equality check on the fields would decide nothing had happened and leave the user on the line they jumped from. A number that only goes up cannot collide with itself. `FileEditor` takes `revealLine` + `revealToken` and reacts to the token; it also remembers the last token it served, so an unrelated re-render cannot replay an old jump and drag the cursor back.
 - `RunView` consumes each request **by object identity** in a ref, the way `InspectView` does. Without that guard every process event, tab switch or status tick would re-open the file.
 - An action hit **selects** its configuration and never starts it. Starting a process off a fuzzy-matched keystroke is a guess whose cost is a build, a port, or a service talking to something real. `RunView` also checks the id against its own list first — the palette ranks over every configuration, that list is app configurations only, and setting a selection to an id it does not hold would empty the toolbar and look like the app breaking.
+
+### Editor navigation history and pinned tabs
+
+The Run tab's file tabs behave like a browser's, and both behaviours keep their decisions in `views/editorNavLogic.ts` (pure, tested in `editorNavLogic.test.ts`) with `RunView` as the rendering shell — the same rule as everywhere else.
+
+- **Back/forward.** A back/forward stack (`NavHistory` = entries + an index; `pushNav` truncates the forward entries, dedupes the current one, and caps at 50 by evicting from the front) records every navigation into the editor: a file opened from the tree, a file tab clicked, and — crucially — the `pendingOpen` consume, which is where the palette, the architecture diagram **and middle-click go-to-definition** all land. So one recording point covers all three producers. `navBack`/`navForward` move the index and hand back the entry; opening a file does *not* record (it is also how Back reopens a closed file, browser-style), and closing a tab does not record either. The browser side mouse buttons drive it (`navMouseAction` maps `button === 3` → back, `4` → forward) through a window-level, capture-phase `mousedown`+`auxclick` listener — `preventDefault` on mousedown, the same guard the middle-click handlers use, which also suppresses any WebView2 back/forward. It is armed only while the Run tab is on screen (`active` prop from `App`): this view stays mounted when hidden, and moving the active file behind another tab would change what the user sees with no visible cause. The mouse handler reads the history through a ref (`navHistoryRef`, mirrored by `writeNav`) so a listener captured once never goes stale — the `inspectInfoRef`/`writeInspect` idiom.
+- **Reveal tokens.** All reveals now draw their token from one `RunView`-owned counter (`revealSeq`) rather than `App`'s `requestToken`, so a history jump and a palette open cannot mint colliding tokens — a reveal only has to *differ* from the last one the editor applied to fire.
+- **Pinned tabs.** `pinnedFiles` (an in-memory `Set`, matching `openFiles` — neither persists) partitions the tabs (`partitionTabs`, order-preserving) into a pinned row above the normal strip; with nothing pinned it is byte-for-byte the old single strip. The 📌 control (`togglePin`) sits beside the × on every tab, and closing a file clears its pin.
 
 ## The IPC layer
 

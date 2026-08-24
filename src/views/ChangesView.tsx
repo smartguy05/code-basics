@@ -1,9 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DiffView, type DiffLayout, type DiffViewHandle } from "../components/DiffView";
-import { allChangedIndices, onlyHunks } from "../components/diffLogic";
+import {
+  allChangedIndices,
+  focusedBaseline,
+  normaliseEndings,
+  onlyHunks,
+} from "../components/diffLogic";
 import { buildSections, statusLetter, type FileSection } from "./changesLogic";
 import { Sidebar } from "../components/Sidebar";
 import { IntentPanel } from "../components/IntentPanel";
+import {
+  httpFileCandidates,
+  pickBehavioralConfig,
+  resolveHttpFiles,
+} from "../components/behavioralPanelLogic";
+import { verifyClaimsAction } from "../components/claimVerifyLogic";
+import { ErosionPanel } from "../components/ErosionPanel";
+import { badgeCount } from "../components/erosionLogic";
+import { StashPanel } from "../components/StashPanel";
 import * as api from "../ipc/api";
 import { applyEditorFontSize, loadEditorFontSize, onEditorFontSizeChange } from "../editorFontSize";
 import {
@@ -12,30 +26,58 @@ import {
   stepFontSize,
 } from "../editorFontSizeLogic";
 import type {
+  BehavioralReport,
   Changelist,
   ComparisonMode,
   FileChange,
   FileContents,
   FileDiff,
+  ErosionFlag,
+  ErosionReport,
   GroupFile,
   InstallScope,
   IntentGroup,
   ProviderId,
   ProviderStatus,
   RejectSummary,
+  RunConfig,
+  Scorecard,
+  UnfulfilledClaim,
   WorkingStatus,
 } from "../ipc/types";
 
 const DIFF_LAYOUT_KEY = "code-basics.diffLayout";
+
+/** A zeroed scorecard for before the first intent refresh. */
+const EMPTY_SCORECARD: Scorecard = {
+  claims: 0,
+  evidenced: 0,
+  unmatched: 0,
+  hunks: 0,
+  attributedHunks: 0,
+  unattributedLines: 0,
+};
 const GROUPING_KEY = "code-basics.changesGrouping";
 const COLLAPSE_KEY = "code-basics.diffCollapseUnchanged";
 const WHITESPACE_KEY = "code-basics.diffIgnoreWhitespace";
 
+/**
+ * How often the Changes tab re-reads the working tree while it is showing, so
+ * edits made outside the app (by an agent, a terminal, another tool) appear
+ * without switching tabs. Gentle on purpose: each tick re-runs the intent and
+ * erosion scans, and the results are de-churned so nothing re-renders unless
+ * the working tree actually changed.
+ */
+const POLL_MS = 2000;
+
 /** How the sidebar organises the working tree. */
-type Grouping = "files" | "intent";
+type Grouping = "files" | "intent" | "stashes" | "erosion";
 
 function loadGrouping(): Grouping {
-  return localStorage.getItem(GROUPING_KEY) === "intent" ? "intent" : "files";
+  const stored = localStorage.getItem(GROUPING_KEY);
+  return stored === "intent" || stored === "stashes" || stored === "erosion"
+    ? stored
+    : "files";
 }
 
 function loadDiffLayout(): DiffLayout {
@@ -58,7 +100,28 @@ const MODE_LABELS: Record<ComparisonMode, string> = {
   indexToHead: "Staged (vs HEAD)",
 };
 
-export function ChangesView() {
+export function ChangesView({
+  behavioral,
+  onOpenReview,
+  onRunBehavioral,
+  onVerifyClaims,
+}: {
+  /**
+   * The finished before/after report, owned by `App` (the run itself happens in
+   * the floating `BehavioralPanel`). Held here only to badge each intent card
+   * with the deltas attributed to it; `null` until a run completes.
+   */
+  behavioral: BehavioralReport | null;
+  onOpenReview: () => void;
+  /**
+   * Open the before/after window for `configId` (the run streams there).
+   * `httpFiles` names the `.http` files to replay, or `null` to let the backend
+   * discover them (the default).
+   */
+  onRunBehavioral: (configId: string, httpFiles: string[] | null) => void;
+  /** Open the before/after window, then hand its evidence to the claim agent. */
+  onVerifyClaims: (configId: string, httpFiles: string[] | null) => void;
+}) {
   const [status, setStatus] = useState<WorkingStatus | null>(null);
   const [mode, setMode] = useState<ComparisonMode>("workingToHead");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -103,6 +166,22 @@ export function ChangesView() {
   const diffHandle = useRef<DiffViewHandle | null>(null);
 
   /**
+   * State the background poll reads without wanting to re-fire on every change.
+   *
+   * `busyRef` mirrors `busy` so the interval can skip a tick while an action is
+   * in flight, without the interval effect resubscribing each time `busy`
+   * flips. The `*Signature` refs hold a serialisation of the last committed
+   * result for each scan, so a poll that finds nothing changed skips the
+   * setState entirely — no re-render, no card recompute — while a real change
+   * still goes through.
+   */
+  const busyRef = useRef(false);
+  const statusSignature = useRef<string | null>(null);
+  const intentSignature = useRef<string | null>(null);
+  const erosionSignature = useRef<string | null>(null);
+  busyRef.current = busy;
+
+  /**
    * F7 / Shift+F7 step through the changes, as they do in Rider.
    *
    * Window-level and capture phase, matching `SearchEverywhere`: the focus is
@@ -124,7 +203,29 @@ export function ChangesView() {
 
   const [grouping, setGrouping] = useState<Grouping>(loadGrouping);
   const [intentGroups, setIntentGroups] = useState<IntentGroup[]>([]);
+  const [scorecard, setScorecard] = useState<Scorecard>(EMPTY_SCORECARD);
+  const [unfulfilled, setUnfulfilled] = useState<UnfulfilledClaim[]>([]);
+  const [erosion, setErosion] = useState<ErosionReport | null>(null);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  /**
+   * The runtime before/after comparison for the current intent view, and the
+   * config it runs. The intent sidebar has no console of its own, so the run's
+   * streamed output is condensed into a one-line status rather than shown raw.
+   */
+  const [configs, setConfigs] = useState<RunConfig[]>([]);
+  /** The compact before/after actions menu in the intent header. */
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  /**
+   * Optional overrides for the before/after run, set in the Evidence dropdown.
+   *
+   * `configOverride` is a config id to replay instead of the auto-picked one
+   * (`null` keeps the auto pick); `selectedHttp` is the set of changed `.http`
+   * files to replay explicitly (empty keeps the backend's auto discovery). Both
+   * default to the existing behaviour, so a user who never opens the picker gets
+   * exactly the old auto config + null path.
+   */
+  const [configOverride, setConfigOverride] = useState<string | null>(null);
+  const [selectedHttp, setSelectedHttp] = useState<string[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   /** Diff lines to preselect, so opening a card lands on its lines. */
   const [highlight, setHighlight] = useState<number[]>([]);
@@ -155,8 +256,9 @@ export function ChangesView() {
   function changeGrouping(next: Grouping) {
     setGrouping(next);
     localStorage.setItem(GROUPING_KEY, next);
-    // The files view has no cards, so nothing may stay scoped to one.
-    if (next === "files") {
+    // Only the intent view has cards, so nothing may stay scoped to one when
+    // leaving it (for either the files or the stashes view).
+    if (next !== "intent") {
       setSelectedGroup(null);
       setHighlight([]);
       setGroupHunks(null);
@@ -171,8 +273,15 @@ export function ChangesView() {
         // never used them simply has none.
         api.gitChangelists().catch(() => ({ version: 1, groups: [] })),
       ]);
-      setStatus(nextStatus);
-      setGroups(nextGroups.groups);
+      // De-churn: the poll calls this on a timer, and replacing state with an
+      // identical value would re-render the list for nothing. Only commit when
+      // the working tree actually changed.
+      const signature = JSON.stringify([nextStatus, nextGroups]);
+      if (signature !== statusSignature.current) {
+        statusSignature.current = signature;
+        setStatus(nextStatus);
+        setGroups(nextGroups.groups);
+      }
       setError(null);
     } catch (e) {
       setError(api.errorMessage(e));
@@ -183,6 +292,33 @@ export function ChangesView() {
     void refreshStatus();
   }, [refreshStatus]);
 
+  // The run configs, so the before/after action has a config to replay. A test
+  // config is preferred (its outcomes are the sharpest evidence); otherwise the
+  // first config the workspace knows about.
+  useEffect(() => {
+    void api
+      .currentWorkspace()
+      .then((ws) => setConfigs(ws?.configs ?? []))
+      .catch(() => setConfigs([]));
+  }, []);
+
+  const behavioralConfig = pickBehavioralConfig(configs);
+  // Whether "Verify claims" can run, against which config, and why — the whole
+  // decision lives in the tested helper.
+  const verify = verifyClaimsAction(configs);
+
+  // The changed .http/.rest files the run could replay explicitly, and the wire
+  // value the picker's toggles resolve to (null == let the backend discover).
+  const httpCandidates = httpFileCandidates(status?.files ?? []);
+  const httpArg = resolveHttpFiles(
+    selectedHttp.length > 0 ? { mode: "explicit", files: selectedHttp } : { mode: "auto" },
+  );
+  /** The config the run replays: the picker override, else the auto pick. */
+  const chosenBehavioralConfig =
+    (configOverride && configs.find((c) => c.id === configOverride)) || behavioralConfig;
+  const chosenVerifyConfig =
+    (configOverride && configs.find((c) => c.id === configOverride)) || verify.config;
+
   /**
    * Recompute the intent cards.
    *
@@ -192,12 +328,21 @@ export function ChangesView() {
   const refreshIntent = useCallback(async () => {
     if (grouping !== "intent") return;
     try {
-      const [groups, status] = await Promise.all([
+      const [review, status] = await Promise.all([
         api.intentGroups(mode),
         api.intentCaptureStatus().catch(() => [] as ProviderStatus[]),
       ]);
-      setIntentGroups(groups);
-      setProviders(status);
+      // De-churn (see refreshStatus): the poll recomputes the cards every tick
+      // to catch edits to files already in the list, so only commit — and only
+      // re-render the panel — when the result changed.
+      const signature = JSON.stringify([review, status]);
+      if (signature !== intentSignature.current) {
+        intentSignature.current = signature;
+        setIntentGroups(review.groups);
+        setScorecard(review.scorecard);
+        setUnfulfilled(review.unfulfilled);
+        setProviders(status);
+      }
     } catch (e) {
       setError(api.errorMessage(e));
     }
@@ -206,6 +351,65 @@ export function ChangesView() {
   useEffect(() => {
     void refreshIntent();
   }, [refreshIntent, status]);
+
+  /**
+   * Recompute the erosion flags. Runs for the Erosion view (which shows them)
+   * and the Intent view (whose risk badges read them), for the same reason the
+   * intent grouping does: it walks every changed file. Both re-run on a mode
+   * change, so the flags' `index` values always match the diff currently shown.
+   */
+  const refreshErosion = useCallback(async () => {
+    if (grouping !== "erosion" && grouping !== "intent") return;
+    try {
+      const report = await api.erosionScan(mode);
+      const signature = JSON.stringify(report);
+      if (signature !== erosionSignature.current) {
+        erosionSignature.current = signature;
+        setErosion(report);
+      }
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
+  }, [grouping, mode]);
+
+  useEffect(() => {
+    void refreshErosion();
+  }, [refreshErosion, status]);
+
+  // Erosion flags are keyed by DiffLine.index, which only means anything within
+  // one comparison mode. Drop them the instant the mode changes so a risk badge
+  // can never intersect a stale flag against a differently-numbered diff; the
+  // effect above then rescans for the new mode.
+  useEffect(() => {
+    setErosion(null);
+    // The intent and erosion signatures are keyed to the diff's line numbering,
+    // which is per-mode; clear them so the next scan is never suppressed by a
+    // match against the previous mode's result.
+    erosionSignature.current = null;
+    intentSignature.current = null;
+  }, [mode]);
+
+  /**
+   * Poll the working tree while this tab is showing, so changes made outside
+   * the app appear without switching tabs. This view is mounted only while the
+   * Changes tab is active (see `App.tsx`), so the interval is naturally scoped
+   * to the tab and torn down on leave.
+   *
+   * Each of the three refreshers de-churns its own result, so a quiet tick does
+   * no work beyond the read; the open diff pane is deliberately left alone, so
+   * an unsaved edit in the editor is never discarded under the user. A tick is
+   * skipped while an action is in flight or the window is hidden, and while the
+   * stash view (which owns its own refresh) is showing.
+   */
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (busyRef.current || document.hidden || grouping === "stashes") return;
+      void refreshStatus();
+      void refreshIntent();
+      void refreshErosion();
+    }, POLL_MS);
+    return () => window.clearInterval(id);
+  }, [refreshStatus, refreshIntent, refreshErosion, grouping]);
 
   const loadFile = useCallback(
     async (path: string, comparison: ComparisonMode) => {
@@ -234,7 +438,8 @@ export function ChangesView() {
     await refreshStatus();
     if (selectedPath) await loadFile(selectedPath, mode);
     await refreshIntent();
-  }, [refreshStatus, loadFile, selectedPath, mode, refreshIntent]);
+    await refreshErosion();
+  }, [refreshStatus, loadFile, selectedPath, mode, refreshIntent, refreshErosion]);
 
   async function withBusy(action: () => Promise<void>) {
     setBusy(true);
@@ -310,6 +515,24 @@ export function ChangesView() {
       await refreshAll();
     });
 
+  /**
+   * Write the user's own intent on a card, then re-read so the card retitles.
+   * The note binds to the card's current changed lines by content (see
+   * `cb_core::intents::user`) and wins over any agent reason there.
+   */
+  const setCardIntent = (group: IntentGroup, label: string) =>
+    withBusy(async () => {
+      await api.setCardIntent(group.id, label, mode);
+      await refreshAll();
+    });
+
+  /** Remove the user's note from a card, restoring its previous title. */
+  const clearCardIntent = (group: IntentGroup) =>
+    withBusy(async () => {
+      await api.clearCardIntent(group.id, mode);
+      await refreshAll();
+    });
+
   const stageGroupFile = (group: IntentGroup, file: GroupFile) =>
     withBusy(async () => {
       const staged = await api.stageIntentGroup(group.id, file.path);
@@ -347,6 +570,11 @@ export function ChangesView() {
     await refreshIntent();
   };
 
+  const disableCapture = async (provider: ProviderId, scope: InstallScope) => {
+    setProviders(await api.disableIntentCapture(provider, scope));
+    await refreshIntent();
+  };
+
   /**
    * Import, and hand the count back: the panel reports the outcome inline,
    * next to the banner that offered the action, rather than as a view error.
@@ -358,6 +586,19 @@ export function ChangesView() {
       await refreshAll();
     });
     return total;
+  };
+
+  /**
+   * Both before/after actions run in the floating {@link BehavioralPanel} at the
+   * app level (so the run survives a tab switch and its report is shown in full,
+   * not condensed into this sidebar). These only pick the config and open the
+   * window; "Verify claims" opens it primed to chain into the claim-check agent.
+   */
+  const runBehavioral = () => {
+    if (chosenBehavioralConfig) onRunBehavioral(chosenBehavioralConfig.id, httpArg);
+  };
+  const verifyClaims = () => {
+    if (chosenVerifyConfig) onVerifyClaims(chosenVerifyConfig.id, httpArg);
   };
 
   /** Stage or unstage a whole file, whichever one was right-clicked. */
@@ -420,6 +661,24 @@ export function ChangesView() {
     grouping === "intent" && groupHunks != null && diff != null
       ? onlyHunks(diff, groupHunks)
       : diff;
+
+  // With an intent card open, scope the side-by-side colouring to the card's
+  // own change: rebuild the baseline as the working copy with only those hunks
+  // reverted, so every other region is identical on both sides and only this
+  // intent's hunk shows as a difference. Memoised so the diff editor is not
+  // torn down and rebuilt on unrelated renders (the baseline is in its deps).
+  const viewBaseline = useMemo(() => {
+    if (
+      grouping === "intent" &&
+      groupHunks != null &&
+      diff != null &&
+      contents?.working != null &&
+      contents?.baseline != null
+    ) {
+      return focusedBaseline(normaliseEndings(contents.working), onlyHunks(diff, groupHunks).hunks);
+    }
+    return contents?.baseline ?? null;
+  }, [grouping, groupHunks, diff, contents]);
   const canRevertAll = shownDiff != null && allChangedIndices(shownDiff).length > 0;
   const sections = buildSections(files, groups);
   /** What the marker strip marks and what F7 steps through. */
@@ -442,6 +701,14 @@ export function ChangesView() {
     setGroupHunks(null);
   }
 
+  /** Open an erosion flag: show its file and highlight the offending line. */
+  function openErosionFlag(flag: ErosionFlag) {
+    setSelectedPath(flag.path);
+    setSelectedGroup(null);
+    setGroupHunks(null);
+    setHighlight([flag.index]);
+  }
+
   function renderFileRow(change: FileChange, section: FileSection) {
     const { letter, className } = statusLetter(change, section.side);
     return (
@@ -462,56 +729,213 @@ export function ChangesView() {
     );
   }
 
+  const groupingToggle = (
+    <div className="segmented">
+      <button
+        className={grouping === "files" ? "active" : ""}
+        onClick={() => changeGrouping("files")}
+        title="List the changed files"
+      >
+        Files
+      </button>
+      <button
+        className={grouping === "intent" ? "active" : ""}
+        onClick={() => changeGrouping("intent")}
+        title="Collapse hunks into the decisions behind them"
+      >
+        Intent
+      </button>
+      <button
+        className={grouping === "erosion" ? "active" : ""}
+        onClick={() => changeGrouping("erosion")}
+        title="Flag changes that quietly weaken the codebase"
+      >
+        Erosion
+        {badgeCount(erosion) > 0 && (
+          <span className="badge" style={{ marginLeft: 4 }}>
+            {badgeCount(erosion)}
+          </span>
+        )}
+      </button>
+      <button
+        className={grouping === "stashes" ? "active" : ""}
+        onClick={() => changeGrouping("stashes")}
+        title="View, apply and drop stashes"
+      >
+        Stashes
+      </button>
+    </div>
+  );
+
+  // Stashes are a self-contained list-with-preview that replaces the file list,
+  // diff and commit box entirely — none of which apply to a stash.
+  if (grouping === "stashes") {
+    return <StashPanel header={groupingToggle} onChanged={() => void refreshAll()} />;
+  }
+
   return (
     <>
       <Sidebar className="file-list">
-        <div className="group-label">
-          {status?.branch ?? "no branch"}
+        {/* The branch name lives in the titlebar branch widget, so it is not
+            repeated here — this row is just the ahead/behind badge and the
+            runtime-evidence / review actions. */}
+        <div className="group-label" style={{ display: "flex", alignItems: "center" }}>
           {status && (status.ahead > 0 || status.behind > 0) && (
-            <span className="badge" style={{ marginLeft: 6 }}>
+            <span className="badge">
               ↑{status.ahead} ↓{status.behind}
             </span>
           )}
+          <span style={{ flex: 1 }} />
+          {grouping === "intent" && (
+            <div className="evidence-menu" style={{ position: "relative" }}>
+              <button
+                onClick={() => setEvidenceOpen((v) => !v)}
+                title="Runtime evidence: run the code against HEAD and your working tree and compare the observable outcomes — with or without an agent judging the diff's claims"
+              >
+                Evidence ▾
+              </button>
+              {evidenceOpen && (
+                <>
+                  <div className="dropdown-backdrop" onClick={() => setEvidenceOpen(false)} />
+                  <div className="dropdown-menu" style={{ right: 0, left: "auto" }}>
+                    {/* Override the auto-picked config. Defaults to the tested
+                        `pickBehavioralConfig` choice; the user can replay any
+                        other config instead. */}
+                    {configs.length > 1 && (
+                      <div className="dropdown-section" style={{ padding: "4px 8px" }}>
+                        <div className="group-label">Config</div>
+                        <select
+                          value={configOverride ?? behavioralConfig?.id ?? ""}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setConfigOverride(e.target.value || null)}
+                          style={{ width: "100%" }}
+                          title="Which configuration to replay against HEAD and the working tree"
+                        >
+                          {configs.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Replay specific changed .http files instead of letting the
+                        backend discover them. No toggles = auto discovery. */}
+                    {httpCandidates.length > 0 && (
+                      <div className="dropdown-section" style={{ padding: "4px 8px" }}>
+                        <div className="group-label">
+                          HTTP files {selectedHttp.length === 0 && "(auto)"}
+                        </div>
+                        {httpCandidates.map((path) => (
+                          <label
+                            key={path}
+                            className="dropdown-item"
+                            style={{ display: "flex", gap: 6, alignItems: "center" }}
+                            onClick={(e) => e.stopPropagation()}
+                            title="Replay this .http file explicitly in the before/after run"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedHttp.includes(path)}
+                              onChange={(e) =>
+                                setSelectedHttp((prev) =>
+                                  e.target.checked
+                                    ? [...prev, path]
+                                    : prev.filter((p) => p !== path),
+                                )
+                              }
+                            />
+                            <span className="path">{path}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+
+                    {(configs.length > 1 || httpCandidates.length > 0) && (
+                      <div className="dropdown-separator" />
+                    )}
+
+                    <div
+                      className={`dropdown-item${chosenBehavioralConfig ? "" : " disabled"}`}
+                      title={
+                        chosenBehavioralConfig
+                          ? `Run "${chosenBehavioralConfig.name}" against HEAD and your working tree, then show what changed in the observable outcomes — test results, console output, HTTP responses. No agent involved.`
+                          : "No run configuration is available to replay before/after"
+                      }
+                      onClick={() => {
+                        if (!chosenBehavioralConfig) return;
+                        setEvidenceOpen(false);
+                        runBehavioral();
+                      }}
+                    >
+                      Run before/after
+                    </div>
+                    <div
+                      className={`dropdown-item${verify.enabled ? "" : " disabled"}`}
+                      title={verify.hint}
+                      onClick={() => {
+                        if (!verify.enabled) return;
+                        setEvidenceOpen(false);
+                        verifyClaims();
+                      }}
+                    >
+                      Verify claims
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          <button
+            onClick={onOpenReview}
+            title="Run an adversarial review of the current changes (Claude Code or Codex)"
+          >
+            Review
+          </button>
         </div>
 
         {status?.inProgressOperation && (
           <div className="warning">A {status.inProgressOperation} is in progress.</div>
         )}
 
-        <div className="segmented">
-          <button
-            className={grouping === "files" ? "active" : ""}
-            onClick={() => changeGrouping("files")}
-            title="List the changed files"
-          >
-            Files
-          </button>
-          <button
-            className={grouping === "intent" ? "active" : ""}
-            onClick={() => changeGrouping("intent")}
-            title="Collapse hunks into the decisions behind them"
-          >
-            Intent
-          </button>
-        </div>
+        {groupingToggle}
 
         {grouping === "intent" && (
-          <IntentPanel
-            groups={intentGroups}
-            providers={providers}
-            selectedGroup={selectedGroup}
+          <>
+            <IntentPanel
+              groups={intentGroups}
+              scorecard={scorecard}
+              unfulfilled={unfulfilled}
+              providers={providers}
+              selectedGroup={selectedGroup}
+              selectedPath={selectedPath}
+              statusFiles={files}
+              mode={mode}
+              busy={busy}
+              onSelect={selectGroup}
+              onSelectFile={selectGroupFile}
+              onStage={stageGroup}
+              onRevert={revertGroup}
+              onStageFile={stageGroupFile}
+              onRevertFile={revertGroupFile}
+              onReject={rejectGroup}
+              onEnable={enableCapture}
+              onDisable={disableCapture}
+              onImportHistory={importHistory}
+              onSetIntent={setCardIntent}
+              onClearIntent={clearCardIntent}
+              behavioral={behavioral}
+              erosionFlags={erosion?.flags}
+            />
+          </>
+        )}
+
+        {grouping === "erosion" && (
+          <ErosionPanel
+            report={erosion}
             selectedPath={selectedPath}
-            mode={mode}
-            busy={busy}
-            onSelect={selectGroup}
-            onSelectFile={selectGroupFile}
-            onStage={stageGroup}
-            onRevert={revertGroup}
-            onStageFile={stageGroupFile}
-            onRevertFile={revertGroupFile}
-            onReject={rejectGroup}
-            onEnable={enableCapture}
-            onImportHistory={importHistory}
+            onOpenFlag={openErosionFlag}
           />
         )}
 
@@ -842,7 +1266,7 @@ export function ChangesView() {
             ) : (
               <DiffView
                 path={selectedPath}
-                baseline={contents.baseline}
+                baseline={viewBaseline}
                 working={contents.working}
                 diff={shownDiff}
                 layout={diffLayout}

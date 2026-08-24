@@ -71,6 +71,54 @@ fn records_are_returned_in_sequence_order() {
     assert_eq!(seqs, vec![0, 1, 2]);
 }
 
+fn prompt(turn: &str, text: &str) -> IntentPrompt {
+    IntentPrompt {
+        provider: ProviderId::ClaudeCode,
+        turn_id: turn.into(),
+        prompt: text.into(),
+    }
+}
+
+#[test]
+fn prompts_round_trip_and_join_by_turn() {
+    let dir = workspace();
+    append_prompt(
+        dir.path(),
+        &prompt("turn-7", "add exponential backoff, cap at 5"),
+    )
+    .unwrap();
+    append_prompt(dir.path(), &prompt("turn-8", "unrelated request")).unwrap();
+
+    let prompts = load_prompts(dir.path()).unwrap();
+
+    assert_eq!(prompts.len(), 2);
+    assert_eq!(
+        prompt_for(&prompts, "turn-7"),
+        Some("add exponential backoff, cap at 5")
+    );
+    // A turn with no recorded prompt joins to nothing.
+    assert_eq!(prompt_for(&prompts, "turn-missing"), None);
+}
+
+#[test]
+fn an_intent_prompt_serialises_with_the_keys_the_note_reads() {
+    let value = serde_json::to_value(prompt("t", "why")).unwrap();
+    let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(keys, ["prompt", "provider", "turnId"]);
+}
+
+#[test]
+fn clear_also_removes_the_prompts_file() {
+    let dir = workspace();
+    append_prompt(dir.path(), &prompt("t", "p")).unwrap();
+    assert!(prompts_path(dir.path()).exists());
+
+    clear(dir.path()).unwrap();
+
+    assert!(!prompts_path(dir.path()).exists());
+}
+
 /// The same edit can be seen by a hook and again by a history sweep.
 #[test]
 fn the_same_edit_seen_twice_is_deduplicated_on_tool_use_id() {
@@ -230,6 +278,46 @@ fn a_label_naming_the_file_is_preferred_over_a_turn_wide_one() {
     assert_eq!(found.label, "just this file");
 }
 
+#[test]
+fn scoped_labels_for_path_returns_all_covering_declared_labels() {
+    let intents = Intents {
+        records: Vec::new(),
+        labels: vec![
+            label("a", "reason A", &["dir"]),         // covers by directory
+            label("b", "reason B", &["dir/file.rs"]), // covers by exact path
+            label("c", "elsewhere", &["other"]),      // does not cover
+            IntentLabel {
+                source: LabelSource::Inferred,
+                ..label("d", "inferred", &["dir"])
+            }, // inferred: never claims
+        ],
+    };
+
+    let got: Vec<&str> = intents
+        .scoped_labels_for_path("dir/file.rs")
+        .iter()
+        .map(|l| l.label.as_str())
+        .collect();
+
+    assert_eq!(got, vec!["reason A", "reason B"]);
+    // Unique cross-turn binding abstains when more than one covers.
+    assert!(intents
+        .effective_scoped_label(&record(0, "dir/file.rs", &[], &["x"]), "dir/file.rs")
+        .is_none());
+}
+
+#[test]
+fn scoped_labels_for_path_dedupes_same_turn_and_text() {
+    let intents = Intents {
+        records: Vec::new(),
+        labels: vec![
+            label("t", "same", &["dir"]),
+            label("t", "same", &["dir/f.rs"]),
+        ],
+    };
+    assert_eq!(intents.scoped_labels_for_path("dir/f.rs").len(), 1);
+}
+
 /// An agent that described its turn once still explains every edit in it.
 #[test]
 fn a_turn_wide_label_covers_a_file_it_does_not_name() {
@@ -265,6 +353,197 @@ fn a_label_path_written_with_backslashes_still_matches() {
         intents.label_for(&intents.records[0]).unwrap().label,
         "matched"
     );
+}
+
+/// A scope naming a directory covers every file edited beneath it — the shape
+/// an agent uses to group a cohesive set of edits under one project folder.
+#[test]
+fn a_directory_label_covers_a_file_beneath_it() {
+    let intents = Intents {
+        records: vec![record(
+            0,
+            "ONEflight.Client.OPS135.Components/Pages/Reports/Trips/FlightsReportPage.razor",
+            &[],
+            &["x"],
+        )],
+        labels: vec![label(
+            "turn-1",
+            "cancel superseded table reads",
+            &["ONEflight.Client.OPS135.Components"],
+        )],
+    };
+
+    assert_eq!(
+        intents.label_for(&intents.records[0]).unwrap().label,
+        "cancel superseded table reads"
+    );
+}
+
+/// A directory scope stops at its own boundary: a file outside it is not
+/// covered, and because the scope is non-empty it cannot serve as the turn-wide
+/// fallback either, so the file goes unlabelled rather than mislabelled.
+#[test]
+fn a_directory_label_does_not_cover_a_file_outside_it() {
+    let intents = Intents {
+        records: vec![record(
+            0,
+            ".memories/work-items/19778/completed.md",
+            &[],
+            &["x"],
+        )],
+        labels: vec![label(
+            "turn-1",
+            "cancel superseded table reads",
+            &["ONEflight.Client.OPS135.Components"],
+        )],
+    };
+
+    assert!(intents.label_for(&intents.records[0]).is_none());
+}
+
+/// The prefix match is at a path segment, so `foo` never covers `foobar/x`.
+#[test]
+fn a_directory_label_does_not_cover_a_sibling_prefix() {
+    let intents = Intents {
+        records: vec![record(0, "foobar/x.rs", &[], &["x"])],
+        labels: vec![label("turn-1", "in foo", &["foo"])],
+    };
+
+    assert!(intents.label_for(&intents.records[0]).is_none());
+}
+
+#[test]
+fn a_directory_label_written_with_backslashes_still_matches() {
+    let intents = Intents {
+        records: vec![record(0, "dir/sub/f.rs", &[], &["x"])],
+        labels: vec![label("turn-1", "matched", &["dir\\sub"])],
+    };
+
+    assert_eq!(
+        intents.label_for(&intents.records[0]).unwrap().label,
+        "matched"
+    );
+}
+
+// -- effective (cross-turn) label resolution --------------------------------
+
+/// A record whose own turn owns a covering label resolves to it, exactly as
+/// `label_for` does — same-turn keeps top priority, so nothing existing changes.
+#[test]
+fn effective_label_prefers_the_same_turn_label() {
+    let mut r = record(0, "src/a.rs", &[], &["x"]);
+    r.turn_id = "turn-1".into();
+    let intents = Intents {
+        records: vec![r],
+        labels: vec![
+            label("turn-1", "same turn", &["src/a.rs"]),
+            label("turn-2", "other turn", &["src/a.rs"]),
+        ],
+    };
+
+    assert_eq!(
+        intents
+            .effective_scoped_label(&intents.records[0], "src/a.rs")
+            .unwrap()
+            .label,
+        "same turn"
+    );
+}
+
+/// An orphan record (no same-turn label) binds to a declared, path-scoped label
+/// from another turn when exactly one such label covers the file.
+#[test]
+fn effective_label_binds_a_path_scoped_label_from_another_turn() {
+    let mut r = record(0, "src/a.rs", &[], &["x"]);
+    r.turn_id = "turnA".into();
+    let intents = Intents {
+        records: vec![r],
+        labels: vec![label("turnB", "declared reason", &["src/a.rs"])],
+    };
+
+    assert_eq!(
+        intents
+            .effective_scoped_label(&intents.records[0], "src/a.rs")
+            .unwrap()
+            .label,
+        "declared reason"
+    );
+}
+
+/// A directory-scoped declared label from another turn covers a file beneath it.
+#[test]
+fn effective_label_binds_a_directory_scope_from_another_turn() {
+    let mut r = record(0, "src/components/x.ts", &[], &["x"]);
+    r.turn_id = "turnA".into();
+    let intents = Intents {
+        records: vec![r],
+        labels: vec![label("turnB", "panel work", &["src/components"])],
+    };
+
+    assert_eq!(
+        intents
+            .effective_scoped_label(&intents.records[0], "src/components/x.ts")
+            .unwrap()
+            .label,
+        "panel work"
+    );
+}
+
+/// Two declared labels from different turns both cover the file: ambiguous, so
+/// it abstains rather than guess.
+#[test]
+fn effective_label_abstains_when_two_cross_turn_labels_cover_the_file() {
+    let mut r = record(0, "src/a.rs", &[], &["x"]);
+    r.turn_id = "turnA".into();
+    let intents = Intents {
+        records: vec![r],
+        labels: vec![
+            label("turnB", "first", &["src/a.rs"]),
+            label("turnC", "second", &["src/a.rs"]),
+        ],
+    };
+
+    assert!(intents
+        .effective_scoped_label(&intents.records[0], "src/a.rs")
+        .is_none());
+}
+
+/// A cross-turn label mined from prose is a guess; it never binds across turns.
+#[test]
+fn effective_label_never_crosses_a_turn_for_an_inferred_label() {
+    let mut r = record(0, "src/a.rs", &[], &["x"]);
+    r.turn_id = "turnA".into();
+    let intents = Intents {
+        records: vec![r],
+        labels: vec![IntentLabel {
+            provider: ProviderId::ClaudeCode,
+            turn_id: "turnB".into(),
+            label: "a mined sentence".into(),
+            paths: vec!["src/a.rs".into()],
+            anchor: None,
+            source: LabelSource::Inferred,
+        }],
+    };
+
+    assert!(intents
+        .effective_scoped_label(&intents.records[0], "src/a.rs")
+        .is_none());
+}
+
+/// A turn-wide (empty-`paths`) label from another turn never binds here — a
+/// bare reason bridges only through the diff-level single-orphan pass.
+#[test]
+fn effective_label_does_not_bind_an_empty_paths_label_across_turns() {
+    let mut r = record(0, "src/a.rs", &[], &["x"]);
+    r.turn_id = "turnA".into();
+    let intents = Intents {
+        records: vec![r],
+        labels: vec![label("turnB", "turn-wide reason", &[])],
+    };
+
+    assert!(intents
+        .effective_scoped_label(&intents.records[0], "src/a.rs")
+        .is_none());
 }
 
 #[test]

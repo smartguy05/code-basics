@@ -17,9 +17,13 @@
 - [ ] Re-rejecting the same place: the note's own lines are part of the diff on
   the second pass, so group geometry includes them. Text handling is covered;
   the second-pass geometry is not. Revisit if it misbehaves.
-- [ ] Consider a marker for languages with no line comment (JSON, CSS). Today
-  they are reverted and reported unmarked, which is honest but means the reason
-  reaches no one.
+- [x] ~~Consider a marker for languages with no line comment (JSON, CSS).~~ **DONE
+  (WF2, 2026-08-24, B11):** block-comment families (CSS, HTML/XML/Markdown/SVG/Vue) now
+  get a self-closing `/* … */` / `<!-- … -->` marker via `CommentSyntax::Block` +
+  `marker_block_for`; the reason's close delimiter is neutralised so it cannot end the
+  block early, and re-rejection replaces (not stacks) via `is_block_terminator`
+  (pinned by `re_rejecting_a_block_comment_file_...`). **JSON and truly comment-less
+  formats stay unmarked by design** (no safe comment to abstain into).
 
 ## Deliberately not doing
 

@@ -25,8 +25,8 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use super::{
-    home_dir, hooks_json, instructions, InstallPlan, InstallScope, PlannedWrite, Provider,
-    ProviderStatus,
+    home_dir, hooks_json, instructions, HistoryMined, InstallPlan, InstallScope, PlannedWrite,
+    Provider, ProviderStatus,
 };
 use crate::intents::patchfmt;
 use crate::intents::{normalise_path, IntentEdit, IntentLabel, IntentRecord, ProviderId};
@@ -190,6 +190,9 @@ impl Codex {
         // commit that still carries one has to be refused.
         writes.extend(super::guard_write(root, &mut caveats));
 
+        // A commit from the command line also persists its intent into a note.
+        writes.extend(super::whyhook_write(root, &mut caveats));
+
         Ok(InstallPlan {
             provider: ProviderId::Codex,
             scope,
@@ -232,8 +235,16 @@ impl Provider for Codex {
         self.install_plan_in(codex_home().as_deref(), root, scope)
     }
 
-    fn history(&self, root: &Path) -> Result<(Vec<IntentRecord>, Vec<IntentLabel>)> {
-        self.history_in(codex_home().as_deref(), root)
+    fn history(&self, root: &Path) -> Result<HistoryMined> {
+        // Codex records and labels are mined; prompt mining from Codex rollouts
+        // is a follow-up (its user-turn shape is less certain than Claude's), so
+        // no prompts are produced here yet.
+        let (records, labels) = self.history_in(codex_home().as_deref(), root)?;
+        Ok(HistoryMined {
+            records,
+            labels,
+            prompts: Vec::new(),
+        })
     }
 }
 
@@ -242,7 +253,7 @@ impl Provider for Codex {
 /// Read as text rather than parsed: the key is a quoted absolute path whose
 /// separators and case vary, and a full TOML parse would still need the same
 /// fuzzy comparison afterwards.
-fn is_trusted_in(home: Option<&Path>, root: &Path) -> bool {
+pub(crate) fn is_trusted_in(home: Option<&Path>, root: &Path) -> bool {
     let Some(home) = home else {
         return false;
     };

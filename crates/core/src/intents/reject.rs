@@ -10,13 +10,16 @@
 //! nothing can make it. A comment three lines above the code it concerns is
 //! seen at the moment it matters.
 //!
-//! # Why line comments only
+//! # Why the comment cannot escape
 //!
-//! A block comment would cover every file type, and a `/*` that fails to close
-//! silently comments out the rest of the file. Line comments cannot do that,
-//! and no reason text — however mangled — can escape one. So a file with no
-//! line-comment syntax is reverted and left unmarked, and the caller says so;
-//! see [`comment_prefix`].
+//! The danger a block comment carries and a line comment does not: a `/*` that
+//! fails to close silently comments out the rest of the file. So a block marker
+//! is only ever emitted *self-closing* — it carries both delimiters and closes
+//! within its own three lines — and the one place hostile text could reach, the
+//! reason, has any close delimiter neutralised before rendering. A line comment
+//! gets that for free; see [`marker_block_for`]. A file with no comment syntax
+//! at all (JSON, an image, a licence) is reverted and left unmarked, and the
+//! caller says so; see [`comment_syntax`].
 //!
 //! # Why the marker has to be removable
 //!
@@ -57,12 +60,32 @@ const NEXT_LABEL: &str = "Next:";
 /// A hand-edited marker must not send the scan running through the whole file.
 const MAX_BLOCK_LINES: usize = 12;
 
-/// The line-comment syntax for a path, or `None` when it has none.
+/// How a comment is introduced in a given file.
 ///
-/// `None` is a real answer, not a failure: JSON, CSS and Markdown have no line
-/// comment that is safe to inject, so they are reverted without a marker and
-/// the caller reports which files went unmarked.
-pub fn comment_prefix(path: &str) -> Option<&'static str> {
+/// A block comment covers file types a line comment cannot, but it can also do
+/// what a line comment never can: a `/*` that fails to close silently comments
+/// out the rest of the file. So the block variant is only ever emitted
+/// *self-closing* (see [`marker_block_for`]) — the marker carries both its
+/// delimiters — and the reason text is neutralised so it cannot close the block
+/// early.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentSyntax {
+    /// A prefix that comments the rest of the line, e.g. `//` or `#`.
+    Line(&'static str),
+    /// A delimited block, e.g. `/*` … `*/` or `<!--` … `-->`.
+    Block {
+        open: &'static str,
+        close: &'static str,
+    },
+}
+
+/// The comment syntax for a path, or `None` when it has none that is safe to
+/// inject.
+///
+/// `None` is a real answer, not a failure: JSON, images and licence files have
+/// no comment at all, so they are reverted without a marker and the caller
+/// reports which files went unmarked.
+pub fn comment_syntax(path: &str) -> Option<CommentSyntax> {
     let name = path
         .rsplit(['/', '\\'])
         .next()
@@ -72,7 +95,7 @@ pub fn comment_prefix(path: &str) -> Option<&'static str> {
     // Some files are identified by name rather than extension.
     match name.as_str() {
         "dockerfile" | "makefile" | "gnumakefile" | ".gitignore" | ".gitattributes"
-        | ".dockerignore" | ".env" => return Some("#"),
+        | ".dockerignore" | ".env" => return Some(CommentSyntax::Line("#")),
         _ => {}
     }
 
@@ -81,15 +104,38 @@ pub fn comment_prefix(path: &str) -> Option<&'static str> {
     Some(match extension {
         "rs" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "c" | "h" | "cc" | "cpp" | "hpp"
         | "cs" | "go" | "java" | "kt" | "kts" | "swift" | "scala" | "php" | "dart" | "proto"
-        | "scss" | "less" | "zig" => "//",
+        | "scss" | "less" | "zig" => CommentSyntax::Line("//"),
 
         "py" | "rb" | "sh" | "bash" | "zsh" | "fish" | "yaml" | "yml" | "toml" | "ps1" | "psm1"
-        | "pl" | "pm" | "r" | "nix" | "tf" | "ini" | "cfg" | "conf" | "gitignore" => "#",
+        | "pl" | "pm" | "r" | "nix" | "tf" | "ini" | "cfg" | "conf" | "gitignore" => {
+            CommentSyntax::Line("#")
+        }
 
-        "sql" | "lua" | "hs" | "elm" | "adb" | "ads" => "--",
+        "sql" | "lua" | "hs" | "elm" | "adb" | "ads" => CommentSyntax::Line("--"),
+
+        "css" => CommentSyntax::Block {
+            open: "/*",
+            close: "*/",
+        },
+
+        "md" | "markdown" | "html" | "htm" | "xml" | "svg" | "vue" => CommentSyntax::Block {
+            open: "<!--",
+            close: "-->",
+        },
 
         _ => return None,
     })
+}
+
+/// The line-comment prefix for a path, or `None` when it has none.
+///
+/// A thin view over [`comment_syntax`]: a file marked with a block comment has
+/// no line prefix, so it answers `None` here even though it is markable.
+pub fn comment_prefix(path: &str) -> Option<&'static str> {
+    match comment_syntax(path) {
+        Some(CommentSyntax::Line(prefix)) => Some(prefix),
+        _ => None,
+    }
 }
 
 /// Reduce a reason typed into a text box to something that fits in a comment.
@@ -121,17 +167,63 @@ pub fn sanitise_reason(reason: &str) -> String {
 /// Three parts, in the order a reader needs them: that this is a rejection and
 /// when, why, and what to do about it. The last line is what
 /// [`insert_markers`] later recognises as the end of the block.
-pub fn marker_block(prefix: &str, indent: &str, reason: &str, date: &str) -> Vec<String> {
-    let head = format!("{MARKER} {date} — reverted during review.");
-    let next = format!("{NEXT_LABEL} fix this properly, then delete these {MARKER} lines.");
+///
+/// A line syntax prefixes every line and is inherently safe. A block syntax
+/// opens on the head line and closes on the `Next:` line, so the block is
+/// *self-closing* — it cannot run past its own three lines. The reason is the
+/// one place hostile text could reach: a `*/` or `-->` inside it would close
+/// the block early and comment out live code, so it is neutralised here. A line
+/// comment gets that for free (nothing after a `//` matters); a block must do
+/// it explicitly.
+pub fn marker_block_for(
+    syntax: &CommentSyntax,
+    indent: &str,
+    reason: &str,
+    date: &str,
+) -> Vec<String> {
+    match syntax {
+        CommentSyntax::Line(prefix) => {
+            let head = format!("{MARKER} {date} — reverted during review.");
+            let next = format!("{NEXT_LABEL} fix this properly, then delete these {MARKER} lines.");
 
-    let mut body = vec![head];
-    body.extend(wrap(&format!("{REASON_LABEL} {reason}"), WRAP));
-    body.extend(wrap(&next, WRAP));
+            let mut body = vec![head];
+            body.extend(wrap(&format!("{REASON_LABEL} {reason}"), WRAP));
+            body.extend(wrap(&next, WRAP));
 
-    body.into_iter()
-        .map(|line| format!("{indent}{prefix} {line}"))
-        .collect()
+            body.into_iter()
+                .map(|line| format!("{indent}{prefix} {line}"))
+                .collect()
+        }
+        CommentSyntax::Block { open, close } => {
+            let reason = neutralise_close(reason, close);
+            let head = format!("{open} {MARKER} {date} — reverted during review.");
+            // The close rides the last line, so re-rejection can recognise the
+            // block's end (a `Next:` line ending with the close delimiter).
+            let next = format!(
+                "{NEXT_LABEL} fix this properly, then delete these {MARKER} lines. {close}"
+            );
+
+            let mut body = vec![head];
+            body.extend(wrap(&format!("{REASON_LABEL} {reason}"), WRAP));
+            body.extend(wrap(&next, WRAP));
+
+            body.into_iter()
+                .map(|line| format!("{indent}{line}"))
+                .collect()
+        }
+    }
+}
+
+/// Break any occurrence of a block's close delimiter inside the reason so it
+/// cannot close the block early. A space through the middle keeps it readable
+/// while making it inert (`*/` → `* /`, `-->` → `-- >`).
+fn neutralise_close(reason: &str, close: &str) -> String {
+    let broken = match close {
+        "*/" => "* /",
+        "-->" => "-- >",
+        _ => return reason.to_string(),
+    };
+    reason.replace(close, broken)
 }
 
 /// Is this the first line of a marker block?
@@ -143,11 +235,15 @@ pub fn is_marker_line(line: &str) -> bool {
     comment_text(line).is_some_and(|text| text.starts_with(MARKER))
 }
 
-/// The text of a line comment, whatever syntax introduced it.
+/// The text of a comment, whatever syntax introduced it — a line prefix or a
+/// block's opening delimiter. Used to recognise a marker's head line, which for
+/// a block sits behind `/*` or `<!--`.
 fn comment_text(line: &str) -> Option<&str> {
     let trimmed = line.trim_start();
     let stripped = trimmed
-        .strip_prefix("//")
+        .strip_prefix("<!--")
+        .or_else(|| trimmed.strip_prefix("//"))
+        .or_else(|| trimmed.strip_prefix("/*"))
         .or_else(|| trimmed.strip_prefix("--"))
         .or_else(|| trimmed.strip_prefix('#'))?;
 
@@ -240,7 +336,7 @@ pub fn anchors(diff: &FileDiff, rejected: &[usize]) -> Vec<u32> {
 pub fn insert_markers(
     text: &str,
     anchors: &[u32],
-    prefix: &str,
+    syntax: &CommentSyntax,
     reason: &str,
     date: &str,
 ) -> String {
@@ -264,7 +360,7 @@ pub fn insert_markers(
         remove_block_at(&mut lines, at);
 
         let indent = indent_at(&lines, at);
-        for (offset, line) in marker_block(prefix, &indent, reason, date)
+        for (offset, line) in marker_block_for(syntax, &indent, reason, date)
             .into_iter()
             .enumerate()
         {
@@ -289,13 +385,26 @@ fn remove_block_at(lines: &mut Vec<String>, at: usize) {
         return;
     }
 
-    let end = (at..lines.len().min(at + MAX_BLOCK_LINES))
-        .find(|i| comment_text(&lines[*i]).is_some_and(|t| t.starts_with(NEXT_LABEL)));
+    let end = (at..lines.len().min(at + MAX_BLOCK_LINES)).find(|i| is_block_terminator(&lines[*i]));
 
     // No terminator means the block was hand-edited and its extent is unknown.
     // Removing just the head line is the conservative reading.
     let end = end.unwrap_or(at);
     lines.drain(at..=end);
+}
+
+/// The last line of a marker block: the `Next:` line.
+///
+/// In a line comment it sits behind the prefix, so [`comment_text`] reaches it.
+/// In a block comment it has no prefix and instead ends with the block's close
+/// delimiter (`*/` or `-->`) — that trailing delimiter is what marks the end.
+fn is_block_terminator(line: &str) -> bool {
+    if comment_text(line).is_some_and(|t| t.starts_with(NEXT_LABEL)) {
+        return true;
+    }
+
+    let trimmed = line.trim();
+    trimmed.starts_with(NEXT_LABEL) && (trimmed.ends_with("*/") || trimmed.ends_with("-->"))
 }
 
 /// The indentation to give a marker: that of the line it will precede, or of
@@ -420,11 +529,11 @@ pub fn reject_file(
     let mut marked = false;
     if reverted && !spots.is_empty() && !diff.is_binary {
         let reason = sanitise_reason(reason);
-        if let (Some(prefix), false) = (comment_prefix(path), reason.is_empty()) {
+        if let (Some(syntax), false) = (comment_syntax(path), reason.is_empty()) {
             marked = mark_file(
                 &repo.workdir().join(path),
                 &spots,
-                prefix,
+                &syntax,
                 &reason,
                 &iso_date(at),
             )?;
@@ -438,11 +547,17 @@ pub fn reject_file(
     })
 }
 
-fn mark_file(full: &Path, spots: &[u32], prefix: &str, reason: &str, date: &str) -> Result<bool> {
+fn mark_file(
+    full: &Path,
+    spots: &[u32],
+    syntax: &CommentSyntax,
+    reason: &str,
+    date: &str,
+) -> Result<bool> {
     let text = std::fs::read_to_string(full)
         .with_context(|| format!("failed to read {} to mark it", full.display()))?;
 
-    let updated = insert_markers(&text, spots, prefix, reason, date);
+    let updated = insert_markers(&text, spots, syntax, reason, date);
     if updated == text {
         return Ok(false);
     }

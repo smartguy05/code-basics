@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  OutputConsole,
-  stripAnsi,
-  type ConsoleHandle,
-} from "../components/OutputConsole";
+import { OutputConsole, type ConsoleHandle } from "../components/OutputConsole";
+import { stripAnsi } from "../components/consoleLogic";
 import { TestTree } from "../components/TestTree";
 import * as api from "../ipc/api";
 import type { InspectRequest } from "../App";

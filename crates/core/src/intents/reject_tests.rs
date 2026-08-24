@@ -45,20 +45,44 @@ fn hash_and_dash_comment_families_are_recognised() {
     }
 }
 
-/// A block comment could be inserted into these, but a stray `/*` that fails
-/// to close silently swallows the rest of the file. Abstaining costs a marker;
-/// guessing costs the file.
+/// Some files have no comment at all — no line prefix and no block delimiters.
+/// A reason cannot be written into them, so they are reverted and left unmarked
+/// and the caller reports it. CSS and Markdown are *not* here any more: they
+/// have block comments now (see the block-comment tests).
 #[test]
-fn a_file_with_no_line_comment_syntax_is_not_marked() {
-    for path in [
-        "package.json",
-        "src/styles.css",
-        "README.md",
-        "icon.png",
-        "LICENSE",
-    ] {
-        assert_eq!(comment_prefix(path), None, "{path}");
+fn a_file_with_no_comment_syntax_at_all_is_not_marked() {
+    for path in ["package.json", "icon.png", "LICENSE"] {
+        assert_eq!(comment_syntax(path), None, "{path}");
     }
+}
+
+/// CSS has no line comment, but it does have a block one. A rejection note has
+/// to be able to land in a stylesheet, wrapped in the delimiters CSS
+/// understands and self-closing so it cannot swallow the rest of the file.
+#[test]
+fn css_is_marked_with_a_self_closing_block_comment() {
+    let syntax = comment_syntax("theme.css").expect("css has a block comment");
+    assert!(
+        matches!(syntax, CommentSyntax::Block { .. }),
+        "css should map to a block comment, got {syntax:?}"
+    );
+
+    let block = marker_block_for(&syntax, "", "a column named limit is matched", DATE);
+    let text = block.join("\n");
+
+    assert!(
+        text.starts_with("/*"),
+        "block must open with /*, got:\n{text}"
+    );
+    assert!(
+        text.trim_end().ends_with("*/"),
+        "block must close with */, got:\n{text}"
+    );
+    assert!(text.contains(MARKER), "got:\n{text}");
+    assert!(
+        block.iter().any(|l| is_marker_line(l)),
+        "the head line must be recognised as a marker, got:\n{text}"
+    );
 }
 
 /// Windows reports the case the filesystem stored, not the case anyone typed.
@@ -112,7 +136,12 @@ fn a_reason_of_only_whitespace_comes_back_empty() {
 
 #[test]
 fn the_block_states_the_token_the_reason_and_what_to_do_next() {
-    let block = marker_block("//", "", "regex mis-detects a column named limit", DATE);
+    let block = marker_block_for(
+        &CommentSyntax::Line("//"),
+        "",
+        "regex mis-detects a column named limit",
+        DATE,
+    );
     let text = block.join("\n");
 
     assert!(text.contains(MARKER));
@@ -125,8 +154,8 @@ fn the_block_states_the_token_the_reason_and_what_to_do_next() {
 
 #[test]
 fn every_line_carries_the_prefix_and_the_anchors_indentation() {
-    let block = marker_block(
-        "#",
+    let block = marker_block_for(
+        &CommentSyntax::Line("#"),
         "    ",
         "a reason long enough to need wrapping across lines",
         DATE,
@@ -142,7 +171,7 @@ fn every_line_carries_the_prefix_and_the_anchors_indentation() {
 fn a_long_reason_wraps_instead_of_running_off_the_screen() {
     let reason = "the generated SQL used a regular expression to find an existing \
                   LIMIT clause, which matches a column that happens to be called limit";
-    let block = marker_block("//", "  ", reason, DATE);
+    let block = marker_block_for(&CommentSyntax::Line("//"), "  ", reason, DATE);
 
     for line in &block {
         assert!(
@@ -164,14 +193,50 @@ fn a_long_reason_wraps_instead_of_running_off_the_screen() {
 #[test]
 fn an_unbreakable_word_is_left_intact_on_its_own_line() {
     let long = "a".repeat(WRAP * 2);
-    let block = marker_block("//", "", &long, DATE);
+    let block = marker_block_for(&CommentSyntax::Line("//"), "", &long, DATE);
 
     assert!(block.iter().any(|l| l.contains(&long)));
 }
 
+/// A `*/` typed into the reason of a block comment would close the block early
+/// and comment out the live code below it — the block analogue of "no reason
+/// text can escape a line comment". It must be neutralised, and the block must
+/// still close exactly once, on its own last line.
+#[test]
+fn a_close_delimiter_in_a_block_reason_cannot_end_the_block_early() {
+    let block = marker_block_for(
+        &CommentSyntax::Block {
+            open: "/*",
+            close: "*/",
+        },
+        "",
+        "the css rule */ was wrong",
+        DATE,
+    );
+    let text = block.join("\n");
+
+    // Exactly one closing delimiter, and it is the very end of the block.
+    assert_eq!(text.matches("*/").count(), 1, "got:\n{text}");
+    assert!(text.trim_end().ends_with("*/"), "got:\n{text}");
+
+    // The same for the html/xml family.
+    let html = marker_block_for(
+        &CommentSyntax::Block {
+            open: "<!--",
+            close: "-->",
+        },
+        "",
+        "closing --> too soon",
+        DATE,
+    )
+    .join("\n");
+    assert_eq!(html.matches("-->").count(), 1, "got:\n{html}");
+    assert!(html.trim_end().ends_with("-->"), "got:\n{html}");
+}
+
 #[test]
 fn a_marker_is_recognisable_once_written() {
-    let block = marker_block("//", "\t", "why", DATE);
+    let block = marker_block_for(&CommentSyntax::Line("//"), "\t", "why", DATE);
     assert!(block.iter().any(|l| is_marker_line(l)));
     assert!(!is_marker_line("    // an ordinary comment"));
 }
@@ -265,7 +330,13 @@ const FILE: &str = "fn main() {\n    one();\n    two();\n    three();\n}\n";
 
 #[test]
 fn a_marker_is_inserted_before_its_anchor_line() {
-    let out = insert_markers(FILE, &[3], "//", "two was wrong", DATE);
+    let out = insert_markers(
+        FILE,
+        &[3],
+        &CommentSyntax::Line("//"),
+        "two was wrong",
+        DATE,
+    );
     let lines: Vec<&str> = out.lines().collect();
 
     let marker = lines.iter().position(|l| is_marker_line(l)).unwrap();
@@ -277,7 +348,7 @@ fn a_marker_is_inserted_before_its_anchor_line() {
 
 #[test]
 fn the_marker_copies_the_indentation_of_the_line_it_precedes() {
-    let out = insert_markers(FILE, &[3], "//", "why", DATE);
+    let out = insert_markers(FILE, &[3], &CommentSyntax::Line("//"), "why", DATE);
 
     assert!(
         out.lines().any(|l| l.starts_with("    // ")),
@@ -289,7 +360,7 @@ fn the_marker_copies_the_indentation_of_the_line_it_precedes() {
 /// block was added.
 #[test]
 fn several_anchors_all_land_on_the_right_lines() {
-    let out = insert_markers(FILE, &[2, 4], "//", "why", DATE);
+    let out = insert_markers(FILE, &[2, 4], &CommentSyntax::Line("//"), "why", DATE);
     let lines: Vec<&str> = out.lines().collect();
 
     let markers: Vec<usize> = lines
@@ -311,8 +382,14 @@ fn several_anchors_all_land_on_the_right_lines() {
 /// it wrong again. The reason should update without the block stacking up.
 #[test]
 fn re_rejecting_the_same_place_replaces_the_marker_rather_than_stacking() {
-    let once = insert_markers(FILE, &[3], "//", "first reason", DATE);
-    let twice = insert_markers(&once, &[3], "//", "second reason", DATE);
+    let once = insert_markers(FILE, &[3], &CommentSyntax::Line("//"), "first reason", DATE);
+    let twice = insert_markers(
+        &once,
+        &[3],
+        &CommentSyntax::Line("//"),
+        "second reason",
+        DATE,
+    );
 
     assert_eq!(
         twice.lines().filter(|l| is_marker_line(l)).count(),
@@ -324,9 +401,35 @@ fn re_rejecting_the_same_place_replaces_the_marker_rather_than_stacking() {
     assert!(twice.contains("    two();"));
 }
 
+/// The block-comment analogue of the test above. Re-rejecting a CSS file must
+/// replace the `/* … */` block, not stack a second one — the only direct
+/// coverage of `is_block_terminator` (recognising a `Next:` line that ends in
+/// the block close), the mechanism that makes block re-rejection replace rather
+/// than accumulate. Asserts exactly one marker block and one open/close pair.
+#[test]
+fn re_rejecting_a_block_comment_file_replaces_the_marker_rather_than_stacking() {
+    let css = ".a {\n  color: red;\n}\n\n.b {\n  color: blue;\n}\n";
+    let syntax = comment_syntax("theme.css").expect("css has a block comment syntax");
+
+    let once = insert_markers(css, &[6], &syntax, "first reason", DATE);
+    let twice = insert_markers(&once, &[6], &syntax, "second reason", DATE);
+
+    assert_eq!(
+        twice.lines().filter(|l| is_marker_line(l)).count(),
+        1,
+        "got:\n{twice}"
+    );
+    assert!(twice.contains("second reason"));
+    assert!(!twice.contains("first reason"));
+    assert!(twice.contains("  color: blue;"));
+    // No stacking: exactly one open and one close delimiter survive.
+    assert_eq!(twice.matches("/*").count(), 1, "got:\n{twice}");
+    assert_eq!(twice.matches("*/").count(), 1, "got:\n{twice}");
+}
+
 #[test]
 fn an_anchor_past_the_end_of_the_file_appends_at_the_end() {
-    let out = insert_markers(FILE, &[999], "//", "why", DATE);
+    let out = insert_markers(FILE, &[999], &CommentSyntax::Line("//"), "why", DATE);
 
     assert!(out.lines().any(is_marker_line));
     assert!(out.starts_with("fn main() {"));
@@ -334,19 +437,28 @@ fn an_anchor_past_the_end_of_the_file_appends_at_the_end() {
 
 #[test]
 fn an_empty_file_still_takes_a_marker() {
-    let out = insert_markers("", &[1], "//", "the whole file was wrong", DATE);
+    let out = insert_markers(
+        "",
+        &[1],
+        &CommentSyntax::Line("//"),
+        "the whole file was wrong",
+        DATE,
+    );
     assert!(out.lines().any(is_marker_line));
 }
 
 #[test]
 fn a_file_without_a_trailing_newline_does_not_gain_one_silently() {
-    let out = insert_markers("one\ntwo", &[1], "//", "why", DATE);
+    let out = insert_markers("one\ntwo", &[1], &CommentSyntax::Line("//"), "why", DATE);
     assert!(!out.ends_with('\n'), "got {out:?}");
 }
 
 #[test]
 fn no_anchors_leaves_the_file_byte_for_byte_unchanged() {
-    assert_eq!(insert_markers(FILE, &[], "//", "why", DATE), FILE);
+    assert_eq!(
+        insert_markers(FILE, &[], &CommentSyntax::Line("//"), "why", DATE),
+        FILE
+    );
 }
 
 // ---------------------------------------------------------------------------

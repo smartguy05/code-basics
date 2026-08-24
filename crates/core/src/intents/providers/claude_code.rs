@@ -21,17 +21,18 @@
 //! from the agent's own end-of-turn summary, and why installing the hooks is
 //! worth doing even though history works with no setup at all.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde_json::Value;
 
 use super::{
-    home_dir, hooks_json, instructions, InstallPlan, InstallScope, PlannedWrite, Provider,
-    ProviderStatus,
+    home_dir, hooks_json, instructions, HistoryMined, InstallPlan, InstallScope, PlannedWrite,
+    Provider, ProviderStatus,
 };
 use crate::intents::{
-    normalise_path, IntentEdit, IntentLabel, IntentRecord, LabelSource, ProviderId,
+    normalise_path, IntentEdit, IntentLabel, IntentPrompt, IntentRecord, LabelSource, ProviderId,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -62,15 +63,19 @@ impl ClaudeCode {
     }
 }
 
-fn claude_home() -> Option<PathBuf> {
+/// `~/.claude`, the Claude Code home directory. Also used by the quality-gate
+/// installer, which lives beside the recorder in the same settings file.
+pub fn claude_home() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".claude"))
 }
 
-fn project_settings_path(root: &Path) -> PathBuf {
+/// `<root>/.claude/settings.json` — the repo-scope hook file.
+pub fn project_settings_path(root: &Path) -> PathBuf {
     root.join(".claude").join("settings.json")
 }
 
-fn user_settings_path(home: &Path) -> PathBuf {
+/// `<home>/settings.json` — the user-scope hook file.
+pub fn user_settings_path(home: &Path) -> PathBuf {
     home.join("settings.json")
 }
 
@@ -185,6 +190,9 @@ impl Provider for ClaudeCode {
         // commit that still carries one has to be refused.
         writes.extend(super::guard_write(root, &mut caveats));
 
+        // A commit from the command line also persists its intent into a note.
+        writes.extend(super::whyhook_write(root, &mut caveats));
+
         Ok(InstallPlan {
             provider: ProviderId::ClaudeCode,
             scope,
@@ -193,18 +201,17 @@ impl Provider for ClaudeCode {
         })
     }
 
-    fn history(&self, root: &Path) -> Result<(Vec<IntentRecord>, Vec<IntentLabel>)> {
-        let mut records = Vec::new();
-        let mut labels = Vec::new();
+    fn history(&self, root: &Path) -> Result<HistoryMined> {
+        let mut mined = HistoryMined::default();
         let mut seq = 0u64;
 
         if let Some(home) = self.home() {
             for session in find_sessions(&home, root) {
-                read_transcript(&session, root, &mut seq, &mut records, &mut labels);
+                read_transcript(&session, root, &mut seq, &mut mined);
             }
         }
 
-        Ok((records, labels))
+        Ok(mined)
     }
 }
 
@@ -233,13 +240,25 @@ fn find_sessions(home: &Path, root: &Path) -> Vec<PathBuf> {
 
     let mut found = Vec::new();
     for dir in dirs {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        // Depth 3 reaches both the flat `<session>.jsonl` transcripts (depth 1)
+        // and the per-session `<session>/subagents/agent-*.jsonl` files (depth 3)
+        // this Claude Code version writes. A file edited only by a subagent has
+        // its geometry *only* in the latter, so a flat read of the project dir
+        // — which this used to do — missed it entirely.
+        for entry in walkdir::WalkDir::new(&dir)
+            .max_depth(3)
+            .into_iter()
+            .flatten()
+        {
             let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            if transcript_cwd(&path).is_some_and(|cwd| cwd.to_lowercase() == wanted) {
-                found.push(path);
+            if transcript_cwd(path).is_some_and(|cwd| cwd.to_lowercase() == wanted) {
+                found.push(path.to_path_buf());
             }
         }
     }
@@ -263,103 +282,260 @@ fn transcript_cwd(path: &Path) -> Option<String> {
     None
 }
 
+/// The grouping state one turn stream carries: the running prose that labels
+/// the current block, the user prompt that opened it, and the block counter.
+///
+/// Everything the agent did after one piece of prose is one intent. Keying on
+/// the individual tool call instead would make every edit its own group, which
+/// defeats the point: measured against this repository's own history that
+/// produced 127 groups from 145 hunks. Grouping by the prose that preceded
+/// them is what turns a wall of hunks into a few decisions, and it matches how
+/// the label was described in the first place — the nearest preceding
+/// sentence, covering the handful of edits that followed.
+///
+/// The main session drives one of these; each subagent lineage drives its own,
+/// so parallel subagents interleaved in one file never share a block counter.
+#[derive(Default)]
+struct TurnState {
+    /// The most recent prose, which becomes the label for edits that follow.
+    recent_text: Option<String>,
+    /// The user's most recent prompt. A `user` line often carries a
+    /// tool_result rather than a human prompt; `user_prompt_text` returns
+    /// `None` for those, so only real prompts land here.
+    recent_prompt: Option<String>,
+    /// The prompt that opened the current block, fixed when prose increments it.
+    block_prompt: Option<String>,
+    prompted_block: Option<usize>,
+    block: usize,
+    labelled_block: Option<usize>,
+}
+
 /// Read one transcript into records, attaching the nearest preceding prose as
-/// a best-effort label.
-fn read_transcript(
-    path: &Path,
-    root: &Path,
-    seq: &mut u64,
-    records: &mut Vec<IntentRecord>,
-    labels: &mut Vec<IntentLabel>,
-) {
+/// a best-effort label and the user prompt that opened the turn.
+///
+/// The main session and each subagent are grouped independently. Subagents run
+/// as sidechains whose lines interleave in the one file, so contiguity cannot
+/// separate them; they are grouped on `parentUuid` lineage instead. A first
+/// pass records the lineage; the second pass drives one `TurnState` per stream.
+fn read_transcript(path: &Path, root: &Path, seq: &mut u64, mined: &mut HistoryMined) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
+    let records = &mut mined.records;
+    let labels = &mut mined.labels;
+    let prompts = &mut mined.prompts;
 
-    // The most recent prose, which becomes the label for edits that follow.
-    let mut recent_text: Option<String> = None;
-
-    // Everything the agent did after one piece of prose is one intent.
-    //
-    // Keying on the individual tool call instead would make every edit its own
-    // group, which defeats the point: measured against this repository's own
-    // history that produced 127 groups from 145 hunks. Grouping by the prose
-    // that preceded them is what turns a wall of hunks into a few decisions,
-    // and it matches how the label was described in the first place — the
-    // nearest preceding sentence, covering the handful of edits that followed.
     let session = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut block = 0usize;
-    let mut labelled_block: Option<usize> = None;
+
+    // First pass: uuid -> (parentUuid, isSidechain). This is the lineage the
+    // second pass walks to place each interleaved subagent line.
+    let mut entries: HashMap<String, (Option<String>, bool)> = HashMap::new();
+    for line in content.lines() {
+        if let Ok(value) = serde_json::from_str::<Value>(line) {
+            if let Some(uuid) = value.get("uuid").and_then(Value::as_str) {
+                let parent = value
+                    .get("parentUuid")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let sidechain = value.get("isSidechain").and_then(Value::as_bool) == Some(true);
+                entries.insert(uuid.to_string(), (parent, sidechain));
+            }
+        }
+    }
+
+    let mut main = TurnState::default();
+    let mut subs: HashMap<String, TurnState> = HashMap::new();
+    let mut root_cache: HashMap<String, Option<String>> = HashMap::new();
 
     for line in content.lines() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if value.get("type").and_then(Value::as_str) != Some("assistant") {
-            continue;
-        }
+        let kind = value.get("type").and_then(Value::as_str);
 
-        // Sidechain entries are a subagent's work, not the main session's.
+        // A subagent line. Group it on its lineage root so parallel subagents
+        // interleaved in one file never share a turn; a chain that cannot be
+        // resolved to a root abstains rather than guess where it belongs.
         if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            let Some(uuid) = value.get("uuid").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(sub_root) = resolve_subagent_root(uuid, &entries, &mut root_cache) else {
+                continue;
+            };
+            let state = subs.entry(sub_root.clone()).or_default();
+            process_entry(
+                &value,
+                kind,
+                root,
+                &session,
+                Some(&sub_root),
+                state,
+                seq,
+                records,
+                labels,
+                prompts,
+            );
             continue;
         }
 
-        let branch = value
-            .get("gitBranch")
-            .and_then(Value::as_str)
-            .filter(|b| !b.is_empty())
-            .map(str::to_string);
+        process_entry(
+            &value, kind, root, &session, None, &mut main, seq, records, labels, prompts,
+        );
+    }
+}
 
-        let Some(blocks) = value
-            .get("message")
-            .and_then(|m| m.get("content"))
-            .and_then(Value::as_array)
-        else {
-            continue;
-        };
+/// Fold one transcript entry into a turn stream's grouping state, emitting the
+/// records, label and prompt for a block of prose the first time an edit lands
+/// under it. Shared by the main session (`sub_root == None`) and every
+/// subagent lineage, so the two cannot drift and title the same turn
+/// differently.
+#[allow(clippy::too_many_arguments)]
+fn process_entry(
+    value: &Value,
+    kind: Option<&str>,
+    root: &Path,
+    session: &str,
+    sub_root: Option<&str>,
+    state: &mut TurnState,
+    seq: &mut u64,
+    records: &mut Vec<IntentRecord>,
+    labels: &mut Vec<IntentLabel>,
+    prompts: &mut Vec<IntentPrompt>,
+) {
+    // A user turn opens the block that follows it. Remember the prompt; the
+    // block it belongs to is fixed when the next prose increments `block`.
+    if kind == Some("user") {
+        if let Some(text) = user_prompt_text(value) {
+            state.recent_prompt = Some(text);
+        }
+        return;
+    }
 
-        for content_block in blocks {
-            match content_block.get("type").and_then(Value::as_str) {
-                Some("text") => {
-                    if let Some(text) = content_block.get("text").and_then(Value::as_str) {
-                        if let Some(summary) = summarise(text) {
-                            // A new piece of prose starts a new intent.
-                            recent_text = Some(summary);
-                            block += 1;
-                        }
+    if kind != Some("assistant") {
+        return;
+    }
+
+    let branch = value
+        .get("gitBranch")
+        .and_then(Value::as_str)
+        .filter(|b| !b.is_empty())
+        .map(str::to_string);
+
+    let Some(blocks) = value
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+
+    for content_block in blocks {
+        match content_block.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(text) = content_block.get("text").and_then(Value::as_str) {
+                    if let Some(summary) = summarise(text) {
+                        // A new piece of prose starts a new intent, and it
+                        // is opened by the most recent user prompt.
+                        state.recent_text = Some(summary);
+                        state.block += 1;
+                        state.block_prompt = state.recent_prompt.clone();
                     }
                 }
-                Some("tool_use") => {
-                    let turn = format!("claude-history-{session}-{block}");
-
-                    let before = records.len();
-                    read_tool_use(content_block, root, &branch, &turn, seq, records);
-
-                    // One label per block of prose, however many edits followed
-                    // it. Emitting one per edit would defeat the grouping.
-                    if records.len() > before && labelled_block != Some(block) {
-                        if let Some(label) = &recent_text {
-                            labelled_block = Some(block);
-                            labels.push(IntentLabel {
-                                provider: ProviderId::ClaudeCode,
-                                turn_id: turn,
-                                label: label.clone(),
-                                paths: Vec::new(),
-                                anchor: None,
-                                // Mined out of prose an agent wrote for a
-                                // human, never offered as a card title.
-                                source: LabelSource::Inferred,
-                            });
-                        }
-                    }
-                }
-                _ => {}
             }
+            Some("tool_use") => {
+                let turn = match sub_root {
+                    Some(r) => format!("claude-history-{session}-sub-{r}-{}", state.block),
+                    None => format!("claude-history-{session}-{}", state.block),
+                };
+
+                let before = records.len();
+                read_tool_use(content_block, root, &branch, &turn, seq, records);
+                if records.len() == before {
+                    continue;
+                }
+
+                // One label per block of prose, however many edits followed
+                // it. Emitting one per edit would defeat the grouping.
+                if state.labelled_block != Some(state.block) {
+                    if let Some(label) = &state.recent_text {
+                        state.labelled_block = Some(state.block);
+                        labels.push(IntentLabel {
+                            provider: ProviderId::ClaudeCode,
+                            turn_id: turn.clone(),
+                            label: label.clone(),
+                            paths: Vec::new(),
+                            anchor: None,
+                            // Mined out of prose an agent wrote for a
+                            // human, never offered as a card title.
+                            source: LabelSource::Inferred,
+                        });
+                    }
+                }
+
+                // The user prompt that opened this block, keyed to the same
+                // turn id the records carry so it joins. Once per block.
+                if state.prompted_block != Some(state.block) {
+                    if let Some(prompt) = &state.block_prompt {
+                        state.prompted_block = Some(state.block);
+                        prompts.push(IntentPrompt {
+                            provider: ProviderId::ClaudeCode,
+                            turn_id: turn,
+                            prompt: prompt.clone(),
+                        });
+                    }
+                }
+            }
+            _ => {}
         }
     }
+}
+
+/// Resolve a sidechain entry to its subagent-root uuid: the topmost sidechain
+/// ancestor, whose parent is the first non-sidechain entry — the `Task`
+/// tool_use that spawned the subagent. That uuid names the subagent for the
+/// whole transcript, so siblings whose lines interleave resolve to different
+/// roots and get different turns.
+///
+/// A dangling parent (a `parentUuid` not present in the file), an unknown
+/// uuid, or a cycle cannot be placed, so the walk yields `None` and the caller
+/// abstains — a wrong grouping is worse than none. Results are cached per uuid.
+fn resolve_subagent_root(
+    uuid: &str,
+    entries: &HashMap<String, (Option<String>, bool)>,
+    cache: &mut HashMap<String, Option<String>>,
+) -> Option<String> {
+    if let Some(cached) = cache.get(uuid) {
+        return cached.clone();
+    }
+
+    let mut current = uuid.to_string();
+    let mut visited: HashSet<String> = HashSet::new();
+    let resolved = loop {
+        if !visited.insert(current.clone()) {
+            break None; // a cycle in the lineage: abstain
+        }
+        let Some((parent, _)) = entries.get(&current) else {
+            break None; // uuid not in the file: abstain
+        };
+        match parent {
+            // No parent recorded: this is the topmost entry of its lineage.
+            None => break Some(current.clone()),
+            Some(p) => match entries.get(p) {
+                None => break None, // dangling parent: abstain
+                // Parent is itself a subagent line; keep climbing.
+                Some((_, true)) => current = p.clone(),
+                // Parent is the non-sidechain spawn point; `current` is the root.
+                Some((_, false)) => break Some(current.clone()),
+            },
+        }
+    };
+
+    cache.insert(uuid.to_string(), resolved.clone());
+    resolved
 }
 
 /// Reduce a prose block to something that fits on a card.
@@ -388,6 +564,32 @@ fn summarise(text: &str) -> Option<String> {
         && cleaned.len() <= 120
         && !crate::intents::hook::looks_like_narration(cleaned))
     .then(|| cleaned.to_string())
+}
+
+/// The human prompt in a `type == "user"` transcript line, or `None`.
+///
+/// A user line is *not* always a prompt: the commonest one is a `tool_result`
+/// being fed back to the model. Those carry no `text` block, so returning the
+/// text only — and `None` when there is none — keeps tool-result echoes out of
+/// the prompt store. `message.content` may be a bare string (an old transcript
+/// shape) or an array of typed blocks.
+fn user_prompt_text(value: &Value) -> Option<String> {
+    let content = value.get("message").and_then(|m| m.get("content"))?;
+
+    let text = match content {
+        Value::String(s) => s.trim().to_string(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string(),
+        _ => return None,
+    };
+
+    (!text.is_empty()).then_some(text)
 }
 
 /// Turn one `Edit` or `Write` tool call into records.

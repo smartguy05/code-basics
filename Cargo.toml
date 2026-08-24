@@ -24,6 +24,7 @@ toml = "0.8"
 regex = "1"
 specta = { version = "2.0.0-rc.20", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
+yaml-rust2 = "0.10"
 
 # Full debuginfo is what makes `target/debug` grow without bound: every test
 # target links its own binary carrying it, cargo never prunes `deps/`, and this

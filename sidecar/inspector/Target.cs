@@ -18,12 +18,12 @@ internal sealed class InspectorException(string code, string message) : Exceptio
 /// </summary>
 internal static class Target
 {
-    public static (DataTarget Data, ClrRuntime Runtime) Open(TargetDto target, bool suspend)
+    public static (DataTarget Data, ClrRuntime Runtime) Open(TargetDto target)
     {
         var data = target.Kind switch
         {
             "dump" => OpenDump(target),
-            "live" => OpenLive(target, suspend),
+            "live" => OpenLive(target),
             _ => throw new InspectorException(
                 FailureCodes.BadRequest,
                 $"`{target.Kind}` is not a kind of target this inspector understands"),
@@ -64,7 +64,7 @@ internal static class Target
         }
     }
 
-    private static DataTarget OpenLive(TargetDto target, bool suspend)
+    private static DataTarget OpenLive(TargetDto target)
     {
         var pid = target.Pid
             ?? throw new InspectorException(FailureCodes.BadRequest, "no process id was given");
@@ -72,11 +72,8 @@ internal static class Target
         try
         {
             // The snapshot copies the process image so the application keeps
-            // running; suspending it is opt-in precisely because stopping a
-            // service to look at it is a surprise worth asking for.
-            return suspend
-                ? DataTarget.AttachToProcess(pid, suspend: true)
-                : DataTarget.CreateSnapshotAndAttach(pid);
+            // running.
+            return DataTarget.CreateSnapshotAndAttach(pid);
         }
         catch (Exception e) when (e is UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {

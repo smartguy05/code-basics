@@ -773,3 +773,60 @@ fn a_word_containing_a_connection_string_key_is_not_mistaken_for_one() {
         admitted.discarded
     );
 }
+
+// ---------------------------------------------------------------------------
+// Service calls
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_high_call_citing_a_declaration_file_is_admitted_as_a_service_call() {
+    // A call signal names two projects rather than a component, so it must
+    // never build a box; it survives as an `AdmittedCall` and nothing else.
+    // Its evidence cites the callee's `launchSettings.json`, a declaration
+    // file, so the HIGH screen passes.
+    let admitted = admit(vec![Signal::call(
+        "orders-web",
+        "orders-api",
+        Evidence::elided_value(
+            "src/Orders.Api/Properties/launchSettings.json",
+            Some(4),
+            "applicationUrl",
+        ),
+    )]);
+
+    assert!(
+        admitted.components.is_empty(),
+        "a call must never bring a component into existence: {:?}",
+        admitted.components
+    );
+    assert_eq!(admitted.service_calls().len(), 1, "{:?}", admitted);
+    let call = &admitted.service_calls()[0];
+    assert_eq!(call.from_project, "orders-web");
+    assert_eq!(call.to_project, "orders-api");
+}
+
+#[test]
+fn a_call_citing_a_source_file_is_refused_as_unverifiable() {
+    // Anchoring the call on a `.cs` line is exactly the lie the gate exists to
+    // catch: HIGH means "the author wrote this down", and a source line is not
+    // that. It is refused, counted, and creates nothing.
+    let admitted = admit(vec![Signal::call(
+        "orders-web",
+        "orders-api",
+        Evidence::new(
+            "src/Orders.Web/Program.cs",
+            Some(3),
+            "c.BaseAddress = new Uri(\"http://localhost:5101\");",
+        ),
+    )]);
+
+    assert!(admitted.service_calls().is_empty(), "{:?}", admitted);
+    assert!(
+        admitted
+            .discarded
+            .iter()
+            .any(|d| d.reason == DiscardReason::UnverifiableEvidence),
+        "the .cs-anchored call was not refused for the right reason: {:?}",
+        admitted.discarded
+    );
+}

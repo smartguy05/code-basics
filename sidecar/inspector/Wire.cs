@@ -40,7 +40,6 @@ internal sealed class RequestDto
     public TargetDto Target { get; set; } = new();
     public RootDto Root { get; set; } = new();
     public CapsDto Caps { get; set; } = new();
-    public bool Suspend { get; set; }
 }
 
 /// <summary>A tagged union on the Rust side; every field optional here so an
@@ -156,6 +155,16 @@ internal sealed class ProcessDto
 
     /// <summary>Round-trip ("O") UTC, or absent.</summary>
     public string? StartedAt { get; set; }
+
+    /// <summary>
+    /// The full command line, or absent. A `dotnet run` starts a
+    /// <c>UseAppHost=false</c> application as <c>dotnet exec &lt;output&gt;.dll</c>,
+    /// whose process name is only <c>dotnet</c> — the assembly appears nowhere
+    /// but here, so this is what lets the Rust side tell the real application
+    /// from the SDK's own <c>dotnet</c>-named build tools. Null across an
+    /// elevation or session boundary, where it costs only preselection.
+    /// </summary>
+    public string? CommandLine { get; set; }
 }
 
 /// <summary>The failure codes code-basics knows how to act on.</summary>

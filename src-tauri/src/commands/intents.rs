@@ -15,11 +15,13 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use cb_core::git::attribution::{self, Options};
-use cb_core::git::grouping::{self, GroupFile, IntentGroup};
+use cb_core::git::coverage::{self, IntentReview};
+use cb_core::git::grouping::{self, GroupFile};
 use cb_core::git::{ComparisonMode, Repo};
 use cb_core::intents::providers::{self, InstallPlan, InstallScope, ProviderStatus};
 use cb_core::intents::reject::{self, RejectSummary};
-use cb_core::intents::{self, guard, LoadOptions, ProviderId};
+use cb_core::intents::user::{self, UserEdit, UserIntent};
+use cb_core::intents::{self, guard, whyhook, LoadOptions, ProviderId};
 use tauri::State;
 
 use crate::state::AppState;
@@ -30,12 +32,16 @@ fn open(state: &State<'_, AppState>) -> Result<(PathBuf, Repo), String> {
     Ok((root, repo))
 }
 
-/// Build the cards for the whole working tree.
+/// Build the cards for the whole working tree, with the coverage audit.
+///
+/// Returns the grouped cards alongside the two failures of the intent join —
+/// unexplained hunks (already sorted to the top of `groups`) and unfulfilled
+/// claims — plus the per-turn scorecard.
 #[tauri::command]
 pub async fn intent_groups(
     state: State<'_, AppState>,
     mode: ComparisonMode,
-) -> Result<Vec<IntentGroup>, String> {
+) -> Result<IntentReview, String> {
     let (root, repo) = open(&state)?;
 
     let diffs = repo.diff_all(mode).map_err(|e| format!("{e:#}"))?;
@@ -45,7 +51,7 @@ pub async fn intent_groups(
     let intents = intents::load(&root, &LoadOptions { branch }).map_err(|e| format!("{e:#}"))?;
 
     let attributions = attribution::attribute(&diffs, &intents, Options::default());
-    Ok(grouping::group(&diffs, &attributions))
+    Ok(coverage::review(&diffs, &attributions, &intents))
 }
 
 /// The line indices a group covers, recomputed for one comparison mode.
@@ -68,7 +74,7 @@ fn lines_for(
     let intents = intents::load(root, &LoadOptions { branch }).map_err(|e| format!("{e:#}"))?;
 
     let attributions = attribution::attribute(&diffs, &intents, Options::default());
-    let groups = grouping::group(&diffs, &attributions);
+    let groups = grouping::group(&diffs, &attributions, &intents);
 
     let group = groups
         .into_iter()
@@ -245,10 +251,45 @@ pub async fn enable_intent_capture(
         }
     }
 
+    // The durable-why post-commit hook is likewise a shell script.
+    if let Some(hook) = whyhook::hook_path(&root) {
+        if whyhook::is_installed(&hook) {
+            whyhook::ensure_executable(&hook).map_err(|e| format!("{e:#}"))?;
+        }
+    }
+
     // The hook refuses to record into a workspace that never opted in, so the
     // directory has to exist before the next edit lands.
     std::fs::create_dir_all(intents::intents_dir(&root))
         .map_err(|e| format!("failed to prepare the intent directory: {e}"))?;
+
+    Ok(providers::statuses(&root))
+}
+
+/// Exactly what disabling `provider`'s capture would remove. Touches nothing.
+///
+/// A zero-write plan means there was nothing installed for that agent.
+#[tauri::command]
+pub async fn intent_uninstall_plan(
+    state: State<'_, AppState>,
+    provider: ProviderId,
+    scope: InstallScope,
+) -> Result<InstallPlan, String> {
+    let root = state.workspace_root()?;
+    providers::uninstall_plan(provider, &root, scope).map_err(|e| format!("{e:#}"))
+}
+
+/// Perform an uninstall the user has confirmed, returning the refreshed statuses.
+#[tauri::command]
+pub async fn disable_intent_capture(
+    state: State<'_, AppState>,
+    provider: ProviderId,
+    scope: InstallScope,
+) -> Result<Vec<ProviderStatus>, String> {
+    let root = state.workspace_root()?;
+
+    let plan = providers::uninstall_plan(provider, &root, scope).map_err(|e| format!("{e:#}"))?;
+    providers::apply_writes(&plan.writes).map_err(|e| format!("{e:#}"))?;
 
     Ok(providers::statuses(&root))
 }
@@ -260,14 +301,17 @@ pub async fn enable_intent_capture(
 #[tauri::command]
 pub async fn import_intent_history(state: State<'_, AppState>) -> Result<usize, String> {
     let root = state.workspace_root()?;
-    let (mut records, labels) = providers::history(&root);
+    let mut mined = providers::history(&root);
 
-    intents::rebase_seqs(&mut records, intents::next_seq(&root));
-    for record in &records {
+    intents::rebase_seqs(&mut mined.records, intents::next_seq(&root));
+    for record in &mined.records {
         intents::append_edit(&root, record).map_err(|e| format!("{e:#}"))?;
     }
-    for label in &labels {
+    for label in &mined.labels {
         intents::append_label(&root, label).map_err(|e| format!("{e:#}"))?;
+    }
+    for prompt in &mined.prompts {
+        intents::append_prompt(&root, prompt).map_err(|e| format!("{e:#}"))?;
     }
 
     Ok(intents::load(&root, &LoadOptions::default())
@@ -280,4 +324,112 @@ pub async fn import_intent_history(state: State<'_, AppState>) -> Result<usize, 
 pub async fn clear_intent_history(state: State<'_, AppState>) -> Result<(), String> {
     let root = state.workspace_root()?;
     intents::clear(&root).map_err(|e| format!("{e:#}"))
+}
+
+/// The user's own note geometry for one card: the changed-line content of each
+/// of its files, captured from the current diff so it rebinds by content.
+///
+/// Returns an empty list when the group no longer exists or carries no changed
+/// lines, so the caller can refuse rather than store a note that matches
+/// nothing.
+fn card_edits(
+    repo: &Repo,
+    root: &Path,
+    group_id: &str,
+    mode: ComparisonMode,
+) -> Result<Vec<UserEdit>, String> {
+    let diffs = repo.diff_all(mode).map_err(|e| format!("{e:#}"))?;
+    let branch = repo.status().ok().and_then(|s| s.branch);
+    let intents = intents::load(root, &LoadOptions { branch }).map_err(|e| format!("{e:#}"))?;
+    let attributions = attribution::attribute(&diffs, &intents, Options::default());
+    let groups = grouping::group(&diffs, &attributions, &intents);
+
+    let group = groups
+        .into_iter()
+        .find(|g| g.id == group_id)
+        .ok_or_else(|| "that group is no longer in the working tree".to_string())?;
+
+    let mut edits = Vec::new();
+    for file in &group.files {
+        let Some(diff) = diffs.iter().find(|d| d.path == file.path) else {
+            continue;
+        };
+        let (old_lines, new_lines) = grouping::changed_content(diff, &selected(file));
+        if old_lines.is_empty() && new_lines.is_empty() {
+            continue;
+        }
+        edits.push(UserEdit {
+            path: file.path.clone(),
+            old_lines,
+            new_lines,
+        });
+    }
+    Ok(edits)
+}
+
+/// Write (or overwrite) the user's own intent for one card.
+///
+/// The note is stored as the card's changed-line content plus the label, so on
+/// the next refresh it rebinds to those lines by content and titles the card —
+/// overriding any agent reason there, because [`user`] gives it the highest
+/// sequence number. Re-annotating the same change replaces the previous note
+/// rather than stacking a second (overlap in [`user::upsert`]).
+#[tauri::command]
+pub async fn set_card_intent(
+    state: State<'_, AppState>,
+    group: String,
+    label: String,
+    mode: ComparisonMode,
+) -> Result<(), String> {
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        return Err("an intent needs a label — that is the whole point of it".into());
+    }
+
+    let (root, repo) = open(&state)?;
+    let edits = card_edits(&repo, &root, &group, mode)?;
+    if edits.is_empty() {
+        return Err("that change has no lines to annotate".into());
+    }
+
+    let mut list = user::load(&root).map_err(|e| format!("{e:#}"))?;
+    let (id, seq) = user::next_id(&list);
+    user::upsert(
+        &mut list,
+        UserIntent {
+            id,
+            seq,
+            label,
+            edits,
+        },
+    );
+    user::save(&root, &list).map_err(|e| format!("{e:#}"))
+}
+
+/// Remove the user's note from one card, restoring whatever reason (agent or
+/// inferred) or location title it had before. Returns whether a note was found.
+#[tauri::command]
+pub async fn clear_card_intent(
+    state: State<'_, AppState>,
+    group: String,
+    mode: ComparisonMode,
+) -> Result<bool, String> {
+    let (root, repo) = open(&state)?;
+    let edits = card_edits(&repo, &root, &group, mode)?;
+    if edits.is_empty() {
+        return Ok(false);
+    }
+
+    let mut list = user::load(&root).map_err(|e| format!("{e:#}"))?;
+    let geom = UserIntent {
+        id: String::new(),
+        seq: 0,
+        label: String::new(),
+        edits,
+    };
+    let removed = user::remove_overlapping(&mut list, &geom);
+    if removed {
+        user::save(&root, &list).map_err(|e| format!("{e:#}"))?;
+    }
+    Ok(removed)
 }

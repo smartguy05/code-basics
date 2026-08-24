@@ -108,3 +108,74 @@ pub fn kill_tree(pid: u32) -> bool {
         false
     }
 }
+
+/// Run a blocking kill body on the blocking pool, awaiting its result.
+///
+/// [`kill_tree`] is synchronous — on Windows it shells out to `taskkill` and
+/// blocks on its exit; on Unix it issues signals and spawns a detached
+/// escalation thread. Called inline from an async task, that blocking work runs
+/// on a runtime worker; on a single-worker `current_thread` runtime it stalls
+/// the sole worker. This seam offloads the body to a dedicated blocking thread
+/// so no async worker is ever occupied by it. A join error (a panic in the
+/// body) is reported as failure, matching every other "could not kill" path.
+async fn spawn_blocking_kill<F>(f: F) -> bool
+where
+    F: FnOnce() -> bool + Send + 'static,
+{
+    tokio::task::spawn_blocking(f).await.unwrap_or(false)
+}
+
+/// The async counterpart to [`kill_tree`], for callers already on a runtime.
+///
+/// Offloads the blocking [`kill_tree`] body to the blocking pool so it cannot
+/// stall a runtime worker (see [`spawn_blocking_kill`]). The synchronous
+/// [`kill_tree`] is kept for [`Drop`] and other no-runtime callers.
+pub async fn kill_tree_async(pid: u32) -> bool {
+    spawn_blocking_kill(move || kill_tree(pid)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// No `flavor` on the attribute means a single-worker `current_thread`
+    /// runtime — the one `notes.md` records as stalling when a blocking kill is
+    /// run inline on the sole worker. This drives the offload seam directly with
+    /// an injected, timing-free blocking body: it sets `started`, then parks on a
+    /// channel until an async releaser (which can only run if the worker is free)
+    /// wakes it. Inline, the worker parks, the releaser never runs, and the 5s
+    /// timeout trips; offloaded to the blocking pool, both halves complete.
+    #[tokio::test]
+    async fn an_offloaded_kill_does_not_stall_the_current_thread_runtime() {
+        let started = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+
+        let body_started = started.clone();
+        let kill = spawn_blocking_kill(move || {
+            body_started.store(true, Ordering::SeqCst);
+            // Park the caller. On the single worker this is a deadlock; on the
+            // blocking pool it merely waits for the releaser below.
+            rx.recv().is_ok()
+        });
+
+        let releaser = async {
+            while !started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            tx.send(())
+                .expect("blocking body still waiting on the channel");
+        };
+
+        let (killed, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(kill, releaser)
+        })
+        .await
+        .expect("the kill blocked the runtime worker");
+
+        assert!(killed, "the released body reported success");
+    }
+}

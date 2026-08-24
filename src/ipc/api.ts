@@ -5,6 +5,7 @@ import type {
   AnchorResult,
   ArchGraph,
   AttachableList,
+  BehavioralReport,
   Branch,
   BuildAction,
   Changelists,
@@ -14,6 +15,8 @@ import type {
   DiagramFile,
   DirEntry,
   ElidedReason,
+  EnhancementInfo,
+  ErosionReport,
   FileContents,
   FileDiff,
   InspectGraph,
@@ -21,22 +24,28 @@ import type {
   InspectTarget,
   InstallPlan,
   InstallScope,
-  IntentGroup,
+  IntentReview,
   LaunchProfile,
+  LineIntent,
   LspStatus,
   MergeReport,
   NetworkKind,
   ProcessEvent,
   ProjectSecrets,
+  PromptInfo,
+  PromptRuns,
   ProviderId,
   ProviderStatus,
   RejectSummary,
+  ReviewAgentInfo,
   RiderImportPreview,
   RootSpec,
+  RulesReport,
   RunConfig,
   RunDump,
   SearchHit,
   SearchScope,
+  StashEntry,
   SymbolIndexStatus,
   TestRunOutcome,
   UsageResult,
@@ -104,6 +113,32 @@ export const fsWriteFile = (path: string, content: string) =>
   invoke<void>("fs_write_file", { path, content });
 
 // ---------------------------------------------------------------------------
+// Enhancements (instruction templates for CLAUDE.md / AGENTS.md)
+// ---------------------------------------------------------------------------
+
+/** Every instruction template, flagged with whether it is installed here. */
+export const listEnhancements = () =>
+  invoke<EnhancementInfo[]>("list_enhancements");
+
+/** Add a template's section to both agent files; returns the refreshed list. */
+export const addEnhancement = (id: string) =>
+  invoke<EnhancementInfo[]>("add_enhancement", { id });
+
+/** Remove a template's section from both agent files; returns the refreshed list. */
+export const removeEnhancement = (id: string) =>
+  invoke<EnhancementInfo[]>("remove_enhancement", { id });
+
+/** Every prompt template, each carrying the body to run as an agent. */
+export const listPrompts = () => invoke<PromptInfo[]>("list_prompts");
+
+/** The run-once record for the current workspace, keyed by prompt id. */
+export const agentRuns = () => invoke<PromptRuns>("agent_runs");
+
+/** Record a successful run of a run-once prompt in the current workspace. */
+export const markAgentRun = (promptId: string) =>
+  invoke<void>("mark_agent_run", { promptId });
+
+// ---------------------------------------------------------------------------
 // Running
 // ---------------------------------------------------------------------------
 
@@ -152,6 +187,44 @@ export function runTests(
 
 export const lastTestRun = (configId: string) =>
   invoke<TestRunOutcome | null>("last_test_run", { configId });
+
+// ---------------------------------------------------------------------------
+// Agent runs (adversarial review + Run Agent)
+// ---------------------------------------------------------------------------
+
+/** The posture an agent runs under: read-only, or allowed to edit files. */
+export type AgentMode = "read-only" | "edit";
+
+/**
+ * Run a chosen prompt against the open workspace with `claude`/`codex`,
+ * streaming its output to `onEvent`. Serves both the adversarial review and the
+ * Enhancements "Run Agent" action; `mode` picks the read-only/edit posture.
+ *
+ * Mirrors {@link startRun}: the promise resolves when the agent process exits,
+ * so callers should not await it before rendering the console.
+ */
+export function startReview(
+  promptId: string,
+  agentId: string,
+  model: string | undefined,
+  mode: AgentMode,
+  onEvent: (event: ProcessEvent) => void,
+  /**
+   * Injected context — evidence, business-rule docs — prepended to the prompt so
+   * the agent reads it before the instruction. Blank/absent leaves the prompt
+   * unchanged. Trailing so existing five-argument calls are unaffected.
+   */
+  context?: string,
+): Promise<void> {
+  const channel = new Channel<ProcessEvent>();
+  channel.onmessage = onEvent;
+  return invoke<void>("start_review", { promptId, agentId, model, mode, context, channel });
+}
+
+export const cancelReview = () => invoke<boolean>("cancel_review");
+
+/** The review agents whose CLI is installed, in preference order. */
+export const reviewAgents = () => invoke<ReviewAgentInfo[]>("review_agents");
 
 // ---------------------------------------------------------------------------
 // Git
@@ -254,10 +327,24 @@ export const gitCommitDiff = (id: string) =>
 export const gitCommitFileContents = (id: string, path: string) =>
   invoke<FileContents>("git_commit_file_contents", { id, path });
 
+/** The recorded reason behind each line of a file, as a past commit left it. */
+export const gitCommitFileWhy = (id: string, path: string) =>
+  invoke<LineIntent[]>("git_commit_file_why", { id, path });
+
 export const gitStashSave = (message: string) =>
   invoke<void>("git_stash_save", { message });
 
-export const gitStashPop = () => invoke<void>("git_stash_pop");
+export const gitStashList = () => invoke<StashEntry[]>("git_stash_list");
+
+export const gitStashPop = (index = 0) => invoke<void>("git_stash_pop", { index });
+
+export const gitStashApply = (index: number) =>
+  invoke<void>("git_stash_apply", { index });
+
+export const gitStashDrop = (index: number) =>
+  invoke<void>("git_stash_drop", { index });
+
+export const gitStashClear = () => invoke<void>("git_stash_clear");
 
 export function gitNetwork(
   kind: NetworkKind,
@@ -272,9 +359,28 @@ export function gitNetwork(
 // Agent intent
 // ---------------------------------------------------------------------------
 
-/** The intent cards for the whole working tree, recomputed on every call. */
+/**
+ * The intent review for the whole working tree, recomputed on every call:
+ * the grouped cards, the unfulfilled claims, and the per-turn scorecard.
+ */
 export const intentGroups = (mode: ComparisonMode) =>
-  invoke<IntentGroup[]>("intent_groups", { mode });
+  invoke<IntentReview>("intent_groups", { mode });
+
+/**
+ * The erosion scan for the whole working tree — changes that quietly weaken the
+ * codebase — recomputed on every call.
+ */
+export const erosionScan = (mode: ComparisonMode) =>
+  invoke<ErosionReport>("erosion_scan", { mode });
+
+/**
+ * Every business-rule doc authored in the workspace's `.code-basics/rules/`.
+ *
+ * These carry no pattern and match nothing on their own — they are prose the
+ * team wrote down, handed to a review as `context` so the agent judges the diff
+ * against the stated invariants. `warnings` lists any file that would not read.
+ */
+export const listRules = () => invoke<RulesReport>("list_rules");
 
 /**
  * Stage everything in one group — or one file's share of it — returning how
@@ -320,11 +426,99 @@ export const intentInstallPlan = (provider: ProviderId, scope: InstallScope) =>
 export const enableIntentCapture = (provider: ProviderId, scope: InstallScope) =>
   invoke<ProviderStatus[]>("enable_intent_capture", { provider, scope });
 
+/**
+ * Exactly what disabling a provider's capture would remove. Touches nothing.
+ * An empty `writes` means there was nothing installed for that agent.
+ */
+export const intentUninstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("intent_uninstall_plan", { provider, scope });
+
+/** Perform a disable the user has confirmed; returns the refreshed statuses. */
+export const disableIntentCapture = (provider: ProviderId, scope: InstallScope) =>
+  invoke<ProviderStatus[]>("disable_intent_capture", { provider, scope });
+
 /** Read what the agents already recorded, with no setup. Returns the total. */
 export const importIntentHistory = () =>
   invoke<number>("import_intent_history");
 
 export const clearIntentHistory = () => invoke<void>("clear_intent_history");
+
+/**
+ * Write (or overwrite) the user's own intent for one card. The note is stored
+ * as the card's changed-line content, so it rebinds by content on the next
+ * refresh and titles the card, overriding any agent reason there.
+ */
+export const setCardIntent = (group: string, label: string, mode: ComparisonMode) =>
+  invoke<void>("set_card_intent", { group, label, mode });
+
+/** Remove the user's note from one card. Returns whether one was found. */
+export const clearCardIntent = (group: string, mode: ComparisonMode) =>
+  invoke<boolean>("clear_card_intent", { group, mode });
+
+// ---------------------------------------------------------------------------
+// Quality-gate Stop hook (`qgate/`) — installed the same way the intent hooks
+// are: preview a plan, then apply it.
+// ---------------------------------------------------------------------------
+
+/** Where the quality gate is installed for this workspace and provider, if anywhere. */
+export const qualityGateStatus = (provider: ProviderId) =>
+  invoke<InstallScope | null>("quality_gate_status", { provider });
+
+/** Exactly what installing the quality gate for a provider would write. Touches nothing. */
+export const qualityGateInstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("quality_gate_install_plan", { provider, scope });
+
+/** Perform an install the user has confirmed; returns the new status. */
+export const installQualityGate = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("install_quality_gate", { provider, scope });
+
+/**
+ * Exactly what turning the quality gate off for a provider would remove.
+ * Touches nothing. An empty `writes` means there was nothing installed.
+ */
+export const qualityGateUninstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("quality_gate_uninstall_plan", { provider, scope });
+
+/** Perform an uninstall the user has confirmed; returns the new status. */
+export const uninstallQualityGate = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("uninstall_quality_gate", { provider, scope });
+
+/** First-open setup: exactly what installing every hook at `scope` would write. */
+export const setupInstallPlan = (scope: InstallScope) =>
+  invoke<InstallPlan>("setup_install_plan", { scope });
+
+/** Apply a confirmed first-open setup (intent capture + quality gate together). */
+export const installSetup = (scope: InstallScope) =>
+  invoke<void>("install_setup", { scope });
+
+// ---------------------------------------------------------------------------
+// Behavioral before/after testing (`behavioral/`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a configuration against both git HEAD and the working tree, then diff the
+ * observable outcomes — test results, console output, and `.http` responses —
+ * as evidence a change did what its intent claimed.
+ *
+ * The inspector-style output of both runs is streamed to `onEvent`; the promise
+ * resolves with the assembled `BehavioralReport` once both sides have finished
+ * and been compared.
+ *
+ * `httpFiles` names the `.http` scenarios to replay, or `null` to let the
+ * backend discover them.
+ */
+export function behavioralDiff(
+  configId: string,
+  httpFiles: string[] | null,
+  onEvent: (event: ProcessEvent) => void,
+): Promise<BehavioralReport> {
+  const channel = new Channel<ProcessEvent>();
+  channel.onmessage = onEvent;
+  return invoke<BehavioralReport>("behavioral_diff", { configId, httpFiles, channel });
+}
+
+/** Discard the cached baseline worktrees; returns any teardown warnings. */
+export const behavioralClear = () => invoke<string[]>("behavioral_clear");
 
 // ---------------------------------------------------------------------------
 // Object inspection

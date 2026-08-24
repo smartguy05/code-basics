@@ -110,6 +110,12 @@ function Value({ node, enclosing, onExpand, onJumpTo }: ValueProps) {
     case "null":
       return <span className="ov ov-null">null</span>;
 
+    case "pair":
+      // A dictionary entry is a pure container: its Key and Value children hold
+      // the values, and the row's own value column stays empty rather than
+      // inventing a summary of two things.
+      return null;
+
     case "reference":
       return (
         <span className="ov ov-reference">

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:\\Users\\AnthonyJames\\Documents\\Code\\code-basics\\target\\release\\cb-app.exe\" quality-gate --code-basics-qgate --workspace \"C:\\Users\\AnthonyJames\\Documents\\Code\\code-basics\"",
+            "timeout": 180
+          }
+        ]
+      }
+    ]
+  }
+}

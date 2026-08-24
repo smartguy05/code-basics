@@ -1,0 +1,42 @@
+# Example erosion rules.
+#
+# Copy this into `.code-basics/erosion/` in a workspace to extend the built-in
+# rule set. User rules never shadow the built-ins — they add to them.
+#
+# Each rule is one regex matched against one *side* of the diff:
+#   side = "removed"  → matched against removed lines (things taken away)
+#   side = "added"    → matched against added lines   (things introduced)
+# A context line is never matched. A wrong flag is worse than none, so prefer
+# high-signal patterns.
+#
+# category is one of:
+#   deletedAssertion | ignoredTest | widenedCatch | removedNullCheck
+#   unsafeCast | leftoverStub | removedSafeguard | droppedLog
+#
+# extensions (optional): file suffixes the rule applies to; empty = every file.
+# prodOnly (optional): skip files that look like tests (for TODO/stub rules).
+
+[[rule]]
+id = "no-fire-and-forget-task"
+category = "widenedCatch"
+side = "added"
+pattern = 'Task\.Run\([^)]*\)\s*;'
+message = "Fire-and-forget Task.Run swallows any failure."
+extensions = [".cs"]
+
+[[rule]]
+id = "no-disabled-eslint"
+category = "unsafeCast"
+side = "added"
+pattern = 'eslint-disable'
+message = "A lint rule was disabled inline."
+extensions = [".ts", ".tsx", ".js", ".jsx"]
+
+[[rule]]
+id = "no-panic-in-lib"
+category = "unsafeCast"
+side = "added"
+pattern = '\bpanic!\('
+message = "A panic! was introduced."
+extensions = [".rs"]
+prodOnly = true

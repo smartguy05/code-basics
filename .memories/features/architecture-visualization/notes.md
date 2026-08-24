@@ -1,5 +1,31 @@
 # Notes — gotchas hit in Phase 1
 
+## 2026-08-24 — B8 (mermaid_id ⇄ mermaidIdOf drift guard): PARTIAL, and the fs gotcha
+
+State in the working tree (uncommitted, verified green):
+- **Rust half DONE & passing:** `mermaid.rs` widened `fn mermaid_id` → `pub(crate)`;
+  `mermaid_tests.rs` guard `mermaid_id_matches_committed_fixture` generates+pins the
+  table; fixture at `crates/core/fixtures/architecture/mermaid_ids.json` (untracked).
+  `cargo test -p cb-core --lib` → 2223 passed / 0 failed.
+- **TS consumer REMOVED (was broken).** The design spec had the vitest test read the
+  fixture with `readFileSync`/`fileURLToPath` from `node:fs`/`node:url`. **This repo
+  ships no `@types/node`** (not in `package.json`; no other test imports node builtins),
+  so `tsc --noEmit` fails `TS2307: Cannot find module 'node:fs'`. The agent's
+  `declare module "node:fs"` work-around is invalid (`TS2664` — can't augment a module
+  that doesn't exist). It broke the quality-gate Stop hook; I removed the imports + the
+  `describe("mermaidIdOf cross-language fixture")` block from
+  `src/views/architecture/nodeTargets.test.ts` to restore green typecheck.
+
+**To finish B8 on resume — the TS side must not touch `node:fs`.** Options:
+1. Import the fixture as data: `import rows from "../../../crates/core/fixtures/architecture/mermaid_ids.json"`
+   — needs `resolveJsonModule: true` in `tsconfig.json` (check it's set) and the file is
+   outside the `["src", ...]` include, so confirm tsc resolves a JSON import across that
+   boundary. Preferred — keeps the suite dependency-free.
+2. Add `@types/node` as a devDep + `"types": ["node"]` — bigger footprint; the repo has
+   deliberately avoided node types in the browser app. Only if option 1 won't resolve.
+Also commit the fixture (it's currently untracked) when B8 lands.
+
+
 ## The `Task<int>` bug in `declaration_name`, and the guard the fix needs
 
 The heuristic lifted out of `git/grouping.rs` split the line on

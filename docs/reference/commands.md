@@ -31,6 +31,23 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `fs_read_file` | `path: String` | `String` | UTF-8 text only; binary or >5 MB files are a clear error |
 | `fs_write_file` | `path: String`, `content: String` | `()` | Saves the file editor's contents (Ctrl+S) |
 
+## Enhancements (instructions + prompts)
+
+`src-tauri/src/commands/enhancements.rs` — the menu-bar **Enhancements** menu, with two file-driven submenus. Both read plain `.md` files (front matter: `id`, `title`, and for instructions `placement`) from user-owned directories, auto-generated from whatever files are present; bundled defaults are seeded on first use without overwriting edits.
+
+**Instructions** live in `%APPDATA%\code-basics\instructions\` (or `$XDG_CONFIG_HOME`/`~/.config` elsewhere; `CB_INSTRUCTIONS_PATH` overrides). Adding (after an inline confirmation) writes the section into **both** `CLAUDE.md` and `AGENTS.md`, bounded by an `<!-- code-basics: enhancement:<id> -->` marker so it is idempotent, refreshable and removable.
+
+**Prompts** live in the sibling `prompts/` directory (`CB_PROMPTS_PATH` overrides). Nothing is written to the prompt files — the command returns each prompt's body, and clicking a prompt under **Run Agent** runs it as an agent in the panel (see `start_review`). A prompt marked `once: true` in its front matter is recorded per workspace when it finishes successfully, and re-running it asks first.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `list_enhancements` | — | `EnhancementInfo[]` | Every instruction template on disk, each flagged `installed` when its section is present in either agent file |
+| `add_enhancement` | `id: String` | `EnhancementInfo[]` | Splice the template's section into both agent files at its declared placement (backing up the originals); returns the refreshed list |
+| `remove_enhancement` | `id: String` | `EnhancementInfo[]` | Cut the template's marked section out of both agent files; returns the refreshed list |
+| `list_prompts` | — | `PromptInfo[]` | Every prompt on disk, each carrying its `body` and the `once` run-once flag |
+| `agent_runs` | — | `PromptRuns` | The current workspace's run-once record (`.code-basics/agent-runs.json`), keyed by prompt id; drives the "already run" badge |
+| `mark_agent_run` | `prompt_id: String` | `()` | Record a successful run-once run for the current workspace (called by the panel on a clean exit) |
+
 ## .NET user secrets
 
 `src-tauri/src/commands/secrets.rs` — `project` is the workspace-relative `.csproj` path a .NET `RunConfig.project` holds. Secrets live in `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere), never in the repository.
@@ -53,6 +70,16 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `run_tests` | `config_id: String`, `only_failed: bool`, `channel: Channel<ProcessEvent>` | `TestRunOutcome` | Streams output, then parses the report; `only_failed` filters to the previous run's failures |
 | `last_test_run` | `config_id: String` | `TestRunOutcome \| null` | Most recent result for this config |
 
+## Adversarial review
+
+`src-tauri/src/commands/review.rs` — runs a coding-agent CLI (Claude Code or Codex) read-only against the open workspace and streams its output. Every decision (which agents exist, allowed models, argument order) lives in `cb_core::review`.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `review_agents` | – | `ReviewAgentInfo[]` | The agents whose CLI is installed (`claude`/`codex`), preference order, each with its offered model aliases (empty ⇒ the agent's own default) |
+| `start_review` | `prompt_id: String`, `agent_id: String`, `model: String?`, `mode: String?`, `context: String?`, `channel: Channel<ProcessEvent>` | `()` | Runs a chosen prompt from the prompt library. `mode` picks the posture (default read-only): read-only is Claude `--permission-mode plan` / Codex `--sandbox read-only`; edit is Claude `--permission-mode bypassPermissions` / Codex `--sandbox workspace-write`. `context` (evidence, business-rule docs) is prepended to the prompt so the agent reads it before the instruction; blank/absent leaves the prompt unchanged. Serves both the adversarial Review and Run Agent. Registered as `review:current`; an unknown model or mode is refused; a missing CLI surfaces as a `Failed` event |
+| `cancel_review` | – | `bool` | Kills the review process **tree** |
+
 ## Git
 
 `src-tauri/src/commands/git.rs` — a `Repo` handle is opened per call (libgit2's `Repository` is not `Sync`).
@@ -69,7 +96,7 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `git_unstage_lines` | `path: String`, `lines: u32[]` | `bool` | |
 | `git_revert_lines` | `path: String`, `mode: ComparisonMode`, `lines: u32[]` | `bool` | Reverse-applies just the selection |
 | `git_discard_file` | `path: String` | `()` | |
-| `git_commit` | `message: String`, `amend: bool` | `String` | Returns the new commit id |
+| `git_commit` | `message: String`, `amend: bool` | `String` | Returns the new commit id. Also persists the change's content-keyed intent into a git note (`refs/notes/code-basics-intents`), best-effort — a note failure never fails the commit |
 | `git_branches` | – | `Branch[]` | |
 | `git_create_branch` | `name: String`, `checkout: bool`, `from: String?` | `()` | `from` is the revision to branch from; absent means HEAD |
 | `git_checkout_branch` | `name: String` | `()` | |
@@ -85,8 +112,13 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `git_history` | `limit: u32` | `Commit[]` | |
 | `git_commit_diff` | `id: String` | `FileDiff[]` | |
 | `git_commit_file_contents` | `id: String, path: String` | `FileContents` | Both sides of one file as a commit changed it, for the History diff viewer. Either side is null when the file did not exist there (added, deleted, or a root commit) |
-| `git_stash_save` | `message: String` | `()` | |
-| `git_stash_pop` | – | `()` | |
+| `git_commit_file_why` | `id: String, path: String` | `LineIntent[]` | The recorded reason behind each line of a file as a past commit left it, resolved from the durable git note. Content-keyed, so it survives reformatting/rebase; empty when the commit has no note or no line matches (never a guessed reason) |
+| `git_stash_save` | `message: String` | `()` | Stash the working tree (including untracked) under a message |
+| `git_stash_list` | – | `StashEntry[]` | Every stash, newest first; `id` is the stash commit for previewing via `git_commit_diff` |
+| `git_stash_pop` | `index: usize` | `()` | Apply `stash@{index}` and remove it |
+| `git_stash_apply` | `index: usize` | `()` | Apply `stash@{index}`, keeping it in the list |
+| `git_stash_drop` | `index: usize` | `()` | Remove `stash@{index}` without applying it |
+| `git_stash_clear` | – | `()` | Drop every stash |
 | `git_network` | `kind: NetworkKind`, `channel: Channel<ProcessEvent>` | `i32 \| null` | Push/pull/fetch via system `git`; returns the exit code |
 
 ## Agent intent
@@ -95,15 +127,82 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `intent_groups` | `mode: ComparisonMode` | `IntentGroup[]` | The cards for the whole working tree. Recomputed on every call rather than cached: a stale group would offer to stage lines that have moved |
+| `intent_groups` | `mode: ComparisonMode` | `IntentReview` | The cards for the whole working tree, plus the coverage audit: unexplained hunks (sorted to the top of `groups`), unfulfilled claims (declared intents no hunk evidences), and the per-turn `scorecard`. Recomputed on every call rather than cached |
 | `stage_intent_group` | `group: String, path: Option<String>` | `usize` | Stage every line in one card; returns how many files changed. Takes the group **id**, not its lines — indices are only valid for one comparison mode, and staging uses a different one from the view, so they are re-derived here |
 | `revert_intent_group` | `group: String, mode: ComparisonMode, path: Option<String>` | `usize` | Revert every line in one card, in the displayed mode; `path` limits either command to that file's share of the card |
 | `reject_intent_group` | `group: String, mode: ComparisonMode, path: Option<String>, reason: String` | `RejectSummary` | Revert one card **and** leave the reason as a marker comment where the code was. Refused in `indexToHead` — a revert there changes the index, so the note would explain something the reviewer is not looking at — and refused without a reason. `unmarked` names files reverted without a note for want of line-comment syntax |
 | `intent_capture_status` | – | `ProviderStatus[]` | Per agent: detected, where hooks are installed, how many past sessions match this workspace, and anything blocking capture |
 | `intent_install_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact final contents of every file an install would write. **Touches nothing** — this is what the confirmation dialog renders |
-| `enable_intent_capture` | `provider: ProviderId, scope: InstallScope` | `ProviderStatus[]` | Perform a confirmed install. Additive: existing hooks are preserved and the file is backed up first. Also installs the `pre-commit` guard and makes it executable |
-| `import_intent_history` | – | `usize` | Read what the agents already recorded, with no setup; returns the total record count afterwards |
-| `clear_intent_history` | – | `()` | Forget everything recorded for this workspace |
+| `enable_intent_capture` | `provider: ProviderId, scope: InstallScope` | `ProviderStatus[]` | Perform a confirmed install. Additive: existing hooks are preserved and the file is backed up first. Also installs the `pre-commit` guard and the durable-why `post-commit` hook, and makes both executable |
+| `intent_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change disabling that agent's capture would make. **Touches nothing.** An empty `writes` means there was nothing to remove. Removes only that provider's own hook entries; the shared commit hooks are removed only when no other agent is still capturing, and the instruction note is left in place |
+| `disable_intent_capture` | `provider: ProviderId, scope: InstallScope` | `ProviderStatus[]` | Perform a confirmed disable, backing the file up first. Returns the refreshed statuses |
+| `import_intent_history` | – | `usize` | Read what the agents already recorded, with no setup: edits, coarse labels, and the user prompts mined from session transcripts (keyed to the same turn id so they join). Returns the total record count afterwards |
+| `clear_intent_history` | – | `()` | Forget everything recorded for this workspace (agent history only; user notes survive) |
+| `set_card_intent` | `group: String, label: String, mode: ComparisonMode` | `()` | Write (or overwrite) the user's own intent for one card. Stored as the card's changed-line content plus the label, so it rebinds by content on the next refresh and titles the card — winning over any agent reason on those lines. Re-annotating the same change replaces the previous note |
+| `clear_card_intent` | `group: String, mode: ComparisonMode` | `bool` | Remove the user's note from one card, restoring the reason or title it had before. Returns whether a note was found |
+
+## Quality-gate hook
+
+`src-tauri/src/commands/qgate.rs` — installing the quality-gate `Stop` hook, the same way the intent hooks install. Decisions live in `cb_core::qgate`.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `quality_gate_status` | `provider: ProviderId` | `InstallScope \| null` | Where the gate is installed for this workspace and provider (project wins over user), or `null` |
+| `quality_gate_install_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact final contents of the provider's hook-file write (Claude Code `settings.json` or Codex `hooks.json`). **Touches nothing** — what the confirmation dialog renders |
+| `install_quality_gate` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install. Additive and backed up first; a distinct marker lets it coexist with the intent recorder's `Stop` entry. Returns the new status |
+| `quality_gate_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change turning the gate off would make. **Touches nothing.** An empty `writes` means there was nothing to remove. Removes only the gate's own marked `Stop` entry; the intent recorder's `Stop` entry (distinct marker) survives |
+| `uninstall_quality_gate` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed uninstall, backing the file up first. Returns the new status (`null` once removed) |
+
+## First-open setup
+
+`src-tauri/src/commands/setup.rs` — the combined install offered when a workspace opens without the hooks. Decisions live in `cb_core::setup`, which chains the intent and quality-gate settings.json merges into one write so neither clobbers the other.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `setup_install_plan` | `scope: InstallScope` | `InstallPlan` | Everything installing intent capture (for every detected agent) + the quality gate at `scope` would write, as one plan. **Touches nothing** — what the setup dialog renders |
+| `install_setup` | `scope: InstallScope` | `()` | Apply the combined plan (backed up first), make the shell hooks executable, and create the intents directory |
+
+## Behavioral before/after testing
+
+`src-tauri/src/commands/behavioral.rs` — the runtime counterpart to the intent coverage audit: run the same config against `HEAD` and the working tree and diff the observable outcomes. Decisions live in `cb_core::behavioral`.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `behavioral_diff` | `configId: String, httpFiles: Option<Vec<String>>, channel: Channel<ProcessEvent>` | `BehavioralReport` | Build `HEAD` in an isolated `git worktree` and the working tree in place, run the config on both under distinct `:base`/`:work` supervisor ids (streaming both sides' output onto `channel`), then diff test results and console output and attribute each delta to the intent card whose files it points at. Every failure — a bad baseline checkout, a config absent at `HEAD`, a server that never became ready — is an abstain recorded in `warnings`, never an error. When `.http` scenarios (with an `@readiness` probe) and an `App` launch config are present it also replays those requests against a server started on each side — strictly sequential (base then work, same port) and never hanging on a server that will not exit — and diffs the responses; otherwise HTTP abstains with a warning |
+| `behavioral_clear` | – | `String[]` | Remove the cached baseline checkouts under `.code-basics/behavioral/`; returns any teardown residue as warnings |
+
+## Erosion detector
+
+`src-tauri/src/commands/erosion.rs` — a rules-based, no-model scan over the diff for changes that quietly weaken the codebase (deleted assertions, skipped tests, widened catches, introduced panics, stubs left in production paths, removed safeguards and logs).
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `erosion_scan` | `mode: ComparisonMode` | `ErosionReport` | Every flag found across the working tree, plus `warnings` for any rule whose TOML would not parse or whose regex would not compile. Recomputed on every call |
+
+Each rule is one regex against one **side** of the diff. The built-in set ships per ecosystem (.NET / TS-JS / Rust) and is **extended, never shadowed** by per-workspace TOML in `.code-basics/erosion/*.toml`:
+
+```toml
+[[rule]]
+id = "no-fire-and-forget-task"
+category = "widenedCatch"   # deletedAssertion | ignoredTest | widenedCatch | removedNullCheck | unsafeCast | leftoverStub | removedSafeguard | droppedLog
+side = "added"              # added (things introduced) | removed (things taken away)
+pattern = 'Task\.Run\('     # regex matched against a changed line's content; a context line is never matched
+message = "Fire-and-forget Task.Run swallows failures."
+extensions = [".cs"]        # optional; empty = every file
+prodOnly = false            # optional; skip files that look like tests
+```
+
+See `examples/erosion/custom.toml` for a copyable starting point.
+
+## Business rules
+
+`src-tauri/src/commands/rules.rs` — the business-rule invariants a team writes down as plain markdown. Unlike an erosion rule (one regex against one side of a diff), a rule doc carries no pattern and matches nothing on its own; it is prose handed to a review as `context` (see `start_review`) so the agent judges the diff against the stated invariants.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `list_rules` | – | `RulesReport` | Every `*.md` rule doc in `.code-basics/rules/`, sorted deterministically. Each carries `id`/`title`/`body`, parsed from the same `---`-fenced front matter the Enhancements library uses — a file with no front matter abstains to safe fallbacks (the file stem for the id, the first heading or the stem for the title) rather than being dropped. `warnings` lists any file that would not read. A missing directory is an empty report, not an error |
+
+Rule docs are committed like erosion rules and declarative adapters — `rules/` is deliberately not gitignored. See `examples/rules/` for a copyable starting point.
 
 ## Object inspection
 

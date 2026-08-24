@@ -130,6 +130,8 @@ struct RawProcess {
     parent_pid: Option<u32>,
     #[serde(default)]
     started_at: Option<String>,
+    #[serde(default)]
+    command_line: Option<String>,
 }
 
 /// The machine's .NET processes, and anything the enumerator could not do.
@@ -175,6 +177,7 @@ pub fn parse_process_list(content: &str) -> Result<ProcessList> {
                 // cannot be true; discarded here so no walk has to cope with it.
                 parent_pid: p.parent_pid.filter(|parent| *parent != pid && *parent != 0),
                 started_at: p.started_at,
+                command_line: p.command_line,
             })
         })
         .collect();

@@ -9,18 +9,26 @@ mod state;
 
 mod commands {
     pub mod architecture;
+    pub mod behavioral;
     pub mod changelists;
+    pub mod enhancements;
+    pub mod erosion;
     pub mod files;
     pub mod git;
     pub mod inspect;
     pub mod intents;
     pub mod lsp;
+    pub mod qgate;
+    pub mod review;
+    pub mod rules;
     pub mod run;
     pub mod secrets;
+    pub mod setup;
     pub mod symbols;
     pub mod workspace;
 }
 
+mod qgate_run;
 mod recorder;
 
 use state::AppState;
@@ -50,6 +58,13 @@ pub fn run() {
     // without ever creating a window.
     if recorder::is_record_invocation() {
         recorder::run();
+        return;
+    }
+
+    // The quality-gate Stop hook likewise re-invokes this binary rather than a
+    // shipped script; it runs its checks and exits without creating a window.
+    if qgate_run::is_quality_gate_invocation() {
+        qgate_run::run();
         return;
     }
 
@@ -91,6 +106,12 @@ pub fn run() {
             commands::workspace::launch_profiles,
             commands::workspace::set_favorite,
             commands::workspace::set_config_order,
+            commands::enhancements::list_enhancements,
+            commands::enhancements::add_enhancement,
+            commands::enhancements::remove_enhancement,
+            commands::enhancements::list_prompts,
+            commands::enhancements::agent_runs,
+            commands::enhancements::mark_agent_run,
             commands::files::fs_list_dir,
             commands::files::fs_read_file,
             commands::files::fs_write_file,
@@ -102,6 +123,9 @@ pub fn run() {
             commands::run::running_ids,
             commands::run::run_tests,
             commands::run::last_test_run,
+            commands::review::start_review,
+            commands::review::cancel_review,
+            commands::review::review_agents,
             commands::git::git_status,
             commands::git::git_file_diff,
             commands::git::git_file_contents,
@@ -128,8 +152,13 @@ pub fn run() {
             commands::git::git_history,
             commands::git::git_commit_diff,
             commands::git::git_commit_file_contents,
+            commands::git::git_commit_file_why,
             commands::git::git_stash_save,
+            commands::git::git_stash_list,
             commands::git::git_stash_pop,
+            commands::git::git_stash_apply,
+            commands::git::git_stash_drop,
+            commands::git::git_stash_clear,
             commands::git::git_network,
             commands::intents::intent_groups,
             commands::intents::stage_intent_group,
@@ -138,8 +167,23 @@ pub fn run() {
             commands::intents::intent_capture_status,
             commands::intents::intent_install_plan,
             commands::intents::enable_intent_capture,
+            commands::intents::intent_uninstall_plan,
+            commands::intents::disable_intent_capture,
             commands::intents::import_intent_history,
             commands::intents::clear_intent_history,
+            commands::intents::set_card_intent,
+            commands::intents::clear_card_intent,
+            commands::qgate::quality_gate_status,
+            commands::qgate::quality_gate_install_plan,
+            commands::qgate::install_quality_gate,
+            commands::qgate::quality_gate_uninstall_plan,
+            commands::qgate::uninstall_quality_gate,
+            commands::setup::setup_install_plan,
+            commands::setup::install_setup,
+            commands::behavioral::behavioral_diff,
+            commands::behavioral::behavioral_clear,
+            commands::erosion::erosion_scan,
+            commands::rules::list_rules,
             commands::inspect::inspect_status,
             commands::inspect::inspect_attachable,
             commands::inspect::inspect_run_dump,

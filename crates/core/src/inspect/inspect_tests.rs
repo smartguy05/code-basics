@@ -6,6 +6,7 @@ const CRASH: &str = include_str!("../../fixtures/inspect/crash-exception.json");
 /// this one pins what the implementation actually emits, which is the half a
 /// hand-written fixture can always drift away from.
 const RECORDED: &str = include_str!("../../fixtures/inspect/recorded-crash.json");
+const DICTIONARY: &str = include_str!("../../fixtures/inspect/dictionary.json");
 const ATTACH_FAILED: &str = include_str!("../../fixtures/inspect/attach-failed.json");
 const UNREADABLE: &str = include_str!("../../fixtures/inspect/unreadable.json");
 
@@ -181,6 +182,51 @@ fn warnings_from_the_sidecar_reach_the_caller() {
             .any(|w| w.contains("could not be read")),
         "{:?}",
         graph.warnings
+    );
+}
+
+/// A `Dictionary<K,V>` reads as one entry row per pair, each with a `Key` and a
+/// `Value` child, and the dictionary's raw internals (`_buckets`, `_entries`,
+/// `_count`) never surface. Rendering those instead would bury the actual
+/// entries behind an implementation detail — the exact noise the collection
+/// unwrapping exists to remove.
+#[test]
+fn a_dictionary_reads_as_key_value_pairs() {
+    let graph = parse_result("dict", DICTIONARY).unwrap();
+
+    // The entries are pair containers, not the dictionary's field layout.
+    let entry = find(&graph.roots, "root[0]");
+    assert_eq!(entry.value, ObjectValue::Pair);
+
+    // Its two children are labelled Key and Value, in that order...
+    let labels: Vec<&str> = entry.children.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, ["Key", "Value"]);
+    assert_eq!(
+        find(&graph.roots, "root[0].key").value,
+        ObjectValue::Text {
+            text: "USD".into(),
+            truncated: false,
+        }
+    );
+    assert_eq!(
+        find(&graph.roots, "root[0].value").value,
+        ObjectValue::Primitive { text: "1".into() }
+    );
+
+    // ...and none of the dictionary's raw internals leak through anywhere.
+    fn collect<'a>(nodes: &'a [InspectNode], out: &mut Vec<&'a InspectNode>) {
+        for node in nodes {
+            out.push(node);
+            collect(&node.children, out);
+        }
+    }
+    let mut all = Vec::new();
+    collect(&graph.roots, &mut all);
+    assert!(
+        all.iter()
+            .all(|n| !matches!(n.label.as_str(), "_buckets" | "_entries" | "_count")),
+        "raw dictionary internals leaked: {:?}",
+        all.iter().map(|n| &n.label).collect::<Vec<_>>()
     );
 }
 

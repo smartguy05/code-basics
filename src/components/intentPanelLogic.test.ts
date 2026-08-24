@@ -1,12 +1,41 @@
 import { describe, expect, it } from "vitest";
 import {
   canRejectInMode,
+  cardRisk,
+  cardCandidates,
+  cardHeadline,
+  cardTitle,
+  intentEditPlan,
+  isAmbiguousIntent,
+  groupStagedState,
   importFeedback,
   intentDataHint,
   rejectFeedback,
   rejectReasonError,
+  scopeCreep,
+  scorecardLine,
+  stagedState,
+  unfulfilledCaption,
 } from "./intentPanelLogic";
-import type { IntentGroup, ProviderStatus } from "../ipc/types";
+import type {
+  ErosionFlag,
+  FileChange,
+  GroupFile,
+  IntentGroup,
+  ProviderStatus,
+  Scorecard,
+  UnfulfilledClaim,
+} from "../ipc/types";
+
+function change(over: Partial<FileChange> & { path: string }): FileChange {
+  return {
+    oldPath: null,
+    staged: null,
+    unstaged: null,
+    isBinary: false,
+    ...over,
+  };
+}
 
 function group(kind: IntentGroup["kind"], id = kind): IntentGroup {
   return {
@@ -33,6 +62,51 @@ const PINNED =
   "Your user-level hook is pinned to C:\\Users\\Someone\\Code\\ONEflight and " +
   "will not record here. Enable capture again to repair it — the entry is " +
   "replaced, not duplicated.";
+
+describe("cardTitle", () => {
+  it("shows the group's own label for a stated intent", () => {
+    const g = group("intent");
+    expect(cardTitle(g, "a kind sentence")).toBe(g.label);
+  });
+
+  it("keeps the explanatory kind sentence for every non-intent kind", () => {
+    expect(cardTitle(group("formatting"), "whitespace only")).toBe("whitespace only");
+    expect(cardTitle(group("modifiedSymbol"), "body changed")).toBe("body changed");
+    expect(cardTitle(group("other"), "grouped by file")).toBe("grouped by file");
+  });
+
+  it("lists every candidate for an ambiguous intent", () => {
+    const g = { ...group("intent"), label: "", candidates: ["reason one", "reason two"] };
+    const title = cardTitle(g, "unused");
+    expect(title).toContain("reason one");
+    expect(title).toContain("reason two");
+  });
+});
+
+describe("ambiguous intent helpers", () => {
+  it("detects an ambiguous intent only when candidates are present", () => {
+    expect(isAmbiguousIntent({ ...group("intent"), candidates: ["a", "b"] })).toBe(true);
+    expect(isAmbiguousIntent(group("intent"))).toBe(false); // single label, no candidates
+    expect(isAmbiguousIntent({ ...group("other"), candidates: ["a", "b"] })).toBe(false); // not intent
+  });
+
+  it("headline shows the label normally and a plain count when ambiguous", () => {
+    expect(cardHeadline(group("intent"))).toBe("a intent group");
+    // No scary "Ambiguous" wording: the stated reasons are real, just not
+    // separable line by line — so the headline just counts them.
+    expect(cardHeadline({ ...group("intent"), label: "", candidates: ["a", "b"] })).toBe(
+      "2 stated intents for this file",
+    );
+    expect(
+      cardHeadline({ ...group("intent"), label: "", candidates: ["a", "b", "c"] }),
+    ).toBe("3 stated intents for this file");
+  });
+
+  it("cardCandidates returns the reasons only when ambiguous", () => {
+    expect(cardCandidates({ ...group("intent"), candidates: ["a", "b"] })).toEqual(["a", "b"]);
+    expect(cardCandidates(group("intent"))).toEqual([]);
+  });
+});
 
 describe("intentDataHint", () => {
   it("says nothing when at least one group is a stated intent", () => {
@@ -119,6 +193,66 @@ describe("intentDataHint", () => {
   });
 });
 
+describe("scorecardLine", () => {
+  function card(over: Partial<Scorecard> = {}): Scorecard {
+    return {
+      claims: 0,
+      evidenced: 0,
+      unmatched: 0,
+      hunks: 0,
+      attributedHunks: 0,
+      unattributedLines: 0,
+      ...over,
+    };
+  }
+
+  it("reads as a compact summary with plurals", () => {
+    const line = scorecardLine(
+      card({ claims: 4, evidenced: 3, unmatched: 1, hunks: 41, unattributedLines: 6 }),
+    );
+    expect(line).toBe("4 claims · 3 evidenced · 1 unmatched · 41 hunks · 6 unattributed");
+  });
+
+  it("uses the singular for one claim and one hunk", () => {
+    const line = scorecardLine(card({ claims: 1, evidenced: 1, hunks: 1 }));
+    expect(line).toContain("1 claim ·");
+    expect(line).toContain("1 hunk ·");
+  });
+
+  it("reads sensibly at zero", () => {
+    expect(scorecardLine(card())).toBe(
+      "0 claims · 0 evidenced · 0 unmatched · 0 hunks · 0 unattributed",
+    );
+  });
+});
+
+describe("unfulfilledCaption", () => {
+  function claim(over: Partial<UnfulfilledClaim> = {}): UnfulfilledClaim {
+    return { turnId: "t", label: "l", provider: "claudeCode", paths: [], ...over };
+  }
+
+  it("is null when there is nothing unmatched", () => {
+    expect(unfulfilledCaption([])).toBeNull();
+  });
+
+  it("uses the singular for one", () => {
+    const text = unfulfilledCaption([claim()]);
+    expect(text).toBe("1 stated intent with no matching change in this diff");
+  });
+
+  it("uses the plural for several", () => {
+    const text = unfulfilledCaption([claim(), claim()]);
+    expect(text).toContain("2 stated intents");
+  });
+
+  // A wrong label is worse than none: the wording never accuses.
+  it("never accuses the agent of lying or not doing the work", () => {
+    const text = unfulfilledCaption([claim()]) ?? "";
+    expect(text).not.toMatch(/not done/i);
+    expect(text).not.toMatch(/lie|lied/i);
+  });
+});
+
 describe("importFeedback", () => {
   it("names how many records were imported", () => {
     expect(importFeedback(7)).toBe("Imported 7 recorded intents.");
@@ -185,5 +319,222 @@ describe("rejectFeedback", () => {
     const text = rejectFeedback({ reverted: 2, marked: ["a.ts"], unmarked: ["data.json"] });
     expect(text).toContain("data.json");
     expect(text).toMatch(/without a note/i);
+  });
+});
+
+describe("stagedState", () => {
+  const files = [
+    change({ path: "src/a.ts", staged: "modified" }), // fully staged
+    change({ path: "src/b.ts", unstaged: "modified" }), // not staged
+    change({ path: "src/c.ts", staged: "modified", unstaged: "modified" }), // partial
+  ];
+
+  it("reports a fully staged file as staged", () => {
+    expect(stagedState("src/a.ts", files)).toBe("staged");
+  });
+
+  it("reports an unstaged file as none", () => {
+    expect(stagedState("src/b.ts", files)).toBe("none");
+  });
+
+  it("reports a partially staged file as partial", () => {
+    expect(stagedState("src/c.ts", files)).toBe("partial");
+  });
+
+  it("treats a path absent from status as none", () => {
+    expect(stagedState("src/missing.ts", files)).toBe("none");
+  });
+});
+
+describe("groupStagedState", () => {
+  const staged = change({ path: "a", staged: "modified" });
+  const unstaged = change({ path: "b", unstaged: "modified" });
+  const partial = change({ path: "c", staged: "modified", unstaged: "modified" });
+
+  it("is staged only when every file is fully staged", () => {
+    expect(groupStagedState(["a"], [staged])).toBe("staged");
+    expect(groupStagedState(["a", "b"], [staged, unstaged])).toBe("partial");
+  });
+
+  it("is none only when no file is staged at all", () => {
+    expect(groupStagedState(["b"], [unstaged])).toBe("none");
+  });
+
+  it("is partial when any file is partially staged", () => {
+    expect(groupStagedState(["c"], [partial])).toBe("partial");
+  });
+
+  it("is none for an empty group", () => {
+    expect(groupStagedState([], [])).toBe("none");
+  });
+});
+
+// -- scope-creep + risk badges ----------------------------------------------
+
+const gfile = (path: string, lineIndices: number[] = []): GroupFile => ({
+  path,
+  lineIndices,
+  hunks: [],
+});
+
+const mkGroup = (over: Partial<IntentGroup>): IntentGroup => ({
+  id: "g",
+  kind: "intent",
+  label: "why",
+  files: [],
+  lineCount: 0,
+  confidence: "high",
+  ...over,
+});
+
+const card = (over: Partial<Scorecard>): Scorecard => ({
+  claims: 0,
+  evidenced: 0,
+  unmatched: 0,
+  hunks: 0,
+  attributedHunks: 0,
+  unattributedLines: 0,
+  ...over,
+});
+
+const eflag = (over: Partial<ErosionFlag>): ErosionFlag => ({
+  path: "a.ts",
+  line: 1,
+  index: 0,
+  origin: "addition",
+  category: "secret",
+  ruleId: "r",
+  message: "m",
+  content: "c",
+  ...over,
+});
+
+describe("scopeCreep", () => {
+  it("abstains on a small diff even with an unattributed line", () => {
+    const groups = [mkGroup({ lineCount: 10 })];
+    expect(scopeCreep(card({ unattributedLines: 5 }), groups)).toBeNull();
+  });
+
+  it("abstains when there are no changes at all", () => {
+    expect(scopeCreep(card({}), [])).toBeNull();
+  });
+
+  it("notices when unexplained groups cross the floor on a large diff", () => {
+    const groups = [
+      mkGroup({ kind: "other", lineCount: 20 }),
+      mkGroup({ kind: "other", lineCount: 20 }),
+    ];
+    const out = scopeCreep(card({ unattributedLines: 0 }), groups);
+    expect(out?.level).toBe("notice");
+  });
+
+  it("notices when a meaningful share of the diff is unattributed", () => {
+    // total = sum(lineCount) = 100; share = 40/100 = 0.4 -> the NOTICE threshold.
+    const groups = [mkGroup({ lineCount: 100 })];
+    const out = scopeCreep(card({ unattributedLines: 40 }), groups);
+    expect(out?.level).toBe("notice");
+  });
+
+  it("escalates to high only when BOTH signals are substantial", () => {
+    // 5 unexplained groups (>=4) and share 60/100 = 0.6 (>=0.6): high is now
+    // reachable — the denominator is sum(lineCount), not summed with unattributed.
+    const groups = Array.from({ length: 5 }, () => mkGroup({ kind: "other", lineCount: 20 }));
+    const out = scopeCreep(card({ unattributedLines: 60 }), groups);
+    expect(out?.level).toBe("high");
+  });
+
+  it("stays at notice when only one signal is substantial", () => {
+    // Many unexplained groups but a small unattributed share.
+    const groups = Array.from({ length: 5 }, () => mkGroup({ kind: "other", lineCount: 20 }));
+    const out = scopeCreep(card({ unattributedLines: 10 }), groups);
+    expect(out?.level).toBe("notice");
+  });
+});
+
+describe("cardRisk", () => {
+  it("abstains for a high-confidence stated card in a plain path with no flag", () => {
+    const g = mkGroup({ confidence: "high", files: [gfile("src/util/math.ts", [0, 1])] });
+    expect(cardRisk(g, [])).toBeNull();
+  });
+
+  it("elevates an unexplained (other) card", () => {
+    const g = mkGroup({ kind: "other", files: [gfile("src/util/math.ts")] });
+    expect(cardRisk(g, [])?.level).toBe("elevated");
+  });
+
+  it("does not elevate a titled same-turn card in a plain path", () => {
+    const g = mkGroup({ kind: "sameTurn", label: "3 files changed together", files: [gfile("src/util/math.ts")] });
+    expect(cardRisk(g, [])).toBeNull();
+  });
+
+  it("elevates on low confidence", () => {
+    const g = mkGroup({ confidence: "low", files: [gfile("src/util/math.ts")] });
+    expect(cardRisk(g, [])?.level).toBe("elevated");
+  });
+
+  it("elevates on a sensitive path and names it", () => {
+    const g = mkGroup({ files: [gfile("src/auth/session.ts")] });
+    const out = cardRisk(g, []);
+    expect(out?.level).toBe("elevated");
+    expect(out?.reasons.some((r) => r.includes("auth/session.ts"))).toBe(true);
+  });
+
+  it("does not treat 'author' or an ordinary config file as sensitive", () => {
+    expect(cardRisk(mkGroup({ files: [gfile("src/models/author.ts")] }), [])).toBeNull();
+    expect(cardRisk(mkGroup({ files: [gfile("vite.config.ts")] }), [])).toBeNull();
+  });
+
+  it("goes high on an intersecting secret erosion flag", () => {
+    const g = mkGroup({ files: [gfile("src/util/math.ts", [4, 5])] });
+    const out = cardRisk(g, [eflag({ path: "src/util/math.ts", index: 5, category: "secret" })]);
+    expect(out?.level).toBe("high");
+  });
+
+  it("stays elevated (not high) on an intersecting low-severity flag", () => {
+    const g = mkGroup({ files: [gfile("src/util/math.ts", [4, 5])] });
+    const out = cardRisk(g, [eflag({ path: "src/util/math.ts", index: 5, category: "droppedLog" })]);
+    expect(out?.level).toBe("elevated");
+  });
+
+  it("ignores an erosion flag on a different line or in a different file", () => {
+    const g = mkGroup({ files: [gfile("src/util/math.ts", [4, 5])] });
+    expect(cardRisk(g, [eflag({ path: "src/util/math.ts", index: 9, category: "secret" })])).toBeNull();
+    expect(cardRisk(g, [eflag({ path: "src/other.ts", index: 5, category: "secret" })])).toBeNull();
+  });
+});
+
+describe("intentEditPlan", () => {
+  it("prompts to overwrite a single agent stated intent, prefilled with it", () => {
+    const plan = intentEditPlan(mkGroup({ kind: "intent", label: "add retry" }));
+    expect(plan.initial).toBe("add retry");
+    expect(plan.hasUserNote).toBe(false);
+    expect(plan.confirm).toContain("overwrites");
+    expect(plan.confirm).toContain("add retry");
+  });
+
+  it("prompts to overwrite an ambiguous card's several stated intents", () => {
+    const plan = intentEditPlan(
+      mkGroup({ kind: "intent", label: "", candidates: ["a", "b"] }),
+    );
+    expect(plan.initial).toBe("");
+    expect(plan.confirm).toContain("2 stated intents");
+  });
+
+  it("does not prompt when editing the user's own note, and offers a clear", () => {
+    const plan = intentEditPlan(
+      mkGroup({ kind: "intent", label: "my note", userAuthored: true }),
+    );
+    expect(plan.confirm).toBeNull();
+    expect(plan.initial).toBe("my note");
+    expect(plan.hasUserNote).toBe(true);
+  });
+
+  it("does not prompt and starts blank on a location card (no stated intent)", () => {
+    for (const kind of ["other", "modifiedSymbol", "newSymbol", "sameTurn", "formatting"] as const) {
+      const plan = intentEditPlan(mkGroup({ kind, label: "Other changes in x.ts" }));
+      expect(plan.confirm, kind).toBeNull();
+      expect(plan.initial, kind).toBe("");
+      expect(plan.hasUserNote, kind).toBe(false);
+    }
   });
 });

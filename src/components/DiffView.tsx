@@ -8,15 +8,27 @@ import {
   type RefObject,
 } from "react";
 import { EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
-import { Decoration, EditorView, keymap, lineNumbers, type DecorationSet } from "@codemirror/view";
+import {
+  Decoration,
+  EditorView,
+  hoverTooltip,
+  keymap,
+  lineNumbers,
+  type DecorationSet,
+} from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { Change, MergeView, presentableDiff, unifiedMergeView } from "@codemirror/merge";
 import { editorColors, languageFor } from "./language";
 import {
   changeMarks,
+  diffSplitFraction,
+  loadDiffSplit,
   mapOffset,
   nextChangeLine,
+  normaliseEndings,
   normaliseWhitespace,
+  saveDiffSplit,
   scrollLeftForThumb,
   scrollThumb,
   type ScrollMetrics,
@@ -119,6 +131,12 @@ export interface DiffViewProps {
   highlight?: number[];
   /** Imperative handle for the toolbar's and F7's jump-to-change. */
   handleRef?: RefObject<DiffViewHandle | null>;
+  /**
+   * The recorded "why" for a 1-based line of the working document, shown as a
+   * hover tooltip. `null` for a line with no recorded reason (no tooltip). The
+   * History tab uses this to surface durable intent git-blame style.
+   */
+  lineWhy?: (line: number) => string | null;
 }
 
 /**
@@ -143,6 +161,7 @@ export function DiffView({
   onSelectionChange,
   highlight,
   handleRef,
+  lineWhy,
 }: DiffViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -155,6 +174,14 @@ export function DiffView({
    * effect has returned.
    */
   const panesRef = useRef<EditorView[]>([]);
+  /**
+   * The baseline pane's width fraction in the side-by-side layout.
+   *
+   * Held in a ref and applied straight to the library's flex wrappers so a drag
+   * resizes the panes without rebuilding the editors — a rebuild would lose the
+   * scroll position and the cursor, exactly as the callback comment above notes.
+   */
+  const splitRef = useRef(loadDiffSplit(localStorage));
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [editorError, setEditorError] = useState<string | null>(null);
   /** The scrollbar's track, measured for the thumb arithmetic. */
@@ -172,8 +199,8 @@ export function DiffView({
 
   // Callbacks are read through a ref so changing them does not tear down and
   // rebuild the editor, which would lose scroll position and the cursor.
-  const handlers = useRef({ onSave, onSelectionChange });
-  handlers.current = { onSave, onSelectionChange };
+  const handlers = useRef({ onSave, onSelectionChange, lineWhy });
+  handlers.current = { onSave, onSelectionChange, lineWhy };
 
   /**
    * Map each working-copy line number to the diff line index that produced it.
@@ -251,6 +278,10 @@ export function DiffView({
       // light-theme diff colours were being painted onto a dark background.
       EditorView.darkTheme.of(true),
       history(),
+      // Ctrl+F searches within the diff (and, on the read-only baseline pane
+      // below, within that side too).
+      search({ top: true }),
+      highlightSelectionMatches(),
       keymap.of([
         {
           key: "Mod-s",
@@ -259,11 +290,32 @@ export function DiffView({
             return true;
           },
         },
+        ...searchKeymap,
         ...defaultKeymap,
         ...historyKeymap,
       ]),
       selectedLineField,
       EditorView.editable.of(editable),
+      // Hover a line to see its recorded intent, when a resolver is supplied
+      // (the History tab). Reads through the handlers ref so it always sees the
+      // latest data without rebuilding the editor.
+      hoverTooltip((view, pos) => {
+        const resolve = handlers.current.lineWhy;
+        if (!resolve) return null;
+        const line = view.state.doc.lineAt(pos).number;
+        const text = resolve(line);
+        if (!text) return null;
+        return {
+          pos,
+          above: true,
+          create() {
+            const dom = document.createElement("div");
+            dom.className = "cm-why-tooltip";
+            dom.textContent = text;
+            return { dom };
+          },
+        };
+      }),
       ...languageFor(path),
       ...editorColors,
     ];
@@ -273,24 +325,34 @@ export function DiffView({
     const collapse = collapseUnchanged ? { margin: 3, minSize: 8 } : undefined;
     const diffConfig = ignoreWhitespace ? { override: whitespaceInsensitiveDiff } : undefined;
 
+    // The baseline comes from git (always `\n`); the working copy comes from
+    // disk (`\r\n` on Windows). `@codemirror/merge` diffs the two raw strings,
+    // so an ending mismatch alone would mark every line changed. Both sides are
+    // brought to `\n` for the comparison — git filters the same difference.
+    const baselineDoc = baseline == null ? null : normaliseEndings(baseline);
+    const workingDoc = normaliseEndings(working);
+
     // A CodeMirror failure must degrade to a message for this one file, not
     // take down the whole UI (an effect error unmounts the React tree).
     try {
       // A file with no committed baseline has nothing to diff against, so it
       // is shown as a plain editor rather than an all-green diff.
-      if (baseline != null && layout === "sideBySide") {
+      if (baselineDoc != null && layout === "sideBySide") {
         const merge = new MergeView({
           a: {
-            doc: baseline,
+            doc: baselineDoc,
             extensions: [
               lineNumbers(),
               EditorView.darkTheme.of(true),
               EditorView.editable.of(false),
+              search({ top: true }),
+              highlightSelectionMatches(),
+              keymap.of(searchKeymap),
               ...languageFor(path),
               ...editorColors,
             ],
           },
-          b: { doc: working, extensions },
+          b: { doc: workingDoc, extensions },
           parent: hostRef.current,
           // The buttons copy a chunk from the baseline onto the working copy —
           // the side-by-side equivalent of the unified view's revert control.
@@ -313,6 +375,22 @@ export function DiffView({
         setEditorError(null);
         viewRef.current = merge.b;
         panesRef.current = [merge.a, merge.b];
+
+        // Restore the remembered divider position on the fresh panes, and drop a
+        // draggable handle at their seam. The handle lives inside the library's
+        // own flex row so it stays at the boundary as the ratio changes;
+        // `merge.destroy()` takes the whole subtree — handle included — with it.
+        applyPaneSplit(splitRef.current);
+        const editors = merge.a.dom.closest<HTMLElement>(".cm-mergeViewEditors");
+        const wrapB = merge.b.dom.closest<HTMLElement>(".cm-mergeViewEditor");
+        if (editors && wrapB) {
+          const handle = document.createElement("div");
+          handle.className = "diff-pane-resizer";
+          handle.title = "Drag to resize the panes";
+          handle.addEventListener("mousedown", startPaneDrag);
+          editors.insertBefore(handle, wrapB);
+        }
+
         return () => {
           merge.destroy();
           viewRef.current = null;
@@ -320,10 +398,10 @@ export function DiffView({
         };
       }
 
-      if (baseline != null) {
+      if (baselineDoc != null) {
         extensions.push(
           unifiedMergeView({
-            original: baseline,
+            original: baselineDoc,
             mergeControls: true,
             highlightChanges: true,
             gutter: true,
@@ -335,7 +413,7 @@ export function DiffView({
       extensions.push(heightTheme);
 
       const view = new EditorView({
-        state: EditorState.create({ doc: working, extensions }),
+        state: EditorState.create({ doc: workingDoc, extensions }),
         parent: hostRef.current,
       });
       setEditorError(null);
@@ -388,6 +466,53 @@ export function DiffView({
     }
     setMetrics((previous) => ({ ...previous, scrollLeft: clamped }));
   }, []);
+
+  /**
+   * The two side-by-side pane wrappers the merge view lays out, or null in the
+   * inline layout (one editor, nothing to divide).
+   */
+  function paneWrappers(): [HTMLElement, HTMLElement] | null {
+    const [a, b] = panesRef.current;
+    const wrapA = a?.dom.closest<HTMLElement>(".cm-mergeViewEditor");
+    const wrapB = b?.dom.closest<HTMLElement>(".cm-mergeViewEditor");
+    return wrapA && wrapB && wrapA !== wrapB ? [wrapA, wrapB] : null;
+  }
+
+  /**
+   * Size the panes to `frac : 1 - frac`.
+   *
+   * The library gives both wrappers `flex-grow: 1; flex-basis: 0`, so overriding
+   * only `flex-grow` splits the flexible width in that ratio and leaves the
+   * revert column between them untouched.
+   */
+  function applyPaneSplit(frac: number) {
+    const wrappers = paneWrappers();
+    if (!wrappers) return;
+    wrappers[0].style.flexGrow = String(frac);
+    wrappers[1].style.flexGrow = String(1 - frac);
+  }
+
+  /** Drag the divider between the two panes; the fraction persists across files. */
+  function startPaneDrag(event: MouseEvent) {
+    event.preventDefault();
+    const editors = panesRef.current[0]?.dom.closest<HTMLElement>(".cm-mergeViewEditors");
+    if (!editors) return;
+    const { left, width } = editors.getBoundingClientRect();
+
+    const onMove = (move: MouseEvent) => {
+      splitRef.current = diffSplitFraction(move.clientX, left, width);
+      applyPaneSplit(splitRef.current);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      saveDiffSplit(localStorage, splitRef.current);
+      // The panes changed width, so the shared scrollbar's arithmetic is stale.
+      requestAnimationFrame(measure);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
 
   // CodeMirror caches character metrics, so a font size applied through CSS
   // leaves every open editor laying out at the old one until it is told to

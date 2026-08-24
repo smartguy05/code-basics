@@ -803,6 +803,76 @@ fn an_unknown_event_name_is_not_accepted() {
     assert_eq!(HookEvent::parse("Stop"), Some(HookEvent::Stop));
 }
 
+/// `SubagentStop` fires when a subagent finishes, and carries the same closing
+/// message a `Stop` does — so it is parsed like one.
+#[test]
+fn a_subagent_stop_event_is_recognised() {
+    assert_eq!(
+        HookEvent::parse("SubagentStop"),
+        Some(HookEvent::SubagentStop)
+    );
+}
+
+/// A `SubagentStop` reads the subagent's closing message and records its label,
+/// exactly like a `Stop`. The label joins to the subagent's edits by its
+/// declared path scope in the cross-turn binder, so no turn-id match is needed.
+#[test]
+fn a_subagent_stop_payload_writes_a_label() {
+    let dir = workspace();
+
+    let written = ingest(
+        dir.path(),
+        ProviderId::ClaudeCode,
+        HookEvent::SubagentStop,
+        &json!({
+            "turn_id": "turn-13",
+            "last_assistant_message": "Intent(src/a.rs): tighten the parser",
+        }),
+    )
+    .unwrap();
+
+    assert_eq!(written, 1);
+    let intents = load(dir.path(), &LoadOptions::default()).unwrap();
+    assert_eq!(intents.labels[0].label, "tighten the parser");
+    assert_eq!(intents.labels[0].paths, vec!["src/a.rs"]);
+}
+
+/// A `SubagentStop` must never go through `ask_for_intent`: blocking a subagent
+/// could hang it, and nothing establishes the platform honours a refusal there.
+/// The `event != Stop` guard is what keeps it a pure recorder.
+#[test]
+fn a_subagent_stop_is_never_asked_for_an_intent() {
+    let dir = workspace();
+    edit_in_turn(dir.path(), "turn-1");
+
+    assert!(ask_for_intent(
+        dir.path(),
+        ProviderId::ClaudeCode,
+        HookEvent::SubagentStop,
+        &stop("turn-1", "All done."),
+    )
+    .is_none());
+}
+
+/// The durable-why post-commit hook line the installer writes must be understood
+/// by the recorder, or a commit's intent is silently never persisted.
+#[test]
+fn the_post_commit_hook_line_is_parsed() {
+    let parsed = parse_recorder_args(&args(&[
+        "exe",
+        "record-intent",
+        "--code-basics-intent",
+        "--event",
+        "PostCommit",
+        "--workspace",
+        "/repo",
+    ]))
+    .expect("a recorder invocation");
+
+    assert_eq!(parsed.event, HookEvent::PostCommit);
+    assert_eq!(parsed.workspace.as_deref(), Some("/repo"));
+}
+
 // -- payload shapes the ingest has to survive -------------------------------
 
 /// The hook runs unattended after every edit, so an event carrying nothing it
@@ -1230,21 +1300,24 @@ fn an_absent_workspace_flag_leaves_the_root_to_the_payload() {
 
 // -- which lifecycle event fired --------------------------------------------
 
-/// Only the two events this feature installs are accepted. Anything else is a
+/// Only the three events this feature installs are accepted. Anything else is a
 /// hook someone else configured, and acting on it would record edits the user
 /// never asked to have recorded.
 #[test]
-fn only_the_two_installed_events_are_recognised() {
+fn only_the_three_installed_events_are_recognised() {
     assert_eq!(
         HookEvent::parse("PostToolUse"),
         Some(HookEvent::PostToolUse)
     );
     assert_eq!(HookEvent::parse("Stop"), Some(HookEvent::Stop));
+    assert_eq!(
+        HookEvent::parse("SubagentStop"),
+        Some(HookEvent::SubagentStop)
+    );
 
     for unknown in [
         "PreToolUse",
         "SessionStart",
-        "SubagentStop",
         "Notification",
         "UserPromptSubmit",
         "",

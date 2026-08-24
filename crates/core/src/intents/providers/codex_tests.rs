@@ -67,18 +67,20 @@ fn detected_agrees_with_the_resolved_codex_home_directory() {
     assert_eq!(Codex::new().detected(), expected);
 }
 
-/// A directory Codex has never seen has no sessions and no capture, whether or
-/// not Codex is installed here.
+/// A directory Codex has never seen has no sessions and no capture. Uses a
+/// fixture home rather than the real `~/.codex` so it is hermetic — the machine
+/// running the suite may itself have Codex capture installed at user scope.
 #[test]
 fn status_for_an_unknown_workspace_reports_nothing_configured() {
     let dir = workspace();
+    let home = codex_home_dir();
 
-    let status = Codex::new().status(dir.path());
+    let status = Codex::new().status_in(Some(home.path()), dir.path());
 
     assert_eq!(status.provider, ProviderId::Codex);
     assert_eq!(status.capture, None);
     assert_eq!(status.sessions, 0);
-    assert_eq!(status.detected, codex_home().is_some_and(|h| h.is_dir()));
+    assert!(status.detected, "the fixture home exists");
 }
 
 // -- split_lines ------------------------------------------------------------
