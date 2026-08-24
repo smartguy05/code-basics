@@ -16,7 +16,7 @@ src/
 │   ├── RunView.tsx       file-tree sidebar, editor pane (back/forward file
 │   │                     history + pinnable tabs) over per-run console tabs,
 │   │                     config dropdown (portaled to the titlebar), env picker,
-│   │                     build actions, secrets
+│   │                     build actions, and .NET secrets opened as an editor tab
 │   ├── editorNavLogic.ts editor back/forward stack + tab pin/partition (pure)
 │   ├── TestsView.tsx     test configs, run / re-run failed, live progress + tree
 │   ├── ChangesView.tsx   git status, comparison modes, side-by-side/inline diff;
@@ -77,7 +77,11 @@ src/
 │   ├── RunConfigMenu.tsx titlebar run-config dropdown: status dots, favourites,
 │   │                     reorder, new/import items (portal from RunView)
 │   ├── FileTree.tsx      lazy workspace directory tree (one fs_list_dir per expand)
-│   ├── FileEditor.tsx    CodeMirror editor over one file; Ctrl+S saves, Ctrl+F finds
+│   ├── FileEditor.tsx    CodeMirror editor over one EditorSource (a workspace file
+│   │                     or a project's secrets); Ctrl+S saves, Ctrl+F finds,
+│   │                     Ctrl+/ toggles comments
+│   ├── editorSourceLogic.ts  what backs an editor tab — workspace file vs. secrets:
+│   │                     id, label, language hint, whether LSP applies (pure)
 │   │                     in-file (@codemirror/search), reports dirty,
 │   │                     reveals a requested line (clamped, token-guarded), and owns
 │   │                     the whole language-server client (didOpen/didChange/didClose,
@@ -101,7 +105,6 @@ src/
 │   ├── language.ts       file-extension → CodeMirror language mode, plus the
 │   │                     shared syntax-colour theme and bracket matching
 │   ├── EnvironmentPicker.tsx  ASPNETCORE_ENVIRONMENT dropdown with in-menu add/remove
-│   ├── SecretsEditor.tsx .NET user-secrets modal
 │   ├── Sidebar.tsx       the resizable left column (shared stored width)
 │   ├── ErrorBoundary.tsx last-resort error screen instead of a blank window
 │   └── RiderImportDialog.tsx  review step before an import is saved
@@ -159,7 +162,7 @@ The Run tab's file tabs behave like a browser's, and both behaviours keep their 
 - **RiderImportDialog** shows the conversion preview — including per-config warnings — and writes nothing until the user confirms ([Rider import](../guides/rider-import.md)).
 - **RunConfigMenu** is rendered by `RunView` (which owns selection, favourites and process status) but displayed in the titlebar via `createPortal` into `#run-config-slot` — the state stays in the view without being lifted to `App`.
 - **SearchEverywhere** is an overlay with one control: an input, four scope buttons, and a ranked list grouped Files / Symbols / Actions. Every decision it looks like it makes is a call into `searchLogic.ts` — `recogniseShortcut` (the whole keybinding table as one expression), `nextIndex` (wrapping arrow-key movement, and normalising a selection left over from a longer list), `highlightSpans` (`SearchHit.positions` are **character** indices, so the label is decomposed with `Array.from` and never sliced as a raw string), `lineToPos` (clamping, because CodeMirror's `doc.line()` throws out of range and the index is a snapshot). The ranking, the scope filtering and the `Foo:123` line suffix are `cb-core`'s and are not re-implemented here; the raw query text is passed through and the line is read off the hit. Keystrokes are debounced 80 ms and each search carries a sequence number, so a slow reply to an older query cannot land on top of a newer one.
-- **FileEditor** instances stay mounted while hidden — like console sessions — so undo history and unsaved edits survive switching file tabs. Files load via `fs_read_file` and save with Ctrl+S via `fs_write_file`; the editor/console split fraction persists in `localStorage` (`code-basics.editorSplit`). It is also the whole client of the language-server surface, because the `didOpen`/`didClose` pair a server is owed is exactly this component's lifetime — see [below](#find-usages-and-go-to-definition).
+- **FileEditor** instances stay mounted while hidden — like console sessions — so undo history and unsaved edits survive switching file tabs. Each is keyed by an **`EditorSource`** (`editorSourceLogic.ts`), not a bare path: a `workspace` file loads/saves via `fs_read_file`/`fs_write_file` and drives the language server, while a .NET project's **user secrets open as a `secrets.json` tab** — source `secrets`, backed by `read_project_secrets`/`write_project_secrets`, with the whole language-server surface switched off (no usages rows, no `didOpen`). The open-file model keys on `file.id`; the editor/console split fraction persists in `localStorage` (`code-basics.editorSplit`). Because the editor is the whole client of the language-server surface, the `didOpen`/`didClose` pair a server is owed is exactly a workspace tab's lifetime — see [below](#find-usages-and-go-to-definition). Two CodeMirror specifics it pins: `drawSelection()` hides the native caret, so the drawn caret is forced visible with `&.cm-focused .cm-cursor { display: block }` (the base reveal selector does not match in the WebView, and without this there is no caret); and **Ctrl+/** (`toggleComment`) is bound explicitly with `preventDefault` ahead of `defaultKeymap` so the WebView cannot swallow it.
 
 ## Find usages and go to definition
 
