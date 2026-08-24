@@ -7,7 +7,7 @@ import { FileTree } from "../components/FileTree";
 import { LspStatusIndicator } from "../components/LspStatus";
 import { RiderImportDialog } from "../components/RiderImportDialog";
 import { RunConfigMenu } from "../components/RunConfigMenu";
-import { SecretsEditor } from "../components/SecretsEditor";
+import { secretsFile, type OpenEditorFile } from "../components/editorSourceLogic";
 import { Sidebar } from "../components/Sidebar";
 import {
   EnvironmentPicker,
@@ -100,11 +100,12 @@ const DEFAULT_ENVIRONMENTS: EnvironmentState = {
 const environmentsKey = (root: string) => `code-basics.environments:${root}`;
 
 /** A file open in the editor pane. */
-interface OpenFile {
-  /** Workspace-relative path — the file's identity. */
-  path: string;
-  name: string;
-}
+/**
+ * An open editor tab. The identity is `file.id` — a workspace-relative path for
+ * an ordinary file, or `secrets:<project>` for a secrets tab — and every per-file
+ * map (active, dirty, pinned, reveal) keys on it. See `editorSourceLogic`.
+ */
+type OpenFile = OpenEditorFile;
 
 /** The tab label for a path, from either separator it may carry. */
 function baseName(path: string): string {
@@ -224,7 +225,6 @@ export function RunView({
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<RunConfig | null>(null);
   const [importing, setImporting] = useState(false);
-  const [secretsFor, setSecretsFor] = useState<RunConfig | null>(null);
   const [environments, setEnvironments] = useState<EnvironmentState>(() =>
     loadEnvironments(workspace.root),
   );
@@ -273,9 +273,26 @@ export function RunView({
 
   function openFile(path: string, name: string) {
     setOpenFiles((previous) =>
-      previous.some((f) => f.path === path) ? previous : [...previous, { path, name }],
+      previous.some((f) => f.id === path)
+        ? previous
+        : [...previous, { id: path, name, source: { kind: "workspace", path } }],
     );
     setActiveFile(path);
+  }
+
+  /**
+   * Open a project's user secrets as an ordinary editor tab — the Rider way. The
+   * external `secrets.json` and its `<UserSecretsId>` are handled by the write
+   * command on first save; opening mutates nothing. Deliberately not recorded in
+   * the back/forward history: go-to-definition never lands here, and the stack is
+   * for workspace paths only.
+   */
+  function openSecrets(project: string) {
+    const file = secretsFile(project);
+    setOpenFiles((previous) =>
+      previous.some((f) => f.id === file.id) ? previous : [...previous, file],
+    );
+    setActiveFile(file.id);
   }
 
   /**
@@ -433,33 +450,33 @@ export function RunView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingSelect, onSelectConsumed]);
 
-  function closeFile(path: string) {
-    const remaining = openFiles.filter((f) => f.path !== path);
+  function closeFile(id: string) {
+    const remaining = openFiles.filter((f) => f.id !== id);
     setOpenFiles(remaining);
     setDirtyFiles((previous) => {
       const next = new Set(previous);
-      next.delete(path);
+      next.delete(id);
       return next;
     });
     setPinnedFiles((previous) => {
-      if (!previous.has(path)) return previous;
+      if (!previous.has(id)) return previous;
       const next = new Set(previous);
-      next.delete(path);
+      next.delete(id);
       return next;
     });
     // Closing is not a navigation: the fallback to another tab below must not
     // push onto the history (a browser does not record a tab close as "forward").
-    if (activeFile === path) {
-      setActiveFile(remaining[remaining.length - 1]?.path ?? null);
+    if (activeFile === id) {
+      setActiveFile(remaining[remaining.length - 1]?.id ?? null);
     }
   }
 
-  function setFileDirty(path: string, dirty: boolean) {
+  function setFileDirty(id: string, dirty: boolean) {
     setDirtyFiles((previous) => {
-      if (previous.has(path) === dirty) return previous;
+      if (previous.has(id) === dirty) return previous;
       const next = new Set(previous);
-      if (dirty) next.add(path);
-      else next.delete(path);
+      if (dirty) next.add(id);
+      else next.delete(id);
       return next;
     });
   }
@@ -928,24 +945,27 @@ export function RunView({
 
   /** One file tab — reused by both the pinned and the normal row. */
   const renderFileTab = (file: OpenFile) => {
-    const isPinned = pinnedFiles.has(file.path);
+    const isPinned = pinnedFiles.has(file.id);
     return (
       <button
-        key={file.path}
-        className={file.path === activeFile ? "active" : ""}
+        key={file.id}
+        className={file.id === activeFile ? "active" : ""}
         onClick={() => {
-          setActiveFile(file.path);
-          recordNav(file.path);
+          setActiveFile(file.id);
+          // Only workspace files enter the back/forward stack: a secrets tab has
+          // no reopenable path (its id is `secrets:<project>`), and go-to-def
+          // never lands on it.
+          if (file.source.kind === "workspace") recordNav(file.source.path);
         }}
         // Middle-click closes, like browser tabs. The mousedown guard stops the
         // autoscroll cursor.
         onMouseDown={(e) => e.button === 1 && e.preventDefault()}
         onAuxClick={(e) => {
-          if (e.button === 1) closeFile(file.path);
+          if (e.button === 1) closeFile(file.id);
         }}
-        title={file.path}
+        title={file.source.kind === "secrets" ? file.source.project : file.source.path}
       >
-        {dirtyFiles.has(file.path) && (
+        {dirtyFiles.has(file.id) && (
           <span className="dirty-dot" title="Unsaved changes — Ctrl+S to save">
             ●
           </span>
@@ -957,7 +977,7 @@ export function RunView({
           title={isPinned ? "Unpin this file" : "Pin this file"}
           onClick={(e) => {
             e.stopPropagation();
-            setPinnedFiles((previous) => togglePin(previous, file.path));
+            setPinnedFiles((previous) => togglePin(previous, file.id));
           }}
         >
           📌
@@ -966,13 +986,13 @@ export function RunView({
           className="row-action"
           role="button"
           title={
-            dirtyFiles.has(file.path)
+            dirtyFiles.has(file.id)
               ? "Close this file (unsaved changes are discarded)"
               : "Close this file"
           }
           onClick={(e) => {
             e.stopPropagation();
-            closeFile(file.path);
+            closeFile(file.id);
           }}
         >
           ×
@@ -1109,7 +1129,7 @@ export function RunView({
             Edit
           </button>
           <button
-            onClick={() => selected && setSecretsFor(selected)}
+            onClick={() => selected?.project && openSecrets(selected.project)}
             disabled={!canEditSecrets(selected)}
             title={
               canEditSecrets(selected)
@@ -1127,7 +1147,7 @@ export function RunView({
           {/* Silent unless a server is starting, missing or dead. The key is
               the open-file set because opening a file is what starts a server:
               a `didOpen` from `FileEditor`, not anything this component does. */}
-          <LspStatusIndicator pollKey={openFiles.map((f) => f.path).join("\0")} />
+          <LspStatusIndicator pollKey={openFiles.map((f) => f.id).join("\0")} />
           {selected && (
             <span className="muted mono" style={{ fontSize: 11 }}>
               {selected.ecosystem}
@@ -1313,17 +1333,17 @@ export function RunView({
                   <div className="editor-area">
                     {openFiles.map((file) => (
                       <div
-                        key={file.path}
+                        key={file.id}
                         style={{
-                          display: file.path === activeFile ? "block" : "none",
+                          display: file.id === activeFile ? "block" : "none",
                           height: "100%",
                         }}
                       >
                         <FileEditor
-                          path={file.path}
-                          onDirtyChange={(dirty) => setFileDirty(file.path, dirty)}
-                          revealLine={reveal?.path === file.path ? reveal.line : null}
-                          revealToken={reveal?.path === file.path ? reveal.token : 0}
+                          source={file.source}
+                          onDirtyChange={(dirty) => setFileDirty(file.id, dirty)}
+                          revealLine={reveal?.path === file.id ? reveal.line : null}
+                          revealToken={reveal?.path === file.id ? reveal.token : 0}
                           onNavigate={(target, name, line) =>
                             onNavigate?.(target, name, line)
                           }
@@ -1444,14 +1464,6 @@ export function RunView({
               ? () => void remove(editing)
               : undefined
           }
-        />
-      )}
-
-      {secretsFor?.project && (
-        <SecretsEditor
-          project={secretsFor.project}
-          projectName={secretsFor.project.split(/[\\/]/).pop() ?? secretsFor.name}
-          onClose={() => setSecretsFor(null)}
         />
       )}
 

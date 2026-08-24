@@ -99,14 +99,14 @@ export function navMouseAction(button: number): "back" | "forward" | null {
  * the original tab order. Generic over the tab shape so `RunView`'s `OpenFile`
  * fits without a type dependency pointing the wrong way.
  */
-export function partitionTabs<T extends { path: string }>(
+export function partitionTabs<T extends { id: string }>(
   files: T[],
   pinned: ReadonlySet<string>,
 ): { pinned: T[]; unpinned: T[] } {
   const pinnedTabs: T[] = [];
   const unpinnedTabs: T[] = [];
   for (const file of files) {
-    (pinned.has(file.path) ? pinnedTabs : unpinnedTabs).push(file);
+    (pinned.has(file.id) ? pinnedTabs : unpinnedTabs).push(file);
   }
   return { pinned: pinnedTabs, unpinned: unpinnedTabs };
 }

@@ -212,7 +212,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/EnvironmentPicker.tsx` | 107 |  |
 | `src/components/ErosionPanel.tsx` | 101 |  |
 | `src/components/ErrorBoundary.tsx` | 65 |  |
-| `src/components/FileEditor.tsx` | 946 |  |
+| `src/components/FileEditor.tsx` | 994 |  |
 | `src/components/FileTree.tsx` | 118 |  |
 | `src/components/IntentPanel.tsx` | 1229 |  |
 | `src/components/LspStatus.tsx` | 125 |  |
@@ -224,7 +224,6 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/RiderImportDialog.tsx` | 135 |  |
 | `src/components/RunConfigMenu.tsx` | 172 |  |
 | `src/components/SearchEverywhere.tsx` | 525 |  |
-| `src/components/SecretsEditor.tsx` | 99 |  |
 | `src/components/SetupPrompt.tsx` | 115 |  |
 | `src/components/Sidebar.tsx` | 50 |  |
 | `src/components/StashPanel.tsx` | 288 |  |
@@ -241,6 +240,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/consoleLogic.ts` | 92 |  |
 | `src/components/diffLogic.test.ts` | 472 |  |
 | `src/components/diffLogic.ts` | 379 |  |
+| `src/components/editorSourceLogic.test.ts` | 70 |  |
+| `src/components/editorSourceLogic.ts` | 70 |  |
 | `src/components/enhancementsLogic.test.ts` | 118 |  |
 | `src/components/enhancementsLogic.ts` | 100 |  |
 | `src/components/erosionLogic.test.ts` | 78 |  |
@@ -283,7 +284,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/ChangesView.tsx` | 1287 |  |
 | `src/views/HistoryView.tsx` | 556 |  |
 | `src/views/InspectView.tsx` | 1058 |  |
-| `src/views/RunView.tsx` | 1469 |  |
+| `src/views/RunView.tsx` | 1481 |  |
 | `src/views/TestsView.tsx` | 399 |  |
 | `src/views/architecture/DiagramCanvas.tsx` | 760 |  |
 | `src/views/architecture/DiagramEditor.tsx` | 322 |  |

@@ -1,9 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { EditorState, type Extension } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { drawSelection, dropCursor, EditorView, keymap, lineNumbers } from "@codemirror/view";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentWithTab,
+  toggleComment,
+} from "@codemirror/commands";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { editorColors, languageFor } from "./language";
+import {
+  EMPTY_SECRETS,
+  sourceEnablesLsp,
+  sourceLanguageHint,
+  type EditorSource,
+} from "./editorSourceLogic";
 import { lineToPos } from "./searchLogic";
 import { onEditorFontSizeChange } from "../editorFontSize";
 import * as api from "../ipc/api";
@@ -124,16 +136,22 @@ function baseName(path: string): string {
  * the screen — so `error` (which replaces the editor with a message) is reserved
  * for the file read and write, and everything LSP-shaped degrades to a row or a
  * corner badge that says what happened.
+ *
+ * The tab's backing is an {@link EditorSource}, not a bare path: a workspace file
+ * reads/writes through `fs_*` and drives the language-server surface, while a
+ * project's user secrets read/write through the secrets commands and skip the
+ * server entirely (see {@link lspEnabled}). Everything else — line numbers, find,
+ * Ctrl+S save, dirty tracking — is source-independent.
  */
 export function FileEditor({
-  path,
+  source,
   onDirtyChange,
   revealLine = null,
   revealToken = 0,
   onNavigate,
 }: {
-  /** Workspace-relative path. A FileEditor is keyed by it and never rebinds. */
-  path: string;
+  /** What backs this tab. A FileEditor is keyed by its identity and never rebinds. */
+  source: EditorSource;
   onDirtyChange: (dirty: boolean) => void;
   /**
    * A 1-based line to put the cursor on and scroll to, or null for none.
@@ -165,6 +183,28 @@ export function FileEditor({
    */
   onNavigate: (path: string, name: string, line: number) => void;
 }) {
+  /**
+   * The tab's stable identity: the build effect's dependency, and — for a
+   * workspace file, the only source that talks to a server — the path every LSP
+   * call and every `usageCacheKey` uses. For secrets the server is never touched,
+   * so this value only ever serves as the effect key.
+   */
+  const identity = source.kind === "secrets" ? `secrets:${source.project}` : source.path;
+  /** Whether this tab participates in the language-server surface. Secrets do not. */
+  const lspEnabled = sourceEnablesLsp(source);
+
+  /** Read the file's text, from whichever backend the source names. */
+  const readSource = (): Promise<string> =>
+    source.kind === "secrets"
+      ? api.readProjectSecrets(source.project).then((s) => s.content ?? EMPTY_SECRETS)
+      : api.fsReadFile(source.path);
+
+  /** Persist the file's text through whichever backend the source names. */
+  const writeSource = (text: string): Promise<void> =>
+    source.kind === "secrets"
+      ? api.writeProjectSecrets(source.project, text).then(() => {})
+      : api.fsWriteFile(source.path, text);
+
   const hostRef = useRef<HTMLDivElement>(null);
   /** The positioned ancestor the dropdowns are placed within. */
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -304,7 +344,7 @@ export function FileEditor({
     }
     const version = docVersion.current;
     const rows: UsageRowSpec[] = anchors.current.map((anchor) => {
-      const key = usageCacheKey(path, anchor.id, version);
+      const key = usageCacheKey(identity, anchor.id, version);
       return { anchor, view: usageRowView(usageStateFor(answers.current, key)) };
     });
     view.dispatch({ effects: setUsageRows.of(rows) });
@@ -320,7 +360,7 @@ export function FileEditor({
       // `selectionLine`/`character`, not `line`: the row is drawn at the start
       // of the declaration but the question has to be aimed at the identifier.
       api
-        .lspFindUsages(path, job.anchor.selectionLine, job.anchor.character)
+        .lspFindUsages(identity, job.anchor.selectionLine, job.anchor.character)
         .then((result) => {
           if (gen.current === mine) recordUsageAnswer(answers.current, job.key, result);
         })
@@ -374,7 +414,7 @@ export function FileEditor({
     for (const key of dropped) answers.current.inFlight.delete(key);
 
     for (const anchor of wanted) {
-      const key = usageCacheKey(path, anchor.id, version);
+      const key = usageCacheKey(identity, anchor.id, version);
       // Not "is there an answer": a `loading`, `starting` or `failed` answer is
       // shown and still asked again, up to a bound. Caching those as final left
       // every row frozen on its reason after a mid-session server restart.
@@ -406,7 +446,7 @@ export function FileEditor({
       anchorTimer.current = null;
     }
     api
-      .lspDeclarationAnchors(path)
+      .lspDeclarationAnchors(identity)
       .then((result) => {
         if (gen.current !== mine) return;
         anchors.current = result.anchors;
@@ -457,6 +497,9 @@ export function FileEditor({
 
   /** Send the buffer, then re-derive anchors and counts against it. */
   const flushChange = () => {
+    // No server for this source: nothing to send, and returning here stops the
+    // "not opened yet, try again" reschedule below from spinning a timer forever.
+    if (!lspEnabled) return;
     const view = viewRef.current;
     if (!view) return;
     if (!opened.current) {
@@ -477,7 +520,7 @@ export function FileEditor({
     // during the round trip, and what landed on the server is this text.
     const sent = docVersion.current;
     api
-      .lspChangeDocument(path, view.state.doc.toString())
+      .lspChangeDocument(identity, view.state.doc.toString())
       .then(() => {
         if (gen.current !== mine) return;
         syncError.current = null;
@@ -527,7 +570,7 @@ export function FileEditor({
 
   const openUsages = (click: UsageRowClick) => {
     if (click.view.action.kind !== "dropdown") return;
-    const key = usageCacheKey(path, click.anchor.id, docVersion.current);
+    const key = usageCacheKey(identity, click.anchor.id, docVersion.current);
     const held = usageStateFor(answers.current, key);
     const answered = held.status === "answered" ? held.result : null;
     const at = place(click.rect.left, click.rect.bottom);
@@ -565,7 +608,7 @@ export function FileEditor({
     const at = place(request.x, request.y);
     setMenu({ kind: "note", place: at, message: "Looking for the definition…" });
     api
-      .lspGotoDefinition(path, request.line, request.character)
+      .lspGotoDefinition(identity, request.line, request.character)
       .then((result) => {
         if (gen.current !== mine) return;
         const action = definitionAction(result);
@@ -607,7 +650,7 @@ export function FileEditor({
     async function build() {
       let content: string;
       try {
-        content = await api.fsReadFile(path);
+        content = await readSource();
       } catch (e) {
         if (!cancelled) setError(api.errorMessage(e));
         return;
@@ -622,8 +665,7 @@ export function FileEditor({
 
       const save = (view: EditorView) => {
         const text = view.state.doc.toString();
-        api
-          .fsWriteFile(path, text)
+        writeSource(text)
           .then(() => {
             setDirty(false);
             setError(null);
@@ -635,6 +677,13 @@ export function FileEditor({
       const extensions: Extension[] = [
         lineNumbers(),
         history(),
+        // The caret and selection. Without these CodeMirror falls back to the
+        // native caret, which the WebView does not paint — so the user has no
+        // idea where they are typing. `drawSelection` renders its own `.cm-cursor`
+        // (coloured in the theme below); `dropCursor` marks the drop point when
+        // text is dragged.
+        drawSelection(),
+        dropCursor(),
         // Ctrl+F opens an in-file find panel at the top; the console's own
         // Ctrl+F only fires while it is visible (offsetParent check), so the two
         // never contend. `highlightSelectionMatches` underlines other copies of
@@ -643,6 +692,12 @@ export function FileEditor({
         highlightSelectionMatches(),
         keymap.of([
           { key: "Mod-s", run: save },
+          // Ctrl+/ toggles line comments. `defaultKeymap` binds this too, but it
+          // is listed explicitly and ahead of it with `preventDefault` so the
+          // WebView cannot claim the chord first (it otherwise swallows it before
+          // CodeMirror is reached). A no-op on a language without comment tokens,
+          // e.g. JSON.
+          { key: "Mod-/", run: toggleComment, preventDefault: true },
           ...searchKeymap,
           indentWithTab,
           ...defaultKeymap,
@@ -662,6 +717,10 @@ export function FileEditor({
           // the map grows by a screenful of answers, each up to 500 snippets, at
           // every typing pause for as long as the tab stays open.
           clearUsageAnswers(answers.current);
+          // A secrets tab talks to no server, so there is nothing to flush and no
+          // timer to arm — the rest of this listener (dirty + version bump) is
+          // harmless and stays.
+          if (!lspEnabled) return;
           if (changeTimer.current !== null) window.clearTimeout(changeTimer.current);
           changeTimer.current = window.setTimeout(() => {
             changeTimer.current = null;
@@ -671,20 +730,44 @@ export function FileEditor({
         EditorView.theme({
           "&": { height: "100%" },
           ".cm-scroller": { overflow: "auto" },
-        }),
-        ...usagesExtension({
-          onRowClick: (click) => lsp.current.openUsages(click),
-          onGoto: (request) => lsp.current.goto(request),
-          onVisibleLinesChange: (span) => {
-            visible.current = span;
-            lsp.current.pushRows();
-            // No guard here: `requestVisible` refuses on its own while a change is
-            // owed to the server. It has to, because two of its three callers are
-            // not on this path.
-            lsp.current.requestVisible();
+          // The drawn caret and selection, coloured for the app's dark theme.
+          // CodeMirror's base caret is black (invisible here) and, more to the
+          // point, `display: none` until a strict focused child-combinator chain
+          // matches — which does not hold in this WebView, so the caret stayed
+          // hidden even though the selection layer showed. The `display: block`
+          // below rides a looser two-class selector that outranks the base hide,
+          // forcing the caret on whenever the editor is focused.
+          ".cm-cursor, .cm-dropCursor": {
+            borderLeftColor: "var(--text)",
+            borderLeftWidth: "2px",
+          },
+          "&.cm-focused .cm-cursor": {
+            display: "block",
+            borderLeftColor: "var(--text)",
+            borderLeftWidth: "2px",
+          },
+          "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
+            backgroundColor: "rgba(90, 120, 220, 0.35)",
           },
         }),
-        ...languageFor(path),
+        // The whole usages/goto surface is workspace-only: a secrets file is JSON
+        // no server knows about, so its inline rows and click handlers are simply
+        // not installed rather than installed and always answering "unavailable".
+        ...(lspEnabled
+          ? usagesExtension({
+              onRowClick: (click) => lsp.current.openUsages(click),
+              onGoto: (request) => lsp.current.goto(request),
+              onVisibleLinesChange: (span) => {
+                visible.current = span;
+                lsp.current.pushRows();
+                // No guard here: `requestVisible` refuses on its own while a change
+                // is owed to the server. It has to, because two of its three callers
+                // are not on this path.
+                lsp.current.requestVisible();
+              },
+            })
+          : []),
+        ...languageFor(sourceLanguageHint(source)),
         ...editorColors,
       ];
 
@@ -703,11 +786,14 @@ export function FileEditor({
         // correct if the editor ever starts with anything else.
         const mine = gen.current;
         const sent = docVersion.current;
+        // A secrets tab opens no document and so owes no `didClose`; the teardown
+        // below is guarded on `openSent`, which stays false here.
+        if (!lspEnabled) return;
         // Set before the call, not after it resolves: from here on a `didClose` is
         // owed whatever happens to this component.
         openSent.current = true;
         api
-          .lspOpenDocument(path, view.state.doc.toString())
+          .lspOpenDocument(identity, view.state.doc.toString())
           .then(() => {
             if (gen.current !== mine) return;
             opened.current = true;
@@ -748,7 +834,7 @@ export function FileEditor({
         // for the result — and owed from the moment the `didOpen` was *sent*, not
         // from the moment it resolved, or a tab closed inside a slow open leaves
         // the server holding an unsaved buffer for ever.
-        api.lspCloseDocument(path).catch(() => {
+        api.lspCloseDocument(identity).catch(() => {
           /* the session is gone; the server was told or never knew */
         });
       }
@@ -756,7 +842,7 @@ export function FileEditor({
       viewRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path]);
+  }, [identity]);
 
   // CodeMirror caches character metrics; a CSS font-size change needs saying
   // out loud (see `editorFontSize.ts`).
