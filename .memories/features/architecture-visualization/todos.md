@@ -368,12 +368,10 @@ and is still the most user-visible item on this list.
       array, `src/**/*Logic.ts` + `src/components/language.ts` +
       `src/views/architecture/nodeTargets.ts`. Verified by removing the line and
       re-running — 372 lines / 18 files without it, 485 / 19 with it.
-- [ ] The `vitest` text coverage reporter hides files at 100%, so the table
-      `pnpm coverage` prints lists only 8 of the 19 measured modules. Anyone
-      auditing "is my new module covered?" from that table alone will conclude
-      it is not included — this is exactly how the `nodeTargets.ts` gap above
-      survived a round. Read `coverage/coverage-final.json` (or
-      `--coverage.reporter=json-summary`) for the real per-file list.
+- [x] The `vitest` text coverage reporter hides files at 100% — **DOCUMENTED (C6,
+      2026-08-24)** in `docs/guides/development.md`: the printed table is not the full
+      measured set; read `coverage/coverage-final.json` or `--coverage.reporter=json-summary`
+      for the real per-file list (how the `nodeTargets.ts` gap once survived a round).
 - [ ] **`nodeTargets.ts` is now a named exception in the include list**, which
       is a second place to remember. The durable fix is the naming convention:
       either rename it `nodeTargetsLogic.ts` so the glob catches it, or accept

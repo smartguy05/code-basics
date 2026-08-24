@@ -76,6 +76,15 @@ catch (Exception)
 
 The filename shape matters: the dumps list decodes `<executable>_<pid>_<unix seconds>.dmp` and a dump named anything else is invisible to this tab.
 
+**VSTest blame-crash dumps are a known exception — they are not listable here.**
+`--blame-crash-collect-always` writes its dump under the test run's results directory with a
+name of its own that carries no pid, executable, or timestamp (not the
+`<executable>_<pid>_<unix seconds>` shape above), and VSTest offers no way to redirect it out of
+`--results-directory` or to rename it. The dump is within the byte budget and the run warns where
+it landed, but the Objects tab cannot list it: synthesising a pid/executable/timestamp it does not
+carry would be exactly the fabrication this feature refuses. Open such a dump from disk in another
+tool, or use the guaranteed `catch`-site capture below, which writes a decodable name.
+
 ### The pid is not always your application
 
 `dotnet run` **builds the project and then starts your application as a separate child process**. The pid code-basics recorded is the .NET CLI, not your app, and attaching to it succeeds — the CLI is managed too — while finding none of your types. An empty tree there means "the launcher holds none of your objects", which reads exactly like "your object is not there".

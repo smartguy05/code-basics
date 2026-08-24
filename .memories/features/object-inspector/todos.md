@@ -18,7 +18,7 @@ and `.memories/` is tracked (not gitignored). Kept here as history:
   entry (Key/Value children); Rust `ObjectValue::Pair` + classify arm (key-pinned); TS union +
   ObjectTree case. Abstains to ordinary field rendering on any surprise. **Live sidecar path
   needs manual app verification** (fixture `dictionary.json` pins the contract).
-- [ ] **VSTest blame dumps are not listable in the Objects tab.** They are inside the byte budget and the run warns where they land, but their filenames carry no pid, executable or timestamp — synthesising those would be the fabrication the module forbids. VSTest offers no way to redirect them out of `--results-directory`.
+- [x] **VSTest blame dumps are not listable in the Objects tab** — **DOCUMENTED (B4, 2026-08-24)** in `docs/guides/inspecting-objects.md` as a known exception (no pid/executable/timestamp in the name; VSTest won't redirect/rename; synthesising them is the fabrication the module forbids). Left as a follow-up per Anthony's decision — no code change.
 - [x] **`InspectRequest::suspend` was vestigial — REMOVED (B3).** Decision: remove, not wire. Deleted the field from the Rust wire type, the TS mirror, and the C# `RequestDto`; `Target.OpenLive` now unconditionally takes `CreateSnapshotAndAttach`. Behavior unchanged (suspend was always false).
 - [x] ~~**`UseAppHost=false` projects are not preselected.**~~ **DONE (WF2, 2026-08-24, B2):**
   the sidecar now exposes each process's command line (one WMI query / `/proc/<pid>/cmdline`),

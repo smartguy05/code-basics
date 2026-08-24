@@ -30,6 +30,7 @@ Two separate gates, both ≥70% lines:
 
 - **Rust**: `cargo llvm-cov` over the whole workspace. Excluded (whole-file, via `--ignore-filename-regex`): `src-tauri/src/main.rs` (Tauri entry point) and `crates/core/src/process/kill.rs` (`taskkill`/libc platform forks, exercised indirectly by the `process::` tests) and `crates/core/src/bin/fake_lsp.rs` (the scripted language-server stand-in — test-only code that ships in no build, so its own coverage would only dilute the product figure). Run it from a shell with `sh` on PATH (Git Bash) — the `process::` tests spawn `sh` and fail without it.
 - **Frontend**: `pnpm coverage`, thresholds configured in `vite.config.ts` over the `*Logic.ts` include list only — rendering components are deliberately outside the metric.
+- **Reading the real per-file frontend list.** The vitest *text* reporter hides any file already at 100%, so the table `pnpm coverage` prints lists only the modules below 100% — it is **not** the full set of measured files. To confirm a specific module is actually included in the metric, read `coverage/coverage-final.json` or run with `--coverage.reporter=json-summary`; do not conclude from the printed table alone that a module is uncovered (that is how the `nodeTargets.ts` include gap once survived a gate round).
 
 ### Build output is enormous — check on it
 
