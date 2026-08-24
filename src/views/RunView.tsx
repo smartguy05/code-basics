@@ -30,7 +30,7 @@ import {
   type NavEntry,
   type NavHistory,
 } from "./editorNavLogic";
-import { preferApplicationProcess } from "./InspectView";
+import { preferApplicationProcess } from "./inspectLogic";
 import type { InspectRequest, OpenFileRequest, SelectConfigRequest } from "../App";
 import type {
   AttachableProcess,

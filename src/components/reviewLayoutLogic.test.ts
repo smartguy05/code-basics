@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   clampPanelPosition,
   clampPanelSize,
+  createResizeGate,
   loadPanelLayout,
   savePanelLayout,
   type PanelLayout,
@@ -137,5 +138,37 @@ describe("panel layout persistence", () => {
     savePanelLayout(store, { left: 1, top: 2 });
     // Sanity: the raw value is JSON we can read back.
     expect(JSON.parse(store.read() ?? "{}")).toEqual({ left: 1, top: 2 });
+  });
+});
+
+describe("createResizeGate", () => {
+  it("skips the initial default measurement even without a minimize", () => {
+    const gate = createResizeGate();
+    // The ResizeObserver fires once on observe() with the un-resized CSS size.
+    expect(gate.persist({ width: 480, height: 420 })).toBe(false);
+  });
+
+  it("persists a real resize", () => {
+    const gate = createResizeGate();
+    expect(gate.persist({ width: 480, height: 420 })).toBe(false); // mount default
+    expect(gate.persist({ width: 700, height: 500 })).toBe(true); // genuine resize
+  });
+
+  it("does not persist a minimize -> restore that returns to the default size", () => {
+    const gate = createResizeGate();
+    // Mount default, then minimize (hidden = 0×0), then restore to the same size.
+    expect(gate.persist({ width: 480, height: 420 })).toBe(false); // mount default
+    expect(gate.persist({ width: 0, height: 0 })).toBe(false); // minimized (hidden)
+    expect(gate.persist({ width: 480, height: 420 })).toBe(false); // restored to default
+    // A genuine resize afterwards still persists.
+    expect(gate.persist({ width: 700, height: 500 })).toBe(true);
+  });
+
+  it("does not re-persist a minimize -> restore to a previously-resized size", () => {
+    const gate = createResizeGate();
+    expect(gate.persist({ width: 480, height: 420 })).toBe(false); // mount default
+    expect(gate.persist({ width: 700, height: 500 })).toBe(true); // genuine resize
+    expect(gate.persist({ width: 0, height: 0 })).toBe(false); // minimized (hidden)
+    expect(gate.persist({ width: 700, height: 500 })).toBe(false); // restored to resized size
   });
 });

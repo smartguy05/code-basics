@@ -1,10 +1,15 @@
 # Todos
 
-## Blocking a clean landing
+## Blocking a clean landing — RESOLVED (reconciled 2026-08-21)
 
-- [ ] **Nothing is committed.** ~77 files on `claude/lightweight-ide-replacement-52cp2n`, still at `657230d`.
-- [ ] **Land the repo-wide rustfmt as its own commit first.** A large share of the modified-file count is a semantically inert formatting pass predating this work — reflowed call chains, reordered `use` statements — in files the feature never logically touched. Committed together, the feature diff is unreadable.
-- [ ] Decide whether `.memories/` is committed or gitignored. Currently untracked, so it shows as `?? .memories/` in git status and in the app's own Changes tab.
+All three items below are done/moot. Verified against the tree 2026-08-21:
+the inspector sources (`sidecar/inspector/*`, `src/views/InspectView.tsx`) are
+committed, the repo-wide rustfmt landed as its own commit (`6b481d7`, per CLAUDE.md),
+and `.memories/` is tracked (not gitignored). Kept here as history:
+
+- [x] ~~Nothing is committed (~77 files on `claude/lightweight-ide-replacement-52cp2n`).~~
+- [x] ~~Land the repo-wide rustfmt as its own commit first.~~ Done in `6b481d7`.
+- [x] ~~Decide whether `.memories/` is committed or gitignored.~~ It is committed/tracked.
 
 ## Deferred, with reasons
 

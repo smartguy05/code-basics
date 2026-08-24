@@ -580,7 +580,12 @@ fn is_container(kind: ArchKind) -> bool {
 /// contains an underscore and an unescaped run never does. The leading `n`
 /// keeps the identifier away from a leading digit and from Mermaid's own
 /// keywords.
-fn mermaid_id(id: &str) -> String {
+///
+/// `pub(crate)` so `mermaid_tests.rs` can pin its output into the committed
+/// cross-language fixture the frontend's `mermaidIdOf` is held against — this
+/// is the escaping the two implementations must agree on, character for
+/// character.
+pub(crate) fn mermaid_id(id: &str) -> String {
     let mut out = String::with_capacity(id.len() + 1);
     out.push('n');
     for ch in id.chars() {

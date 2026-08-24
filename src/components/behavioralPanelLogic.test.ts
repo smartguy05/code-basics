@@ -2,15 +2,19 @@ import { describe, expect, it } from "vitest";
 import {
   behavioralBadge,
   behavioralScoreLine,
+  httpFileCandidates,
   httpStatusTone,
   pickBehavioralConfig,
+  resolveHttpFiles,
   transitionTone,
+  type HttpFileSelection,
 } from "./behavioralPanelLogic";
 import type {
   BehavioralDelta,
   BehavioralScorecard,
   CardBehavior,
   CaseTransition,
+  FileChange,
   RunConfig,
 } from "../ipc/types";
 
@@ -178,6 +182,57 @@ describe("httpStatusTone", () => {
   it("is neutral for an unchanged code", () => {
     expect(httpStatusTone(200, 200)).toBe("neutral");
     expect(httpStatusTone(404, 404)).toBe("neutral");
+  });
+});
+
+describe("resolveHttpFiles", () => {
+  it("returns null for the auto mode", () => {
+    expect(resolveHttpFiles({ mode: "auto" })).toBeNull();
+  });
+
+  it("normalises an explicit list: dedupes and drops blanks", () => {
+    const selection: HttpFileSelection = {
+      mode: "explicit",
+      files: ["api/orders.http", "api/orders.http", "  "],
+    };
+    expect(resolveHttpFiles(selection)).toEqual(["api/orders.http"]);
+  });
+
+  it("falls back to auto (null) for an empty explicit list", () => {
+    // Matches the backend treating Some(empty) == None == discover.
+    expect(resolveHttpFiles({ mode: "explicit", files: [] })).toBeNull();
+  });
+
+  it("returns null when an explicit list is only blanks", () => {
+    expect(resolveHttpFiles({ mode: "explicit", files: ["", "   "] })).toBeNull();
+  });
+});
+
+describe("httpFileCandidates", () => {
+  const change = (path: string): FileChange =>
+    ({
+      path,
+      oldPath: null,
+      staged: null,
+      unstaged: "modified",
+      isBinary: false,
+    }) as FileChange;
+
+  it("returns changed .http and .rest paths", () => {
+    const files = [
+      change("api/orders.http"),
+      change("api/health.rest"),
+      change("src/main.ts"),
+    ];
+    expect(httpFileCandidates(files)).toEqual(["api/orders.http", "api/health.rest"]);
+  });
+
+  it("is case-insensitive on the extension", () => {
+    expect(httpFileCandidates([change("api/Orders.HTTP")])).toEqual(["api/Orders.HTTP"]);
+  });
+
+  it("returns an empty list when nothing matches", () => {
+    expect(httpFileCandidates([change("src/main.ts")])).toEqual([]);
   });
 });
 

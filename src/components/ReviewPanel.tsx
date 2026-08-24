@@ -22,6 +22,7 @@ import {
 import {
   clampPanelPosition,
   clampPanelSize,
+  createResizeGate,
   loadPanelLayout,
   savePanelLayout,
   type PanelLayout,
@@ -161,20 +162,16 @@ export function ReviewPanel({
     const panel = panelRef.current;
     if (!panel || typeof ResizeObserver !== "function") return;
 
-    let first = true;
+    const gate = createResizeGate();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const observer = new ResizeObserver(() => {
-      if (first) {
-        first = false;
-        return;
-      }
+      const width = panel.offsetWidth;
+      const height = panel.offsetHeight;
+      if (!gate.persist({ width, height })) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        const w = panel.offsetWidth;
-        const h = panel.offsetHeight;
-        if (w === 0 || h === 0) return;
         const clamped = clampPanelSize(
-          { width: w, height: h },
+          { width, height },
           { width: window.innerWidth, height: window.innerHeight },
         );
         const saved = loadPanelLayout(localStorage);

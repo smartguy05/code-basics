@@ -505,6 +505,87 @@ fn an_aspire_add_project_enriches_the_referenced_service() {
     );
 }
 
+/// A hyphenated project name resolves end-to-end, and the near-miss directory
+/// does not steal it.
+///
+/// This pins the whole path from `Projects.web_frontend` in the app host down to
+/// the `web-frontend.csproj` the scan found: `aspire_class_name` maps the `-` to
+/// `_` (the SDK's `\W` rule), and the match is decided on the *transformed
+/// stem*, so the sibling `webfrontend.csproj` — whose transform is `webfrontend`
+/// and does not equal `web_frontend` — must not be enriched. Asserting on
+/// [`details_of`] rather than the flattened [`details`] is the point: the decoy
+/// is only a decoy if the test can tell *which* box the Aspire detail landed on.
+#[test]
+fn an_aspire_add_project_resolves_a_hyphenated_project_name() {
+    let (_dir, _out, gated) = admitted(&[
+        (
+            "AppHost/AppHost.csproj",
+            &csproj("<IsAspireHost>true</IsAspireHost>", &[]),
+        ),
+        (
+            "AppHost/Program.cs",
+            "var builder = DistributedApplication.CreateBuilder(args);\n\
+             builder.AddProject<Projects.web_frontend>(\"web\");\n\
+             builder.Build().Run();\n",
+        ),
+        ("src/web-frontend/web-frontend.csproj", &web_csproj(&[])),
+        // The decoy: its stem transforms to `webfrontend`, not `web_frontend`,
+        // so it must never be chosen for `Projects.web_frontend`.
+        ("src/webfrontend/webfrontend.csproj", &web_csproj(&[])),
+    ]);
+
+    assert!(
+        details_of(&gated, "web-frontend")
+            .iter()
+            .any(|d| d.contains("Aspire")),
+        "the hyphenated project was not resolved end-to-end: {:?}",
+        details_of(&gated, "web-frontend")
+    );
+    assert!(
+        details_of(&gated, "webfrontend").is_empty(),
+        "the near-miss directory was enriched by the app host reference: {:?}",
+        details_of(&gated, "webfrontend")
+    );
+}
+
+/// Two projects whose file stems collide *after* the transform are not
+/// disambiguated by guesswork.
+///
+/// `Orders.Api.csproj` and `Orders_Api.csproj` both transform to `Orders_Api`,
+/// so `Projects.Orders_Api` matches both. The `many` arm refuses to attribute
+/// the reference to either and warns instead — a wrong arrow is worse than none.
+#[test]
+fn an_aspire_add_project_ambiguous_after_the_transform_is_not_attributed() {
+    let (_dir, out, gated) = admitted(&[
+        (
+            "AppHost/AppHost.csproj",
+            &csproj("<IsAspireHost>true</IsAspireHost>", &[]),
+        ),
+        (
+            "AppHost/Program.cs",
+            "builder.AddProject<Projects.Orders_Api>(\"orders\");\n",
+        ),
+        ("src/OrdersApi/Orders.Api.csproj", &web_csproj(&[])),
+        (
+            "src/OrdersApiUnderscore/Orders_Api.csproj",
+            &web_csproj(&[]),
+        ),
+    ]);
+
+    assert!(
+        !details(&gated).iter().any(|d| d.contains("Aspire")),
+        "an ambiguous reference was attributed to a guessed project: {:?}",
+        details(&gated)
+    );
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("Orders_Api") && w.contains("2 scanned projects")),
+        "the collision was not reported as a two-way ambiguity: {:?}",
+        out.warnings
+    );
+}
+
 #[test]
 fn an_aspire_add_project_naming_no_scanned_project_is_a_warning_and_not_a_component() {
     let (_dir, out, gated) = admitted(&[

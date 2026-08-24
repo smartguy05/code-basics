@@ -3,6 +3,7 @@ import type {
   BehavioralScorecard,
   CardBehavior,
   CaseTransition,
+  FileChange,
   RunConfig,
 } from "../ipc/types";
 
@@ -56,6 +57,58 @@ export function httpStatusTone(before: number, after: number): Tone {
  */
 export function pickBehavioralConfig(configs: RunConfig[]): RunConfig | null {
   return configs.find((c) => c.kind === "test") ?? configs[0] ?? null;
+}
+
+/**
+ * Which `.http` files the before/after run should replay.
+ *
+ * `auto` lets the backend discover them itself; `explicit` names a specific set
+ * the user toggled in the Evidence picker. The two are kept apart so the view
+ * can offer a checklist of candidates without losing the default "just find
+ * them" behaviour.
+ */
+export type HttpFileSelection =
+  | { mode: "auto" }
+  | { mode: "explicit"; files: string[] };
+
+/**
+ * The wire value for `behavioral_diff`'s `http_files` argument.
+ *
+ * `null` means "discover" — and that is what both `auto` and an *empty* explicit
+ * list resolve to, because the backend treats `Some(empty)` identically to
+ * `None` (see `cb_core::behavioral`). Otherwise the explicit list is normalised:
+ * trimmed, blanks dropped, deduplicated in first-seen order. There is
+ * deliberately no value that means "run no HTTP at all" — the wire argument
+ * cannot express it, so this never invents one.
+ */
+export function resolveHttpFiles(selection: HttpFileSelection): string[] | null {
+  if (selection.mode === "auto") return null;
+  const seen = new Set<string>();
+  const files: string[] = [];
+  for (const raw of selection.files) {
+    const path = raw.trim();
+    if (path === "" || seen.has(path)) continue;
+    seen.add(path);
+    files.push(path);
+  }
+  return files.length > 0 ? files : null;
+}
+
+/**
+ * The changed files that look like HTTP request collections — the candidates
+ * the Evidence picker offers to replay explicitly.
+ *
+ * Limited to changed files (what `git status` reports) on purpose: unchanged
+ * `.http` files elsewhere in the tree are not offered, since full discovery is
+ * the backend's `auto` path, not this list.
+ */
+export function httpFileCandidates(files: FileChange[]): string[] {
+  return files
+    .map((file) => file.path)
+    .filter((path) => {
+      const lower = path.toLowerCase();
+      return lower.endsWith(".http") || lower.endsWith(".rest");
+    });
 }
 
 /** A short badge summarising one card's behavioral deltas, with a longer tooltip. */

@@ -1,0 +1,50 @@
+[
+  {
+    "id": "crates-core",
+    "mermaidId": "ncrates_2d_core"
+  },
+  {
+    "id": "src-tauri",
+    "mermaidId": "nsrc_2d_tauri"
+  },
+  {
+    "id": "src/a-b",
+    "mermaidId": "nsrc_2f_a_2d_b"
+  },
+  {
+    "id": "src/a.b",
+    "mermaidId": "nsrc_2f_a_2e_b"
+  },
+  {
+    "id": "workspace:Cargo.toml",
+    "mermaidId": "nworkspace_3a_Cargo_2e_toml"
+  },
+  {
+    "id": "solution:src/App.sln",
+    "mermaidId": "nsolution_3a_src_2f_App_2e_sln"
+  },
+  {
+    "id": "external:../Other",
+    "mermaidId": "nexternal_3a__2e__2e__2f_Other"
+  },
+  {
+    "id": "store:postgres",
+    "mermaidId": "nstore_3a_postgres"
+  },
+  {
+    "id": "café",
+    "mermaidId": "ncaf_e9_"
+  },
+  {
+    "id": "a😀",
+    "mermaidId": "na_1f600_"
+  },
+  {
+    "id": "",
+    "mermaidId": "n"
+  },
+  {
+    "id": "path/to.file",
+    "mermaidId": "npath_2f_to_2e_file"
+  }
+]

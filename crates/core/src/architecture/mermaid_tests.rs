@@ -1384,3 +1384,91 @@ fn a_validation_error_serialises_with_the_keys_the_ui_reads() {
         "unbalancedSubgraph"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The cross-language escaping contract
+// ---------------------------------------------------------------------------
+
+/// The single source of truth for the id-escaping contract.
+///
+/// `mermaid_id` (Rust) and `mermaidIdOf` (TypeScript, `nodeTargets.ts`) must
+/// agree character for character, because the frontend turns a rendered node's
+/// DOM id back into a graph id by re-deriving the escaped identifier rather
+/// than decoding it — a second decoder in TypeScript is the copy this project
+/// has already paid for once. Nothing at runtime makes the two move together,
+/// so a committed golden file does: this test owns the canonical id list, pins
+/// `mermaid_id` for each into `fixtures/architecture/mermaid_ids.json`, and the
+/// vitest `mermaidIdOf cross-language fixture` reads the *same* file and checks
+/// its own output against it. Any escaping change in either language breaks a
+/// test.
+///
+/// The list is adversarial as well as realistic: the ids the deriver actually
+/// mints (`crates-core`, `src-tauri`), the `src/a-b` vs `src/a.b` pair that
+/// stripping non-alphanumerics would collapse into one box, every container
+/// prefix, a non-ASCII code point, an astral one that must escape by whole code
+/// point rather than by surrogate, the empty string, and ids carrying `/` and
+/// `.`.
+///
+/// The fixture is read at runtime via `env!("CARGO_MANIFEST_DIR")` — not
+/// `include_str!` — so a missing or stale file is a runtime failure this test
+/// can rewrite. Regenerate with:
+///
+/// ```text
+/// UPDATE_FIXTURES=1 cargo test -p cb-core mermaid_id_matches_committed_fixture
+/// ```
+#[test]
+fn mermaid_id_matches_committed_fixture() {
+    // The one place these ids are declared. vitest derives its ids from the
+    // fixture below and never re-lists them.
+    let ids = [
+        "crates-core",
+        "src-tauri",
+        "src/a-b",
+        "src/a.b",
+        "workspace:Cargo.toml",
+        "solution:src/App.sln",
+        "external:../Other",
+        "store:postgres",
+        "café",
+        "a😀",
+        "",
+        "path/to.file",
+    ];
+
+    let rows: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|id| serde_json::json!({ "id": id, "mermaidId": mermaid_id(id) }))
+        .collect();
+    // Pretty-printed with a trailing newline: an array keeps the rows in a
+    // stable order so a diff reads cleanly, and the newline is what most tools
+    // (and the golden regeneration below) leave on a file.
+    let generated = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&serde_json::Value::Array(rows)).unwrap()
+    );
+
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("architecture")
+        .join("mermaid_ids.json");
+
+    if std::env::var_os("UPDATE_FIXTURES").is_some() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &generated).unwrap();
+        return;
+    }
+
+    let committed = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "could not read {}: {e}\nregenerate with: \
+             UPDATE_FIXTURES=1 cargo test -p cb-core mermaid_id_matches_committed_fixture",
+            path.display()
+        )
+    });
+
+    assert_eq!(
+        committed, generated,
+        "the committed mermaid_id fixture is stale; regenerate with: \
+         UPDATE_FIXTURES=1 cargo test -p cb-core mermaid_id_matches_committed_fixture"
+    );
+}

@@ -114,3 +114,47 @@ export function savePanelLayout(storage: Pick<Storage, "setItem">, layout: Panel
     // Ignore: persistence is a convenience, not a requirement.
   }
 }
+
+// --- Deciding when a resize is worth persisting ----------------------------
+
+/** A stateful gate over the raw ResizeObserver stream (see `createResizeGate`). */
+export interface ResizeGate {
+  /**
+   * Given a measured panel size, decide whether it is a genuine user resize
+   * worth persisting. Returns false for the mount default, for a hidden
+   * (minimized) 0×0 measurement, and for a restore back to the last non-zero
+   * size; true only when the size genuinely differs from the last one seen.
+   */
+  persist(size: PanelSize): boolean;
+}
+
+/**
+ * A stateful, DOM-free gate deciding which ResizeObserver measurements are real
+ * user resizes worth persisting. The observer fires once on `observe()` with
+ * the un-resized CSS default, continuously through a drag, and reports 0×0 while
+ * the panel is hidden (minimized) — a naive "not the first callback" test would
+ * persist the CSS default the moment a minimize/restore cycle re-measured it.
+ *
+ * It keeps the last *non-zero* size seen: a hidden 0×0 measurement is ignored
+ * without updating that memory, so a restore back to the same size compares
+ * equal and is refused. The first non-zero measurement (the mount default) is
+ * recorded but never persisted. Same shape as `createNdjsonBuffer` — a factory
+ * closing over private state, tested headlessly.
+ */
+export function createResizeGate(): ResizeGate {
+  // The last non-zero size seen. Undefined until the first real measurement.
+  let last: PanelSize | undefined;
+  return {
+    persist(size: PanelSize): boolean {
+      // Hidden (minimized): don't persist, and don't update `last`, so a later
+      // restore to the same size still compares equal.
+      if (size.width === 0 || size.height === 0) return false;
+      const prev = last;
+      last = size;
+      // The mount default: recorded, never persisted.
+      if (prev === undefined) return false;
+      // A genuine resize only if the size actually changed.
+      return size.width !== prev.width || size.height !== prev.height;
+    },
+  };
+}

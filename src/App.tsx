@@ -126,6 +126,8 @@ export function App() {
   // One slot, keyed by token so a fresh open restarts the run.
   const [behavioralPanel, setBehavioralPanel] = useState<{
     configId: string;
+    /** Explicit `.http` files to replay, or null to let the backend discover. */
+    httpFiles: string[] | null;
     verify: boolean;
     token: number;
   } | null>(null);
@@ -134,8 +136,8 @@ export function App() {
   const [behavioralReport, setBehavioralReport] = useState<BehavioralReport | null>(null);
 
   /** Open the before/after window for a config; `verify` chains it to the agent. */
-  const openBehavioral = (configId: string, verify: boolean) =>
-    setBehavioralPanel({ configId, verify, token: nextToken() });
+  const openBehavioral = (configId: string, httpFiles: string[] | null, verify: boolean) =>
+    setBehavioralPanel({ configId, httpFiles, verify, token: nextToken() });
 
   /** Open the agent panel as an adversarial review (Changes tab + menu bar). */
   const openReview = () =>
@@ -434,8 +436,8 @@ export function App() {
             key={workspace.root}
             behavioral={behavioralReport}
             onOpenReview={openReview}
-            onRunBehavioral={(configId) => openBehavioral(configId, false)}
-            onVerifyClaims={(configId) => openBehavioral(configId, true)}
+            onRunBehavioral={(configId, httpFiles) => openBehavioral(configId, httpFiles, false)}
+            onVerifyClaims={(configId, httpFiles) => openBehavioral(configId, httpFiles, true)}
           />
         </div>
       )}
@@ -506,6 +508,7 @@ export function App() {
         <BehavioralPanel
           key={behavioralPanel.token}
           configId={behavioralPanel.configId}
+          httpFiles={behavioralPanel.httpFiles}
           verify={behavioralPanel.verify}
           onReport={setBehavioralReport}
           onVerify={openVerifyClaims}

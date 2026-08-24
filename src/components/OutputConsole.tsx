@@ -13,8 +13,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { ProcessEvent } from "../ipc/types";
 import { decorate, filterLines, stripAnsi, type Severity } from "./consoleLogic";
 
-export { stripAnsi };
-
 /** How much raw output to keep for Copy All / diagnostics. */
 const RAW_CAP = 1_000_000;
 

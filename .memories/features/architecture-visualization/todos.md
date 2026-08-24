@@ -1,15 +1,57 @@
 # Todos
 
+## RECONCILED 2026-08-21 — read this first; it supersedes the open boxes below
+
+The round-by-round sections below are kept for provenance, but many `[ ]` items
+in them were completed by the Phase 4 UI rounds and never ticked, so the file
+contradicted the tree. Verified against the actual code on 2026-08-21:
+
+**DONE (ignore any open box below that claims otherwise):**
+- The Architecture tab is fully wired and shipped. `ArchitectureView.tsx` /
+  `views/architecture/` call `archProjectGraph`, `archRenderGraph`,
+  `componentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`,
+  `archValidate` — the "six wrappers with zero callers" / "no UI calls" /
+  "component_graph not reachable" / "Phase 5 entirely frontend, unstarted" items
+  are all **stale**.
+- **Phase 0 CSP spike is settled.** `DiagramCanvas.tsx` sets top-level
+  `htmlLabels: false` (plus per-diagram) and mermaid renders under the strict
+  production CSP. Ship branch was taken.
+- `mermaid` is imported (lazily) — the "installed and imported nowhere" note is stale.
+- Level 2 signals / component map (Phase 4) shipped with the centralized
+  `signals::framework::admit` gate and the connection-string-value test.
+
+**GENUINELY STILL OPEN (the real remainder):**
+- **Agent-authored diagrams (old "Phase 4"): not implemented.**
+  `architecture/prompt.rs::prompt_for` does **not** exist and no `diagrams.agentCommand`
+  is wired (verified 2026-08-21). `validate` + front-matter provenance did land.
+- ~~**Aspire `Projects.` identifier transform** — still unverified.~~ **DONE (WF1,
+  2026-08-24, B6):** verified correct; pinned end-to-end by
+  `an_aspire_add_project_resolves_a_hyphenated_project_name` + an ambiguity guard.
+- **`pnpm-workspace.yaml`** — half-supported on purpose; **being added in WF3 (B7):**
+  `yaml-rust2`, containment from `pnpm-workspace.yaml` `packages:` globs only.
+- ~~**`mermaidIdOf` (TS) mirrors `mermaid_id` (Rust)** with no cross-language drift guard.~~
+  **DONE (WF1, 2026-08-24, B8):** cb-core `mermaid_id_matches_committed_fixture`
+  generates+pins `fixtures/architecture/mermaid_ids.json`; vitest consumes it via a
+  JSON import (no `node:fs` — see notes.md).
+- **No project→project arrow** for the MEDIUM `AddHttpClient`/`BaseAddress` evidence
+  (deliberate; would move to `signals/dotnet.rs` citing `launchSettings.json`).
+- **Live verification:** a *non-empty component map* has never been produced from
+  real code (this repo yields an empty one); clicking a box / opening a stored
+  diagram in the built app is still the manual check from the last fix round.
+- Doc-comment safety-property sweep in `architecture/` (2-for-2 wrong so far).
+
+---
+
 ## Immediate follow-ups from Phase 1
 
 - [x] ~~**Mirror `SearchHit` / `SearchScope` / `HitKind` into `src/ipc/types.ts`.**~~
       Done in Phase 2, together with `SymbolKind` and `SymbolIndexStatus`.
 - [ ] Decide whether `mermaid@11.16.1` stays in `package.json` if Phase 0 fails.
       It is currently installed and imported nowhere.
-- [ ] `MAX_DEPTH = 10` hides files from the palette that the lazy, unbounded file
-      tree can still reach. Consistent with the project scan, inconsistent with
-      the tree. Keep 10 for v1 and surface `truncated`, but it is a conscious
-      product call that has not been put to the user.
+- [x] ~~`MAX_DEPTH = 10` hides files from the palette~~ **DONE (WF1, 2026-08-24, C5):
+      raised to 50** (Anthony's call). SKIP_DIRS + the 50k-file cap keep the deeper
+      walk bounded; pinned by `a_source_file_nested_deeper_than_ten_levels_is_indexed`
+      (symbols) + `a_project_nested_deeper_than_ten_levels_is_discovered` (workspace).
 
 ## Carried out of the fix round (2026-08-10)
 

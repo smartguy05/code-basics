@@ -32,12 +32,19 @@ import {
  */
 export function BehavioralPanel({
   configId,
+  httpFiles,
   verify,
   onReport,
   onVerify,
   onClose,
 }: {
   configId: string;
+  /**
+   * The explicit `.http` files to replay, or `null` to let the backend discover
+   * them. Resolved in the Changes tab via `resolveHttpFiles`; passed straight to
+   * `behavioral_diff` here.
+   */
+  httpFiles: string[] | null;
   /** After the run, hand its evidence to the agent claim-verifier. */
   verify: boolean;
   /** The finished report, so the intent cards can badge each card's deltas. */
@@ -80,7 +87,7 @@ export function BehavioralPanel({
     setError(null);
 
     void api
-      .behavioralDiff(configId, null, (event: ProcessEvent) => {
+      .behavioralDiff(configId, httpFiles, (event: ProcessEvent) => {
         // Route every event through the console's own renderer (colours, the
         // command banner, the exit line) — the same view the Run tab gives.
         consoleRef.current?.handle(event);

@@ -391,6 +391,31 @@ fn the_walk_skips_build_output_and_nested_checkouts() {
     assert_eq!(files(&index), ["src/kept.rs"]);
 }
 
+#[test]
+fn a_source_file_nested_deeper_than_ten_levels_is_indexed() {
+    // A conventional layout is shallow, but monorepos and generated trees are
+    // not: a file fourteen directories down is still source, and the walk must
+    // reach it. Depth 15 here (root is depth 0) is comfortably past the old
+    // limit of 10 and well short of anything that could stall a scan.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let nested = "d01/d02/d03/d04/d05/d06/d07/d08/d09/d10/d11/d12/d13/d14/deep.rs";
+    write(root, nested, "pub fn buried() {}\n");
+
+    let index = build(root, &[]);
+
+    assert!(
+        files(&index).iter().any(|f| f.ends_with("deep.rs")),
+        "deeply nested file must be indexed: {:?}",
+        files(&index)
+    );
+    assert!(
+        names(&index).contains(&"buried"),
+        "its symbol must be indexed: {:?}",
+        names(&index)
+    );
+}
+
 /// Pinned before the counterparty exists, on the same reasoning as
 /// `search_hit_serialises_with_the_keys_the_ui_reads`: there is no TypeScript
 /// mirror of `Symbol` or `SymbolIndex` yet and no command returning one, so

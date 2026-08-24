@@ -29,10 +29,6 @@ import {
   spliceInto,
 } from "./inspectLogic";
 
-// Re-exported for the Run tab, which imports it from this module: one answer to
-// "which of these processes is the application", shared by both views.
-export { preferApplicationProcess } from "./inspectLogic";
-
 /**
  * The Objects tab: pick something to read — a crash dump on disk or a process
  * that is still running — then browse the real objects inside it.

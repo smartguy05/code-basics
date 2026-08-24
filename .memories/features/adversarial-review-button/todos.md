@@ -66,10 +66,11 @@
       intents/` — confirm a SubagentStop label recorded and Changes→Intent
       attributes the subagent's hunks. If the live payload lacks
       `last_assistant_message`, 3a is a no-op and 3b (mining) is the working path.
-- [ ] NIT (review, non-blocking): `ReviewPanel` minimize→restore can persist the
-      CSS-default size (the `first` guard only skips the initial observe). Harmless
-      — value is clamped and equals what's displayed, re-applied identically on
-      reload.
+- [x] ~~NIT: `ReviewPanel` minimize→restore can persist the CSS-default size (the
+      `first` guard only skips the initial observe).~~ **DONE (WF1, 2026-08-24, C7):**
+      extracted a pure `createResizeGate()` in reviewLayoutLogic.ts (keeps the last
+      non-zero size, ignores 0×0, never persists the mount default, persists only a
+      genuine change); ReviewPanel uses it. 4 new gate tests.
 - [ ] NIT (review, non-blocking): `resolve_subagent_root` caches only the queried
       uuid, not ancestors climbed — redundant walk for deep lineages, bounded by
       the cycle guard, correctness unaffected.

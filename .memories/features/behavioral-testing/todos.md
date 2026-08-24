@@ -39,5 +39,9 @@
 - [ ] (LOW/optional) extract the 2 inline abstain guard-clauses in behavioral.rs into a tested pure fn.
 - [ ] LIVE GUI verify (pnpm tauri dev, click Run before/after in a real workspace w/ a test config);
       HTTP path needs a workspace with .http files (w/ @readiness) + an App launch config.
-- [ ] Front-end still calls behavioralDiff(config.id, null, ...) → httpFiles=null, so HTTP auto-discovers
-      .http files. UI to pick .http files / launch config explicitly is a future nicety.
+- [x] ~~Front-end still calls behavioralDiff(config.id, null, ...) → httpFiles=null~~ **DONE
+      (WF1, 2026-08-24, B10):** Evidence dropdown now offers an explicit config override +
+      changed-.http/.rest scenario toggles; pure `resolveHttpFiles`/`httpFileCandidates` in
+      behavioralPanelLogic.ts (empty-explicit → null to match backend Some(empty)==None).
+      Default path (no picks) still sends auto config + null. Full discovery of unchanged
+      .http files remains a future backend command.

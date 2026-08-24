@@ -9,7 +9,11 @@ import {
 import { buildSections, statusLetter, type FileSection } from "./changesLogic";
 import { Sidebar } from "../components/Sidebar";
 import { IntentPanel } from "../components/IntentPanel";
-import { pickBehavioralConfig } from "../components/behavioralPanelLogic";
+import {
+  httpFileCandidates,
+  pickBehavioralConfig,
+  resolveHttpFiles,
+} from "../components/behavioralPanelLogic";
 import { verifyClaimsAction } from "../components/claimVerifyLogic";
 import { ErosionPanel } from "../components/ErosionPanel";
 import { badgeCount } from "../components/erosionLogic";
@@ -109,10 +113,14 @@ export function ChangesView({
    */
   behavioral: BehavioralReport | null;
   onOpenReview: () => void;
-  /** Open the before/after window for `configId` (the run streams there). */
-  onRunBehavioral: (configId: string) => void;
+  /**
+   * Open the before/after window for `configId` (the run streams there).
+   * `httpFiles` names the `.http` files to replay, or `null` to let the backend
+   * discover them (the default).
+   */
+  onRunBehavioral: (configId: string, httpFiles: string[] | null) => void;
   /** Open the before/after window, then hand its evidence to the claim agent. */
-  onVerifyClaims: (configId: string) => void;
+  onVerifyClaims: (configId: string, httpFiles: string[] | null) => void;
 }) {
   const [status, setStatus] = useState<WorkingStatus | null>(null);
   const [mode, setMode] = useState<ComparisonMode>("workingToHead");
@@ -207,6 +215,17 @@ export function ChangesView({
   const [configs, setConfigs] = useState<RunConfig[]>([]);
   /** The compact before/after actions menu in the intent header. */
   const [evidenceOpen, setEvidenceOpen] = useState(false);
+  /**
+   * Optional overrides for the before/after run, set in the Evidence dropdown.
+   *
+   * `configOverride` is a config id to replay instead of the auto-picked one
+   * (`null` keeps the auto pick); `selectedHttp` is the set of changed `.http`
+   * files to replay explicitly (empty keeps the backend's auto discovery). Both
+   * default to the existing behaviour, so a user who never opens the picker gets
+   * exactly the old auto config + null path.
+   */
+  const [configOverride, setConfigOverride] = useState<string | null>(null);
+  const [selectedHttp, setSelectedHttp] = useState<string[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   /** Diff lines to preselect, so opening a card lands on its lines. */
   const [highlight, setHighlight] = useState<number[]>([]);
@@ -287,6 +306,18 @@ export function ChangesView({
   // Whether "Verify claims" can run, against which config, and why — the whole
   // decision lives in the tested helper.
   const verify = verifyClaimsAction(configs);
+
+  // The changed .http/.rest files the run could replay explicitly, and the wire
+  // value the picker's toggles resolve to (null == let the backend discover).
+  const httpCandidates = httpFileCandidates(status?.files ?? []);
+  const httpArg = resolveHttpFiles(
+    selectedHttp.length > 0 ? { mode: "explicit", files: selectedHttp } : { mode: "auto" },
+  );
+  /** The config the run replays: the picker override, else the auto pick. */
+  const chosenBehavioralConfig =
+    (configOverride && configs.find((c) => c.id === configOverride)) || behavioralConfig;
+  const chosenVerifyConfig =
+    (configOverride && configs.find((c) => c.id === configOverride)) || verify.config;
 
   /**
    * Recompute the intent cards.
@@ -559,10 +590,10 @@ export function ChangesView({
    * window; "Verify claims" opens it primed to chain into the claim-check agent.
    */
   const runBehavioral = () => {
-    if (behavioralConfig) onRunBehavioral(behavioralConfig.id);
+    if (chosenBehavioralConfig) onRunBehavioral(chosenBehavioralConfig.id, httpArg);
   };
   const verifyClaims = () => {
-    if (verify.config) onVerifyClaims(verify.config.id);
+    if (chosenVerifyConfig) onVerifyClaims(chosenVerifyConfig.id, httpArg);
   };
 
   /** Stage or unstage a whole file, whichever one was right-clicked. */
@@ -762,15 +793,73 @@ export function ChangesView({
                 <>
                   <div className="dropdown-backdrop" onClick={() => setEvidenceOpen(false)} />
                   <div className="dropdown-menu" style={{ right: 0, left: "auto" }}>
+                    {/* Override the auto-picked config. Defaults to the tested
+                        `pickBehavioralConfig` choice; the user can replay any
+                        other config instead. */}
+                    {configs.length > 1 && (
+                      <div className="dropdown-section" style={{ padding: "4px 8px" }}>
+                        <div className="group-label">Config</div>
+                        <select
+                          value={configOverride ?? behavioralConfig?.id ?? ""}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setConfigOverride(e.target.value || null)}
+                          style={{ width: "100%" }}
+                          title="Which configuration to replay against HEAD and the working tree"
+                        >
+                          {configs.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Replay specific changed .http files instead of letting the
+                        backend discover them. No toggles = auto discovery. */}
+                    {httpCandidates.length > 0 && (
+                      <div className="dropdown-section" style={{ padding: "4px 8px" }}>
+                        <div className="group-label">
+                          HTTP files {selectedHttp.length === 0 && "(auto)"}
+                        </div>
+                        {httpCandidates.map((path) => (
+                          <label
+                            key={path}
+                            className="dropdown-item"
+                            style={{ display: "flex", gap: 6, alignItems: "center" }}
+                            onClick={(e) => e.stopPropagation()}
+                            title="Replay this .http file explicitly in the before/after run"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedHttp.includes(path)}
+                              onChange={(e) =>
+                                setSelectedHttp((prev) =>
+                                  e.target.checked
+                                    ? [...prev, path]
+                                    : prev.filter((p) => p !== path),
+                                )
+                              }
+                            />
+                            <span className="path">{path}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+
+                    {(configs.length > 1 || httpCandidates.length > 0) && (
+                      <div className="dropdown-separator" />
+                    )}
+
                     <div
-                      className={`dropdown-item${behavioralConfig ? "" : " disabled"}`}
+                      className={`dropdown-item${chosenBehavioralConfig ? "" : " disabled"}`}
                       title={
-                        behavioralConfig
-                          ? `Run "${behavioralConfig.name}" against HEAD and your working tree, then show what changed in the observable outcomes — test results, console output, HTTP responses. No agent involved.`
+                        chosenBehavioralConfig
+                          ? `Run "${chosenBehavioralConfig.name}" against HEAD and your working tree, then show what changed in the observable outcomes — test results, console output, HTTP responses. No agent involved.`
                           : "No run configuration is available to replay before/after"
                       }
                       onClick={() => {
-                        if (!behavioralConfig) return;
+                        if (!chosenBehavioralConfig) return;
                         setEvidenceOpen(false);
                         runBehavioral();
                       }}
