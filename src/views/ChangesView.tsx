@@ -570,6 +570,11 @@ export function ChangesView({
     await refreshIntent();
   };
 
+  const disableCapture = async (provider: ProviderId, scope: InstallScope) => {
+    setProviders(await api.disableIntentCapture(provider, scope));
+    await refreshIntent();
+  };
+
   /**
    * Import, and hand the count back: the panel reports the outcome inline,
    * next to the banner that offered the action, rather than as a view error.
@@ -916,6 +921,7 @@ export function ChangesView({
               onRevertFile={revertGroupFile}
               onReject={rejectGroup}
               onEnable={enableCapture}
+              onDisable={disableCapture}
               onImportHistory={importHistory}
               onSetIntent={setCardIntent}
               onClearIntent={clearCardIntent}

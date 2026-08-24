@@ -224,6 +224,81 @@ pub fn history(root: &Path) -> HistoryMined {
     merged
 }
 
+/// Everything disabling `provider`'s intent capture would do, computed without
+/// touching disk. Mirrors the install path and is previewed and applied through
+/// the same [`InstallPlan`] / [`apply_writes`] machinery.
+///
+/// Removes only that provider's own marked hook-config entries, from the same
+/// settings file its install targeted (Claude Code's `settings.json`, Codex's
+/// `hooks.json`). The other agent's file is never named.
+///
+/// The repository-level commit guard (`pre-commit`) and durable-why hook
+/// (`post-commit`) are shared: **both** agents' installs add them. They are
+/// removed here only when no *other* provider is still capturing in this
+/// workspace, so disabling one agent never yanks a hook the other still relies
+/// on. The `CLAUDE.md` / `AGENTS.md` instruction section is inert prose and is
+/// deliberately left in place.
+pub fn uninstall_plan(
+    provider: ProviderId,
+    root: &Path,
+    scope: InstallScope,
+) -> Result<InstallPlan> {
+    // The recorder and the gate share one file per provider+scope; that path
+    // resolver is the same one C2 added for the gate installer.
+    let path = crate::qgate::install::settings_path(provider, root, scope, None)?;
+
+    let mut writes = Vec::new();
+    if let Some(content) = hooks_json::plan_removal(&path)? {
+        writes.push(PlannedWrite {
+            path,
+            content,
+            merges_existing: true,
+        });
+    }
+
+    // Only the last capturing agent takes the shared repo-level hooks with it.
+    if !another_provider_capturing(provider, root) {
+        if let Some(hook) = super::guard::hook_path(root) {
+            if let Some(content) = super::guard::plan_removal(&hook)? {
+                writes.push(PlannedWrite {
+                    path: hook,
+                    content,
+                    merges_existing: true,
+                });
+            }
+        }
+        if let Some(hook) = super::whyhook::hook_path(root) {
+            if let Some(content) = super::whyhook::plan_removal(&hook)? {
+                writes.push(PlannedWrite {
+                    path: hook,
+                    content,
+                    merges_existing: true,
+                });
+            }
+        }
+    }
+
+    Ok(InstallPlan {
+        provider,
+        scope,
+        writes,
+        caveats: Vec::new(),
+    })
+}
+
+/// Is any agent *other than* `provider` still capturing in this workspace?
+///
+/// This is the signal that the shared repo-level hooks must be left in place
+/// when `provider` is disabled — checked against the other providers' live
+/// status so the decision reflects what is actually installed, not an
+/// assumption.
+fn another_provider_capturing(provider: ProviderId, root: &Path) -> bool {
+    all()
+        .iter()
+        .filter(|p| p.id() != provider)
+        .any(|p| p.status(root).capture.is_some())
+}
+
 /// The commit guard, as an extra write on an install plan.
 ///
 /// Repository-level rather than per-agent: the note a rejection leaves behind

@@ -1472,3 +1472,62 @@ fn mermaid_id_matches_committed_fixture() {
          UPDATE_FIXTURES=1 cargo test -p cb-core mermaid_id_matches_committed_fixture"
     );
 }
+
+#[test]
+fn a_service_call_edge_is_drawn_with_an_arrow_no_other_edge_kind_uses() {
+    // Five edge kinds, five arrow glyphs. If the service call shared a glyph
+    // with another kind, the legend would explain a symbol that means two
+    // different things — the confident wrong answer this module avoids.
+    let g = graph(
+        vec![
+            node("a", "A", ArchKind::Service),
+            node("b", "B", ArchKind::Service),
+            node("c", "C", ArchKind::Project),
+            node("d", "D", ArchKind::Project),
+            node("e", "E", ArchKind::Project),
+            node(
+                "component:database:postgresql",
+                "PostgreSQL",
+                ArchKind::DataStore,
+            ),
+        ],
+        vec![
+            edge("a", "c", EdgeKind::ProjectReference),
+            edge("a", "d", EdgeKind::PackageDependency),
+            edge("a", "e", EdgeKind::Contains),
+            edge("a", "component:database:postgresql", EdgeKind::DataAccess),
+            edge("a", "b", EdgeKind::ServiceCall),
+        ],
+    );
+
+    let source = render(&g);
+    let drawn = without_legend(&source);
+    let lines = statements(&drawn);
+
+    assert!(lines.contains(&"na --x nb"), "{lines:?}");
+    assert_eq!(
+        lines.iter().filter(|l| l.contains("--x")).count(),
+        1,
+        "the service-call arrow must not be spelled the same as another kind: {lines:?}"
+    );
+    assert_eq!(validate(&source), Ok(()), "{source}");
+}
+
+#[test]
+fn a_component_map_legend_explains_the_service_call_arrow() {
+    let g = graph(
+        vec![
+            node("a", "A", ArchKind::Service),
+            node("b", "B", ArchKind::Service),
+        ],
+        vec![edge("a", "b", EdgeKind::ServiceCall)],
+    );
+
+    let legend = legend_of(&render(&g));
+
+    assert!(legend.contains("--x|\""), "{legend}");
+    assert!(
+        legend.to_lowercase().contains("calls over http"),
+        "the legend must say in words what the service-call arrow is:\n{legend}"
+    );
+}

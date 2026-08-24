@@ -901,8 +901,15 @@ fn an_httpclient_base_address_bound_to_configuration_yields_no_signal() {
 }
 
 #[test]
-fn an_httpclient_base_address_matching_an_application_url_enriches_that_service() {
-    let (_dir, _out, gated) = admitted(&[
+fn an_httpclient_base_address_matching_an_application_url_emits_a_high_call_citing_launch_settings()
+{
+    // Inverted from the old `..._enriches_that_service`: a matched base address
+    // is no longer a MEDIUM enrichment note. It is a HIGH *call* candidate, and
+    // the evidence it cites is the callee's `launchSettings.json` — a
+    // declaration file the author wrote — rather than the caller's `.cs`. That
+    // anchoring is what lets it survive the gate as a service call without ever
+    // letting a source line be treated as a declared fact.
+    let (_dir, out, gated) = admitted(&[
         ("src/Orders.Api/Orders.Api.csproj", &web_csproj(&[])),
         (
             "src/Orders.Api/Program.cs",
@@ -918,10 +925,37 @@ fn an_httpclient_base_address_matching_an_application_url_enriches_that_service(
         ),
     ]);
 
-    let details = details(&gated);
+    let call = out
+        .signals
+        .iter()
+        .find(|s| s.target_project.is_some())
+        .expect("a call candidate must be emitted for the matched base address");
+    assert_eq!(
+        call.strength,
+        Strength::High,
+        "a matched call is a declared fact once anchored on a config file: {call:?}"
+    );
     assert!(
-        details.iter().any(|d| d.contains("Orders.Api")),
-        "the caller was not recorded against the service it calls: {details:?}"
+        call.evidence
+            .path
+            .to_string_lossy()
+            .ends_with("launchSettings.json"),
+        "the call must cite the callee's declaration file, not the caller's source: {:?}",
+        call.evidence
+    );
+    assert_eq!(
+        gated.service_calls().len(),
+        1,
+        "the HIGH call must survive the gate as one service call: {:?}",
+        gated.service_calls()
+    );
+    // The matched call is no longer a MEDIUM detail on the callee's box.
+    assert!(
+        details(&gated)
+            .iter()
+            .all(|d| !d.contains("called over HTTP")),
+        "a matched call must not also enrich the callee as a note: {:?}",
+        details(&gated)
     );
 }
 

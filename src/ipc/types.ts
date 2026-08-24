@@ -1173,12 +1173,20 @@ export type ArchKind =
  * `dataAccess` runs project → `dataStore` and appears only in a component map.
  * It asserts that the project's manifest names a client library for that
  * technology — capability, not runtime use, and never a shared instance.
+ *
+ * `serviceCall` runs service → service and appears only in a component map. It
+ * asserts that the caller's `AddHttpClient` registration wrote a literal base
+ * address matching exactly one other project's `launchSettings.json`
+ * `applicationUrl`. The caller's address is read from source, but the callee's
+ * identity rests on that declaration file, which is what lets the arrow be
+ * drawn; it is only ever drawn between two boxes that already exist.
  */
 export type EdgeKind =
   | "projectReference"
   | "packageDependency"
   | "contains"
-  | "dataAccess";
+  | "dataAccess"
+  | "serviceCall";
 
 /**
  * Where a graph came from, and therefore how much of it can be trusted.

@@ -134,6 +134,8 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `intent_capture_status` | – | `ProviderStatus[]` | Per agent: detected, where hooks are installed, how many past sessions match this workspace, and anything blocking capture |
 | `intent_install_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact final contents of every file an install would write. **Touches nothing** — this is what the confirmation dialog renders |
 | `enable_intent_capture` | `provider: ProviderId, scope: InstallScope` | `ProviderStatus[]` | Perform a confirmed install. Additive: existing hooks are preserved and the file is backed up first. Also installs the `pre-commit` guard and the durable-why `post-commit` hook, and makes both executable |
+| `intent_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change disabling that agent's capture would make. **Touches nothing.** An empty `writes` means there was nothing to remove. Removes only that provider's own hook entries; the shared commit hooks are removed only when no other agent is still capturing, and the instruction note is left in place |
+| `disable_intent_capture` | `provider: ProviderId, scope: InstallScope` | `ProviderStatus[]` | Perform a confirmed disable, backing the file up first. Returns the refreshed statuses |
 | `import_intent_history` | – | `usize` | Read what the agents already recorded, with no setup: edits, coarse labels, and the user prompts mined from session transcripts (keyed to the same turn id so they join). Returns the total record count afterwards |
 | `clear_intent_history` | – | `()` | Forget everything recorded for this workspace (agent history only; user notes survive) |
 | `set_card_intent` | `group: String, label: String, mode: ComparisonMode` | `()` | Write (or overwrite) the user's own intent for one card. Stored as the card's changed-line content plus the label, so it rebinds by content on the next refresh and titles the card — winning over any agent reason on those lines. Re-annotating the same change replaces the previous note |
@@ -145,9 +147,11 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `quality_gate_status` | – | `InstallScope \| null` | Where the gate is installed for this workspace (project wins over user), or `null` |
-| `quality_gate_install_plan` | `scope: InstallScope` | `InstallPlan` | The exact final contents of the `settings.json` write. **Touches nothing** — what the confirmation dialog renders |
-| `install_quality_gate` | `scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install. Additive and backed up first; a distinct marker lets it coexist with the intent recorder's `Stop` entry. Returns the new status |
+| `quality_gate_status` | `provider: ProviderId` | `InstallScope \| null` | Where the gate is installed for this workspace and provider (project wins over user), or `null` |
+| `quality_gate_install_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact final contents of the provider's hook-file write (Claude Code `settings.json` or Codex `hooks.json`). **Touches nothing** — what the confirmation dialog renders |
+| `install_quality_gate` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install. Additive and backed up first; a distinct marker lets it coexist with the intent recorder's `Stop` entry. Returns the new status |
+| `quality_gate_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change turning the gate off would make. **Touches nothing.** An empty `writes` means there was nothing to remove. Removes only the gate's own marked `Stop` entry; the intent recorder's `Stop` entry (distinct marker) survives |
+| `uninstall_quality_gate` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed uninstall, backing the file up first. Returns the new status (`null` once removed) |
 
 ## First-open setup
 

@@ -12,11 +12,12 @@
 //! * **`dependencies`/`devDependencies` names** in `package.json` files become
 //!   [`EdgeKind::PackageDependency`] edges, but *only* when the name matches
 //!   another Node project in the same workspace.
-//! * **`.sln`/`.slnx` grouping, npm workspace globs and Cargo `[workspace]
+//! * **`.sln`/`.slnx` grouping, npm/pnpm workspace globs and Cargo `[workspace]
 //!   members` globs** become [`EdgeKind::Contains`] edges, which are membership
-//!   and nothing else — except in a pnpm workspace, where the `workspaces` key
-//!   is not membership at all and nothing is drawn from it (see
-//!   [`pnpm_notice`]).
+//!   and nothing else. In a pnpm workspace the membership comes from
+//!   `pnpm-workspace.yaml`'s `packages:` globs, and the `workspaces` key in
+//!   `package.json` is suppressed because pnpm does not read it (see
+//!   [`npm_workspace_members`] and [`pnpm_notice`]).
 //!
 //! # Why this is not a field on `Project`
 //!
@@ -69,7 +70,11 @@ use crate::workspace::Workspace;
 ///   Rust repository derived at version 1 has boxes and no arrows between them,
 ///   which is not a differently-formatted answer to the same question but a
 ///   materially different one, so the two must not be compared silently.
-pub const SCANNER_VERSION: u32 = 2;
+/// * `3` — pnpm workspace containment. A pnpm workspace previously yielded
+///   boxes and no containment (its members live in `pnpm-workspace.yaml`, which
+///   was reported but never read); it now yields [`EdgeKind::Contains`] edges
+///   from a container drawn from that file's `packages:` globs.
+pub const SCANNER_VERSION: u32 = 3;
 
 // ---------------------------------------------------------------------------
 // Types crossing IPC
@@ -169,6 +174,27 @@ pub enum EdgeKind {
     /// database's own configuration is visible from here, so a store cannot be
     /// observed to depend on anything.
     DataAccess,
+    /// One service calls another over HTTP: the caller's `AddHttpClient`
+    /// registration wrote a literal `BaseAddress` that matched exactly one
+    /// other project's `launchSettings.json` `applicationUrl`.
+    ///
+    /// Always service → service, and only ever between two boxes that already
+    /// exist. The producer reads the caller's literal address out of a `.cs`
+    /// file — which could never be HIGH on its own — but anchors the signal's
+    /// evidence on the *callee's* `launchSettings.json`, a declaration file the
+    /// author wrote, so the identity of the thing being called rests on a
+    /// config file rather than on source. That is what lets the arrow be drawn
+    /// at all, and it is exactly the discipline the DataAccess edge follows:
+    /// the claim rides on something declared, not something inferred.
+    ///
+    /// The "never invent a node" guard lives at *draw* time, in
+    /// [`super::components`] — the only layer that knows which nodes exist —
+    /// which draws this edge only when both endpoints are already
+    /// [`ArchKind::Service`] nodes an earlier pass created, and otherwise
+    /// abstains with a warning. The two endpoints are always the same ecosystem
+    /// by construction: a `launchSettings.json` and the project owning it are
+    /// both .NET.
+    ServiceCall,
 }
 
 /// Where a graph came from, and therefore how much it can be trusted.
@@ -1371,27 +1397,144 @@ fn cargo_globs(
 /// at a path separator, which is what npm, pnpm and Yarn all mean by it;
 /// without it `packages/*` would swallow `packages/a/b` and invent members.
 ///
-/// Only the root `package.json` is consulted; a nested workspace root is out of
-/// scope. See [`pnpm_notice`] for why a pnpm workspace draws nothing at all.
+/// Only the root manifest is consulted; a nested workspace root is out of
+/// scope. When a `pnpm-workspace.yaml` sits in the root, membership is drawn
+/// from *its* `packages:` globs (see [`pnpm_workspace_members`]) and the
+/// `workspaces` key in `package.json` is suppressed, because pnpm does not read
+/// that key (see [`pnpm_notice`]).
 fn npm_workspace_members(workspace: &Workspace, ids: &NodeIds, builder: &mut Builder) {
-    let manifest = workspace.root.join("package.json");
-    let pkg = std::fs::read_to_string(&manifest)
-        .ok()
-        .as_deref()
-        .and_then(node::parse_package_json);
-    let globs = pkg.as_ref().map(node::workspace_globs).unwrap_or_default();
-
-    // Checked before anything is drawn, not after: in a pnpm workspace the
-    // `workspaces` key is not this repository's membership list at all.
-    if workspace.root.join("pnpm-workspace.yaml").exists() {
-        builder.warn(pnpm_notice(&globs));
+    // Checked before package.json is read, not after: in a pnpm workspace the
+    // `workspaces` key is not this repository's membership list at all, so the
+    // YAML is the sole source of containment.
+    let pnpm = workspace.root.join("pnpm-workspace.yaml");
+    if pnpm.exists() {
+        pnpm_workspace_members(workspace, ids, builder, &pnpm);
         return;
     }
 
-    let Some(pkg) = pkg else {
+    let manifest = workspace.root.join("package.json");
+    let Some(pkg) = std::fs::read_to_string(&manifest)
+        .ok()
+        .as_deref()
+        .and_then(node::parse_package_json)
+    else {
         return;
     };
 
+    let label = pkg.name.clone().unwrap_or_else(|| workspace.name.clone());
+    expand_workspace_globs(
+        workspace,
+        ids,
+        builder,
+        node::workspace_globs(&pkg),
+        "workspace:package.json".to_string(),
+        PathBuf::from("package.json"),
+        label,
+    );
+}
+
+/// Draw containment for a pnpm workspace from `pnpm-workspace.yaml`.
+///
+/// pnpm keeps its member globs in this YAML file and does not read the
+/// `workspaces` key in `package.json`. Confirmed against pnpm 10.14.0 rather
+/// than asserted from memory: with both files present and disagreeing,
+/// `pnpm list -r` returned exactly the members `pnpm-workspace.yaml` listed and
+/// none of the ones only `package.json` listed, and pnpm printed
+/// `The "workspaces" field in package.json is not supported by pnpm`.
+///
+/// So membership comes from this file's `packages:` sequence and nothing else.
+/// The container is labelled from the root `package.json` name if there is one,
+/// falling back to the workspace name. If the file cannot be read or parsed the
+/// function abstains with a warning rather than inventing a container — the
+/// same rule the rest of the module follows.
+fn pnpm_workspace_members(
+    workspace: &Workspace,
+    ids: &NodeIds,
+    builder: &mut Builder,
+    path: &Path,
+) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) => {
+            builder.warn(format!("pnpm-workspace.yaml could not be read: {e}"));
+            return;
+        }
+    };
+
+    let Some(globs) = pnpm_workspace_globs(&text) else {
+        builder.warn(
+            "pnpm-workspace.yaml is present but its 'packages' globs could not be read, so no \
+             containment was drawn from it"
+                .to_string(),
+        );
+        return;
+    };
+
+    let pkg = std::fs::read_to_string(workspace.root.join("package.json"))
+        .ok()
+        .as_deref()
+        .and_then(node::parse_package_json);
+    let label = pkg
+        .as_ref()
+        .and_then(|p| p.name.clone())
+        .unwrap_or_else(|| workspace.name.clone());
+
+    // A `workspaces` key sitting in package.json alongside the YAML is dead
+    // weight pnpm ignores; say so rather than let a reader assume it
+    // contributed members.
+    if let Some(ignored) = pkg.as_ref().map(node::workspace_globs) {
+        if !ignored.is_empty() {
+            builder.warn(pnpm_notice(&ignored));
+        }
+    }
+
+    expand_workspace_globs(
+        workspace,
+        ids,
+        builder,
+        globs,
+        "workspace:pnpm-workspace.yaml".to_string(),
+        PathBuf::from("pnpm-workspace.yaml"),
+        label,
+    );
+}
+
+/// Read the `packages:` globs out of a `pnpm-workspace.yaml` body.
+///
+/// Returns `None` when the document does not parse or has no `packages:`
+/// sequence — the caller turns that into an abstain-with-warning. A present but
+/// non-string entry is dropped, matching the abstain rule
+/// [`node::workspace_globs`] follows for the npm `workspaces` array. Kept pure
+/// (a string in, globs out) so it is unit-testable without a tempdir.
+fn pnpm_workspace_globs(text: &str) -> Option<Vec<String>> {
+    let docs = yaml_rust2::YamlLoader::load_from_str(text).ok()?;
+    let packages = docs.first()?["packages"].as_vec()?;
+    Some(
+        packages
+            .iter()
+            .filter_map(|entry| entry.as_str().map(str::to_string))
+            .collect(),
+    )
+}
+
+/// Expand a set of workspace globs onto the discovered node projects and, if
+/// any match, draw a [`ArchKind::Solution`] container holding them.
+///
+/// Shared by the npm and pnpm membership paths so the two agree on every rule
+/// that matters: patterns match against **discovered project directories**
+/// (never the filesystem), `literal_separator` stops `*` at a path separator,
+/// a malformed glob costs that pattern's members and nothing else, and an empty
+/// match set draws nothing at all (mirroring the silence npm keeps when its
+/// globs name no project).
+fn expand_workspace_globs(
+    workspace: &Workspace,
+    ids: &NodeIds,
+    builder: &mut Builder,
+    globs: Vec<String>,
+    container_id: String,
+    container_path: PathBuf,
+    label: String,
+) {
     let mut patterns = globset::GlobSetBuilder::new();
     let mut any = false;
     for pattern in globs {
@@ -1416,10 +1559,7 @@ fn npm_workspace_members(workspace: &Workspace, ids: &NodeIds, builder: &mut Bui
         return;
     };
 
-    let id = "workspace:package.json".to_string();
-    let label = pkg.name.clone().unwrap_or_else(|| workspace.name.clone());
     let mut members = Vec::new();
-
     for project in workspace.projects.iter().filter(|p| p.ecosystem == "node") {
         let relative = relative_to_root(&workspace.root, &project.dir);
         if !relative.is_empty() && set.is_match(&relative) {
@@ -1432,61 +1572,31 @@ fn npm_workspace_members(workspace: &Workspace, ids: &NodeIds, builder: &mut Bui
     }
 
     builder.add_node(ArchNode {
-        id: id.clone(),
+        id: container_id.clone(),
         label,
         kind: ArchKind::Solution,
         project_id: None,
-        path: Some(PathBuf::from("package.json")),
+        path: Some(container_path),
         ecosystem: Some("node".into()),
     });
     for member in members {
-        builder.add_edge(&id, &member, EdgeKind::Contains);
+        builder.add_edge(&container_id, &member, EdgeKind::Contains);
     }
 }
 
-/// What to say when a `pnpm-workspace.yaml` is present, given the `workspaces`
-/// globs the root `package.json` declares alongside it.
+/// What to say about the `workspaces` key in a pnpm workspace's `package.json`.
 ///
-/// pnpm keeps its member globs in a YAML file of its own and does not read the
-/// `workspaces` key in `package.json`. Confirmed against pnpm 10.14.0 rather
-/// than asserted from memory: with both files present and disagreeing,
-/// `pnpm list -r` returned exactly the members `pnpm-workspace.yaml` listed and
-/// none of the ones only `package.json` listed, and pnpm printed
-/// `The "workspaces" field in package.json is not supported by pnpm`.
-///
-/// So in a pnpm workspace the two lists are not two views of one membership —
-/// one of them is simply not membership. Expanding the `package.json` globs
-/// there drew a container labelled from the ignored file, holding whichever
-/// projects that file happened to name, while real pnpm members sat outside it
-/// as free-floating boxes. That is not an incomplete picture, it is a confident
-/// wrong one, and the governing rule of this module says a wrong answer is much
-/// worse than no answer. So nothing is drawn.
-///
-/// The alternative considered was drawing the boxes with a caveat naming the
-/// file they came from. It was rejected on two counts: the caveat would have to
-/// survive into the rendered diagram to do any good, and the renderer is not
-/// this module's to change; and a reader looking at a picture believes the
-/// picture, not the footnote. Reading the YAML properly is the real fix and
-/// needs a dependency this crate does not have — until then, silence about
-/// membership plus a warning that says exactly which lists went unread is the
-/// honest position.
-fn pnpm_notice(globs: &[String]) -> String {
-    let mut notice = "pnpm-workspace.yaml declares this workspace's members, but reading YAML \
-                      would need a dependency this crate does not have, so no containment was \
-                      drawn from it"
-        .to_string();
-
-    if !globs.is_empty() {
-        let quoted: Vec<String> = globs.iter().map(|g| format!("'{g}'")).collect();
-        notice.push_str(&format!(
-            "; the 'workspaces' key in package.json ({}) was not drawn either, because \
-             pnpm does not read that key — it is not this workspace's membership list, \
-             and boxes built from it would put real members outside the container",
-            quoted.join(", ")
-        ));
-    }
-
-    notice
+/// pnpm does not read that key — membership comes from `pnpm-workspace.yaml`
+/// instead — so when both are present the `workspaces` globs contribute nothing
+/// and a reader should be told, rather than left to assume they did. Given the
+/// (non-empty) ignored globs, name the file and quote them.
+fn pnpm_notice(ignored: &[String]) -> String {
+    let quoted: Vec<String> = ignored.iter().map(|g| format!("'{g}'")).collect();
+    format!(
+        "the 'workspaces' key in package.json ({}) was ignored because pnpm does not read it; \
+         this workspace's members come from pnpm-workspace.yaml instead",
+        quoted.join(", ")
+    )
 }
 
 // ---------------------------------------------------------------------------

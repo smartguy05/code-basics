@@ -253,7 +253,7 @@ impl Provider for Codex {
 /// Read as text rather than parsed: the key is a quoted absolute path whose
 /// separators and case vary, and a full TOML parse would still need the same
 /// fuzzy comparison afterwards.
-fn is_trusted_in(home: Option<&Path>, root: &Path) -> bool {
+pub(crate) fn is_trusted_in(home: Option<&Path>, root: &Path) -> bool {
     let Some(home) = home else {
         return false;
     };

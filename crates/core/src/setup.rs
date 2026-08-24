@@ -65,6 +65,23 @@ pub fn setup_plan(
         }
     }
 
+    // Codex keeps its hooks in a file of its own, so when Codex intent capture is
+    // being installed the gate's Stop entry must ride in that *same*
+    // `.codex/hooks.json` write — two independent writes to one path would make
+    // the second clobber the first at apply time. Only chain onto a write that
+    // already exists (i.e. Codex intent capture is in this plan); never introduce
+    // a `.codex/` file for a Codex the user does not use.
+    // Resolving the Codex path can fail only when no Codex home exists, in which
+    // case there is no Codex write to chain onto — so a failure here is skipped
+    // rather than failing the whole plan.
+    if let Ok(codex_gate_path) =
+        qgate::install::settings_path(ProviderId::Codex, root, scope, gate_home)
+    {
+        if let Some(existing) = writes.iter_mut().find(|w| w.path == codex_gate_path) {
+            existing.content = qgate::install::merged_into(&existing.content, pin)?;
+        }
+    }
+
     Ok(InstallPlan {
         provider: ProviderId::ClaudeCode,
         scope,

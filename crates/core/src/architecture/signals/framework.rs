@@ -121,6 +121,15 @@ pub struct Signal {
     /// The enrichment a [`Strength::Medium`] signal carries — a route list, an
     /// alternative name. `None` on a signal that only corroborates.
     pub detail: Option<String>,
+    /// The [`crate::model::Project::id`] this signal claims the emitting project
+    /// *calls*, set only by [`Signal::call`] and `None` on every other signal.
+    ///
+    /// A signal carrying this is not a claim about a component at all — it is a
+    /// claim about an edge between two projects — and [`admit`] partitions it
+    /// out before the component loop so it can never build a box. Both projects
+    /// have to already be drawn for the edge to appear; that check is the
+    /// assembly step's, not the gate's.
+    pub target_project: Option<String>,
     pub evidence: Evidence,
 }
 
@@ -137,6 +146,7 @@ impl Signal {
             label: label.into(),
             project_id: project_id.into(),
             detail: None,
+            target_project: None,
             evidence,
         }
     }
@@ -153,6 +163,39 @@ impl Signal {
             label: label.into(),
             project_id: project_id.into(),
             detail: None,
+            target_project: None,
+            evidence,
+        }
+    }
+
+    /// A HIGH claim that one project calls another over HTTP.
+    ///
+    /// Unlike [`Signal::high`] and [`Signal::medium`], this is never a claim
+    /// about a component — it carries a [`Signal::target_project`], which is
+    /// what tells [`admit`] to route it to [`Admitted::service_calls`] rather
+    /// than into the component loop. It is HIGH because the caller resolves the
+    /// callee's identity through a declaration file (a
+    /// `launchSettings.json`), and the producer is expected to pass that file
+    /// as the evidence: a call anchored on a `.cs` line is refused by the same
+    /// [`DiscardReason::UnverifiableEvidence`] screen every other HIGH signal
+    /// faces.
+    ///
+    /// The label is the callee id, which is safe by construction — a project id
+    /// carries neither `=`, `;`, `://` nor a `host:port`, so it clears the
+    /// `Incomplete` and value-shape screens without ever quoting a url.
+    pub fn call(
+        from_project: impl Into<String>,
+        to_project: impl Into<String>,
+        evidence: Evidence,
+    ) -> Self {
+        let to_project = to_project.into();
+        Self {
+            strength: Strength::High,
+            kind: ComponentKind::HttpService,
+            label: to_project.clone(),
+            project_id: from_project.into(),
+            detail: None,
+            target_project: Some(to_project),
             evidence,
         }
     }
@@ -238,6 +281,22 @@ pub struct Detail {
 pub struct AdmittedEdge {
     pub project_id: String,
     pub component_id: String,
+}
+
+/// One admitted service → service call: a HIGH [`Signal::call`] that survived
+/// [`screen`].
+///
+/// It is deliberately *not* an edge yet. [`admit`] cannot know which projects
+/// were drawn — that is decided by the assembly step, which turns a call into
+/// an [`super::super::graph::EdgeKind::ServiceCall`] edge only when both
+/// endpoints already exist as service nodes, and abstains with a warning
+/// otherwise. The "never invent a node" guard therefore lives there, beside
+/// the identical guard the data-access edge already goes through.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AdmittedCall {
+    pub from_project: String,
+    pub to_project: String,
+    pub evidence: Evidence,
 }
 
 /// Why a candidate was refused.
@@ -328,9 +387,18 @@ pub struct Admitted {
     /// Everything seen and refused, sorted. Its length is the count the module
     /// documentation promises: nothing is dropped without landing here.
     pub discarded: Vec<Discarded>,
+    /// Every HIGH [`Signal::call`] that survived screening, sorted by content
+    /// so the result does not depend on producer order. Each one is a *possible*
+    /// service-call edge; whether it is drawn is the assembly step's decision.
+    pub calls: Vec<AdmittedCall>,
 }
 
 impl Admitted {
+    /// The service → service calls that survived the gate.
+    pub fn service_calls(&self) -> &[AdmittedCall] {
+        &self.calls
+    }
+
     /// One edge per usage, deduplicated and sorted.
     pub fn edges(&self) -> Vec<AdmittedEdge> {
         let mut edges: Vec<AdmittedEdge> = self
@@ -450,8 +518,33 @@ pub fn admit(signals: Vec<Signal>) -> Admitted {
     let mut discarded: Vec<Discarded> = Vec::new();
     let mut high: Vec<Signal> = Vec::new();
     let mut medium: Vec<Signal> = Vec::new();
+    let mut calls: Vec<AdmittedCall> = Vec::new();
 
     for signal in signals {
+        // A call signal is partitioned out before the component loop below: it
+        // claims an edge between two projects, never a box, so letting it reach
+        // that loop would risk it creating one. It still runs the full `screen`
+        // — most importantly the HIGH declaration-file check, which is what
+        // refuses a call anchored on a `.cs` line rather than a config file.
+        if let Some(to_project) = signal.target_project.clone() {
+            match screen(&signal) {
+                Some(reason) => discarded.push(discard(&signal, reason)),
+                None => match signal.strength {
+                    Strength::High => calls.push(AdmittedCall {
+                        from_project: signal.project_id.clone(),
+                        to_project,
+                        evidence: signal.evidence.clone(),
+                    }),
+                    // A call is HIGH by construction (`Signal::call`); a MEDIUM
+                    // one has no component to attach to and is refused for the
+                    // record rather than silently dropped.
+                    Strength::Medium => {
+                        discarded.push(discard(&signal, DiscardReason::MediumWithoutHigh))
+                    }
+                },
+            }
+            continue;
+        }
         match screen(&signal) {
             Some(reason) => discarded.push(discard(&signal, reason)),
             None => match signal.strength {
@@ -525,9 +618,17 @@ pub fn admit(signals: Vec<Signal>) -> Admitted {
     // would follow is removed in `warnings`, where repetition is only noise.
     discarded.sort();
 
+    // Sorted and deduplicated: two producers reporting the same call from the
+    // same file is one edge, and the ordering — like the components' — is a
+    // function of content alone so the map is byte-identical whichever order
+    // the producers ran in.
+    calls.sort();
+    calls.dedup();
+
     Admitted {
         components,
         discarded,
+        calls,
     }
 }
 

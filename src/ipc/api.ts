@@ -426,6 +426,17 @@ export const intentInstallPlan = (provider: ProviderId, scope: InstallScope) =>
 export const enableIntentCapture = (provider: ProviderId, scope: InstallScope) =>
   invoke<ProviderStatus[]>("enable_intent_capture", { provider, scope });
 
+/**
+ * Exactly what disabling a provider's capture would remove. Touches nothing.
+ * An empty `writes` means there was nothing installed for that agent.
+ */
+export const intentUninstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("intent_uninstall_plan", { provider, scope });
+
+/** Perform a disable the user has confirmed; returns the refreshed statuses. */
+export const disableIntentCapture = (provider: ProviderId, scope: InstallScope) =>
+  invoke<ProviderStatus[]>("disable_intent_capture", { provider, scope });
+
 /** Read what the agents already recorded, with no setup. Returns the total. */
 export const importIntentHistory = () =>
   invoke<number>("import_intent_history");
@@ -449,17 +460,28 @@ export const clearCardIntent = (group: string, mode: ComparisonMode) =>
 // are: preview a plan, then apply it.
 // ---------------------------------------------------------------------------
 
-/** Where the quality gate is installed for this workspace, if anywhere. */
-export const qualityGateStatus = () =>
-  invoke<InstallScope | null>("quality_gate_status");
+/** Where the quality gate is installed for this workspace and provider, if anywhere. */
+export const qualityGateStatus = (provider: ProviderId) =>
+  invoke<InstallScope | null>("quality_gate_status", { provider });
 
-/** Exactly what installing the quality gate would write. Touches nothing. */
-export const qualityGateInstallPlan = (scope: InstallScope) =>
-  invoke<InstallPlan>("quality_gate_install_plan", { scope });
+/** Exactly what installing the quality gate for a provider would write. Touches nothing. */
+export const qualityGateInstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("quality_gate_install_plan", { provider, scope });
 
 /** Perform an install the user has confirmed; returns the new status. */
-export const installQualityGate = (scope: InstallScope) =>
-  invoke<InstallScope | null>("install_quality_gate", { scope });
+export const installQualityGate = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("install_quality_gate", { provider, scope });
+
+/**
+ * Exactly what turning the quality gate off for a provider would remove.
+ * Touches nothing. An empty `writes` means there was nothing installed.
+ */
+export const qualityGateUninstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("quality_gate_uninstall_plan", { provider, scope });
+
+/** Perform an uninstall the user has confirmed; returns the new status. */
+export const uninstallQualityGate = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("uninstall_quality_gate", { provider, scope });
 
 /** First-open setup: exactly what installing every hook at `scope` would write. */
 export const setupInstallPlan = (scope: InstallScope) =>

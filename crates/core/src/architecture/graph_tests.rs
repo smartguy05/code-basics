@@ -170,6 +170,7 @@ fn an_arch_graph_serialises_with_the_keys_the_ui_reads() {
         EdgeKind::PackageDependency,
         EdgeKind::Contains,
         EdgeKind::DataAccess,
+        EdgeKind::ServiceCall,
     ]
     .iter()
     .map(|kind| serde_json::to_value(kind).unwrap())
@@ -180,7 +181,8 @@ fn an_arch_graph_serialises_with_the_keys_the_ui_reads() {
             "projectReference",
             "packageDependency",
             "contains",
-            "dataAccess"
+            "dataAccess",
+            "serviceCall"
         ],
         "src/ipc/types.ts spells the EdgeKind union by hand — update it with this test"
     );
@@ -708,9 +710,11 @@ fn a_workspace_protocol_dependency_matching_no_project_is_reported() {
 }
 
 #[test]
-fn a_pnpm_workspace_file_is_reported_because_its_members_are_not_read() {
-    // Not parsing YAML is defensible; silently dropping the containment of the
-    // commonest monorepo layout in the JS ecosystem is not.
+fn a_pnpm_workspace_draws_containment_from_its_packages_globs() {
+    // The commonest monorepo layout in the JS ecosystem keeps its member globs
+    // in `pnpm-workspace.yaml`, not in `package.json`. Reading that file is the
+    // honest fix: a pnpm workspace yields a container holding the members its
+    // own `packages:` list expands to.
     let (_dir, ws) = scanned(&[
         ("pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n"),
         (
@@ -721,11 +725,19 @@ fn a_pnpm_workspace_file_is_reported_because_its_members_are_not_read() {
 
     let graph = project_graph(&ws);
 
-    assert_eq!(graph.warnings.len(), 1, "{:?}", graph.warnings);
     assert!(
-        graph.warnings[0].contains("pnpm-workspace.yaml"),
-        "the warning must name the file sitting in the root: {}",
-        graph.warnings[0]
+        graph
+            .nodes
+            .iter()
+            .any(|n| n.id == "workspace:pnpm-workspace.yaml" && n.kind == ArchKind::Solution),
+        "a pnpm workspace container node must exist: {:?}",
+        graph.nodes
+    );
+    assert!(
+        edges_of(&graph, EdgeKind::Contains)
+            .contains(&("workspace:pnpm-workspace.yaml", id_of(&ws, "web"))),
+        "the container must hold the member its packages glob expands to: {:?}",
+        graph.edges
     );
 }
 
@@ -736,10 +748,10 @@ fn a_workspaces_key_pnpm_ignores_is_never_drawn_as_containment() {
     // `packages/*` glob in `package.json` contributed nothing — pnpm prints
     // "The \"workspaces\" field in package.json is not supported by pnpm".
     //
-    // So the boxes the `workspaces` key produces are membership pnpm does not
-    // recognise. Drawing them puts real members outside the container and gives
-    // the container a label from a file the package manager ignored, which is
-    // worse than drawing no container at all.
+    // So membership is drawn from `pnpm-workspace.yaml`: the container is
+    // `workspace:pnpm-workspace.yaml`, never `workspace:package.json`, and it
+    // holds exactly the members that file's globs expand to. The ignored
+    // `workspaces` key is reported so a reader knows it went unused.
     let (_dir, ws) = scanned(&[
         (
             "package.json",
@@ -762,15 +774,17 @@ fn a_workspaces_key_pnpm_ignores_is_never_drawn_as_containment() {
     let graph = project_graph(&ws);
 
     assert!(
-        edges_of(&graph, EdgeKind::Contains).is_empty(),
-        "no containment may be drawn from a key the workspace's package manager \
-         ignores: {:?}",
-        graph.edges
-    );
-    assert!(
         !graph.nodes.iter().any(|n| n.id == "workspace:package.json"),
-        "the container's own label came from the ignored file: {:?}",
+        "the container's own label must not come from the ignored file: {:?}",
         graph.nodes
+    );
+
+    let contains = edges_of(&graph, EdgeKind::Contains);
+    assert!(
+        contains.contains(&("workspace:pnpm-workspace.yaml", id_of(&ws, "web")))
+            && contains.contains(&("workspace:pnpm-workspace.yaml", id_of(&ws, "@acme/cli"))),
+        "the pnpm container must hold the members its own globs expand to: {:?}",
+        graph.edges
     );
 
     assert_eq!(graph.warnings.len(), 1, "{:?}", graph.warnings);
@@ -778,11 +792,123 @@ fn a_workspaces_key_pnpm_ignores_is_never_drawn_as_containment() {
     assert!(
         warning.contains("pnpm-workspace.yaml") && warning.contains("package.json"),
         "the warning must name both files, so a reader knows which list was \
-         abandoned and which was never read: {warning}"
+         ignored and which supplied the members: {warning}"
     );
     assert!(
         warning.contains("packages/*"),
-        "the warning must quote the patterns that were not drawn: {warning}"
+        "the warning must quote the ignored patterns: {warning}"
+    );
+}
+
+#[test]
+fn a_pnpm_workspace_expands_multiple_globs_and_excludes_non_node_dirs() {
+    // Multiple `packages:` entries all contribute, and a directory that is not
+    // a node project is never swept in even when a glob would match its path.
+    let (_dir, ws) = scanned(&[
+        (
+            "pnpm-workspace.yaml",
+            "packages:\n  - 'packages/*'\n  - 'apps/*'\n",
+        ),
+        (
+            "packages/web/package.json",
+            r#"{ "name": "web", "scripts": { "dev": "vite" } }"#,
+        ),
+        (
+            "apps/api/package.json",
+            r#"{ "name": "@acme/api", "scripts": { "start": "node ." } }"#,
+        ),
+        // A .NET project under a matched glob path: matched by the pattern but
+        // not a node project, so it is not a member.
+        (
+            "packages/svc/svc.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>",
+        ),
+    ]);
+
+    let graph = project_graph(&ws);
+
+    let contains = edges_of(&graph, EdgeKind::Contains);
+    assert!(
+        contains.contains(&("workspace:pnpm-workspace.yaml", id_of(&ws, "web")))
+            && contains.contains(&("workspace:pnpm-workspace.yaml", id_of(&ws, "@acme/api"))),
+        "both globs must contribute their node members: {:?}",
+        graph.edges
+    );
+    assert!(
+        !contains.contains(&("workspace:pnpm-workspace.yaml", id_of(&ws, "svc"))),
+        "a non-node directory must never be swept into a node workspace container: {:?}",
+        graph.edges
+    );
+}
+
+#[test]
+fn a_pnpm_glob_that_matches_nothing_draws_no_container() {
+    // Mirrors npm's silence: a `packages:` glob that expands to no discovered
+    // project invents neither a container node nor a warning.
+    let (_dir, ws) = scanned(&[
+        ("pnpm-workspace.yaml", "packages:\n  - 'services/*'\n"),
+        (
+            "packages/web/package.json",
+            r#"{ "name": "web", "scripts": { "dev": "vite" } }"#,
+        ),
+    ]);
+
+    let graph = project_graph(&ws);
+
+    assert!(
+        !graph
+            .nodes
+            .iter()
+            .any(|n| n.id == "workspace:pnpm-workspace.yaml"),
+        "a glob matching no project must draw no container: {:?}",
+        graph.nodes
+    );
+    assert!(
+        edges_of(&graph, EdgeKind::Contains).is_empty(),
+        "a glob matching no project must draw no containment: {:?}",
+        graph.edges
+    );
+    assert!(
+        graph.warnings.is_empty(),
+        "a glob matching nothing is silence, not a warning: {:?}",
+        graph.warnings
+    );
+}
+
+#[test]
+fn an_unparseable_pnpm_workspace_yaml_abstains_with_a_named_warning() {
+    // Not parsing YAML is defensible; silently pretending a broken file names no
+    // members is not. A file that cannot be read for its `packages:` globs
+    // abstains — no container invented — and says so, naming the file.
+    let (_dir, ws) = scanned(&[
+        // A tab where YAML forbids one: unparseable as a mapping.
+        ("pnpm-workspace.yaml", "packages:\n\t- oops\n"),
+        (
+            "packages/web/package.json",
+            r#"{ "name": "web", "scripts": { "dev": "vite" } }"#,
+        ),
+    ]);
+
+    let graph = project_graph(&ws);
+
+    assert!(
+        !graph
+            .nodes
+            .iter()
+            .any(|n| n.id == "workspace:pnpm-workspace.yaml"),
+        "no container may be invented from a file that could not be parsed: {:?}",
+        graph.nodes
+    );
+    assert!(
+        edges_of(&graph, EdgeKind::Contains).is_empty(),
+        "no containment may be drawn from a file that could not be parsed: {:?}",
+        graph.edges
+    );
+    assert_eq!(graph.warnings.len(), 1, "{:?}", graph.warnings);
+    assert!(
+        graph.warnings[0].contains("pnpm-workspace.yaml"),
+        "the warning must name the file that could not be read: {}",
+        graph.warnings[0]
     );
 }
 

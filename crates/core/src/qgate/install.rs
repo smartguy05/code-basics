@@ -15,9 +15,12 @@ use anyhow::Result;
 use serde_json::{json, Map, Value};
 
 use crate::intents::providers::{
-    claude_code, settings_merge, InstallPlan, InstallScope, PlannedWrite,
+    claude_code, codex, settings_merge, InstallPlan, InstallScope, PlannedWrite,
 };
 use crate::intents::ProviderId;
+
+use anyhow::anyhow;
+use std::path::PathBuf;
 
 /// Present in the gate's command line, so its settings entry can be recognised
 /// again without depending on its exact text. Distinct from the recorder's
@@ -31,15 +34,27 @@ const EVENTS: &[&str] = &["Stop"];
 /// instant, so this is generous next to the recorder's 5s.
 const TIMEOUT_SECS: u64 = 180;
 
-/// Where the gate is installed for this workspace, if anywhere. Project wins
-/// over user, matching the recorder's status precedence.
+/// Where the gate is installed for this workspace, if anywhere, for Claude Code.
+/// Project wins over user, matching the recorder's status precedence.
 ///
-/// `home` overrides `~/.claude` for tests; production passes `None`.
+/// `home` overrides `~/.claude` for tests; production passes `None`. Thin wrapper
+/// over the provider-aware [`status_for`], kept for existing callers.
 pub fn status(root: &Path, home: Option<&Path>) -> Option<InstallScope> {
-    if settings_merge::is_installed(&claude_code::project_settings_path(root), EVENTS, MARKER) {
-        return Some(InstallScope::Project);
+    status_for(ProviderId::ClaudeCode, root, home)
+}
+
+/// Where the gate is installed for this workspace, if anywhere, for `provider`.
+/// Project wins over user.
+///
+/// `home` overrides the provider's home directory for tests; production passes
+/// `None`.
+pub fn status_for(provider: ProviderId, root: &Path, home: Option<&Path>) -> Option<InstallScope> {
+    if let Ok(project) = settings_path(provider, root, InstallScope::Project, home) {
+        if settings_merge::is_installed(&project, EVENTS, MARKER) {
+            return Some(InstallScope::Project);
+        }
     }
-    if let Some(user) = user_settings(home) {
+    if let Ok(user) = settings_path(provider, root, InstallScope::User, home) {
         if settings_merge::is_installed(&user, EVENTS, MARKER) {
             return Some(InstallScope::User);
         }
@@ -47,22 +62,68 @@ pub fn status(root: &Path, home: Option<&Path>) -> Option<InstallScope> {
     None
 }
 
-/// The user-scope settings path, or `None` when the home directory is unknown.
-fn user_settings(home: Option<&Path>) -> Option<std::path::PathBuf> {
+/// The file a `provider`'s gate hook is written into for a given scope.
+///
+/// The gate's `Stop` entry is identical for both providers — the two differ only
+/// in where the file lives (Claude Code nests hooks in `settings.json`; Codex
+/// gives them a file of their own) — so a single settings-shaped merge serves
+/// both. Exposed so the uninstall path can target the same file the install did.
+pub fn settings_path(
+    provider: ProviderId,
+    root: &Path,
+    scope: InstallScope,
+    home: Option<&Path>,
+) -> Result<PathBuf> {
+    match provider {
+        ProviderId::ClaudeCode => match scope {
+            InstallScope::Project => Ok(claude_code::project_settings_path(root)),
+            InstallScope::User => claude_user_settings(home)
+                .ok_or_else(|| anyhow!("could not locate the Claude Code home directory")),
+        },
+        ProviderId::Codex => match scope {
+            InstallScope::Project => Ok(root.join(".codex").join("hooks.json")),
+            InstallScope::User => home
+                .map(Path::to_path_buf)
+                .or_else(codex::codex_home)
+                .map(|h| h.join("hooks.json"))
+                .ok_or_else(|| anyhow!("could not locate the Codex home directory")),
+        },
+        ProviderId::User => Err(anyhow!(
+            "the quality gate cannot be installed for the user pseudo-provider"
+        )),
+    }
+}
+
+/// The Claude Code user-scope settings path, or `None` when the home directory
+/// is unknown.
+fn claude_user_settings(home: Option<&Path>) -> Option<PathBuf> {
     home.map(Path::to_path_buf)
         .or_else(claude_code::claude_home)
         .map(|h| claude_code::user_settings_path(&h))
 }
 
-/// Everything installing the gate would do, computed without touching disk.
+/// Everything installing the gate would do for Claude Code, computed without
+/// touching disk. Thin wrapper over the provider-aware [`install_plan_for`].
 ///
 /// `home` overrides `~/.claude` for tests; production passes `None`.
 pub fn install_plan(root: &Path, scope: InstallScope, home: Option<&Path>) -> Result<InstallPlan> {
-    let path = match scope {
-        InstallScope::Project => claude_code::project_settings_path(root),
-        InstallScope::User => user_settings(home)
-            .ok_or_else(|| anyhow::anyhow!("could not locate the Claude Code home directory"))?,
-    };
+    install_plan_for(ProviderId::ClaudeCode, root, scope, home)
+}
+
+/// Everything installing the gate would do for `provider`, computed without
+/// touching disk.
+///
+/// The gate itself is provider-agnostic (`quality-gate` takes no `--provider`
+/// flag), so the only things that vary by provider are the target path, the
+/// plan's `provider` field, and the caveats. `home` overrides the provider's
+/// home directory for tests; production passes `None`.
+pub fn install_plan_for(
+    provider: ProviderId,
+    root: &Path,
+    scope: InstallScope,
+    home: Option<&Path>,
+) -> Result<InstallPlan> {
+    let path = settings_path(provider, root, scope, home)?;
 
     // A project-scope hook names its workspace; a user-scope one fires
     // everywhere and resolves the workspace from the payload instead.
@@ -70,14 +131,60 @@ pub fn install_plan(root: &Path, scope: InstallScope, home: Option<&Path>) -> Re
     let (content, merges_existing) = settings_merge::merged_text(&path, &entries_for(pin), MARKER)?;
 
     Ok(InstallPlan {
-        provider: ProviderId::ClaudeCode,
+        provider,
         scope,
         writes: vec![PlannedWrite {
             path,
             content,
             merges_existing,
         }],
-        caveats: caveats(scope),
+        caveats: caveats_for(provider, scope, root, home),
+    })
+}
+
+/// Everything uninstalling the gate would do for Claude Code, computed without
+/// touching disk. Thin wrapper over the provider-aware [`uninstall_plan_for`].
+///
+/// `home` overrides `~/.claude` for tests; production passes `None`.
+pub fn uninstall_plan(
+    root: &Path,
+    scope: InstallScope,
+    home: Option<&Path>,
+) -> Result<InstallPlan> {
+    uninstall_plan_for(ProviderId::ClaudeCode, root, scope, home)
+}
+
+/// Everything uninstalling the gate for `provider` would do, computed without
+/// touching disk.
+///
+/// Targets the same settings file [`install_plan_for`] wrote, and removes only
+/// the gate's own marked `Stop` entry via [`settings_merge::plan_removal`]. The
+/// intent recorder's `Stop` entry carries a *distinct* marker, so it survives
+/// untouched — which is the whole reason the two markers differ. A file that
+/// holds no gate entry (or does not exist) yields **zero** writes, so the UI can
+/// say "nothing to remove" rather than rewrite an unchanged file.
+pub fn uninstall_plan_for(
+    provider: ProviderId,
+    root: &Path,
+    scope: InstallScope,
+    home: Option<&Path>,
+) -> Result<InstallPlan> {
+    let path = settings_path(provider, root, scope, home)?;
+
+    let writes = match settings_merge::plan_removal(&path, EVENTS, MARKER)? {
+        Some(content) => vec![PlannedWrite {
+            path,
+            content,
+            merges_existing: true,
+        }],
+        None => Vec::new(),
+    };
+
+    Ok(InstallPlan {
+        provider,
+        scope,
+        writes,
+        caveats: Vec::new(),
     })
 }
 
@@ -121,7 +228,21 @@ fn command_line(workspace: Option<&Path>) -> String {
     line
 }
 
-/// What to warn the user about before writing.
+/// What to warn the user about before writing, for `provider`.
+fn caveats_for(
+    provider: ProviderId,
+    scope: InstallScope,
+    root: &Path,
+    home: Option<&Path>,
+) -> Vec<String> {
+    match provider {
+        ProviderId::ClaudeCode => caveats(scope),
+        ProviderId::Codex => codex_caveats(scope, root, home),
+        ProviderId::User => Vec::new(),
+    }
+}
+
+/// What to warn the user about before writing Claude Code's settings.
 fn caveats(scope: InstallScope) -> Vec<String> {
     match scope {
         InstallScope::Project => vec![
@@ -136,6 +257,42 @@ fn caveats(scope: InstallScope) -> Vec<String> {
                 .to_string(),
         ],
     }
+}
+
+/// What to warn the user about before writing Codex's `hooks.json`.
+///
+/// Two conditions are Codex-specific and both leave the configuration looking
+/// correct while doing nothing, so they are surfaced rather than assumed away:
+/// an untrusted project (checked via [`codex::is_trusted_in`]) and Codex's
+/// first-run review of a new command hook.
+fn codex_caveats(scope: InstallScope, root: &Path, home: Option<&Path>) -> Vec<String> {
+    let mut caveats = Vec::new();
+    match scope {
+        InstallScope::Project => {
+            caveats.push(
+                "This writes .codex/hooks.json, which is committed and shared with \
+                 everyone who clones the repository."
+                    .to_string(),
+            );
+            if !codex::is_trusted_in(home, root) {
+                caveats.push(
+                    "Codex ignores this repository's .codex/ directory until the project \
+                     is trusted. Open it in Codex once and accept the trust prompt."
+                        .to_string(),
+                );
+            }
+        }
+        InstallScope::User => {
+            caveats.push(
+                "A user-level hook runs when any repository's agent turn ends. The gate \
+                 abstains where the tooling is absent (no `typecheck` script, no \
+                 Cargo.toml), so it is safe, but it applies to every repository you open."
+                    .to_string(),
+            );
+        }
+    }
+    caveats.push("Codex asks you to review a new command hook the first time it runs.".to_string());
+    caveats
 }
 
 #[cfg(test)]

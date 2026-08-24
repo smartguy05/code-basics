@@ -246,7 +246,9 @@ export function App() {
       return;
     }
     let live = true;
-    void Promise.all([api.intentCaptureStatus(), api.qualityGateStatus()])
+    // The combined first-open setup installs the gate as Claude Code's Stop hook,
+    // so the prompt decision reads that provider's gate status.
+    void Promise.all([api.intentCaptureStatus(), api.qualityGateStatus("claudeCode")])
       .then(([providers, gate]) => {
         if (live) setShowSetup(shouldPrompt(providers, gate, localStorage, root));
       })

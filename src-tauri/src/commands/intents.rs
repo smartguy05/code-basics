@@ -266,6 +266,34 @@ pub async fn enable_intent_capture(
     Ok(providers::statuses(&root))
 }
 
+/// Exactly what disabling `provider`'s capture would remove. Touches nothing.
+///
+/// A zero-write plan means there was nothing installed for that agent.
+#[tauri::command]
+pub async fn intent_uninstall_plan(
+    state: State<'_, AppState>,
+    provider: ProviderId,
+    scope: InstallScope,
+) -> Result<InstallPlan, String> {
+    let root = state.workspace_root()?;
+    providers::uninstall_plan(provider, &root, scope).map_err(|e| format!("{e:#}"))
+}
+
+/// Perform an uninstall the user has confirmed, returning the refreshed statuses.
+#[tauri::command]
+pub async fn disable_intent_capture(
+    state: State<'_, AppState>,
+    provider: ProviderId,
+    scope: InstallScope,
+) -> Result<Vec<ProviderStatus>, String> {
+    let root = state.workspace_root()?;
+
+    let plan = providers::uninstall_plan(provider, &root, scope).map_err(|e| format!("{e:#}"))?;
+    providers::apply_writes(&plan.writes).map_err(|e| format!("{e:#}"))?;
+
+    Ok(providers::statuses(&root))
+}
+
 /// Read whatever the agents already recorded, with no setup at all.
 ///
 /// Returns how many records were imported. Existing records are left alone:

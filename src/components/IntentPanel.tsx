@@ -185,6 +185,8 @@ export interface IntentPanelProps {
     file?: GroupFile,
   ) => Promise<RejectSummary | null>;
   onEnable: (provider: ProviderId, scope: InstallScope) => Promise<void>;
+  /** Turn capture off for one provider at the scope it is installed. */
+  onDisable: (provider: ProviderId, scope: InstallScope) => Promise<void>;
   /** Resolves with how many records the import found, so the panel can say so. */
   onImportHistory: () => Promise<number>;
   /** Write (or overwrite) the user's own intent for a card. */
@@ -223,6 +225,7 @@ export function IntentPanel({
   onRevertFile,
   onReject,
   onEnable,
+  onDisable,
   onImportHistory,
   onSetIntent,
   onClearIntent,
@@ -325,9 +328,10 @@ export function IntentPanel({
             providers={providers}
             busy={busy}
             onEnable={onEnable}
+            onDisable={onDisable}
             onImportHistory={runImport}
           />
-          <QualityGateSetup busy={busy} />
+          <QualityGateSetup providers={providers} busy={busy} />
         </>
       )}
 
@@ -871,19 +875,36 @@ function CaptureSetup({
   providers,
   busy,
   onEnable,
+  onDisable,
   onImportHistory,
 }: {
   providers: ProviderStatus[];
   busy: boolean;
   onEnable: (provider: ProviderId, scope: InstallScope) => Promise<void>;
+  onDisable: (provider: ProviderId, scope: InstallScope) => Promise<void>;
   onImportHistory: () => Promise<void>;
 }) {
-  const [plan, setPlan] = useState<InstallPlan | null>(null);
+  // A pending preview is either an install or an uninstall; the confirm applies
+  // whichever kind was previewed. An empty uninstall plan (nothing to remove)
+  // is shown as such rather than offered as a write of zero files.
+  const [pending, setPending] = useState<{ plan: InstallPlan; kind: "enable" | "disable" } | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
+  const plan = pending?.plan ?? null;
 
   const preview = async (provider: ProviderId, scope: InstallScope) => {
     try {
-      setPlan(await api.intentInstallPlan(provider, scope));
+      setPending({ plan: await api.intentInstallPlan(provider, scope), kind: "enable" });
+      setError(null);
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
+  };
+
+  const previewDisable = async (provider: ProviderId, scope: InstallScope) => {
+    try {
+      setPending({ plan: await api.intentUninstallPlan(provider, scope), kind: "disable" });
       setError(null);
     } catch (e) {
       setError(api.errorMessage(e));
@@ -891,10 +912,12 @@ function CaptureSetup({
   };
 
   const confirm = async () => {
-    if (!plan) return;
+    if (!pending) return;
     try {
-      await onEnable(plan.provider, plan.scope);
-      setPlan(null);
+      const { plan, kind } = pending;
+      if (kind === "enable") await onEnable(plan.provider, plan.scope);
+      else await onDisable(plan.provider, plan.scope);
+      setPending(null);
       setError(null);
     } catch (e) {
       setError(api.errorMessage(e));
@@ -969,6 +992,13 @@ function CaptureSetup({
               >
                 Re-apply setup…
               </button>
+              <button
+                disabled={busy}
+                onClick={() => void previewDisable(status.provider, status.capture!)}
+                title="Remove this agent's intent hooks, previewing the exact files first. The shared commit hooks stay while the other agent still uses them, and the instruction note is left in place."
+              >
+                Disable…
+              </button>
             </div>
           )}
         </div>
@@ -984,12 +1014,24 @@ function CaptureSetup({
 
       {error && <div className="error" style={{ fontSize: 11 }}>{error}</div>}
 
-      {plan && (
+      {plan && plan.writes.length === 0 && (
+        <div className="muted" style={{ fontSize: 11, padding: "6px 8px" }}>
+          Nothing to remove — this agent's hooks are not installed at that scope.
+          <div className="actions">
+            <button disabled={busy} onClick={() => setPending(null)}>
+              OK
+            </button>
+          </div>
+        </div>
+      )}
+
+      {plan && plan.writes.length > 0 && (
         <PlanPreview
           plan={plan}
           busy={busy}
+          confirmLabel={pending?.kind === "disable" ? "Disable" : undefined}
           onConfirm={() => void confirm()}
-          onCancel={() => setPlan(null)}
+          onCancel={() => setPending(null)}
         />
       )}
     </div>
@@ -998,23 +1040,62 @@ function CaptureSetup({
 
 /**
  * Turning the quality gate on. Installed the same way capture is — a previewed
- * plan applied to `.claude/settings.json` — but self-contained: it owns its own
- * status, since it is a single Claude Code hook rather than a per-agent matrix.
+ * plan applied to each agent's hook file — and, like the capture block above,
+ * listed per detected agent: the same Stop-hook gate can live in Claude Code's
+ * `settings.json` or Codex's `hooks.json`.
  *
  * The gate blocks a turn that ends with a failing `pnpm typecheck` / `cargo fmt`
  * on changed files, an unresolved rejection note, and reminds (without blocking)
  * when source changed but no `.memories/` file did.
  */
-function QualityGateSetup({ busy }: { busy: boolean }) {
+function QualityGateSetup({
+  providers,
+  busy,
+}: {
+  providers: ProviderStatus[];
+  busy: boolean;
+}) {
+  const detected = providers.filter((p) => p.detected && p.provider !== "user");
+
+  return (
+    <div className="intent-panel">
+      {detected.length === 0 && (
+        <div className="muted" style={{ fontSize: 12 }}>
+          No coding agent detected on this machine.
+        </div>
+      )}
+
+      {detected.map((status) => (
+        <QualityGateProvider key={status.provider} provider={status.provider} busy={busy} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The quality gate for one agent. It owns its own installed-scope status, since
+ * a gate is a single Stop hook per provider rather than a per-agent matrix.
+ */
+function QualityGateProvider({
+  provider,
+  busy,
+}: {
+  provider: ProviderId;
+  busy: boolean;
+}) {
   const [scope, setScope] = useState<InstallScope | null>(null);
-  const [plan, setPlan] = useState<InstallPlan | null>(null);
+  // A pending preview is an install or an uninstall; confirm applies its kind.
+  const [pending, setPending] = useState<{ plan: InstallPlan; kind: "enable" | "disable" } | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const plan = pending?.plan ?? null;
 
   useEffect(() => {
     let live = true;
     void api
-      .qualityGateStatus()
+      .qualityGateStatus(provider)
       .then((s) => {
         if (live) {
           setScope(s);
@@ -1025,11 +1106,20 @@ function QualityGateSetup({ busy }: { busy: boolean }) {
     return () => {
       live = false;
     };
-  }, []);
+  }, [provider]);
 
   const preview = async (target: InstallScope) => {
     try {
-      setPlan(await api.qualityGateInstallPlan(target));
+      setPending({ plan: await api.qualityGateInstallPlan(provider, target), kind: "enable" });
+      setError(null);
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
+  };
+
+  const previewDisable = async (target: InstallScope) => {
+    try {
+      setPending({ plan: await api.qualityGateUninstallPlan(provider, target), kind: "disable" });
       setError(null);
     } catch (e) {
       setError(api.errorMessage(e));
@@ -1037,10 +1127,15 @@ function QualityGateSetup({ busy }: { busy: boolean }) {
   };
 
   const confirm = async () => {
-    if (!plan) return;
+    if (!pending) return;
     try {
-      setScope(await api.installQualityGate(plan.scope));
-      setPlan(null);
+      const { plan, kind } = pending;
+      setScope(
+        kind === "enable"
+          ? await api.installQualityGate(provider, plan.scope)
+          : await api.uninstallQualityGate(provider, plan.scope),
+      );
+      setPending(null);
       setError(null);
     } catch (e) {
       setError(api.errorMessage(e));
@@ -1050,45 +1145,45 @@ function QualityGateSetup({ busy }: { busy: boolean }) {
   if (!loaded) return null;
 
   return (
-    <div className="intent-panel">
-      <div className="provider">
-        <div className="provider-name">
-          <strong>Quality gate</strong>
-          {scope ? (
-            <span className="badge" title={`Stop hook installed at ${scope} level`}>
-              on ({scope})
-            </span>
-          ) : (
-            <span className="faint" style={{ fontSize: 11 }}>
-              off
-            </span>
-          )}
-        </div>
+    <div className="provider">
+      <div className="provider-name">
+        <strong>Quality gate — {PROVIDER_LABEL[provider]}</strong>
+        {scope ? (
+          <span className="badge" title={`Stop hook installed at ${scope} level`}>
+            on ({scope})
+          </span>
+        ) : (
+          <span className="faint" style={{ fontSize: 11 }}>
+            off
+          </span>
+        )}
+      </div>
 
-        <div className="faint" style={{ fontSize: 11 }}>
-          Blocks a turn that ends with a failing typecheck / cargo fmt on changed
-          files, or an unresolved rejection note; reminds about `.memories/`.
-        </div>
+      <div className="faint" style={{ fontSize: 11 }}>
+        Blocks a turn that ends with a failing typecheck / cargo fmt on changed
+        files, or an unresolved rejection note; reminds about `.memories/`.
+      </div>
 
-        <div className="actions">
-          {!scope ? (
-            <>
-              <button
-                disabled={busy}
-                onClick={() => void preview("project")}
-                title="Write the Stop hook into this repository, shared with anyone who clones it"
-              >
-                Enable for this repo…
-              </button>
-              <button
-                disabled={busy}
-                onClick={() => void preview("user")}
-                title="Write the Stop hook into your own configuration, covering every repository"
-              >
-                Enable for me…
-              </button>
-            </>
-          ) : (
+      <div className="actions">
+        {!scope ? (
+          <>
+            <button
+              disabled={busy}
+              onClick={() => void preview("project")}
+              title="Write the Stop hook into this repository, shared with anyone who clones it"
+            >
+              Enable for this repo…
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => void preview("user")}
+              title="Write the Stop hook into your own configuration, covering every repository"
+            >
+              Enable for me…
+            </button>
+          </>
+        ) : (
+          <>
             <button
               disabled={busy}
               onClick={() => void preview(scope)}
@@ -1096,18 +1191,37 @@ function QualityGateSetup({ busy }: { busy: boolean }) {
             >
               Re-apply…
             </button>
-          )}
-        </div>
+            <button
+              disabled={busy}
+              onClick={() => void previewDisable(scope)}
+              title="Remove the quality-gate Stop hook, previewing the exact change first. The intent recorder's own Stop hook is left in place."
+            >
+              Turn off…
+            </button>
+          </>
+        )}
       </div>
 
       {error && <div className="error" style={{ fontSize: 11 }}>{error}</div>}
 
-      {plan && (
+      {plan && plan.writes.length === 0 && (
+        <div className="muted" style={{ fontSize: 11, padding: "6px 8px" }}>
+          Nothing to remove — the gate is not installed at that scope.
+          <div className="actions">
+            <button disabled={busy} onClick={() => setPending(null)}>
+              OK
+            </button>
+          </div>
+        </div>
+      )}
+
+      {plan && plan.writes.length > 0 && (
         <PlanPreview
           plan={plan}
           busy={busy}
+          confirmLabel={pending?.kind === "disable" ? "Turn off" : undefined}
           onConfirm={() => void confirm()}
-          onCancel={() => setPlan(null)}
+          onCancel={() => setPending(null)}
         />
       )}
     </div>

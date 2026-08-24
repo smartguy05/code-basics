@@ -4,10 +4,41 @@
 //! clobbering the other.
 
 use super::*;
-use crate::intents::providers::{apply_writes, claude_code::ClaudeCode, hooks_json};
+use crate::intents::providers::codex::Codex;
+use crate::intents::providers::{
+    apply_writes, claude_code::ClaudeCode, hooks_json, HistoryMined, ProviderStatus,
+};
 use crate::qgate;
 use std::fs;
+use std::path::PathBuf;
 use tempfile::tempdir;
+
+/// A Codex provider forced to report `detected`, pointed at a fixture home.
+///
+/// `setup_plan` reaches Codex only through the [`Provider`] trait, whose real
+/// methods resolve `$CODEX_HOME`; this shim drives the Codex branch of the plan
+/// hermetically, without touching the machine's real Codex home.
+struct DetectedCodex {
+    home: PathBuf,
+}
+
+impl Provider for DetectedCodex {
+    fn id(&self) -> ProviderId {
+        ProviderId::Codex
+    }
+    fn detected(&self) -> bool {
+        true
+    }
+    fn status(&self, root: &Path) -> ProviderStatus {
+        Codex::new().status_in(Some(&self.home), root)
+    }
+    fn install_plan(&self, root: &Path, scope: InstallScope) -> Result<InstallPlan> {
+        Codex::new().install_plan_in(Some(&self.home), root, scope)
+    }
+    fn history(&self, _root: &Path) -> Result<HistoryMined> {
+        Ok(HistoryMined::default())
+    }
+}
 
 fn detected_claude(home: &Path) -> Vec<Box<dyn Provider>> {
     // `detected()` is true when the home dir exists.
@@ -117,5 +148,50 @@ fn project_caveat_is_not_duplicated() {
     assert!(
         shared <= 1,
         "shared-file caveat not repeated (was {shared})"
+    );
+}
+
+/// When Codex intent capture is being installed, Codex keeps its hooks in a file
+/// of its own (`.codex/hooks.json`), and the gate's `Stop` entry must ride in
+/// that *same* write. Two independent [`PlannedWrite`]s to one path would make
+/// the second clobber the first at apply time, so this pins that the gate is
+/// chained into the existing Codex write rather than appended as a second one.
+#[test]
+fn the_gate_chains_into_codexs_single_hooks_write_not_a_second_one() {
+    let root = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let providers: Vec<Box<dyn Provider>> = vec![Box::new(DetectedCodex {
+        home: home.path().to_path_buf(),
+    })];
+
+    let plan = setup_plan(
+        root.path(),
+        InstallScope::Project,
+        &providers,
+        Some(home.path()),
+    )
+    .unwrap();
+
+    let codex_hooks = root.path().join(".codex").join("hooks.json");
+    let matching: Vec<_> = plan
+        .writes
+        .iter()
+        .filter(|w| w.path == codex_hooks)
+        .collect();
+    assert_eq!(
+        matching.len(),
+        1,
+        "exactly one .codex/hooks.json write, not two: {:?}",
+        plan.writes.iter().map(|w| &w.path).collect::<Vec<_>>()
+    );
+
+    let content = &matching[0].content;
+    assert!(
+        content.contains(hooks_json::MARKER),
+        "carries the intent-recorder marker"
+    );
+    assert!(
+        content.contains(qgate::install::MARKER),
+        "carries the gate marker in the same write"
     );
 }

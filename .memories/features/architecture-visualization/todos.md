@@ -27,14 +27,21 @@ contradicted the tree. Verified against the actual code on 2026-08-21:
 - ~~**Aspire `Projects.` identifier transform** — still unverified.~~ **DONE (WF1,
   2026-08-24, B6):** verified correct; pinned end-to-end by
   `an_aspire_add_project_resolves_a_hyphenated_project_name` + an ambiguity guard.
-- **`pnpm-workspace.yaml`** — half-supported on purpose; **being added in WF3 (B7):**
-  `yaml-rust2`, containment from `pnpm-workspace.yaml` `packages:` globs only.
+- ~~**`pnpm-workspace.yaml`** — half-supported on purpose~~ **DONE (WF3, 2026-08-24, B7):**
+  added `yaml-rust2`, containment drawn from `pnpm-workspace.yaml` `packages:` globs only
+  (package.json `workspaces` stays suppressed, matching pnpm); `SCANNER_VERSION` 2→3; the two
+  old abstain-pinning tests inverted.
 - ~~**`mermaidIdOf` (TS) mirrors `mermaid_id` (Rust)** with no cross-language drift guard.~~
   **DONE (WF1, 2026-08-24, B8):** cb-core `mermaid_id_matches_committed_fixture`
   generates+pins `fixtures/architecture/mermaid_ids.json`; vitest consumes it via a
   JSON import (no `node:fs` — see notes.md).
-- **No project→project arrow** for the MEDIUM `AddHttpClient`/`BaseAddress` evidence
-  (deliberate; would move to `signals/dotnet.rs` citing `launchSettings.json`).
+- ~~**No project→project arrow** for the MEDIUM `AddHttpClient`/`BaseAddress` evidence~~
+  **DONE (WF3, 2026-08-24, B9):** new `EdgeKind::ServiceCall` — the caller's `AddHttpClient`
+  `BaseAddress` matched against a callee's `launchSettings.json` `applicationUrl` (HIGH,
+  config-file evidence) draws a service→service arrow; never invents a node (guarded at draw
+  time in components.rs), evidence elided so no URL/credential leaks, ambiguous → warning.
+  Mermaid `--x` glyph + legend row; two "never drawn as an arrow" tests inverted.
+  **Rendering in the running app is still a manual-verification item.**
 - **Live verification:** a *non-empty component map* has never been produced from
   real code (this repo yields an empty one); clicking a box / opening a stored
   diagram in the built app is still the manual check from the last fix round.
