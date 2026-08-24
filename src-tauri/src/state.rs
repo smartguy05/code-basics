@@ -9,6 +9,7 @@ use cb_core::inspect::InspectGraph;
 use cb_core::lsp::session::LspHandle;
 use cb_core::model::TestRunResult;
 use cb_core::process::Supervisor;
+use cb_core::pty::PtyManager;
 use cb_core::symbols::index::SymbolIndex;
 use cb_core::workspace::Workspace;
 
@@ -17,6 +18,12 @@ pub struct AppState {
     /// The currently open workspace, if any.
     pub workspace: Mutex<Option<Workspace>>,
     pub supervisor: Supervisor,
+    /// The interactive floating terminals. A cheap-to-clone handle over its own
+    /// map of PTY sessions, keyed by an id minted per open — the same shape as
+    /// `supervisor`, and like it not a per-workspace cache: a terminal outlives
+    /// a rescan and is not tied to the open root, so nothing here is cleared by
+    /// `set_workspace`.
+    pub pty: PtyManager,
     /// The most recent result per test configuration, so "re-run failed" knows
     /// which tests to name.
     pub last_test_run: Mutex<HashMap<String, TestRunResult>>,

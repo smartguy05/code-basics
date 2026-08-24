@@ -22,6 +22,7 @@ pub mod invocation;
 pub mod lsp;
 pub mod model;
 pub mod process;
+pub mod pty;
 pub mod qgate;
 pub mod review;
 pub mod rules;

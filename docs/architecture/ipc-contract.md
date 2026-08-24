@@ -2,7 +2,7 @@
 
 Every value crossing between Rust and TypeScript is defined twice:
 
-- **Rust:** `crates/core/src/model.rs` (plus `workspace.rs`, `files.rs`, `git/repo.rs`, `git/patch.rs`, `process/mod.rs`, `inspect/model.rs`, `lsp/model.rs`, and the small response structs in `src-tauri/src/commands/`), all deriving `Serialize`/`Deserialize` with `#[serde(rename_all = "camelCase")]`.
+- **Rust:** `crates/core/src/model.rs` (plus `workspace.rs`, `files.rs`, `git/repo.rs`, `git/patch.rs`, `process/mod.rs`, `pty/model.rs`, `inspect/model.rs`, `lsp/model.rs`, and the small response structs in `src-tauri/src/commands/`), all deriving `Serialize`/`Deserialize` with `#[serde(rename_all = "camelCase")]`.
 - **TypeScript:** `src/ipc/types.ts`, written **by hand** against those camelCase names.
 
 There is no codegen wired up. Every Rust model type also derives `specta::Type`, which keeps the door open to generating the TypeScript later, but today the mirror is manual.
@@ -16,7 +16,7 @@ A renamed Rust field would serialise happily and only surface as `undefined` in 
 - `enum_variants_serialise_in_camel_case`
 - `optional_config_fields_are_omitted_rather_than_null`
 
-Renaming a Rust field fails one of these tests, and the failure message points at the TypeScript file that needs the matching edit. Crossing types defined outside `model.rs` pin their keys beside their own module instead — `workspace_serialises_with_the_keys_the_ui_reads` in `workspace.rs`, `dir_entry_serialises_with_the_keys_the_ui_reads` in `files.rs`, and the inspector's types in `inspect/model_tests.rs`:
+Renaming a Rust field fails one of these tests, and the failure message points at the TypeScript file that needs the matching edit. Crossing types defined outside `model.rs` pin their keys beside their own module instead — `workspace_serialises_with_the_keys_the_ui_reads` in `workspace.rs`, `dir_entry_serialises_with_the_keys_the_ui_reads` in `files.rs`, the terminal's `TerminalEvent` in `pty/model.rs` (each variant's keys pinned, and a signalled exit kept as an explicit `null` code — the same "no `skip_serializing_if`" rule as `ProcessEvent`), and the inspector's types in `inspect/model_tests.rs`:
 
 - `inspect_node_serialises_with_the_keys_the_ui_reads`
 - `inspect_graph_serialises_with_the_keys_the_ui_reads`

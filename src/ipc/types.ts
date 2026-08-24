@@ -215,6 +215,18 @@ export type ProcessEvent =
   | { type: "exited"; code: number | null; success: boolean; durationMs: number; cancelled: boolean }
   | { type: "failed"; message: string };
 
+/**
+ * Events from an interactive terminal session (`cb_core::pty`). Deliberately
+ * not {@link ProcessEvent}: a PTY merges what would be stdout and stderr onto
+ * one stream (no `stream` field), and the shell prints its own prompt (no
+ * `started` banner). Mirrors the Rust `TerminalEvent`, pinned by
+ * `crates/core/src/pty/model.rs`.
+ */
+export type TerminalEvent =
+  | { type: "output"; text: string }
+  | { type: "exited"; code: number | null; success: boolean }
+  | { type: "failed"; message: string };
+
 // ---------------------------------------------------------------------------
 // Git
 // ---------------------------------------------------------------------------

@@ -12,6 +12,8 @@ import { ReviewPanel } from "./components/ReviewPanel";
 import { SearchEverywhere } from "./components/SearchEverywhere";
 import { SetupPrompt } from "./components/SetupPrompt";
 import { shouldPrompt, setDismissed } from "./components/setupPromptLogic";
+import { TerminalPanel } from "./components/TerminalPanel";
+import { makeTerminal, type TerminalDescriptor } from "./components/terminalLogic";
 import { TestsView } from "./views/TestsView";
 import * as api from "./ipc/api";
 import type { AgentMode } from "./ipc/api";
@@ -134,6 +136,20 @@ export function App() {
   // The finished report, passed back to the Changes tab so each intent card can
   // show the deltas attributed to it.
   const [behavioralReport, setBehavioralReport] = useState<BehavioralReport | null>(null);
+
+  /**
+   * The open floating terminals. Hosted at app level (like the agent panel) so
+   * they survive tab switches and keep their PTY streaming while minimized.
+   * The sequence counter only ever climbs, so a title never names two sessions.
+   */
+  const [terminals, setTerminals] = useState<TerminalDescriptor[]>([]);
+  const terminalSeq = useRef(0);
+  const openTerminal = () => {
+    terminalSeq.current += 1;
+    setTerminals((open) => [...open, makeTerminal(terminalSeq.current)]);
+  };
+  const closeTerminal = (key: string) =>
+    setTerminals((open) => open.filter((t) => t.key !== key));
 
   /** Open the before/after window for a config; `verify` chains it to the agent. */
   const openBehavioral = (configId: string, httpFiles: string[] | null, verify: boolean) =>
@@ -374,6 +390,12 @@ export function App() {
           {workspace.projects.length} project
           {workspace.projects.length === 1 ? "" : "s"}
         </span>
+        <button
+          onClick={openTerminal}
+          title="Open a floating terminal (run Claude Code, a shell, anything)"
+        >
+          + Terminal
+        </button>
         <button onClick={rescan} title="Re-detect projects and configurations">
           Rescan
         </button>
@@ -517,6 +539,19 @@ export function App() {
           onClose={() => setBehavioralPanel(null)}
         />
       )}
+
+      {/* Floating interactive terminals. Hosted here so a running Claude Code
+          session (or any shell) survives tab switches and minimizes to a pill.
+          Each owns its own PTY and cleans it up on close/unmount. `index` feeds
+          the cascade offset so several opened in a row do not stack exactly. */}
+      {terminals.map((t, index) => (
+        <TerminalPanel
+          key={t.key}
+          title={t.title}
+          index={index}
+          onClose={() => closeTerminal(t.key)}
+        />
+      ))}
     </div>
   );
 }

@@ -80,6 +80,18 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `start_review` | `prompt_id: String`, `agent_id: String`, `model: String?`, `mode: String?`, `context: String?`, `channel: Channel<ProcessEvent>` | `()` | Runs a chosen prompt from the prompt library. `mode` picks the posture (default read-only): read-only is Claude `--permission-mode plan` / Codex `--sandbox read-only`; edit is Claude `--permission-mode bypassPermissions` / Codex `--sandbox workspace-write`. `context` (evidence, business-rule docs) is prepended to the prompt so the agent reads it before the instruction; blank/absent leaves the prompt unchanged. Serves both the adversarial Review and Run Agent. Registered as `review:current`; an unknown model or mode is refused; a missing CLI surfaces as a `Failed` event |
 | `cancel_review` | – | `bool` | Kills the review process **tree** |
 
+## Interactive terminals
+
+`src-tauri/src/commands/terminal.rs` — the floating terminals, backed by `cb_core::pty`. Unlike everything else here this is a real PTY (ConPTY on Windows, forkpty on Unix): stdin stays open and the child sees a TTY, so an interactive program such as Claude Code runs unchanged. Output streams over the channel; keystrokes, resizes and close come back as ordinary commands.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `terminal_open` | `cwd: String?`, `cols: u16`, `rows: u16`, `channel: Channel<TerminalEvent>` | `String` (session id) | Opens a shell (`default_shell`: `pwsh`→`powershell`→`cmd` on Windows, `$SHELL`→`bash`→`sh` on Unix) in `cwd` (defaults to the open workspace, else home). One merged output stream — no stdout/stderr split, no `started` banner |
+| `terminal_write` | `id: String`, `data: String` | `()` | Sends keystrokes (Enter is `\r`). Errors if the session is gone |
+| `terminal_resize` | `id: String`, `cols: u16`, `rows: u16` | `()` | Resizes the PTY; a no-op if the session is gone |
+| `terminal_close` | `id: String` | `bool` | Kills the process **tree** (so a shell's `claude`/`node` children die too); `false` if nothing was open |
+| `terminal_list` | – | `String[]` | Ids of every open terminal |
+
 ## Git
 
 `src-tauri/src/commands/git.rs` — a `Repo` handle is opened per call (libgit2's `Repository` is not `Sync`).
@@ -270,6 +282,6 @@ Sessions are per workspace and are started by `open_workspace`, `rescan_workspac
 
 ## Streaming commands
 
-`start_run`, `run_tests`, `git_network`, and `inspect_capture` take a `Channel<ProcessEvent>` and push output events (stdout/stderr chunks, exit) while their promise stays pending. The `api.ts` wrappers hide the channel behind an `onEvent` callback.
+`start_run`, `run_tests`, `git_network`, and `inspect_capture` take a `Channel<ProcessEvent>` and push output events (stdout/stderr chunks, exit) while their promise stays pending. `terminal_open` is the bidirectional variant: it pushes `TerminalEvent`s over its channel (one merged stream) while keystrokes flow back through `terminal_write`. The `api.ts` wrappers hide the channel behind an `onEvent` callback.
 
 Related: [Tauri shell](../architecture/tauri-shell.md) · [adding a command end-to-end](../guides/development.md#adding-a-tauri-command-end-to-end).

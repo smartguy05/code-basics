@@ -24,6 +24,11 @@ specta.workspace = true
 uuid.workspace = true
 yaml-rust2.workspace = true
 
+# Cross-platform pseudo-terminal for the interactive floating terminals
+# (ConPTY on Windows, forkpty on Unix). The only place the app opens a PTY;
+# `process::Supervisor` stays stdin-null and output-only.
+portable-pty = "0.9"
+
 # HTTP replay for behavioral before/after testing. Blocking client only (the
 # replay layer is synchronous and the command wraps it in `spawn_blocking`);
 # rustls so no system OpenSSL is needed on Windows.

@@ -55,6 +55,10 @@ src/
 ├── components/
 │   ├── OutputConsole.tsx xterm.js terminal: links, severity colours, search/filter,
 │   │                     copy-on-select, context menu with Copy diagnostics
+│   ├── TerminalPanel.tsx floating interactive terminal (drag/resize/minimize-to-
+│   │                     pill, flash on output) over a PTY session
+│   ├── TerminalView.tsx  raw xterm wrapper: bytes in, keystrokes out — NOT
+│   │                     OutputConsole (its filtering corrupts a live TUI)
 │   ├── TestTree.tsx      collapsible outcome tree with text/outcome filters
 │   ├── ObjectTree.tsx    inspected object graph: one distinct rendering per
 │                         ObjectValue, so "null" never looks like "unreadable"
@@ -148,6 +152,7 @@ The Run tab's file tabs behave like a browser's, and both behaviours keep their 
 ## Components worth knowing
 
 - **OutputConsole** wraps xterm.js (fit, web-links, and search addons) behind a `ConsoleHandle` (`write` / `clear` / `handle(event)`) exposed via `useImperativeHandle`. A real terminal matters because runners redraw progress with bare `\r` and ANSI escapes — the backend deliberately preserves those ([core crate](core-crate.md#process)), and xterm renders them faithfully. On top: URLs open in the system browser, unstyled severity markers are coloured client-side, Ctrl+F opens a find/filter bar (severity threshold + text, rebuilt from a raw-text tail of the output), selection copies, and the right-click menu offers Copy all / Copy diagnostics (command line + exit + last 100 lines). Panes hosting a terminal must be `overflow: hidden` — an outer scrollbar fights the fit addon.
+- **TerminalPanel / TerminalView** are the [floating interactive terminals](../getting-started/using-the-app.md#terminals), hosted at the app level (like the agent panel) so a running session survives a tab switch. `TerminalPanel` is the draggable, resizable, minimize-to-pill shell modelled on `ReviewPanel`; it reuses `reviewLayoutLogic.ts` (its own persistence key + a cascade offset so several do not stack) and flashes the pill when a minimized session produces output — every such decision in the tested `terminalLogic.ts`. `TerminalView` is a deliberately thin, **raw** xterm wrapper: PTY bytes written straight in, keystrokes straight out via `onData`, and none of `OutputConsole`'s re-colouring/filtering/rebuild, which would corrupt a program that redraws its own screen (Claude Code's TUI, a shell line editor). It relies on xterm answering Device Status Report queries itself, so an interactive shell in a PTY does not hang. Backed by [`cb_core::pty`](core-crate.md#pty) through the `terminal_*` commands.
 - **DiffView** builds on CodeMirror 6's merge package with per-language syntax highlighting (JS/TS, JSON, CSS, HTML, Python, Rust, XML, C++): side-by-side `MergeView` by default (editors auto-size, `.diff-host` scrolls — the revert buttons are positioned in document coordinates) or the unified `unifiedMergeView`. It renders the `FileDiff` hunks from the backend and lets the user select individual changed lines; selections become the `lines: number[]` passed to `git_stage_lines` / `git_revert_lines`. `allChangedIndices` selects a whole file's changes at once.
 - **TestTree** renders `TestNode` hierarchies with worst-outcome colouring, duration formatting, expansion state, and combined text + outcome filtering.
 - **ConfigEditor** edits a `RunConfig`. Environment variables are typed as `KEY=value` lines and split on the *first* `=` only, so connection strings, base64, and JWTs survive intact.

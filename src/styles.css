@@ -1068,6 +1068,34 @@ textarea:focus {
   height: 100%;
 }
 
+/* Floating interactive terminals ----------------------------------------- */
+
+/* Reuses the .review-panel base (float, drag, resize, minimize-to-pill). A
+   terminal earns a little more default room than the agent panel. */
+.terminal-panel {
+  width: min(760px, 64vw);
+  height: min(520px, 66vh);
+}
+
+/* xterm fights a scrollbar, so the terminal pane is strictly overflow:hidden,
+   the same rule the review console follows. */
+.terminal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--border-strong);
+}
+
+.terminal-host {
+  height: 100%;
+  background: var(--bg-inset);
+  padding: 4px 6px;
+}
+
+.terminal-host .xterm {
+  height: 100%;
+}
+
 /* --------------------------------------------------------------------- */
 /* Changes / diff                                                         */
 /* --------------------------------------------------------------------- */

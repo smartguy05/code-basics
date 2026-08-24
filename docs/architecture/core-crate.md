@@ -106,6 +106,14 @@ The single place that spawns anything: test runs, app launches, git network call
 - `kill` terminates the process **tree**: a new process group at spawn time (Unix `setpgid`, Windows process groups), because killing only the wrapper leaves `dotnet run`'s assembly or a dev-server holding its port.
 - Colour-friendly defaults are layered under the config's own env: `FORCE_COLOR=1`, and the configuration key that re-enables .NET's console-logger colours under redirection (`Logging__Console__FormatterOptions__ColorBehavior=Enabled`).
 
+## `pty`
+
+The **second** place that spawns a process, and the only bidirectional one — behind the [floating terminals](../getting-started/using-the-app.md#terminals). `process` is output-only (`stdin` null, streams to exit), which is right for a test run and useless for a shell you type into. `PtyManager` allocates a real pseudo-terminal instead (ConPTY on Windows, forkpty on Unix, via `portable-pty`): stdin stays open, the child sees a TTY, and the session resizes as the window does, so an interactive program — Claude Code's TUI included — runs unchanged.
+
+- Same handle shape as `Supervisor` (cheap to clone, a session map keyed by a caller-minted id, tree-kill on close via `process::kill_tree`), but the map is a `std::sync::Mutex`: the reader thread (portable-pty's reader is a synchronous `Read`) and the waiter thread run on plain OS threads with no async runtime.
+- `TerminalEvent` is deliberately **not** `ProcessEvent`: a PTY multiplexes stdout and stderr onto one stream (no `stream` field) and the shell prints its own prompt (no `Started` banner). Output is one merged raw stream written straight to xterm.
+- `shell` is pure and holds the two decisions worth testing without a process: `default_shell` (Windows `pwsh`→`powershell`→`cmd`; Unix `$SHELL`→`bash`→`sh`), `clamp_size` (floor 1×1 — xterm can momentarily report 0), and `is_session_marker`. The last strips the Claude Code child-session markers this app inherits when it is itself launched from a Claude Code session (`CLAUDE_CODE_*`, plus bare `CLAUDECODE`/`CLAUDE_PID`/`CLAUDE_EFFORT`/`AI_AGENT`); left in place a nested `claude` runs as a child — transcripts off, parent IPC socket reused — instead of a fresh top-level session.
+
 ## `symbols`
 
 What a workspace declares, and finding it fast — the index the search palette sits on. The layering is one-directional, and each layer is testable on its own terms:

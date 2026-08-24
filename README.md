@@ -15,6 +15,7 @@ Built as a native desktop application (Tauri 2): a compiled Rust core does all t
 - **Branches everywhere** — a Rider-style titlebar widget with a branch tree (slash-named branches group into folders), switching (including remote checkout), creation from any base, and fetch/pull/push.
 - **Rider import** — converts JetBrains Rider `.run/*.xml` configurations, with a review step that surfaces anything that could not be translated.
 - **[Enhancements](docs/guides/instruction-enhancements.md)** — a menu bar with a File menu and an Enhancements menu driven by plain `.md` files you drop in a folder: **Add Instructions** adds a reusable, marker-bounded section to the workspace's `CLAUDE.md`/`AGENTS.md` (idempotent, backed up, confirmed first), and **Run Agent** runs a saved prompt as an agent (read-only or edit), with `once: true` prompts recorded per repo.
+- **Terminals** — floating, interactive terminal windows you can open anytime (drag, resize, minimize to a pill that flashes when a hidden session produces output). Each is a real pseudo-terminal running your shell, so you can launch Claude Code — or anything — and interact with it live; several can run at once and they survive tab switches. Closing one ends its whole process tree.
 - **Console built for troubleshooting** — clickable URLs, severity colouring, Ctrl+F search, filtering by severity/text, copy-on-select, and a one-click paste-ready diagnostics block.
 
 ## Quick start

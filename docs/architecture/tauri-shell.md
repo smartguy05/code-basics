@@ -17,6 +17,7 @@ Deliberately thin. Every decision lives in [`cb-core`](core-crate.md); what rema
 | `src/commands/changelists.rs` | Change-group commands |
 | `src/commands/intents.rs` | Agent intent capture and grouping commands |
 | `src/commands/inspect.rs` | Object-inspection commands; resolves the bundled sidecar directory |
+| `src/commands/terminal.rs` | Floating-terminal commands over `cb_core::pty` (open/write/resize/close/list) |
 | `src/recorder.rs` | The one non-window entry point: `record-intent`, re-invoked by an agent hook |
 
 The complete command list with parameters is in the [command reference](../reference/commands.md); it must stay in sync with the `generate_handler!` block in `lib.rs`.
@@ -29,10 +30,12 @@ pub struct AppState {
     pub supervisor: Supervisor,                        // running processes
     pub last_test_run: Mutex<HashMap<String, TestRunResult>>, // per-config, for "re-run failed"
     pub last_inspect: Mutex<Option<InspectGraph>>,     // the most recent object capture
+    pub pty: PtyManager,                               // the floating terminals' PTY sessions
+    // (plus symbols + a build flag, and the LSP session handle)
 }
 ```
 
-The workspace survives a window reload because it lives here, not in the frontend. `last_test_run` is what lets `run_tests(only_failed: true)` know which test names to filter to. `last_inspect` is one slot rather than a map: there is nothing to key a capture by, and a capture is a copy of somebody's process memory — holding several would be holding more of it than anything needs, which is also why `inspect_clear` genuinely drops it.
+The workspace survives a window reload because it lives here, not in the frontend. `last_test_run` is what lets `run_tests(only_failed: true)` know which test names to filter to. `last_inspect` is one slot rather than a map: there is nothing to key a capture by, and a capture is a copy of somebody's process memory — holding several would be holding more of it than anything needs, which is also why `inspect_clear` genuinely drops it. `pty` is a clone-cheap handle like `supervisor`, holding the open [terminal](../getting-started/using-the-app.md#terminals) sessions keyed by id; unlike the caches it is **not** per-workspace, so `set_workspace` does not clear it — a terminal is not tied to the open root.
 
 ## `invocation::build`
 
@@ -57,6 +60,8 @@ Everything else code-basics runs (`dotnet`, `node`, `git`) is found on `PATH`. T
 ## Streaming output to the UI
 
 Commands that run processes (`start_run`, `run_tests`, `git_network`, `inspect_capture`) accept a Tauri `Channel<ProcessEvent>`. A forwarding task pumps supervisor events onto the channel as they arrive, so console output reaches the UI live rather than in one burst at exit. A closed channel (window went away) just stops forwarding — the process itself is left to finish.
+
+`terminal_open` is the bidirectional variant: it forwards `TerminalEvent`s (one merged stream) the same way, but keystrokes and resizes flow **back** as ordinary commands (`terminal_write` / `terminal_resize`), the input path a supervised process never has.
 
 `run_tests` additionally waits for exit, parses the report file, records the result in `last_test_run`, and returns a `TestRunOutcome` containing the flat result, the built tree, and any invocation warnings.
 

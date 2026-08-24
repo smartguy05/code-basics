@@ -146,6 +146,12 @@ Two limits define the whole feature: **no method is ever called** and **no prope
 
 Crash-dump capture is opt-in per workspace and off by default, because a dump is a verbatim copy of process memory. Attaching to a running process offers **every** attachable .NET process on the machine, each labelled *launched*, *descendant* or *unrelated* — the `dotnet run` child is usually the one you want, since the pid code-basics started is the CLI launcher. Full detail, including what attaching costs the target: [Inspecting objects](../guides/inspecting-objects.md).
 
+## Terminals
+
+Not one of the six views but available over all of them: the **+ Terminal** button in the titlebar opens a floating, interactive terminal window. It runs your shell (PowerShell on Windows, `$SHELL` on macOS/Linux) as a real pseudo-terminal, so it is a genuine interactive session — you can launch Claude Code, run a build, tail a log, anything — and type into it, arrow keys and prompts and all. It starts in the open workspace's directory.
+
+Each terminal floats over the app like the agent panel: drag it by its header, resize it from the corner, or **minimize** it to a small pill. Minimized terminals keep running, and the pill **flashes** when a hidden session produces new output, so a background task finishing (or Claude Code asking for something) gets your attention without staying on screen. Open as many as you like — they cascade so they do not stack exactly — and they survive switching between the tabs. Closing a terminal ends its whole process tree, so a shell that launched `claude` (and its `node` child) is cleaned up with it.
+
 ## Where app state lives
 
 Everything workspace-local is under `.code-basics/` in the workspace root: `config.json` (saved run configurations), `adapters/*.toml` (declarative adapters), `diagrams/` (architecture diagrams — check these in; `diagrams/derived/` is gitignored), and `results/` (test report files — gitignore this). Details in [Configuration](../reference/configuration.md).

@@ -47,6 +47,7 @@ import type {
   SearchScope,
   StashEntry,
   SymbolIndexStatus,
+  TerminalEvent,
   TestRunOutcome,
   UsageResult,
   ValidationError,
@@ -225,6 +226,46 @@ export const cancelReview = () => invoke<boolean>("cancel_review");
 
 /** The review agents whose CLI is installed, in preference order. */
 export const reviewAgents = () => invoke<ReviewAgentInfo[]>("review_agents");
+
+// ---------------------------------------------------------------------------
+// Interactive terminals
+// ---------------------------------------------------------------------------
+
+/**
+ * Open an interactive terminal, streaming its raw output to `onEvent`, and
+ * resolve to the session id used by {@link terminalWrite}/{@link terminalResize}
+ * /{@link terminalClose}. Output is one merged stream written straight to xterm
+ * — no post-processing — because an interactive TUI (Claude Code's included)
+ * redraws its own screen.
+ *
+ * `cols`/`rows` are the initial size; `cwd` defaults to the open workspace when
+ * omitted.
+ */
+export function terminalOpen(
+  cols: number,
+  rows: number,
+  onEvent: (event: TerminalEvent) => void,
+  cwd?: string,
+): Promise<string> {
+  const channel = new Channel<TerminalEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>("terminal_open", { cwd, cols, rows, channel });
+}
+
+/** Send keystrokes (or any bytes) to a terminal. */
+export const terminalWrite = (id: string, data: string) =>
+  invoke<void>("terminal_write", { id, data });
+
+/** Tell a terminal its viewport changed size. */
+export const terminalResize = (id: string, cols: number, rows: number) =>
+  invoke<void>("terminal_resize", { id, cols, rows });
+
+/** Close a terminal, killing its process tree. Resolves whether one was open. */
+export const terminalClose = (id: string) =>
+  invoke<boolean>("terminal_close", { id });
+
+/** The ids of every open terminal. */
+export const terminalList = () => invoke<string[]>("terminal_list");
 
 // ---------------------------------------------------------------------------
 // Git

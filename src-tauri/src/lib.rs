@@ -25,6 +25,7 @@ mod commands {
     pub mod secrets;
     pub mod setup;
     pub mod symbols;
+    pub mod terminal;
     pub mod workspace;
 }
 
@@ -208,6 +209,11 @@ pub fn run() {
             commands::lsp::lsp_find_usages,
             commands::lsp::lsp_goto_definition,
             commands::lsp::lsp_declaration_anchors,
+            commands::terminal::terminal_open,
+            commands::terminal::terminal_write,
+            commands::terminal::terminal_resize,
+            commands::terminal::terminal_close,
+            commands::terminal::terminal_list,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start code-basics");

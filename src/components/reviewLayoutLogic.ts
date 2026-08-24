@@ -85,12 +85,20 @@ export interface PanelLayout {
   height?: number;
 }
 
-const LAYOUT_KEY = "cb.agentPanel.layout";
+/**
+ * The default persistence key — the agent panel's. Callers that host more than
+ * one kind of floating panel (the terminals) pass their own key so their layout
+ * does not fight the agent panel's; omitting it keeps the original behaviour.
+ */
+const DEFAULT_LAYOUT_KEY = "cb.agentPanel.layout";
 
 /** Read the remembered position. A missing or unparseable value is empty. */
-export function loadPanelLayout(storage: Pick<Storage, "getItem">): PanelLayout {
+export function loadPanelLayout(
+  storage: Pick<Storage, "getItem">,
+  key: string = DEFAULT_LAYOUT_KEY,
+): PanelLayout {
   try {
-    const raw = storage.getItem(LAYOUT_KEY);
+    const raw = storage.getItem(key);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return {};
@@ -107,9 +115,13 @@ export function loadPanelLayout(storage: Pick<Storage, "getItem">): PanelLayout 
 }
 
 /** Remember the panel position. Never throws (storage may be unavailable). */
-export function savePanelLayout(storage: Pick<Storage, "setItem">, layout: PanelLayout): void {
+export function savePanelLayout(
+  storage: Pick<Storage, "setItem">,
+  layout: PanelLayout,
+  key: string = DEFAULT_LAYOUT_KEY,
+): void {
   try {
-    storage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+    storage.setItem(key, JSON.stringify(layout));
   } catch {
     // Ignore: persistence is a convenience, not a requirement.
   }
