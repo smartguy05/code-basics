@@ -110,6 +110,9 @@ fn value_variants_are_tagged_by_kind_in_camel_case() {
     };
 
     assert_eq!(tag(&ObjectValue::Null), "null");
+    // A dictionary entry crosses as a `pair` marker; the TS `ObjectValue` union
+    // and the sidecar both pin this exact string.
+    assert_eq!(tag(&ObjectValue::Pair), "pair");
     assert_eq!(
         tag(&ObjectValue::Primitive { text: "1".into() }),
         "primitive"
@@ -318,11 +321,19 @@ fn a_dotnet_process_serialises_with_the_keys_the_sidecar_writes() {
         path: Some("C:/src/Crasher/bin/Crasher.exe".into()),
         parent_pid: Some(8352),
         started_at: Some("2026-08-06T13:35:02.1230000Z".into()),
+        command_line: Some("dotnet exec C:/src/Crasher/bin/Crasher.dll".into()),
     })
     .unwrap();
     assert_eq!(
         keys(&full),
-        ["name", "parentPid", "path", "pid", "startedAt"]
+        [
+            "commandLine",
+            "name",
+            "parentPid",
+            "path",
+            "pid",
+            "startedAt"
+        ]
     );
 
     // Everything but the pid and the name is best effort: a process whose
@@ -334,6 +345,7 @@ fn a_dotnet_process_serialises_with_the_keys_the_sidecar_writes() {
         path: None,
         parent_pid: None,
         started_at: None,
+        command_line: None,
     })
     .unwrap();
     assert_eq!(keys(&bare), ["name", "pid"]);
@@ -379,7 +391,7 @@ fn dump_capture_is_off_unless_asked_for() {
 }
 
 #[test]
-fn a_request_carries_the_schema_version_and_does_not_suspend_by_default() {
+fn a_request_carries_the_schema_version() {
     let request = InspectRequest::new(
         InspectTarget::Live { pid: 1 },
         RootSpec::Exceptions,
@@ -387,14 +399,9 @@ fn a_request_carries_the_schema_version_and_does_not_suspend_by_default() {
     );
 
     assert_eq!(request.schema_version, SCHEMA_VERSION);
-    // Suspending stops the user's application; it has to be asked for.
-    assert!(!request.suspend);
 
     let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(
-        keys(&json),
-        ["caps", "root", "schemaVersion", "suspend", "target"]
-    );
+    assert_eq!(keys(&json), ["caps", "root", "schemaVersion", "target"]);
 }
 
 #[test]

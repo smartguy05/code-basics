@@ -93,14 +93,12 @@ both invisible to a fixture without astral-plane characters:
       `EXIT_GRACE` wait. Harmless today because only `Client::shutdown` calls it.
       **Trigger: the session actor gaining a second teardown path.** Reviewed
       2026-08-17 and deliberately left; the reason is in `notes.md`.
-- [ ] **`kill_tree` blocks the calling runtime worker** (`taskkill` via
-      `std::process::Command::status`, or a 2 s escalation thread on Unix) and is
-      called from async tasks and from `Drop`. Invisible on the multi-thread
-      runtime the app uses; on the current-thread runtime every `#[tokio::test]`
-      uses, it stalls every other task including the timeout that bounds the test.
-      **Trigger: the first LSP test that flakes on a timeout. The fix is
-      `spawn_blocking`** — written down so the diagnosis is not re-derived.
-      Reviewed 2026-08-17 and deliberately left.
+- [x] ~~**`kill_tree` blocks the calling runtime worker**~~ **DONE (WF2, 2026-08-24, B14):**
+      added `kill_tree_async` = `spawn_blocking(kill_tree).await` and routed the async callers
+      (`Supervisor::cancel`, the four `transport.rs` sites) through it; `Transport::drop` uses
+      `Handle::try_current` → `spawn_blocking` fire-and-forget in a runtime, inline when none.
+      Sync `kill_tree` kept (Drop's no-runtime branch + the offloaded body). Pinned by
+      `an_offloaded_kill_does_not_stall_the_current_thread_runtime` (timing-free injected body).
 - [x] ~~`ReadyWithCaveat` reaches no consumer~~ — it does now: `session.rs`
       turns it into a `RunningRow` and a caveat `message`, which is exactly what the
       Phase 5 fix round made the UI honour. `ask` returns

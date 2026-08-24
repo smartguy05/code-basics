@@ -141,6 +141,12 @@ internal sealed class Walker
             return;
         }
 
+        if (Collections.TryGetDictionary(obj, out var pairs, out var pairTotal))
+        {
+            ExpandDictionary(pairs, pairTotal, node, depth);
+            return;
+        }
+
         ExpandFields(type, obj.Address, interior: false, node, depth);
     }
 
@@ -184,6 +190,62 @@ internal sealed class Walker
         {
             var child = ObjectChild(elements[i], node, $"[{i}]", $"{node.Id}[{i}]", depth);
             _nodes.Add(child);
+        }
+
+        if (total > shown)
+        {
+            _nodes.Add(Elided(node, $"[{shown}…{total - 1}]", "childLimit"));
+        }
+    }
+
+    /// <summary>
+    /// Render a dictionary as one <c>pair</c> container per live entry, each
+    /// holding a <c>Key</c> and a <c>Value</c> child.
+    ///
+    /// The container node has no address: it is a grouping the Rust side draws
+    /// as a leaf-with-children, never a reference to expand. Its two children
+    /// are the Entry struct's <c>key</c> and <c>value</c> fields, read through
+    /// the ordinary <see cref="FieldNode"/> machinery at the struct's interior
+    /// address (so value-type keys and values read as values), then relabelled
+    /// from the CLR's <c>key</c>/<c>value</c> to <c>Key</c>/<c>Value</c>.
+    /// </summary>
+    private void ExpandDictionary(
+        IReadOnlyList<Collections.DictionaryEntry> entries,
+        int total,
+        NodeDto node,
+        int depth)
+    {
+        node.ChildCountTotal = total;
+
+        var shown = Math.Min(entries.Count, _caps.MaxChildren);
+        for (var i = 0; i < shown; i++)
+        {
+            // Each pair costs three nodes (the container plus a Key and a
+            // Value), so the budget is checked before starting one rather than
+            // leaving a pair with a Key and no Value.
+            if (_nodes.Count + 3 > _caps.MaxNodes)
+            {
+                _nodes.Add(Elided(node, "…", "nodeLimit"));
+                return;
+            }
+
+            var entry = entries[i];
+            var pair = new NodeDto
+            {
+                Id = $"{node.Id}[{i}]",
+                Parent = node.Id,
+                Label = $"[{i}]",
+                Kind = "pair",
+            };
+            _nodes.Add(pair);
+
+            var key = FieldNode(entry.Key, entry.Address, interior: true, pair, depth + 1);
+            key.Label = "Key";
+            _nodes.Add(key);
+
+            var value = FieldNode(entry.Value, entry.Address, interior: true, pair, depth + 1);
+            value.Label = "Value";
+            _nodes.Add(value);
         }
 
         if (total > shown)

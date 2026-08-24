@@ -788,6 +788,9 @@ export type ObjectValue =
   | { kind: "primitive"; text: string }
   | { kind: "text"; text: string; truncated: boolean }
   | { kind: "null" }
+  /** A dictionary entry: a container with no value of its own; its `Key` and
+   * `Value` children carry everything. */
+  | { kind: "pair" }
   | { kind: "reference"; address: string; typeName: string; expandable: boolean }
   /** Already shown at `path`; a leaf, so rendering never recurses. */
   | { kind: "cycle"; address: string; path: string }
@@ -844,8 +847,6 @@ export interface InspectRequest {
   target: InspectTarget;
   root: RootSpec;
   caps: Caps;
-  /** Suspends the user's application while capturing. Opt-in. */
-  suspend: boolean;
 }
 
 /** A crash dump under `.code-basics/dumps/`. */
@@ -874,6 +875,14 @@ export interface DotnetProcess {
   parentPid?: number;
   /** ISO-8601, exactly as the enumerator wrote it. */
   startedAt?: string;
+  /**
+   * Full command line, when it could be read. The only place a `dotnet run`
+   * child's assembly appears — its OS name is just `dotnet` — so it is what
+   * separates the real application from the SDK's own build tools. Omitted when
+   * unknown (reading another process's command line is refused across an
+   * elevation or session boundary), which costs only preselection.
+   */
+  commandLine?: string;
 }
 
 /**

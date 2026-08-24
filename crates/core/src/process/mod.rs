@@ -19,7 +19,7 @@ pub use chunker::{LineSplitter, Utf8Chunker};
 /// of which suits a long-lived duplex protocol), and a language server that is
 /// killed one process at a time orphans Roslyn's `BuildHost-netcore` /
 /// `BuildHost-net472` children for the life of the user's session.
-pub use kill::{configure_process_group, kill_tree};
+pub use kill::{configure_process_group, kill_tree, kill_tree_async};
 /// Re-exported rather than making the module public, matching how `chunker`'s
 /// two useful items are surfaced: the PATHEXT walk is the whole of `resolve`'s
 /// interest to anyone else, and its helpers are not.
@@ -249,7 +249,7 @@ impl Supervisor {
         };
 
         match target {
-            Some(pid) => kill::kill_tree(pid),
+            Some(pid) => kill::kill_tree_async(pid).await,
             // Spawned but no pid means it already exited.
             None => false,
         }

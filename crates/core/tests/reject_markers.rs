@@ -147,6 +147,44 @@ fn a_file_with_no_comment_syntax_is_reverted_but_left_unmarked() {
     assert_eq!(read(dir.path(), "data.json"), "{\n  \"a\": 1\n}\n");
 }
 
+/// CSS has no line comment, so it used to be reverted without a note. It does
+/// have a block comment, and the reason belongs in it.
+#[test]
+fn a_css_change_is_reverted_and_marked_with_a_block_comment() {
+    let dir = init_repo(&[("styles.css", "body {\n  color: red;\n}\n")]);
+    write(dir.path(), "styles.css", "body {\n  color: blue;\n}\n");
+
+    let outcome = reject_all(dir.path(), "styles.css", REASON);
+
+    assert!(outcome.reverted);
+    assert!(
+        outcome.marked,
+        "CSS should be markable with a block comment"
+    );
+
+    let text = read(dir.path(), "styles.css");
+    assert!(
+        text.contains("/*"),
+        "the note must open a block comment:\n{text}"
+    );
+    assert!(
+        text.contains("*/"),
+        "the note must close the block comment:\n{text}"
+    );
+    assert!(
+        text.contains(REASON),
+        "the reason must be written in:\n{text}"
+    );
+    assert!(
+        text.contains("color: red"),
+        "the revert must restore the baseline:\n{text}"
+    );
+    assert!(
+        !text.contains("color: blue"),
+        "the rejected change must be gone:\n{text}"
+    );
+}
+
 #[test]
 fn an_empty_reason_reverts_without_writing_a_note() {
     let dir = init_repo(&[("src/lib.rs", BEFORE)]);
@@ -245,6 +283,31 @@ fn the_guard_refuses_a_commit_that_still_carries_a_note() {
     );
     assert!(
         stderr.contains("src/lib.rs"),
+        "the guard must name the offending file; got: {stderr}"
+    );
+}
+
+/// A block-comment note carries the same head line (token + date) as a line
+/// one, so the guard's grep must catch it too — the marker's language must not
+/// decide whether the guard fires.
+#[test]
+fn the_guard_refuses_a_css_note_written_as_a_block_comment() {
+    let dir = init_repo(&[("styles.css", "body {\n  color: red;\n}\n")]);
+    install_guard(dir.path());
+
+    write(dir.path(), "styles.css", "body {\n  color: blue;\n}\n");
+    reject_all(dir.path(), "styles.css", REASON);
+    run(dir.path(), &["add", "styles.css"]);
+
+    let output = git(dir.path(), &["commit", "-m", "should not land"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "the commit should have been refused; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("styles.css"),
         "the guard must name the offending file; got: {stderr}"
     );
 }

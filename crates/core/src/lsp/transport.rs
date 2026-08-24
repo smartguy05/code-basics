@@ -63,7 +63,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use crate::lsp::framing::{self, Decoder};
 use crate::lsp::jsonrpc::{classify, Incoming, Outgoing, RequestId, RpcError, METHOD_NOT_FOUND};
 use crate::process::{
-    configure_process_group, kill_tree, resolve_program, LineSplitter, Utf8Chunker,
+    configure_process_group, kill_tree, kill_tree_async, resolve_program, LineSplitter, Utf8Chunker,
 };
 
 /// How many stderr lines to keep. Enough to explain a crash, small enough that
@@ -558,7 +558,7 @@ impl Transport {
         {
             if let Some(pid) = self.pid {
                 tracing::warn!(pid, "language server ignored shutdown; killing the tree");
-                kill_tree(pid);
+                kill_tree_async(pid).await;
             }
         }
 
@@ -580,7 +580,19 @@ impl Drop for Transport {
         if self.death.borrow().is_none() {
             if let Some(pid) = self.pid {
                 tracing::debug!(pid, "transport dropped without shutdown; killing the tree");
-                kill_tree(pid);
+                // `drop` cannot `.await`, and it must not block a runtime worker
+                // with the synchronous kill either. When a runtime is present,
+                // offload the blocking kill to the pool fire-and-forget; with no
+                // runtime (e.g. dropped from a plain thread) run it inline, where
+                // blocking is fine because no async worker is at stake.
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => {
+                        handle.spawn_blocking(move || kill_tree(pid));
+                    }
+                    Err(_) => {
+                        kill_tree(pid);
+                    }
+                }
             }
         }
     }
@@ -720,7 +732,7 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             // only kills while no death has been published.
             if let Some(pid) = pid {
                 tracing::warn!(pid, "cannot write to the language server; killing the tree");
-                kill_tree(pid);
+                kill_tree_async(pid).await;
             }
             return;
         }
@@ -765,7 +777,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                     DeathReason::ReadFailed(error.to_string()),
                 );
                 if let Some(pid) = pid {
-                    kill_tree(pid);
+                    kill_tree_async(pid).await;
                 }
                 return;
             }
@@ -787,7 +799,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                 // The process may well still be alive and still writing. It is
                 // useless to us now, and leaving it running would leak it.
                 if let Some(pid) = pid {
-                    kill_tree(pid);
+                    kill_tree_async(pid).await;
                 }
                 return;
             }

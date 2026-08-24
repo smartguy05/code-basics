@@ -27,11 +27,11 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/architecture/components_tests.rs` | 996 | Tests for [`super::components`]. |
 | `crates/core/src/architecture/graph.rs` | 1672 | The derived project graph: nodes, edges, and the rules that produce them. |
 | `crates/core/src/architecture/graph_tests.rs` | 1986 | Tests for [`super::graph`]. |
-| `crates/core/src/architecture/mermaid.rs` | 1315 | Rendering an [`ArchGraph`](super::graph::ArchGraph) to Mermaid source, and |
-| `crates/core/src/architecture/mermaid_tests.rs` | 1386 | Tests for [`super::mermaid`]. |
+| `crates/core/src/architecture/mermaid.rs` | 1320 | Rendering an [`ArchGraph`](super::graph::ArchGraph) to Mermaid source, and |
+| `crates/core/src/architecture/mermaid_tests.rs` | 1474 | Tests for [`super::mermaid`]. |
 | `crates/core/src/architecture/mod.rs` | 77 | The derived project graph: what this workspace is made of, and what points |
 | `crates/core/src/architecture/signals/dotnet.rs` | 1342 | Component signals read out of .NET manifests, configuration and source. |
-| `crates/core/src/architecture/signals/dotnet_tests.rs` | 1087 | Tests for [`super::dotnet`]. |
+| `crates/core/src/architecture/signals/dotnet_tests.rs` | 1168 | Tests for [`super::dotnet`]. |
 | `crates/core/src/architecture/signals/framework.rs` | 824 | The signal types and [`admit`] — the one gate every candidate component in |
 | `crates/core/src/architecture/signals/framework_tests.rs` | 775 | Tests for [`super::framework`]. |
 | `crates/core/src/architecture/signals/mod.rs` | 88 | Components that are not projects: the databases, caches, queues and HTTP |
@@ -121,8 +121,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/providers/mod.rs` | 273 | Per-agent knowledge: where it keeps its history, and how to ask it to |
 | `crates/core/src/intents/providers/providers_tests.rs` | 839 | Tests for provider detection and hook installation. |
 | `crates/core/src/intents/providers/settings_merge.rs` | 158 | Generic marker-based merging of hook entries into a `settings.json`-shaped |
-| `crates/core/src/intents/reject.rs` | 457 | Rejecting a change: undoing it and leaving the reason where it was. |
-| `crates/core/src/intents/reject_tests.rs` | 371 | Tests for rejecting a change — the marker comment left where code was. |
+| `crates/core/src/intents/reject.rs` | 572 | Rejecting a change: undoing it and leaving the reason where it was. |
+| `crates/core/src/intents/reject_tests.rs` | 421 | Tests for rejecting a change — the marker comment left where code was. |
 | `crates/core/src/intents/user.rs` | 248 | User-authored intents: a note the user writes on a card when no agent hook |
 | `crates/core/src/intents/user_tests.rs` | 193 |  |
 | `crates/core/src/intents/whyhook.rs` | 166 | The `post-commit` hook that persists durable intent for external commits. |
@@ -153,13 +153,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/lsp/session_tests.rs` | 490 | The session's pure decisions, headlessly. |
 | `crates/core/src/lsp/settings.rs` | 159 | The per-workspace language-server configuration block. |
 | `crates/core/src/lsp/settings_tests.rs` | 172 |  |
-| `crates/core/src/lsp/transport.rs` | 1075 | One live server process, and the bytes going in and out of it. |
+| `crates/core/src/lsp/transport.rs` | 1087 | One live server process, and the bytes going in and out of it. |
 | `crates/core/src/lsp/transport_tests.rs` | 752 | Unit tests for the parts of the transport that need no process. |
 | `crates/core/src/lsp/uri.rs` | 186 | Paths in, `file:` URIs out, and back again. |
 | `crates/core/src/lsp/uri_tests.rs` | 254 |  |
 | `crates/core/src/model.rs` | 636 | Types shared between the Rust core and the TypeScript frontend. |
 | `crates/core/src/process/chunker.rs` | 188 | Incremental UTF-8 decoding for streamed process output. |
-| `crates/core/src/process/kill.rs` | 110 | Platform-specific process *tree* termination. |
+| `crates/core/src/process/kill.rs` | 181 | Platform-specific process *tree* termination. |
 | `crates/core/src/process/mod.rs` | 615 | Process supervision: spawn, stream, cancel. |
 | `crates/core/src/process/resolve.rs` | 200 | Windows program-name resolution. |
 | `crates/core/src/qgate/decide_tests.rs` | 166 | Decision-logic tests for the quality gate — the Rust port of the behaviour |
@@ -180,7 +180,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/symbols/fuzzy.rs` | 558 | Scoring how well a query matches a candidate symbol name. |
 | `crates/core/src/symbols/fuzzy_tests.rs` | 227 | Tests for scoring a query against a candidate name. |
 | `crates/core/src/symbols/index.rs` | 755 | Building the symbol index: walking a workspace's source files and recording |
-| `crates/core/src/symbols/index_tests.rs` | 813 | Tests for building the index of what a workspace declares. |
+| `crates/core/src/symbols/index_tests.rs` | 838 | Tests for building the index of what a workspace declares. |
 | `crates/core/src/symbols/mod.rs` | 51 | Knowing what a workspace declares, and finding it fast. |
 | `crates/core/src/symbols/search.rs` | 425 | Querying the index: the layer a symbol palette actually talks to. |
 | `crates/core/src/symbols/search_tests.rs` | 362 | Tests for querying the index behind a symbol palette. |
@@ -189,7 +189,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/testing/mod.rs` | 121 | Test report parsing and result shaping. |
 | `crates/core/src/testing/tree.rs` | 296 | Turning a flat list of test cases into the hierarchy the UI renders. |
 | `crates/core/src/testing/trx.rs` | 575 | Parser for Visual Studio `.trx` test reports. |
-| `crates/core/src/workspace.rs` | 2047 | Scanning a workspace for projects and building the configurations that can |
+| `crates/core/src/workspace.rs` | 2069 | Scanning a workspace for projects and building the configurations that can |
 | `crates/core/tests/behavioral_replay.rs` | 104 | A real-network smoke test for [`cb_core::behavioral::replay`]. |
 | `crates/core/tests/durable_why.rs` | 201 | End-to-end tests for durable intent: writing a git note at commit and |
 | `crates/core/tests/git_operations.rs` | 1085 | End-to-end git tests against real repositories on disk. |
@@ -198,9 +198,9 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/lsp_oracle.rs` | 838 | The answers a **real** language server gives, for the languages this machine |
 | `crates/core/tests/lsp_session.rs` | 962 | Every language server for one workspace, behind one actor, against `cb-fake-lsp`. |
 | `crates/core/tests/lsp_transport.rs` | 935 | The transport against a live process, one test per way a server misbehaves. |
-| `crates/core/tests/reject_markers.rs` | 359 | Rejection end to end: against a real repository, with the real `git`. |
-| `src/App.tsx` | 517 |  |
-| `src/components/BehavioralPanel.tsx` | 297 |  |
+| `crates/core/tests/reject_markers.rs` | 422 | Rejection end to end: against a real repository, with the real `git`. |
+| `src/App.tsx` | 520 |  |
+| `src/components/BehavioralPanel.tsx` | 304 |  |
 | `src/components/BranchMenu.tsx` | 386 |  |
 | `src/components/ConfigEditor.tsx` | 313 |  |
 | `src/components/DiffView.tsx` | 761 |  |
@@ -213,9 +213,9 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/LspStatus.tsx` | 125 |  |
 | `src/components/MenuBar.tsx` | 381 |  |
 | `src/components/ObjectTree.tsx` | 351 |  |
-| `src/components/OutputConsole.tsx` | 428 |  |
+| `src/components/OutputConsole.tsx` | 426 |  |
 | `src/components/PlanPreview.tsx` | 60 |  |
-| `src/components/ReviewPanel.tsx` | 465 |  |
+| `src/components/ReviewPanel.tsx` | 462 |  |
 | `src/components/RiderImportDialog.tsx` | 135 |  |
 | `src/components/RunConfigMenu.tsx` | 172 |  |
 | `src/components/SearchEverywhere.tsx` | 525 |  |
@@ -224,8 +224,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/Sidebar.tsx` | 50 |  |
 | `src/components/StashPanel.tsx` | 288 |  |
 | `src/components/TestTree.tsx` | 125 |  |
-| `src/components/behavioralPanelLogic.test.ts` | 200 |  |
-| `src/components/behavioralPanelLogic.ts` | 217 |  |
+| `src/components/behavioralPanelLogic.test.ts` | 255 |  |
+| `src/components/behavioralPanelLogic.ts` | 270 |  |
 | `src/components/claimVerifyLogic.test.ts` | 247 |  |
 | `src/components/claimVerifyLogic.ts` | 150 |  |
 | `src/components/configLogic.test.ts` | 111 |  |
@@ -244,8 +244,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/language.ts` | 113 |  |
 | `src/components/lspStatusLogic.test.ts` | 306 |  |
 | `src/components/lspStatusLogic.ts` | 226 |  |
-| `src/components/reviewLayoutLogic.test.ts` | 141 |  |
-| `src/components/reviewLayoutLogic.ts` | 116 | Pure decisions for positioning the floating agent panel — the clamp |
+| `src/components/reviewLayoutLogic.test.ts` | 174 |  |
+| `src/components/reviewLayoutLogic.ts` | 160 | Pure decisions for positioning the floating agent panel — the clamp |
 | `src/components/reviewLogic.test.ts` | 182 |  |
 | `src/components/reviewLogic.ts` | 141 | Pure decisions for the adversarial-review panel — extracted so they are |
 | `src/components/reviewStreamLogic.test.ts` | 147 |  |
@@ -269,12 +269,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
+| `src/reexportGuards.test.ts` | 23 | / <reference types="vite/client" /> |
 | `src/views/ArchitectureView.tsx` | 677 |  |
-| `src/views/ChangesView.tsx` | 1192 |  |
+| `src/views/ChangesView.tsx` | 1281 |  |
 | `src/views/HistoryView.tsx` | 556 |  |
-| `src/views/InspectView.tsx` | 1062 |  |
+| `src/views/InspectView.tsx` | 1058 |  |
 | `src/views/RunView.tsx` | 1469 |  |
-| `src/views/TestsView.tsx` | 402 |  |
+| `src/views/TestsView.tsx` | 399 |  |
 | `src/views/architecture/DiagramCanvas.tsx` | 760 |  |
 | `src/views/architecture/DiagramEditor.tsx` | 322 |  |
 | `src/views/architecture/architectureLogic.test.ts` | 176 |  |
@@ -285,7 +286,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/architecture/emptyStateLogic.ts` | 43 |  |
 | `src/views/architecture/frontMatterLogic.test.ts` | 86 |  |
 | `src/views/architecture/frontMatterLogic.ts` | 91 |  |
-| `src/views/architecture/nodeTargets.test.ts` | 390 |  |
+| `src/views/architecture/nodeTargets.test.ts` | 407 |  |
 | `src/views/architecture/nodeTargets.ts` | 460 |  |
 | `src/views/architecture/panZoomLogic.test.ts` | 213 |  |
 | `src/views/architecture/panZoomLogic.ts` | 210 |  |
@@ -370,7 +371,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/adapters/solution.rs`: `Solution`, `SolutionProject`, `is_solution_file()`, `parse()`
 - `crates/core/src/architecture/components.rs`: `component_graph()`
 - `crates/core/src/architecture/graph.rs`: `ArchKind`, `EdgeKind`, `Derivation`, `ArchNode`, `ArchEdge`, `ArchGraph`, `project_graph()`
-- `crates/core/src/architecture/mermaid.rs`: `render()`, `ValidationRule`, `ValidationError`, `validate()`
+- `crates/core/src/architecture/mermaid.rs`: `render()`, `mermaid_id()`, `ValidationRule`, `ValidationError`, `validate()`
 - `crates/core/src/architecture/signals/dotnet.rs`: `DotnetSignals`, `signals()`, `aspire_class_name()`
 - `crates/core/src/architecture/signals/framework.rs`: `Strength`, `ComponentKind`, `slug()`, `Evidence`, `new()`, `elided_value()`, `Signal`, `high()`, `medium()`, `with_detail()`, `Component`, `Usage`, `Detail`, `AdmittedEdge`, `DiscardReason`, `Discarded`, `Admitted`, `edges()`, `warnings()`, `warnings_named()`, `admit()`
 - `crates/core/src/architecture/signals/node.rs`: `NodeSignals`, `signals()`
@@ -417,7 +418,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/intents/providers/instructions.rs`: `path_for()`, `is_present()`, `planned_write()`
 - `crates/core/src/intents/providers/mod.rs`: `InstallScope`, `ProviderStatus`, `absent()`, `PlannedWrite`, `InstallPlan`, `SessionFile`, `HistoryMined`, `apply_plan()`, `apply_writes()`, `all()`, `statuses()`, `history()`, `guard_write()`, `whyhook_write()`, `home_dir()`
 - `crates/core/src/intents/providers/settings_merge.rs`: `contains_marker()`, `is_installed()`, `merged_text()`, `merged_into_text()`, `plan_removal()`
-- `crates/core/src/intents/reject.rs`: `comment_prefix()`, `sanitise_reason()`, `marker_block()`, `is_marker_line()`, `anchors()`, `insert_markers()`, `iso_date()`, `FileRejection`, `RejectSummary`, `record()`, `reject_file()`
+- `crates/core/src/intents/reject.rs`: `CommentSyntax`, `comment_syntax()`, `comment_prefix()`, `sanitise_reason()`, `marker_block_for()`, `is_marker_line()`, `anchors()`, `insert_markers()`, `iso_date()`, `FileRejection`, `RejectSummary`, `record()`, `reject_file()`
 - `crates/core/src/intents/user.rs`: `UserEdit`, `UserIntent`, `turn_id()`, `is_empty()`, `overlaps()`, `upsert()`, `remove_overlapping()`, `next_id()`, `to_intents()`, `merge_into()`, `user_intents_path()`, `load()`, `save()`
 - `crates/core/src/intents/whyhook.rs`: `block()`, `hook_path()`, `plan_for()`, `planned_write()`, `is_installed()`, `ensure_executable()`, `plan_removal()`
 - `crates/core/src/invocation.rs`: `build()`, `rerun_filter()`, `plan_compound()`
@@ -436,7 +437,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/lsp/uri.rs`: `UriStyle`, `to_file_uri()`, `from_file_uri()`
 - `crates/core/src/model.rs`: `Project`, `ProjectKind`, `TestRunner`, `RunKind`, `ConfigSource`, `RunConfig`, `new()`, `ReportSpec`, `ReportFormat`, `Invocation`, `TestOutcome`, `TestCase`, `TestSummary`, `from_cases()`, `TestRunResult`, `TestNode`
 - `crates/core/src/process/chunker.rs`: `Utf8Chunker`, `new()`, `push()`, `finish()`, `LineSplitter`, `new()`, `push()`, `finish()`
-- `crates/core/src/process/kill.rs`: `configure_process_group()`, `kill_tree()`
+- `crates/core/src/process/kill.rs`: `configure_process_group()`, `kill_tree()`, `kill_tree_async()`
 - `crates/core/src/process/mod.rs`: `Stream`, `ProcessEvent`, `Supervisor`, `new()`, `run()`, `cancel()`, `running_ids()`, `pid()`, `running()`, `is_running()`
 - `crates/core/src/process/resolve.rs`: `resolve_program()`
 - `crates/core/src/qgate/install.rs`: `status()`, `install_plan()`, `merged_into()`

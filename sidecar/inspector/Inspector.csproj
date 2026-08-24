@@ -28,6 +28,10 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Diagnostics.Runtime" Version="4.0.732401" />
+    <!-- Reading another process's command line means WMI (Win32_Process), which
+         lives in this out-of-band package on modern .NET and is Windows-only.
+         The /proc reader on Linux needs nothing beyond the BCL. -->
+    <PackageReference Include="System.Management" Version="10.0.0" />
   </ItemGroup>
 
 </Project>

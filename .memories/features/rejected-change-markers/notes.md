@@ -45,6 +45,36 @@ in that group could be reverted." never displays. Not changed here — rejection
 routes its feedback back to the panel instead, the way `importHistory` already
 does. If that bug is ever fixed, the reject path could be simplified.
 
+## Block comments (B11): CSS/HTML/XML/Markdown are markable now
+
+`comment_prefix` gained a sibling `comment_syntax(path) -> Option<CommentSyntax>`
+(`Line(&'static str)` | `Block { open, close }`). CSS → `/* */`;
+md/markdown/html/htm/xml/svg/vue → `<!-- -->`. `comment_prefix` is now a thin
+view over it (returns `None` for block files, so its old callers/tests are
+unchanged). JSON, images, LICENSE stay `None` and keep flowing into
+`RejectSummary.unmarked` — deliberately, no sidecar note.
+
+`marker_block` → `marker_block_for(&CommentSyntax, …)`. A block marker is
+**self-closing**: `/*` (or `<!--`) rides the head line, and the close (`*/` /
+`-->`) rides the `Next:` line, so the whole note lives in its own 3 lines and
+cannot swallow the file. `insert_markers` now takes `&CommentSyntax` (still
+line-oriented — it inserts the block's lines into the file array).
+
+Two safety points, both pinned by tests:
+- **Neutralise the close delimiter inside the reason** (`neutralise_close`:
+  `*/`→`* /`, `-->`→`-- >`). A line comment gets this free; a block must do it
+  explicitly, or a `*/` in the reason closes the block early. `sanitise_reason`
+  only flattens whitespace — it does *not* do this.
+- **The guard grep still catches block notes.** It matches the head line
+  (`AI-REJECTED YYYY-MM-DD`), which is present on the `/* AI-REJECTED …` line
+  unchanged — `guard.rs` needed no edit. Pinned by
+  `the_guard_refuses_a_css_note_written_as_a_block_comment`.
+
+`remove_block_at`'s terminator scan was extended (`is_block_terminator`) to also
+recognise a `Next:` line ending with the block close, so re-rejecting a block
+file replaces rather than stacks. `RejectSummary` shape unchanged → no
+types.ts/api.ts churn; CSS just moved from `unmarked` to `marked`.
+
 ## Test harness gotchas hit while building this
 
 - A commit with nothing staged fails with "nothing to commit" on **stdout**,

@@ -120,6 +120,11 @@ pub fn classify(node: &RawNode) -> ObjectValue {
     match node.kind.as_str() {
         "null" => ObjectValue::Null,
 
+        // A dictionary entry: a container grouping a Key and a Value. It has no
+        // address, text or reason of its own — everything it carries is its two
+        // children — so there is nothing to require here beyond the kind itself.
+        "pair" => ObjectValue::Pair,
+
         "primitive" => match &node.text {
             Some(text) => ObjectValue::Primitive { text: text.clone() },
             None => unreadable("the inspector reported a value but did not include it"),

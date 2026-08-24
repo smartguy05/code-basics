@@ -45,7 +45,7 @@ The list is refreshed when the tab is opened, when a run starts or stops, and on
 This is the one part of the feature that reaches into a process you care about while it is serving traffic, so the price is stated beside the button rather than after the pause:
 
 - **The snapshot clones the process's working set.** Expect a pause of the order of a second and memory use roughly doubling for as long as the copy exists. On a machine already short of memory that is a real cost.
-- **Your application is not stopped.** ClrMD can instead attach with every thread frozen until the capture finishes; the request carries a `suspend` flag for it, it is opt-in, and this app never sets it. A service being inspected keeps serving.
+- **Your application is not stopped.** ClrMD can instead attach with every thread frozen until the capture finishes; this app never does that, always taking the snapshot attach instead. A service being inspected keeps serving.
 - **The price of not stopping it is staleness.** A live capture is a moment in time. By the time the tree renders, the field you are reading may already hold something else, and expanding a node past a cap is a genuinely *new* snapshot of a process that has moved on — the tab says so in a band you cannot miss. Dumps are exempt, because two reads of a file are the same bytes.
 
 ### Catching a caught exception

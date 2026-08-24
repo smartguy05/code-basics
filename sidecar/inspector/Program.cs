@@ -155,7 +155,7 @@ internal static class Program
         ClrRuntime? runtime = null;
         try
         {
-            (data, runtime) = Target.Open(request.Target, request.Suspend);
+            (data, runtime) = Target.Open(request.Target);
             result.Target = Target.Describe(data, runtime, request.Target);
 
             var walker = new Walker(runtime.Heap, request.Caps);

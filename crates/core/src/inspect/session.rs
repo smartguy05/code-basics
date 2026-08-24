@@ -506,6 +506,53 @@ fn is_build_tool(process: &DotnetProcess) -> bool {
     TOOLS.contains(&name.as_str()) || name.starts_with("testhost.")
 }
 
+/// The assembly a configuration is expected to run, as a bare file stem.
+///
+/// Derived from the configuration's project path alone — the stem of
+/// `Api/Api.csproj` is `Api` — and deliberately never from the project file's
+/// contents. This is consulted on the polled attach path, so it must stay free
+/// of filesystem I/O; parsing the `.csproj` to honour an `<AssemblyName>`
+/// override would put a read behind every poll. An override therefore does not
+/// match here, and the honest consequence is to abstain rather than preselect —
+/// exactly the direction this module always errs.
+///
+/// `None` when the configuration names no project, which is no evidence at all.
+fn expected_assembly_stem(config: &RunConfig) -> Option<String> {
+    config
+        .project
+        .as_ref()?
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(str::to_string)
+}
+
+/// Whether a command line runs the configuration's own assembly.
+///
+/// The application `dotnet run` starts for a `UseAppHost=false` project is
+/// launched as `dotnet exec <output>.dll` (and, occasionally, `dotnet X.dll`),
+/// so its OS name is only `dotnet` and the assembly appears nowhere but the
+/// command line. The check is a whole-stem match against the expected assembly:
+/// any argument ending `.dll` whose file stem equals `expected_stem`,
+/// case-insensitively. That is what separates the real child from the SDK's own
+/// `MSBuild.dll` / `VBCSCompiler.dll`, which end `.dll` too but never carry the
+/// user's stem.
+///
+/// Either side missing is no evidence and returns `false`.
+fn runs_assembly(command_line: Option<&str>, expected_stem: Option<&str>) -> bool {
+    let (Some(cmd), Some(expected)) = (command_line, expected_stem) else {
+        return false;
+    };
+    cmd.split_whitespace().any(|token| {
+        let token = token.trim_matches('"');
+        if !token.to_ascii_lowercase().ends_with(".dll") {
+            return false;
+        }
+        let file = token.rsplit(['/', '\\']).next().unwrap_or(token);
+        let stem = &file[..file.len() - 4];
+        stem.eq_ignore_ascii_case(expected)
+    })
+}
+
 /// What the observed process tree says about a pid the supervisor launched.
 struct LauncherVerdict {
     /// Why this pid is not the process holding the user's objects.
@@ -581,6 +628,29 @@ fn launcher_verdict(
             application_child: Some(child.pid),
         },
         several => {
+            // The one place a `dotnet exec <output>.dll` child can be told from
+            // the SDK's own `dotnet`-named build tools is its command line.
+            // Where exactly one child runs the configuration's own assembly it
+            // is the application, and is named with the same wording the
+            // single-child arm uses; anything else — none, or several — abstains
+            // as before, because picking between two candidates from here would
+            // be the guess this module refuses to make.
+            let expected = expected_assembly_stem(config);
+            let runners: Vec<&&DotnetProcess> = several
+                .iter()
+                .filter(|child| runs_assembly(child.command_line.as_deref(), expected.as_deref()))
+                .collect();
+            if let [child] = runners.as_slice() {
+                return LauncherVerdict {
+                    caveat: Some(format!(
+                        "{opening} The application itself is `{}` (pid {}), also in this list; \
+                         capture that one.",
+                        child.name, child.pid
+                    )),
+                    application_child: Some(child.pid),
+                };
+            }
+
             let started = if let [only] = several {
                 format!(
                     "The one process it started that has published a channel is `{}`, which is \
