@@ -21,6 +21,7 @@ pub mod intents;
 pub mod invocation;
 pub mod lsp;
 pub mod model;
+pub mod notes;
 pub mod process;
 pub mod pty;
 pub mod qgate;

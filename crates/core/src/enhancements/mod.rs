@@ -18,7 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -394,6 +394,65 @@ pub fn seed(dir: &Path, bundled: Option<&Path>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A filesystem- and id-safe slug from a human title: lowercase, non-alphanumeric
+/// runs collapsed to a single `-`, trimmed of leading/trailing `-`. An empty or
+/// all-punctuation title falls back to `"note"` so there is always a filename.
+///
+/// The slug is both the template's `id` (the marker key) and its `<slug>.md`
+/// filename, so two notes whose titles slugify the same deliberately refresh one
+/// template rather than accumulating near-duplicates — the same id-dedup the
+/// library already applies in [`discover`].
+pub fn slugify(title: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in title.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash && !out.is_empty() {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "note".to_string()
+    } else {
+        out
+    }
+}
+
+/// Serialise an instruction template as the `.md` [`discover`]/[`parse_template`]
+/// read back: `---`-fenced `id`/`title`/`placement` front matter, a blank line,
+/// then the body verbatim.
+///
+/// `placement: end` — a saved note has no anchor in the target file, and [`End`]
+/// is the one placement that is always valid and always visible. The title is
+/// flattened to a single line so a stray newline cannot break the `key: value`
+/// front matter it sits in. Pure, so the format is pinned against the reader by a
+/// round-trip test rather than discovered in a live install.
+///
+/// [`End`]: Placement::End
+pub fn serialize_template(id: &str, title: &str, body: &str) -> String {
+    let title = title.replace(['\r', '\n'], " ");
+    format!("---\nid: {id}\ntitle: {title}\nplacement: end\n---\n\n{body}")
+}
+
+/// Write an instruction template into `dir` as `<slug(title)>.md`, returning the
+/// path written. The directory is created if absent; an existing file with the
+/// same slug is refreshed (overwritten), matching the id-dedup in [`discover`].
+pub fn save_template(dir: &Path, title: &str, body: &str) -> Result<PathBuf> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let id = slugify(title);
+    let path = dir.join(format!("{id}.md"));
+    let text = serialize_template(&id, title, body);
+    std::fs::write(&path, format!("{text}\n"))
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
 }
 
 /// The menu listing: every template, flagged with whether it is installed in

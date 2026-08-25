@@ -60,7 +60,8 @@ pub async fn review_agents() -> Result<Vec<ReviewAgentInfo>, String> {
 pub async fn start_review(
     app: AppHandle,
     state: State<'_, AppState>,
-    prompt_id: String,
+    prompt_id: Option<String>,
+    prompt_body: Option<String>,
     agent_id: String,
     model: Option<String>,
     mode: Option<String>,
@@ -77,18 +78,26 @@ pub async fn start_review(
     // Absent/blank ⇒ read-only; an unknown value is refused, not defaulted.
     let mode = AgentMode::from_id(mode.as_deref())?;
 
-    // The prompt library is the same one the Enhancements menu lists, so a
-    // user-authored review prompt dropped into the prompts dir is runnable with
-    // no recompile.
-    let prompt = enhancements::list_prompts(&seeded_prompts_dir(&app))
-        .into_iter()
-        .find(|p| p.id == prompt_id)
-        .ok_or_else(|| format!("no review prompt named {prompt_id}"))?;
+    // A run is driven either by an inline body (a note sent to the agent) or a
+    // library prompt id. The library — the same one the Enhancements menu lists,
+    // so a user-authored review prompt dropped into the prompts dir runs with no
+    // recompile — is only consulted when there is no inline body.
+    let library_body = match prompt_id.as_deref() {
+        Some(id) => Some(
+            enhancements::list_prompts(&seeded_prompts_dir(&app))
+                .into_iter()
+                .find(|p| p.id == id)
+                .ok_or_else(|| format!("no review prompt named {id}"))?
+                .body,
+        ),
+        None => None,
+    };
+    let body = review::resolve_prompt_body(prompt_body.as_deref(), library_body.as_deref())?;
 
     // Injected context — evidence, business rules — leads the prompt so the
     // agent reads it before the instruction that acts on it. Blank/absent
     // context leaves the body untouched.
-    let full_prompt = review::compose_prompt(context.as_deref(), &prompt.body);
+    let full_prompt = review::compose_prompt(context.as_deref(), &body);
 
     let invocation = Invocation {
         program: agent.program().to_string(),

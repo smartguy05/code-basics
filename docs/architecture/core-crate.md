@@ -210,6 +210,12 @@ Workspace file access for the Run tab's directory tree and editor. `list_dir` li
 
 .NET user secrets, the way `dotnet user-secrets` and Rider manage them: a project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere) — secrets never touch the workspace. `read` returns id/path/content; `write` validates against the same JSON dialect .NET's configuration loader accepts (comments and trailing commas included) and adds a `<UserSecretsId>` to the project file first when missing, like `dotnet user-secrets init`.
 
+## `notes`
+
+The global [notes / scratchpad](../getting-started/using-the-app.md#notes) store, `code-basics/notes.json`. Unlike almost everything else this crate persists, notes are **user-global, not per-workspace**: `notes_path()` resolves the file beside the enhancements library under the user config directory (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` / `~/.config` elsewhere; `CB_NOTES_PATH` overrides the whole path), so the same scratchpad is available in every project and there is no `.code-basics/` gitignore entry to keep in step. `load` is tolerant the way `enhancements::runs` is — a missing or corrupt file is an empty `NotesFile` (`version` 1, no notes), never an error, so a bad file cannot stop the panel opening — and `save` writes pretty JSON, creating the directory first. A `NotesFile` is a schema `version` plus an ordered `Vec<Note>` (`id`/`title`/`body`/`createdAtMs`/`updatedAtMs`); the camelCase keys are pinned by a test, the same contract as `model`.
+
+The related **"save a note as an instruction"** action lives in `enhancements` (the [instruction-enhancements](../guides/instruction-enhancements.md) library): `slugify` + `serialize_template` emit a `.md` template that round-trips back through `parse_template` (pinned by a test), and `save_template` writes `<slug>.md` into the instruction library, refreshing a same-slug file rather than duplicating it.
+
 ## `model`
 
 The types shared with the frontend: `Project`, `RunConfig`, `Invocation`, `TestCase`/`TestNode`/`TestRunResult`, and their enums. Serialised camelCase; the JSON key names are pinned by tests. See [the IPC contract](ipc-contract.md).

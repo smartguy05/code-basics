@@ -1,36 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ArchitectureView } from "./views/ArchitectureView";
 import { BranchMenu } from "./components/BranchMenu";
-import { BehavioralPanel } from "./components/BehavioralPanel";
-import { ChangesView } from "./views/ChangesView";
 import { MenuBar } from "./components/MenuBar";
-import { HistoryView } from "./views/HistoryView";
-import { InspectView } from "./views/InspectView";
-import { RunView } from "./views/RunView";
-import { ReviewPanel } from "./components/ReviewPanel";
-import { SearchEverywhere } from "./components/SearchEverywhere";
-import { SetupPrompt } from "./components/SetupPrompt";
-import { shouldPrompt, setDismissed } from "./components/setupPromptLogic";
-import { TerminalPanel } from "./components/TerminalPanel";
-import { makeTerminal, type TerminalDescriptor } from "./components/terminalLogic";
-import { TestsView } from "./views/TestsView";
+import { NotesPanel } from "./components/NotesPanel";
+import { WorkspaceTab, type WorkspaceTabHandle } from "./components/WorkspaceTab";
+import { addOpenWorkspace, closeOpenWorkspace, tabLabels } from "./components/workspaceTabsLogic";
 import * as api from "./ipc/api";
-import type { AgentMode } from "./ipc/api";
 import { applyEditorFontSize, loadEditorFontSize } from "./editorFontSize";
 import { DEFAULT_EDITOR_FONT_SIZE, recogniseFontSizeShortcut, stepFontSize } from "./editorFontSizeLogic";
 import { loadRecents, rememberRecent } from "./recentsLogic";
-import type { BehavioralReport, InspectTarget, RootSpec, Workspace } from "./ipc/types";
-
-type Tab = "tests" | "run" | "changes" | "history" | "architecture" | "inspect";
+import type { InspectTarget, RootSpec, Workspace } from "./ipc/types";
 
 /**
- * A jump into the Objects tab raised from somewhere else in the app.
+ * A jump into the Objects tab raised from somewhere else in a workspace tab.
  *
  * This is the UI's request, not the wire request the sidecar reads (that is
  * `InspectRequest` in `ipc/types.ts`): caps and suspension are the backend's
- * business, and all a crashed run or a red test knows is what to look at and
- * why.
+ * business, and all a crashed run or a red test knows is what to look at and why.
  */
 export interface InspectRequest {
   target: InspectTarget;
@@ -42,17 +28,9 @@ export interface InspectRequest {
 /**
  * A file the search palette asked to be opened, held until the Run tab has it.
  *
- * The editor state itself is **not** lifted: `RunView` still owns `openFiles`,
- * `activeFile` and `openFile`, and this is only the request to call it, the same
- * shape as `InspectRequest` above. Lifting the editor would move a pane's worth
- * of state up here to serve one keystroke, and the two views would then have to
- * agree about tab order, dirty files and focus.
- *
- * `token` is what makes the request re-fire. The interesting case is choosing a
- * symbol in a file that is *already* open: the path is unchanged, so an equality
- * check on path — or on the whole object were it rebuilt from equal fields —
- * would decide nothing had happened and leave the user looking at the line they
- * jumped from. A number that only ever goes up cannot collide with itself.
+ * `token` is what makes the request re-fire: choosing a symbol in a file that is
+ * *already* open changes no field a consumer could compare, and a number that
+ * only ever goes up cannot collide with itself.
  */
 export interface OpenFileRequest {
   /** Workspace-relative, as `SearchHit.path` gives it. */
@@ -66,220 +44,86 @@ export interface OpenFileRequest {
 
 /**
  * A configuration the palette asked to be selected — selected, not started.
- *
- * Starting a process off a fuzzy-matched keystroke is the kind of wrong answer
- * this codebase refuses on principle: the match is a guess about what was meant,
- * and the cost of guessing wrong is a build, a port, or a service talking to
- * something real. Selecting puts the configuration under the Run button and
- * leaves the decision to press it where it was.
+ * Starting a process off a fuzzy-matched keystroke is the kind of guess this app
+ * refuses; selecting puts the configuration under the Run button instead.
  */
 export interface SelectConfigRequest {
   configId: string;
   token: number;
 }
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "run", label: "Run" },
-  { id: "tests", label: "Tests" },
-  { id: "changes", label: "Changes" },
-  { id: "history", label: "History" },
-  // The id matches the label on purpose. `inspect`/"Objects" below is the one
-  // place they differ, and CLAUDE.md complains about it by name: grepping the
-  // tree for "Objects" never finds the view that draws it. One such trap is
-  // enough.
-  { id: "architecture", label: "Architecture" },
-  { id: "inspect", label: "Objects" },
-];
-
 /** True when running inside the Tauri webview (false in a plain browser tab). */
 const inTauri = "__TAURI_INTERNALS__" in window;
 
 export function App() {
-  const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [tab, setTab] = useState<Tab>("run");
+  // Every open codebase, and which one is in the foreground. Identity is `root`.
+  const [openWorkspaces, setOpenWorkspaces] = useState<Workspace[]>([]);
+  const [activeRoot, setActiveRoot] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recents, setRecents] = useState<string[]>(() => loadRecents(localStorage));
   const [loading, setLoading] = useState(true);
-  // First-open prompt: shown when a workspace opens without the agent hooks
-  // installed (and not dismissed for it). Decided by an effect on the root.
-  const [showSetup, setShowSetup] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+
+  const activeWorkspace = openWorkspaces.find((w) => w.root === activeRoot) ?? null;
+
   /**
-   * A contextual Inspect click, held only until the Objects tab has consumed
-   * it. It lives here because the views that raise one and the view that
-   * serves it are siblings.
+   * Each open tab registers an action handle here; the titlebar and the global
+   * Notes panel invoke the *foreground* tab's handle. A ref (not state) because
+   * these are imperative one-shot calls, not something the render reads.
    */
-  const [inspectRequest, setInspectRequest] = useState<InspectRequest | null>(null);
-  // The agent panel (adversarial Review + Enhancements "Run Agent") is hosted
-  // here, not in a tab, so a running agent survives switching tabs. One slot,
-  // one agent at a time; a new request replaces the previous panel.
-  const [agentPanel, setAgentPanel] = useState<{
-    initialPromptId?: string;
-    initialMode: AgentMode;
-    title: string;
-    /** Evidence prepended to the prompt (the verify-claims before/after report). */
-    initialContext?: string;
-    /** Bumped per open so a fresh context remounts the panel (see the key below). */
-    token: number;
-  } | null>(null);
+  const tabHandles = useRef(new Map<string, WorkspaceTabHandle>());
+  const registerTab = useCallback((root: string, handle: WorkspaceTabHandle | null) => {
+    if (handle) tabHandles.current.set(root, handle);
+    else tabHandles.current.delete(root);
+  }, []);
+  const activeHandle = () => (activeRoot ? tabHandles.current.get(activeRoot) : undefined);
 
-  // The before/after run and its report live in a floating panel hosted here
-  // (like the agent panel), so the run survives a tab switch and its full
-  // report is shown in a window rather than condensed into the Changes sidebar.
-  // One slot, keyed by token so a fresh open restarts the run.
-  const [behavioralPanel, setBehavioralPanel] = useState<{
-    configId: string;
-    /** Explicit `.http` files to replay, or null to let the backend discover. */
-    httpFiles: string[] | null;
-    verify: boolean;
-    token: number;
-  } | null>(null);
-  // The finished report, passed back to the Changes tab so each intent card can
-  // show the deltas attributed to it.
-  const [behavioralReport, setBehavioralReport] = useState<BehavioralReport | null>(null);
+  /** A rescan or config-save handed back a fresh workspace; replace it in place. */
+  const onWorkspaceChange = useCallback((ws: Workspace) => {
+    setOpenWorkspaces((list) => list.map((w) => (w.root === ws.root ? ws : w)));
+  }, []);
 
   /**
-   * The open floating terminals. Hosted at app level (like the agent panel) so
-   * they survive tab switches and keep their PTY streaming while minimized.
-   * The sequence counter only ever climbs, so a title never names two sessions.
-   */
-  const [terminals, setTerminals] = useState<TerminalDescriptor[]>([]);
-  const terminalSeq = useRef(0);
-  const openTerminal = () => {
-    terminalSeq.current += 1;
-    setTerminals((open) => [...open, makeTerminal(terminalSeq.current)]);
-  };
-  const closeTerminal = (key: string) =>
-    setTerminals((open) => open.filter((t) => t.key !== key));
-
-  /** Open the before/after window for a config; `verify` chains it to the agent. */
-  const openBehavioral = (configId: string, httpFiles: string[] | null, verify: boolean) =>
-    setBehavioralPanel({ configId, httpFiles, verify, token: nextToken() });
-
-  /** Open the agent panel as an adversarial review (Changes tab + menu bar). */
-  const openReview = () =>
-    setAgentPanel({ initialMode: "read-only", title: "Adversarial review", token: nextToken() });
-
-  /**
-   * Open the agent panel primed to verify the diff's claims against the
-   * before/after evidence the Changes tab just gathered. The evidence text is
-   * built in `claimVerifyLogic`; here it only travels into the panel as context.
-   */
-  const openVerifyClaims = (context: string) =>
-    setAgentPanel({
-      initialPromptId: "verify-claims",
-      initialMode: "read-only",
-      title: "Verify claims",
-      initialContext: context,
-      token: nextToken(),
-    });
-
-  /** Send the user to the Objects tab with something already chosen to read. */
-  function requestInspect(request: InspectRequest) {
-    setInspectRequest(request);
-    setTab("inspect");
-  }
-
-  /**
-   * What the palette chose, held only until the Run tab has consumed it.
-   *
-   * Same one-slot arrangement as `inspectRequest`: there is one user pressing
-   * Enter one row at a time, and a queue would only let a stale choice arrive
-   * after the one that replaced it.
-   */
-  const [openRequest, setOpenRequest] = useState<OpenFileRequest | null>(null);
-  const [selectRequest, setSelectRequest] = useState<SelectConfigRequest | null>(null);
-  const requestToken = useRef(0);
-
-  /** A monotonic token, shared by the open/select requests and the agent panel. */
-  function nextToken() {
-    requestToken.current += 1;
-    return requestToken.current;
-  }
-
-  /** Send the user to the Run tab with a file open, and a line revealed. */
-  function requestOpenFile(path: string, name: string, line?: number) {
-    requestToken.current += 1;
-    setOpenRequest({ path, name, line, token: requestToken.current });
-    setTab("run");
-  }
-
-  /** Send the user to the Run tab with a configuration selected. */
-  function requestSelectConfig(configId: string) {
-    requestToken.current += 1;
-    setSelectRequest({ configId, token: requestToken.current });
-    setTab("run");
-  }
-
-  /**
-   * The editor font size: restored on start, and driven by Ctrl+= / Ctrl+- /
-   * Ctrl+0 from anywhere in the app.
-   *
-   * Registered here rather than in a view because the size is app-wide — the
-   * diff, the file editor and the diagram editor all read it — and because the
-   * keystroke should work whichever tab is showing. Capture phase, matching
-   * `SearchEverywhere`: CodeMirror binds Ctrl+- itself in some keymaps, and a
-   * bubble-phase listener would never see it.
+   * The editor font size: restored on start and driven by Ctrl+= / Ctrl+- /
+   * Ctrl+0 from anywhere. App-wide, so it lives here rather than in a tab.
    */
   useEffect(() => {
     applyEditorFontSize(loadEditorFontSize());
-
     const onKeyDown = (event: KeyboardEvent) => {
       const action = recogniseFontSizeShortcut(event);
       if (action === null) return;
-
-      // Ctrl+= / Ctrl+- are the webview's own zoom, which would scale the
-      // whole chrome rather than the code.
       event.preventDefault();
       event.stopPropagation();
-
       const current = loadEditorFontSize();
       applyEditorFontSize(
         action === "reset" ? DEFAULT_EDITOR_FONT_SIZE : stepFontSize(current, action === "increase" ? 1 : -1),
       );
     };
-
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, []);
 
-  // The backend keeps the open workspace across a window reload.
+  // The backend keeps every open workspace across a window reload, so the tab
+  // strip is rebuilt from it (there is no event channel; identity is `root`).
   useEffect(() => {
-    api
-      .currentWorkspace()
-      .then(setWorkspace)
+    Promise.all([api.listOpenWorkspaces(), api.currentWorkspace()])
+      .then(([list, current]) => {
+        setOpenWorkspaces(list);
+        setActiveRoot(current?.root ?? list[0]?.root ?? null);
+      })
       .catch(() => {
         /* nothing open */
       })
       .finally(() => setLoading(false));
   }, []);
 
-  // On opening a workspace, offer to set up the agent hooks if they are not
-  // installed and the prompt has not been dismissed for this workspace.
-  useEffect(() => {
-    const root = workspace?.root;
-    if (!root) {
-      setShowSetup(false);
-      return;
-    }
-    let live = true;
-    // The combined first-open setup installs the gate as Claude Code's Stop hook,
-    // so the prompt decision reads that provider's gate status.
-    void Promise.all([api.intentCaptureStatus(), api.qualityGateStatus("claudeCode")])
-      .then(([providers, gate]) => {
-        if (live) setShowSetup(shouldPrompt(providers, gate, localStorage, root));
-      })
-      .catch(() => {
-        /* status unavailable — do not prompt */
-      });
-    return () => {
-      live = false;
-    };
-  }, [workspace?.root]);
-
+  /** Open a folder: add it as a tab (never evicts) and make it active. */
   async function openPath(path: string) {
     try {
       const opened = await api.openWorkspace(path);
-      setWorkspace(opened);
+      const next = addOpenWorkspace(openWorkspaces, opened);
+      setOpenWorkspaces(next.list);
+      setActiveRoot(next.activeRoot);
       rememberRecent(localStorage, opened.root);
       setRecents(loadRecents(localStorage));
       setError(null);
@@ -297,9 +141,39 @@ export function App() {
     }
   }
 
+  /** Switch tabs: flip the backend's active pointer *before* revealing the tab,
+   *  so the newly-foregrounded views never query the previous workspace. */
+  async function activateWorkspace(root: string) {
+    if (root === activeRoot) return;
+    try {
+      await api.setActiveWorkspace(root);
+      setActiveRoot(root);
+      setError(null);
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
+  }
+
+  /** Close a tab: tears its backend workspace down, then repoints to a neighbour
+   *  (the frontend's tab-order choice, which the backend is realigned to). */
+  async function closeWorkspace(root: string) {
+    try {
+      await api.closeWorkspace(root);
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
+    const next = closeOpenWorkspace(openWorkspaces, root, activeRoot);
+    if (next.activeRoot && next.activeRoot !== activeRoot) {
+      await api.setActiveWorkspace(next.activeRoot).catch(() => {});
+    }
+    setOpenWorkspaces(next.list);
+    setActiveRoot(next.activeRoot);
+  }
+
+  /** Rescan the active workspace (re-detect projects/configs), keeping it live. */
   async function rescan() {
     try {
-      setWorkspace(await api.rescanWorkspace());
+      onWorkspaceChange(await api.rescanWorkspace());
       setError(null);
     } catch (e) {
       setError(api.errorMessage(e));
@@ -323,7 +197,7 @@ export function App() {
     return <div className="empty">Loading…</div>;
   }
 
-  if (!workspace) {
+  if (openWorkspaces.length === 0) {
     return (
       <div className="app">
         <div className="empty" style={{ paddingTop: 80 }}>
@@ -353,46 +227,48 @@ export function App() {
     );
   }
 
+  const labels = tabLabels(openWorkspaces);
+
   return (
     <div className="app">
       <div className="titlebar">
-        {/* File (Open / Rescan / Exit) and Enhancements (Instructions / Prompts).
-            The standalone Open…/Rescan buttons below remain as shortcuts. */}
+        {/* File (Open / Rescan) and Enhancements — the agent actions target the
+            foreground tab through its registered handle. */}
         <MenuBar
           onOpen={pickFolder}
           onRescan={rescan}
-          onRunAgent={(promptId) =>
-            setAgentPanel({
-              initialPromptId: promptId,
-              initialMode: "read-only",
-              title: "Run agent",
-              token: nextToken(),
-            })
-          }
-          onOpenReview={openReview}
+          onRunAgent={(promptId) => activeHandle()?.openRunAgent(promptId)}
+          onOpenReview={() => activeHandle()?.openReview()}
         />
 
-        <span className="workspace-name">{workspace.name}</span>
-        <span className="faint mono" style={{ fontSize: 11 }}>
-          {workspace.root}
-        </span>
+        {activeWorkspace && (
+          <>
+            <span className="workspace-name">{activeWorkspace.name}</span>
+            <span className="faint mono" style={{ fontSize: 11 }}>
+              {activeWorkspace.root}
+            </span>
+            {/* Keyed by the active root, so switching codebases re-reads branches. */}
+            <BranchMenu key={activeRoot ?? ""} />
+          </>
+        )}
 
-        {/* Keyed by root: a different workspace is a different repository. */}
-        <BranchMenu key={workspace.root} />
-
-        {/* The Run view portals its configuration dropdown here (it owns the
-            selection and process state; see RunConfigMenu). */}
+        {/* The foreground Run view portals its configuration dropdown here. */}
         <div id="run-config-slot" />
 
         <div className="spacer" />
 
-        <span className="muted" style={{ fontSize: 11 }}>
-          {workspace.projects.length} project
-          {workspace.projects.length === 1 ? "" : "s"}
-        </span>
+        {activeWorkspace && (
+          <span className="muted" style={{ fontSize: 11 }}>
+            {activeWorkspace.projects.length} project
+            {activeWorkspace.projects.length === 1 ? "" : "s"}
+          </span>
+        )}
+        <button onClick={() => setNotesOpen(true)} title="Open the notes / scratchpad panel">
+          Notes
+        </button>
         <button
-          onClick={openTerminal}
-          title="Open a floating terminal (run Claude Code, a shell, anything)"
+          onClick={() => activeHandle()?.openTerminal()}
+          title="Open a floating terminal in the active codebase"
         >
           + Terminal
         </button>
@@ -402,156 +278,54 @@ export function App() {
         <button onClick={pickFolder}>Open…</button>
       </div>
 
-      <div className="tabs tabs-row">
-        {TABS.map(({ id, label }) => (
-          <button
-            key={id}
-            className={tab === id ? "active" : ""}
-            onClick={() => setTab(id)}
-          >
-            {label}
-          </button>
+      {/* The open-codebases tab strip, above each workspace's own inner tabs. */}
+      <div className="tabs ws-tabs">
+        {openWorkspaces.map((w, i) => (
+          <div key={w.root} className={`ws-tab ${w.root === activeRoot ? "active" : ""}`}>
+            <button
+              className="ws-tab-label"
+              onClick={() => void activateWorkspace(w.root)}
+              title={w.root}
+            >
+              {labels[i]}
+            </button>
+            <button
+              className="ws-tab-close"
+              onClick={() => void closeWorkspace(w.root)}
+              title="Close this codebase"
+            >
+              ×
+            </button>
+          </div>
         ))}
+        <button className="ws-tab-add" onClick={pickFolder} title="Open another codebase">
+          +
+        </button>
       </div>
 
       {error && <div className="error">{error}</div>}
 
-      {/* Run, Tests and Objects stay mounted while hidden: they own running
-          processes and their consoles, which must survive a tab switch.
-          Changes, History and Architecture re-mount so they re-read what is on
-          disk on every visit — git state for the first two, and for
-          Architecture the manifests every diagram is derived from. The
-          before/after run is not tied to this: it lives in a floating panel
-          hosted below, so it survives even while Changes is unmounted. */}
-      <div className="body" hidden={tab !== "run"}>
-        {/* `onNavigate` is an editor jump — Go to definition, a usage row — and
-            is the third caller of this one request path, after the palette and
-            the architecture diagram. Deliberately not a fourth mechanism, and
-            deliberately not a shortcut into `RunView`'s own `openFile`: only
-            `requestToken` makes a jump *inside the file already showing* fire at
-            all. See `OpenFileRequest` above. */}
-        <RunView
-          key={workspace.root}
-          workspace={workspace}
-          onWorkspaceChange={setWorkspace}
-          onInspect={requestInspect}
-          pendingOpen={openRequest}
-          onOpenConsumed={() => setOpenRequest(null)}
-          pendingSelect={selectRequest}
-          onSelectConsumed={() => setSelectRequest(null)}
-          onNavigate={requestOpenFile}
-          active={tab === "run"}
-        />
-      </div>
-      <div className="body" hidden={tab !== "tests"}>
-        <TestsView workspace={workspace} key={workspace.root} onInspect={requestInspect} />
-      </div>
-      <div className="body" hidden={tab !== "inspect"}>
-        <InspectView
-          workspace={workspace}
-          key={workspace.root}
-          pendingRequest={inspectRequest}
-          onRequestConsumed={() => setInspectRequest(null)}
-        />
-      </div>
-      {tab === "changes" && (
-        <div className="body">
-          <ChangesView
-            key={workspace.root}
-            behavioral={behavioralReport}
-            onOpenReview={openReview}
-            onRunBehavioral={(configId, httpFiles) => openBehavioral(configId, httpFiles, false)}
-            onVerifyClaims={(configId, httpFiles) => openBehavioral(configId, httpFiles, true)}
-          />
-        </div>
-      )}
-      {tab === "history" && (
-        <div className="body">
-          <HistoryView key={workspace.root} />
-        </div>
-      )}
-      {tab === "architecture" && (
-        <div className="body">
-          {/* Clicking a box routes through `requestOpenFile` — the same
-              request-and-consume path the search palette uses, and deliberately
-              not a third mechanism. It carries the monotonic token because
-              jumping to a file that is already open changes no field the Run
-              tab could compare, and switches the user to Run, which is where
-              the only editor in this app lives. */}
-          <ArchitectureView
-            key={workspace.root}
-            workspace={workspace}
-            onOpenFile={requestOpenFile}
-          />
-        </div>
-      )}
-
-      {/* Inside the workspace branch only: with nothing open there is no index,
-          no configurations and no editor to open a result in, so the palette
-          would be a keystroke that produces an empty box. */}
-      <SearchEverywhere
-        key={workspace.root}
-        onOpenFile={requestOpenFile}
-        onRunAction={requestSelectConfig}
-      />
-
-      {showSetup && (
-        <SetupPrompt
-          onDismiss={() => setShowSetup(false)}
-          onDontAskAgain={() => {
-            setDismissed(localStorage, workspace.root);
-            setShowSetup(false);
-          }}
-          onInstalled={() => setShowSetup(false)}
-        />
-      )}
-
-      {/* Hosted here rather than in a tab: the agent runs as a background
-          process and its panel minimizes to a pill, so it must outlive a tab
-          switch. Mounted only while open (or minimized), and it cancels its
-          process on close. Keyed so a new request remounts a fresh panel. */}
-      {agentPanel && (
-        <ReviewPanel
-          // The token is part of the key so a fresh open — a new before/after
-          // context in particular — remounts the panel rather than reusing one
-          // that seeded its context from a stale value.
-          key={`${agentPanel.title}:${agentPanel.initialPromptId ?? ""}:${agentPanel.token}`}
-          onClose={() => setAgentPanel(null)}
-          initialPromptId={agentPanel.initialPromptId}
-          initialMode={agentPanel.initialMode}
-          initialContext={agentPanel.initialContext}
-          title={agentPanel.title}
-        />
-      )}
-
-      {/* The before/after run window. Hosted here (not in the Changes tab) so
-          the run outlives a tab switch and its report shows in full. Keyed by
-          token so re-running remounts a fresh run. When opened to verify, it
-          hands its evidence to the agent panel above on completion. */}
-      {behavioralPanel && (
-        <BehavioralPanel
-          key={behavioralPanel.token}
-          configId={behavioralPanel.configId}
-          httpFiles={behavioralPanel.httpFiles}
-          verify={behavioralPanel.verify}
-          onReport={setBehavioralReport}
-          onVerify={openVerifyClaims}
-          onClose={() => setBehavioralPanel(null)}
-        />
-      )}
-
-      {/* Floating interactive terminals. Hosted here so a running Claude Code
-          session (or any shell) survives tab switches and minimizes to a pill.
-          Each owns its own PTY and cleans it up on close/unmount. `index` feeds
-          the cascade offset so several opened in a row do not stack exactly. */}
-      {terminals.map((t, index) => (
-        <TerminalPanel
-          key={t.key}
-          title={t.title}
-          index={index}
-          onClose={() => closeTerminal(t.key)}
+      {/* One tab per open codebase, kept mounted; only the active one is visible,
+          so a background codebase's processes, terminals and language server keep
+          running. */}
+      {openWorkspaces.map((w) => (
+        <WorkspaceTab
+          key={w.root}
+          workspace={w}
+          active={w.root === activeRoot}
+          onWorkspaceChange={onWorkspaceChange}
+          onRegister={registerTab}
         />
       ))}
+
+      {/* The global Notes / scratchpad panel — one instance, not per-workspace.
+          Its "send to agent" runs in the foreground tab. */}
+      {notesOpen && (
+        <NotesPanel
+          onClose={() => setNotesOpen(false)}
+          onSendToAgent={(note) => activeHandle()?.openNoteInAgent(note)}
+        />
+      )}
     </div>
   );
 }

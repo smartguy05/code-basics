@@ -152,6 +152,17 @@ Not one of the six views but available over all of them: the **+ Terminal** butt
 
 Each terminal floats over the app like the agent panel: drag it by its header, resize it from the corner, or **minimize** it to a small pill. Minimized terminals keep running, and the pill **flashes** when a hidden session produces new output, so a background task finishing (or Claude Code asking for something) gets your attention without staying on screen. Open as many as you like — they cascade so they do not stack exactly — and they survive switching between the tabs. Closing a terminal ends its whole process tree, so a shell that launched `claude` (and its `node` child) is cleaned up with it.
 
+## Notes
+
+Also available over all views: the **Notes** button in the titlebar opens a floating scratchpad for free-form notes, reminders, and prompts you want to keep for later. Like a terminal it floats over the app — drag it by its header, resize it from the corner, and **minimize** it to a thin labeled bar that expands back when you click it.
+
+One panel holds several **named notes**: click **+** to start one, click a tab to switch, double-click a tab to rename it, and the **✕** on a tab deletes it. Typing autosaves after a short pause. Notes are stored **globally** — under your user config directory (`%APPDATA%\code-basics\notes.json` on Windows; `$XDG_CONFIG_HOME`/`~/.config` elsewhere), *not* in the workspace — so the same scratchpad follows you into every project. (Set `CB_NOTES_PATH` to override the file location.)
+
+Two actions sit under the active note:
+
+- **Send to agent ▶** runs the note's text as a prompt in the agent panel (the same panel the adversarial Review and Run Agent use), against the open workspace. Pick the agent, model, and read-only/edit posture as usual — the note *is* the prompt, so there is no prompt to choose.
+- **Save as instruction** writes the note into your instruction library as a `.md` template, so it then appears under **[Enhancements](../guides/instruction-enhancements.md) → Add Instructions** and can be spliced into a workspace's `CLAUDE.md`/`AGENTS.md`.
+
 ## Where app state lives
 
 Everything workspace-local is under `.code-basics/` in the workspace root: `config.json` (saved run configurations), `adapters/*.toml` (declarative adapters), `diagrams/` (architecture diagrams — check these in; `diagrams/derived/` is gitignored), and `results/` (test report files — gitignore this). Details in [Configuration](../reference/configuration.md).

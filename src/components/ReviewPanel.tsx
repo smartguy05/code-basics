@@ -54,12 +54,20 @@ const VERIFY_RULES_PROMPT_ID = "verify-rules";
 export function ReviewPanel({
   onClose,
   initialPromptId,
+  initialPromptBody,
   initialMode = "read-only",
   initialContext,
   title = "Adversarial review",
 }: {
   onClose: () => void;
   initialPromptId?: string;
+  /**
+   * An inline prompt body run in place of a library prompt — a Notes-panel note
+   * sent to the agent. When present the prompt picker is hidden (the note *is*
+   * the prompt) and this text drives the run. Seeded once at mount, like
+   * `initialContext`, so a fresh note arrives as a freshly-keyed panel.
+   */
+  initialPromptBody?: string;
   initialMode?: AgentMode;
   initialContext?: string;
   title?: string;
@@ -101,6 +109,10 @@ export function ReviewPanel({
   // Injected evidence, seeded once so re-selecting inputs cannot mutate what a
   // run will send. A fresh context arrives as a freshly-keyed panel (see App).
   const [injectedContext] = useState(initialContext);
+  // An inline note body to run instead of a library prompt, seeded once. When
+  // set, the prompt picker is hidden and the run is driven by this text.
+  const [injectedPromptBody] = useState(initialPromptBody);
+  const runningNote = injectedPromptBody !== undefined;
   // The guard for a rules review: computed from the loaded rules whenever the
   // verify-rules prompt is selected, so the user sees "no rules yet" before
   // spending a run to be told the same thing.
@@ -196,7 +208,9 @@ export function ReviewPanel({
   };
 
   const start = () => {
-    if (!promptId || !agentId || running) return;
+    // A run needs an agent and either a chosen library prompt or an inline note
+    // body — never both required, never neither.
+    if ((!promptId && !runningNote) || !agentId || running) return;
     setError(null);
     setLast(null);
     setAttention(false);
@@ -204,9 +218,11 @@ export function ReviewPanel({
     setPhase("running");
 
     // Capture what is being run now, so a run-once prompt is recorded on a
-    // successful finish even if the selection changes afterwards.
-    const runPromptId = promptId;
-    const runIsOnce = prompts.find((p) => p.id === runPromptId)?.once ?? false;
+    // successful finish even if the selection changes afterwards. A note run has
+    // no library prompt id, so it is never run-once.
+    const runPromptId = runningNote ? undefined : promptId;
+    const runIsOnce =
+      runPromptId !== undefined && (prompts.find((p) => p.id === runPromptId)?.once ?? false);
 
     // Remember this selection for the next open (posture excluded on purpose).
     saveAgentPrefs(localStorage, { agentId, model: models.length ? model : undefined, promptId });
@@ -227,7 +243,7 @@ export function ReviewPanel({
     };
 
     void api
-      .startReview(promptId, agentId, models.length ? model : undefined, mode, (event) => {
+      .startReview(runningNote ? undefined : promptId, agentId, models.length ? model : undefined, mode, (event) => {
         if (isClaude && event.type === "output" && event.stream === "stdout") {
           renderClaude(ndjson.push(event.text));
           return;
@@ -241,6 +257,7 @@ export function ReviewPanel({
           // a failed or cancelled setup can be retried without a confirm.
           if (
             runIsOnce &&
+            runPromptId &&
             event.type === "exited" &&
             event.success &&
             !event.cancelled
@@ -258,7 +275,7 @@ export function ReviewPanel({
         // Codex output, Claude's stderr, and the started banner pass through the
         // console's own renderer.
         consoleRef.current?.handle(event);
-      }, injectedContext)
+      }, injectedContext, injectedPromptBody)
       .catch((e) => {
         setError(String(e));
         setPhase("done");
@@ -392,21 +409,27 @@ export function ReviewPanel({
               {agents[0]?.label}
             </span>
           )}
-          <label>
-            Prompt
-            <select
-              value={promptId ?? ""}
-              disabled={running || prompts.length === 0}
-              onChange={(e) => setPromptId(e.target.value)}
-            >
-              {prompts.length === 0 && <option value="">No prompts found</option>}
-              {prompts.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.title}
-                </option>
-              ))}
-            </select>
-          </label>
+          {runningNote ? (
+            <span className="faint" style={{ fontSize: 12, alignSelf: "center" }}>
+              Running note
+            </span>
+          ) : (
+            <label>
+              Prompt
+              <select
+                value={promptId ?? ""}
+                disabled={running || prompts.length === 0}
+                onChange={(e) => setPromptId(e.target.value)}
+              >
+                {prompts.length === 0 && <option value="">No prompts found</option>}
+                {prompts.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {models.length > 0 && (
             <label>
               Model
@@ -439,7 +462,11 @@ export function ReviewPanel({
               Cancel
             </button>
           ) : (
-            <button className="primary" disabled={!promptId || !agentId} onClick={start}>
+            <button
+              className="primary"
+              disabled={(!promptId && !runningNote) || !agentId}
+              onClick={start}
+            >
               {mode === "edit" ? "Run (edits)" : "Run"}
             </button>
           )}

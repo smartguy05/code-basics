@@ -18,6 +18,7 @@ mod commands {
     pub mod inspect;
     pub mod intents;
     pub mod lsp;
+    pub mod notes;
     pub mod qgate;
     pub mod review;
     pub mod rules;
@@ -99,6 +100,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::workspace::open_workspace,
             commands::workspace::current_workspace,
+            commands::workspace::list_open_workspaces,
+            commands::workspace::set_active_workspace,
+            commands::workspace::close_workspace,
             commands::workspace::rescan_workspace,
             commands::workspace::save_config,
             commands::workspace::delete_config,
@@ -113,6 +117,9 @@ pub fn run() {
             commands::enhancements::list_prompts,
             commands::enhancements::agent_runs,
             commands::enhancements::mark_agent_run,
+            commands::enhancements::save_note_as_instruction,
+            commands::notes::read_notes,
+            commands::notes::write_notes,
             commands::files::fs_list_dir,
             commands::files::fs_read_file,
             commands::files::fs_write_file,

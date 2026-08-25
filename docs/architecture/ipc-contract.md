@@ -16,7 +16,7 @@ A renamed Rust field would serialise happily and only surface as `undefined` in 
 - `enum_variants_serialise_in_camel_case`
 - `optional_config_fields_are_omitted_rather_than_null`
 
-Renaming a Rust field fails one of these tests, and the failure message points at the TypeScript file that needs the matching edit. Crossing types defined outside `model.rs` pin their keys beside their own module instead — `workspace_serialises_with_the_keys_the_ui_reads` in `workspace.rs`, `dir_entry_serialises_with_the_keys_the_ui_reads` in `files.rs`, the terminal's `TerminalEvent` in `pty/model.rs` (each variant's keys pinned, and a signalled exit kept as an explicit `null` code — the same "no `skip_serializing_if`" rule as `ProcessEvent`), and the inspector's types in `inspect/model_tests.rs`:
+Renaming a Rust field fails one of these tests, and the failure message points at the TypeScript file that needs the matching edit. Crossing types defined outside `model.rs` pin their keys beside their own module instead — `workspace_serialises_with_the_keys_the_ui_reads` in `workspace.rs`, `dir_entry_serialises_with_the_keys_the_ui_reads` in `files.rs`, the terminal's `TerminalEvent` in `pty/model.rs` (each variant's keys pinned, and a signalled exit kept as an explicit `null` code — the same "no `skip_serializing_if`" rule as `ProcessEvent`), the notes `Note`/`NotesFile` in `notes_tests.rs` (`serialisation_shape_pins_the_wire_keys`), and the inspector's types in `inspect/model_tests.rs`:
 
 - `inspect_node_serialises_with_the_keys_the_ui_reads`
 - `inspect_graph_serialises_with_the_keys_the_ui_reads`

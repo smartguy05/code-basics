@@ -451,6 +451,28 @@ export interface PromptRun {
 /** Run-once records keyed by prompt id (`enhancements::runs::PromptRuns`). */
 export type PromptRuns = Record<string, PromptRun>;
 
+/**
+ * One note in the global scratchpad (`notes::Note`). The key names are pinned by
+ * `serialisation_shape_pins_the_wire_keys` in `crates/core/src/notes_tests.rs`.
+ */
+export interface Note {
+  id: string;
+  title: string;
+  body: string;
+  /** When the note was created, milliseconds since the Unix epoch. */
+  createdAtMs: number;
+  /** When the note was last edited, milliseconds since the Unix epoch. */
+  updatedAtMs: number;
+}
+
+/** The whole global notes file (`notes::NotesFile`). */
+export interface NotesFile {
+  /** Schema version (currently 1), so the format can migrate. */
+  version: number;
+  /** The notes, in the order the panel shows their tabs. */
+  notes: Note[];
+}
+
 /** An installed review agent (`commands::review::ReviewAgentInfo`). */
 export interface ReviewAgentInfo {
   id: string;

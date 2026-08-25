@@ -60,13 +60,51 @@ pub async fn open_workspace(
     Ok(workspace)
 }
 
+/// The currently active workspace (the foreground tab), or `None` if nothing is
+/// open. Reports "nothing open" as a value, not an error.
 #[tauri::command]
 pub async fn current_workspace(state: State<'_, AppState>) -> Result<Option<Workspace>, String> {
-    Ok(state
-        .workspace
-        .lock()
-        .map_err(|_| "application state is unavailable".to_string())?
-        .clone())
+    Ok(state.active_workspace_opt())
+}
+
+/// Every open workspace, so the frontend can rebuild its tab strip (there is no
+/// event channel; identity is `Workspace.root`).
+#[tauri::command]
+pub async fn list_open_workspaces(state: State<'_, AppState>) -> Result<Vec<Workspace>, String> {
+    Ok(state.open_workspaces())
+}
+
+/// Make an already-open workspace the active one. A cheap pointer move that tears
+/// nothing down — background workspaces keep running. The frontend awaits this
+/// before the newly-foregrounded views issue their commands.
+#[tauri::command]
+pub async fn set_active_workspace(state: State<'_, AppState>, root: String) -> Result<(), String> {
+    let root = dunce::canonicalize(&root).unwrap_or_else(|_| PathBuf::from(&root));
+    state.set_active(&root)
+}
+
+/// Close an open workspace: remove its slot, tear down its language server, and
+/// cancel its running processes. Returns the new active root (or `None`).
+#[tauri::command]
+pub async fn close_workspace(
+    state: State<'_, AppState>,
+    root: String,
+) -> Result<Option<String>, String> {
+    let root = dunce::canonicalize(&root).unwrap_or_else(|_| PathBuf::from(&root));
+    let (removed, new_active) = state.close(&root);
+
+    // Off the lock: the slot owns live process trees. Tear the language server
+    // down and cancel every configuration run this workspace had going.
+    if let Some(slot) = removed {
+        if let Some(handle) = slot.take_lsp() {
+            handle.request_teardown();
+        }
+        for id in slot.supervisor.running_ids().await {
+            slot.supervisor.cancel(&id).await;
+        }
+    }
+
+    Ok(new_active.map(|p| p.display().to_string()))
 }
 
 /// Re-detect projects, picking up files added since the workspace was opened.

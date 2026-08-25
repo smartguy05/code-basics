@@ -11,7 +11,7 @@ import {
   type PanelLayout,
   type PanelSize,
 } from "./reviewLayoutLogic";
-import { cascadeShift, outputNeedsAttention, TERMINAL_LAYOUT_KEY } from "./terminalLogic";
+import { cascadeShift, outputNeedsAttention, terminalLayoutKey } from "./terminalLogic";
 
 /**
  * One floating, interactive terminal.
@@ -28,16 +28,26 @@ import { cascadeShift, outputNeedsAttention, TERMINAL_LAYOUT_KEY } from "./termi
  */
 export function TerminalPanel({
   title,
+  cwd,
   index,
   onClose,
 }: {
   title: string;
+  /**
+   * The workspace root this terminal runs in — its PTY cwd, and the scope for
+   * its saved layout. Passed explicitly so the terminal stays in its own
+   * repository even after its tab is backgrounded.
+   */
+  cwd: string;
   /** Position among the currently open terminals, for the cascade offset. */
   index: number;
   onClose: () => void;
 }) {
   const viewRef = useRef<TerminalViewHandle>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  // Layout is remembered per workspace, so a terminal in one codebase does not
+  // inherit the geometry of one in another.
+  const layoutKey = terminalLayoutKey(cwd);
 
   // The PTY session id, once `terminal_open` resolves. Keystrokes and resizes
   // produced before then are dropped — xterm fires neither until the view is
@@ -50,11 +60,11 @@ export function TerminalPanel({
   const minimizedRef = useRef(false);
 
   const [pos, setPos] = useState<PanelLayout | undefined>(() => {
-    const saved = loadPanelLayout(localStorage, TERMINAL_LAYOUT_KEY);
+    const saved = loadPanelLayout(localStorage, layoutKey);
     return saved.left !== undefined && saved.top !== undefined ? saved : undefined;
   });
   const [size] = useState<PanelSize | undefined>(() => {
-    const saved = loadPanelLayout(localStorage, TERMINAL_LAYOUT_KEY);
+    const saved = loadPanelLayout(localStorage, layoutKey);
     return saved.width !== undefined && saved.height !== undefined
       ? { width: saved.width, height: saved.height }
       : undefined;
@@ -73,10 +83,15 @@ export function TerminalPanel({
     let alive = true;
     const { cols, rows } = sizeRef.current;
     void api
-      .terminalOpen(cols, rows, (event: TerminalEvent) => {
-        if (!alive) return;
-        handleEvent(event);
-      })
+      .terminalOpen(
+        cols,
+        rows,
+        (event: TerminalEvent) => {
+          if (!alive) return;
+          handleEvent(event);
+        },
+        cwd,
+      )
       .then((id) => {
         if (!alive) {
           // Unmounted before open resolved — do not leak the session.
@@ -151,8 +166,8 @@ export function TerminalPanel({
           { width, height },
           { width: window.innerWidth, height: window.innerHeight },
         );
-        const saved = loadPanelLayout(localStorage, TERMINAL_LAYOUT_KEY);
-        savePanelLayout(localStorage, { ...saved, ...clamped }, TERMINAL_LAYOUT_KEY);
+        const saved = loadPanelLayout(localStorage, layoutKey);
+        savePanelLayout(localStorage, { ...saved, ...clamped }, layoutKey);
       }, 200);
     });
     observer.observe(panel);
@@ -211,7 +226,7 @@ export function TerminalPanel({
       header.releasePointerCapture(e.pointerId);
       header.removeEventListener("pointermove", onMove);
       header.removeEventListener("pointerup", onUp);
-      if (moved) savePanelLayout(localStorage, latest, TERMINAL_LAYOUT_KEY);
+      if (moved) savePanelLayout(localStorage, latest, layoutKey);
     };
     header.addEventListener("pointermove", onMove);
     header.addEventListener("pointerup", onUp);

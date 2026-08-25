@@ -30,6 +30,7 @@ import type {
   LspStatus,
   MergeReport,
   NetworkKind,
+  NotesFile,
   ProcessEvent,
   ProjectSecrets,
   PromptInfo,
@@ -59,13 +60,45 @@ import type {
 // Workspace
 // ---------------------------------------------------------------------------
 
+/**
+ * Open a codebase. With multiple workspaces the backend ADDS this root to its
+ * open set (keyed by canonical root) and makes it the active one — it no longer
+ * evicts whatever was open before. Opening an already-open root focuses and
+ * rescans it. The returned `Workspace` is the freshly opened one.
+ */
 export const openWorkspace = (path: string) =>
   invoke<Workspace>("open_workspace", { path });
 
+/** The currently ACTIVE workspace (the foreground tab), or null if none is open. */
 export const currentWorkspace = () =>
   invoke<Workspace | null>("current_workspace");
 
 export const rescanWorkspace = () => invoke<Workspace>("rescan_workspace");
+
+/**
+ * Every open workspace, in no particular order — the frontend orders its own tab
+ * strip. Used to rebuild the tab bar after a reload, since there is no event
+ * channel; identity is `Workspace.root`.
+ */
+export const listOpenWorkspaces = () =>
+  invoke<Workspace[]>("list_open_workspaces");
+
+/**
+ * Make `root` the active workspace that the argument-free commands resolve
+ * against. A cheap pointer move that tears nothing down — background workspaces
+ * keep running. Must be awaited BEFORE the newly-active views issue their
+ * commands, or they would query the previous workspace.
+ */
+export const setActiveWorkspace = (root: string) =>
+  invoke<void>("set_active_workspace", { root });
+
+/**
+ * Close an open workspace: removes its slot, tears down its language server and
+ * cancels its running processes, and repoints the active workspace to another
+ * open one (or none). Returns the new active root, or null when nothing is left.
+ */
+export const closeWorkspace = (root: string) =>
+  invoke<string | null>("close_workspace", { root });
 
 export const saveConfig = (config: RunConfig) =>
   invoke<Workspace>("save_config", { config });
@@ -139,6 +172,21 @@ export const agentRuns = () => invoke<PromptRuns>("agent_runs");
 export const markAgentRun = (promptId: string) =>
   invoke<void>("mark_agent_run", { promptId });
 
+/** Save a Notes-panel note into the instruction library as a `.md` template. */
+export const saveNoteAsInstruction = (title: string, body: string) =>
+  invoke<void>("save_note_as_instruction", { title, body });
+
+// ---------------------------------------------------------------------------
+// Notes / scratchpad (user-global, not per-workspace)
+// ---------------------------------------------------------------------------
+
+/** Read the global notes file. Missing/unreadable yields an empty set. */
+export const readNotes = () => invoke<NotesFile>("read_notes");
+
+/** Write the global notes file, creating its directory if absent. */
+export const writeNotes = (file: NotesFile) =>
+  invoke<void>("write_notes", { file });
+
 // ---------------------------------------------------------------------------
 // Running
 // ---------------------------------------------------------------------------
@@ -205,7 +253,7 @@ export type AgentMode = "read-only" | "edit";
  * so callers should not await it before rendering the console.
  */
 export function startReview(
-  promptId: string,
+  promptId: string | undefined,
   agentId: string,
   model: string | undefined,
   mode: AgentMode,
@@ -216,10 +264,24 @@ export function startReview(
    * unchanged. Trailing so existing five-argument calls are unaffected.
    */
   context?: string,
+  /**
+   * An inline prompt body — a note's text sent straight to the agent — used in
+   * place of a library prompt. When present it wins over `promptId`; when absent
+   * the run falls back to the library prompt named by `promptId`.
+   */
+  promptBody?: string,
 ): Promise<void> {
   const channel = new Channel<ProcessEvent>();
   channel.onmessage = onEvent;
-  return invoke<void>("start_review", { promptId, agentId, model, mode, context, channel });
+  return invoke<void>("start_review", {
+    promptId,
+    promptBody,
+    agentId,
+    model,
+    mode,
+    context,
+    channel,
+  });
 }
 
 export const cancelReview = () => invoke<boolean>("cancel_review");

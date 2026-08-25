@@ -10,9 +10,12 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `open_workspace` | `path: String` | `Workspace` | Scans, merges saved configs, stores as current |
-| `current_workspace` | – | `Workspace \| null` | Survives window reload |
-| `rescan_workspace` | – | `Workspace` | Re-detects; keeps saved configs layered on top |
+| `open_workspace` | `path: String` | `Workspace` | Scans, merges saved configs. **Adds** this codebase to the open set and makes it active (does not evict others) |
+| `current_workspace` | – | `Workspace \| null` | The **active** workspace (foreground tab); survives window reload |
+| `list_open_workspaces` | – | `Workspace[]` | Every open workspace, so the tab strip can be rebuilt (no event channel; identity is `root`) |
+| `set_active_workspace` | `root: String` | `()` | Make an open workspace active. Cheap pointer move; tears nothing down |
+| `close_workspace` | `root: String` | `String \| null` | Remove a workspace: tears down its language server, cancels its runs. Returns the new active root |
+| `rescan_workspace` | – | `Workspace` | Re-detects the **active** workspace; keeps saved configs layered on top, and its live LSP/symbols/runs |
 | `save_config` | `config: RunConfig` | `Workspace` | Persists to `.code-basics/config.json` |
 | `delete_config` | `id: String` | `Workspace` | |
 | `preview_rider_import` | – | `RiderImportPreview` | Parses `.run/*.xml`; writes nothing |
@@ -47,6 +50,16 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `list_prompts` | — | `PromptInfo[]` | Every prompt on disk, each carrying its `body` and the `once` run-once flag |
 | `agent_runs` | — | `PromptRuns` | The current workspace's run-once record (`.code-basics/agent-runs.json`), keyed by prompt id; drives the "already run" badge |
 | `mark_agent_run` | `prompt_id: String` | `()` | Record a successful run-once run for the current workspace (called by the panel on a clean exit) |
+| `save_note_as_instruction` | `title: String`, `body: String` | `()` | Write a Notes-panel note into the instruction library as a `<slug>.md` template, so it appears under **Add Instructions** |
+
+## Notes / scratchpad
+
+`src-tauri/src/commands/notes.rs` — the global notes / scratchpad store. Notes are **user-global, not per-workspace**: they live at `code-basics/notes.json` under the user config directory (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` / `~/.config` elsewhere; `CB_NOTES_PATH` overrides the whole path), so the same scratchpad is available in every workspace. Neither command touches `AppState`.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `read_notes` | — | `NotesFile` | The global notes; a missing or unreadable file is an empty set, not an error |
+| `write_notes` | `file: NotesFile` | `()` | Overwrite the global notes file, creating its directory if absent |
 
 ## .NET user secrets
 
@@ -65,8 +78,8 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 |---------|-----------|---------|-------|
 | `start_run` | `config_id: String`, `channel: Channel<ProcessEvent>`, `env: Map?` | `()` | Streams output; resolves on exit. `env` is layered over the config's own for this run only (the Run tab's environment picker) |
 | `build_project` | `config_id: String`, `action: "build" \| "rebuild" \| "clean"`, `channel: Channel<ProcessEvent>` | `()` | .NET only; runs `dotnet build` / `build --no-incremental` / `clean`, registered as `<config_id>:build` |
-| `cancel_run` | `config_id: String` | `bool` | Kills the process **tree** |
-| `running_ids` | – | `String[]` | Config ids currently running |
+| `cancel_run` | `config_id: String`, `root?: String` | `bool` | Kills the process **tree**. `root` targets a specific (possibly background) workspace; defaults to the active one |
+| `running_ids` | `root?: String` | `String[]` | Config ids currently running in `root`'s workspace, or the active one |
 | `run_tests` | `config_id: String`, `only_failed: bool`, `channel: Channel<ProcessEvent>` | `TestRunOutcome` | Streams output, then parses the report; `only_failed` filters to the previous run's failures |
 | `last_test_run` | `config_id: String` | `TestRunOutcome \| null` | Most recent result for this config |
 
@@ -77,7 +90,7 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
 | `review_agents` | – | `ReviewAgentInfo[]` | The agents whose CLI is installed (`claude`/`codex`), preference order, each with its offered model aliases (empty ⇒ the agent's own default) |
-| `start_review` | `prompt_id: String`, `agent_id: String`, `model: String?`, `mode: String?`, `context: String?`, `channel: Channel<ProcessEvent>` | `()` | Runs a chosen prompt from the prompt library. `mode` picks the posture (default read-only): read-only is Claude `--permission-mode plan` / Codex `--sandbox read-only`; edit is Claude `--permission-mode bypassPermissions` / Codex `--sandbox workspace-write`. `context` (evidence, business-rule docs) is prepended to the prompt so the agent reads it before the instruction; blank/absent leaves the prompt unchanged. Serves both the adversarial Review and Run Agent. Registered as `review:current`; an unknown model or mode is refused; a missing CLI surfaces as a `Failed` event |
+| `start_review` | `prompt_id: String?`, `prompt_body: String?`, `agent_id: String`, `model: String?`, `mode: String?`, `context: String?`, `channel: Channel<ProcessEvent>` | `()` | Runs either a chosen library prompt (`prompt_id`) or an inline body (`prompt_body`, a Notes-panel note sent to the agent); the inline body wins when present, and with neither the run is refused rather than empty. `mode` picks the posture (default read-only): read-only is Claude `--permission-mode plan` / Codex `--sandbox read-only`; edit is Claude `--permission-mode bypassPermissions` / Codex `--sandbox workspace-write`. `context` (evidence, business-rule docs) is prepended so the agent reads it before the instruction; blank/absent leaves the prompt unchanged. Serves the adversarial Review, Run Agent, and Notes → Send to agent. Registered as `review:current`; an unknown model or mode is refused; a missing CLI surfaces as a `Failed` event |
 | `cancel_review` | – | `bool` | Kills the review process **tree** |
 
 ## Interactive terminals

@@ -43,6 +43,7 @@ import type {
   RunConfig,
   Scorecard,
   UnfulfilledClaim,
+  Workspace,
   WorkingStatus,
 } from "../ipc/types";
 
@@ -101,11 +102,18 @@ const MODE_LABELS: Record<ComparisonMode, string> = {
 };
 
 export function ChangesView({
+  workspace,
   behavioral,
   onOpenReview,
   onRunBehavioral,
   onVerifyClaims,
 }: {
+  /**
+   * The workspace this view is for, passed down rather than fetched, so it always
+   * matches the tab that mounted it — a background poll must never read the
+   * backend's *active* workspace, which may be another tab.
+   */
+  workspace: Workspace;
   /**
    * The finished before/after report, owned by `App` (the run itself happens in
    * the floating `BehavioralPanel`). Held here only to badge each intent card
@@ -212,7 +220,9 @@ export function ChangesView({
    * config it runs. The intent sidebar has no console of its own, so the run's
    * streamed output is condensed into a one-line status rather than shown raw.
    */
-  const [configs, setConfigs] = useState<RunConfig[]>([]);
+  // Derived from the workspace prop, not fetched: the before/after action needs
+  // this tab's configs, which must not come from the backend's active workspace.
+  const configs: RunConfig[] = workspace.configs;
   /** The compact before/after actions menu in the intent header. */
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   /**
@@ -291,16 +301,6 @@ export function ChangesView({
   useEffect(() => {
     void refreshStatus();
   }, [refreshStatus]);
-
-  // The run configs, so the before/after action has a config to replay. A test
-  // config is preferred (its outcomes are the sharpest evidence); otherwise the
-  // first config the workspace knows about.
-  useEffect(() => {
-    void api
-      .currentWorkspace()
-      .then((ws) => setConfigs(ws?.configs ?? []))
-      .catch(() => setConfigs([]));
-  }, []);
 
   const behavioralConfig = pickBehavioralConfig(configs);
   // Whether "Verify claims" can run, against which config, and why — the whole

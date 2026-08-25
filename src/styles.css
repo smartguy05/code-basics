@@ -186,6 +186,69 @@ textarea:focus {
   display: none;
 }
 
+/* One open codebase. Fills the space under the tab strips; only the foreground
+   one is shown, the rest stay mounted (so their processes/terminals keep
+   running) but hidden. `display: flex` beats the UA `[hidden]` rule, hence the
+   explicit override. */
+.workspace-tab {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workspace-tab[hidden] {
+  display: none;
+}
+
+/* The open-codebases tab strip: a row of workspace tabs above the inner tabs. */
+.ws-tabs {
+  align-items: center;
+  padding: 2px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.ws-tab {
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 4px 4px 0 0;
+}
+.ws-tab.active {
+  border-bottom-color: var(--accent);
+  background: var(--bg-raised);
+}
+.ws-tab-label {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 4px 8px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-tab.active .ws-tab-label {
+  color: var(--text);
+}
+.ws-tab-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 2px 6px;
+  line-height: 1;
+}
+.ws-tab-close:hover {
+  color: var(--text);
+}
+.ws-tab-add {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 4px 8px;
+}
+
 .sidebar {
   width: 280px; /* overridden by the Sidebar component's stored width */
   flex: 0 0 auto;
@@ -1090,6 +1153,115 @@ textarea:focus {
   height: 100%;
   background: var(--bg-inset);
   padding: 4px 6px;
+}
+
+/* Notes / scratchpad panel ------------------------------------------------ */
+
+/* Reuses the .review-panel base (float, drag, resize). A little narrower than a
+   terminal — it holds text, not a wide TUI. */
+.notes-panel {
+  width: min(560px, 48vw);
+  height: min(520px, 66vh);
+}
+
+/* Minimized: a thin labeled bar pinned to the right, not a rounded pill — the
+   requested "collapse to a thin bar with a label that expands back". */
+.notes-pill {
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  writing-mode: horizontal-tb;
+}
+
+.notes-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-strong);
+  overflow-x: auto;
+}
+
+.notes-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--text-faint);
+}
+
+.notes-tab.active {
+  background: var(--bg-inset);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.notes-tab-close {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.notes-tab-close:hover {
+  color: var(--text);
+}
+
+.notes-tab-add {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  border-radius: 5px;
+  cursor: pointer;
+  padding: 2px 8px;
+}
+
+.notes-tab-rename {
+  font-size: 12px;
+  padding: 3px 6px;
+  min-width: 90px;
+}
+
+.notes-editor {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: none;
+  border-top: 1px solid var(--border-strong);
+  background: var(--bg-inset);
+  color: var(--text);
+  padding: 10px 12px;
+  font-family: var(--mono, monospace);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.notes-editor:focus {
+  outline: none;
+}
+
+.notes-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-strong);
+}
+
+.notes-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  border-top: 1px solid var(--border-strong);
 }
 
 .terminal-host .xterm {

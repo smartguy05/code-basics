@@ -18,6 +18,7 @@ Deliberately thin. Every decision lives in [`cb-core`](core-crate.md); what rema
 | `src/commands/intents.rs` | Agent intent capture and grouping commands |
 | `src/commands/inspect.rs` | Object-inspection commands; resolves the bundled sidecar directory |
 | `src/commands/terminal.rs` | Floating-terminal commands over `cb_core::pty` (open/write/resize/close/list) |
+| `src/commands/notes.rs` | Global notes / scratchpad commands over `cb_core::notes` (read/write); no `AppState` |
 | `src/recorder.rs` | The one non-window entry point: `record-intent`, re-invoked by an agent hook |
 
 The complete command list with parameters is in the [command reference](../reference/commands.md); it must stay in sync with the `generate_handler!` block in `lib.rs`.

@@ -4,22 +4,31 @@
 //! live PTY. The React/xterm plumbing that drives them lives in
 //! `TerminalPanel.tsx` and `TerminalView.tsx` and decides nothing.
 
-/** A terminal the app is hosting: a stable React key and a display title. */
+/** A terminal the app is hosting: a stable React key, a display title, and the
+ * workspace it belongs to. */
 export interface TerminalDescriptor {
   /** Stable across re-renders; the React key and layout scoping id. */
   key: string;
   /** Shown in the header and the minimized pill, e.g. "Terminal 3". */
   title: string;
+  /**
+   * The workspace root this terminal was opened for, passed to the backend as
+   * the PTY's cwd. Bound at open time and never re-derived, so a terminal stays
+   * in its own repository even after its tab is backgrounded and the backend's
+   * *active* workspace has moved on.
+   */
+  cwd: string;
 }
 
 /**
  * Build the descriptor for a newly opened terminal from a monotonic sequence
- * number the host keeps. Monotonic rather than "lowest unused" on purpose:
- * closing Terminal 2 and opening another gives Terminal 4, not a recycled 2, so
- * a title never refers to two different sessions across a session's life.
+ * number the host keeps and the workspace root it belongs to. Monotonic rather
+ * than "lowest unused" on purpose: closing Terminal 2 and opening another gives
+ * Terminal 4, not a recycled 2, so a title never refers to two different
+ * sessions across a session's life.
  */
-export function makeTerminal(seq: number): TerminalDescriptor {
-  return { key: `term-${seq}`, title: `Terminal ${seq}` };
+export function makeTerminal(seq: number, cwd: string): TerminalDescriptor {
+  return { key: `term-${seq}`, title: `Terminal ${seq}`, cwd };
 }
 
 /** The step, in px, each cascaded terminal is offset from the previous. */
@@ -40,8 +49,14 @@ export function cascadeShift(index: number, step: number = CASCADE_STEP): number
   return clamped * step;
 }
 
-/** The localStorage key the terminals persist their shared layout under. */
-export const TERMINAL_LAYOUT_KEY = "cb.terminal.layout";
+/**
+ * The localStorage key the terminals of one workspace persist their shared
+ * layout under. Scoped by root so a fresh terminal in one codebase does not
+ * adopt the saved geometry of a terminal in another.
+ */
+export function terminalLayoutKey(root: string): string {
+  return `cb.terminal.layout:${root}`;
+}
 
 /**
  * Whether a chunk of terminal output should raise the minimized panel's

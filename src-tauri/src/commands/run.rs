@@ -36,7 +36,8 @@ pub async fn start_run(
     // run only — the UI's environment picker (e.g. ASPNETCORE_ENVIRONMENT).
     env: Option<std::collections::BTreeMap<String, String>>,
 ) -> Result<(), String> {
-    let workspace = state.workspace()?;
+    let slot = state.active_slot()?;
+    let workspace = slot.workspace();
     let config = workspace
         .configs
         .iter()
@@ -44,7 +45,7 @@ pub async fn start_run(
         .ok_or_else(|| format!("no configuration named {config_id}"))?;
 
     if !config.compound.is_empty() {
-        return start_compound(&state, &workspace, config, &env, channel).await;
+        return start_compound(&slot, &workspace, config, &env, channel).await;
     }
 
     // Merged into the config *before* building, so invocation-time checks
@@ -65,8 +66,7 @@ pub async fn start_run(
     let (tx, rx) = mpsc::channel(512);
     forward(rx, channel);
 
-    state
-        .supervisor
+    slot.supervisor
         .run(&config_id, &invocation, tx)
         .await
         .map(|_| ())
@@ -79,7 +79,7 @@ pub async fn start_run(
 /// compound or an individual member works. Output from all members is
 /// interleaved onto the one channel, the way a shared console would show it.
 async fn start_compound(
-    state: &State<'_, AppState>,
+    slot: &std::sync::Arc<crate::state::WorkspaceSlot>,
     workspace: &cb_core::workspace::Workspace,
     config: &cb_core::model::RunConfig,
     env: &Option<std::collections::BTreeMap<String, String>>,
@@ -105,7 +105,7 @@ async fn start_compound(
         let (tx, rx) = mpsc::channel(512);
         forward(rx, channel.clone());
 
-        let supervisor = state.supervisor.clone();
+        let supervisor = slot.supervisor.clone();
         handles.push(tokio::spawn(async move {
             supervisor
                 .run(&member.id, &invocation, tx)
@@ -143,7 +143,8 @@ pub async fn build_project(
     action: cb_core::adapters::dotnet::BuildAction,
     channel: Channel<ProcessEvent>,
 ) -> Result<(), String> {
-    let workspace = state.workspace()?;
+    let slot = state.active_slot()?;
+    let workspace = slot.workspace();
     let config = workspace
         .configs
         .iter()
@@ -163,35 +164,64 @@ pub async fn build_project(
     let (tx, rx) = mpsc::channel(512);
     forward(rx, channel);
 
-    state
-        .supervisor
+    slot.supervisor
         .run(&format!("{config_id}:build"), &invocation, tx)
         .await
         .map(|_| ())
         .map_err(|e| format!("{e:#}"))
 }
 
-#[tauri::command]
-pub async fn cancel_run(state: State<'_, AppState>, config_id: String) -> Result<bool, String> {
-    // Stopping a compound means stopping its members: the members are what is
-    // actually registered with the supervisor.
-    if let Ok(workspace) = state.workspace() {
-        if let Some(config) = workspace.configs.iter().find(|c| c.id == config_id) {
-            if !config.compound.is_empty() {
-                let mut any = false;
-                for member in &config.compound {
-                    any |= state.supervisor.cancel(member).await;
-                }
-                return Ok(any);
-            }
+/// The workspace slot a process-control command targets: the one named by `root`
+/// when given (so a background tab's processes can be stopped or listed), else
+/// the active one. `None` when that workspace is not open.
+fn control_slot(
+    state: &State<'_, AppState>,
+    root: Option<String>,
+) -> Option<std::sync::Arc<crate::state::WorkspaceSlot>> {
+    match root {
+        Some(root) => {
+            let root =
+                dunce::canonicalize(&root).unwrap_or_else(|_| std::path::PathBuf::from(&root));
+            state.slot(&root)
         }
+        None => state.active_slot().ok(),
     }
-    Ok(state.supervisor.cancel(&config_id).await)
 }
 
 #[tauri::command]
-pub async fn running_ids(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    Ok(state.supervisor.running_ids().await)
+pub async fn cancel_run(
+    state: State<'_, AppState>,
+    config_id: String,
+    // The workspace whose run to cancel; defaults to the active one.
+    root: Option<String>,
+) -> Result<bool, String> {
+    let Some(slot) = control_slot(&state, root) else {
+        return Ok(false);
+    };
+    // Stopping a compound means stopping its members: the members are what is
+    // actually registered with the supervisor.
+    if let Some(config) = slot.workspace().configs.iter().find(|c| c.id == config_id) {
+        if !config.compound.is_empty() {
+            let mut any = false;
+            for member in &config.compound {
+                any |= slot.supervisor.cancel(member).await;
+            }
+            return Ok(any);
+        }
+    }
+    Ok(slot.supervisor.cancel(&config_id).await)
+}
+
+#[tauri::command]
+pub async fn running_ids(
+    state: State<'_, AppState>,
+    // The workspace whose running ids to list; defaults to the active one.
+    root: Option<String>,
+) -> Result<Vec<String>, String> {
+    match control_slot(&state, root) {
+        Some(slot) => Ok(slot.supervisor.running_ids().await),
+        None => Ok(Vec::new()),
+    }
 }
 
 /// The outcome of a test run, ready for the tree view.
@@ -212,7 +242,8 @@ pub async fn run_tests(
     only_failed: bool,
     channel: Channel<ProcessEvent>,
 ) -> Result<TestRunOutcome, String> {
-    let workspace = state.workspace()?;
+    let slot = state.active_slot()?;
+    let workspace = slot.workspace();
     let config = workspace
         .configs
         .iter()
@@ -248,7 +279,7 @@ pub async fn run_tests(
     let (tx, rx) = mpsc::channel(512);
     forward(rx, channel);
 
-    let exit_code = state
+    let exit_code = slot
         .supervisor
         .run(&config_id, &invocation, tx)
         .await

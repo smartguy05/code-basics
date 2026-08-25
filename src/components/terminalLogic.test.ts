@@ -3,17 +3,21 @@ import {
   cascadeShift,
   makeTerminal,
   outputNeedsAttention,
-  TERMINAL_LAYOUT_KEY,
+  terminalLayoutKey,
 } from "./terminalLogic";
 
 describe("makeTerminal", () => {
-  it("derives a stable key and a human title from the sequence", () => {
-    expect(makeTerminal(1)).toEqual({ key: "term-1", title: "Terminal 1" });
-    expect(makeTerminal(42)).toEqual({ key: "term-42", title: "Terminal 42" });
+  it("derives a stable key, a human title, and carries the workspace cwd", () => {
+    expect(makeTerminal(1, "/ws")).toEqual({ key: "term-1", title: "Terminal 1", cwd: "/ws" });
+    expect(makeTerminal(42, "/other")).toEqual({
+      key: "term-42",
+      title: "Terminal 42",
+      cwd: "/other",
+    });
   });
 
   it("gives distinct keys to distinct sequence numbers", () => {
-    expect(makeTerminal(2).key).not.toBe(makeTerminal(3).key);
+    expect(makeTerminal(2, "/ws").key).not.toBe(makeTerminal(3, "/ws").key);
   });
 });
 
@@ -55,9 +59,13 @@ describe("outputNeedsAttention", () => {
   });
 });
 
-describe("TERMINAL_LAYOUT_KEY", () => {
+describe("terminalLayoutKey", () => {
+  it("scopes the layout by workspace root so two codebases do not share geometry", () => {
+    expect(terminalLayoutKey("/a")).toBe("cb.terminal.layout:/a");
+    expect(terminalLayoutKey("/a")).not.toBe(terminalLayoutKey("/b"));
+  });
+
   it("is distinct from the agent panel's key so their layouts do not collide", () => {
-    expect(TERMINAL_LAYOUT_KEY).toBe("cb.terminal.layout");
-    expect(TERMINAL_LAYOUT_KEY).not.toBe("cb.agentPanel.layout");
+    expect(terminalLayoutKey("/a")).not.toBe("cb.agentPanel.layout");
   });
 });

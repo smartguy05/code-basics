@@ -134,6 +134,7 @@ export function RunView({
   onSelectConsumed,
   onNavigate,
   active,
+  foreground = true,
 }: {
   workspace: Workspace;
   onWorkspaceChange: (workspace: Workspace) => void;
@@ -145,6 +146,13 @@ export function RunView({
    * time they return here, with no visible cause.
    */
   active: boolean;
+  /**
+   * Whether this Run view's *workspace* is the foreground tab (regardless of
+   * which inner tab is showing). Gates the titlebar config dropdown's portal, so
+   * only the foreground codebase's dropdown occupies the single slot. Defaults
+   * true for the single-workspace callers.
+   */
+  foreground?: boolean;
   /** A file the search palette chose; see `OpenFileRequest` in `App.tsx`. */
   pendingOpen?: OpenFileRequest | null;
   onOpenConsumed?: () => void;
@@ -1011,6 +1019,7 @@ export function RunView({
         dotClass={dotClass}
         canMove={(config, delta) => neighborId(config, delta) !== null}
         groupLabel={solutionOf}
+        active={foreground}
         onSelect={(config) => {
           setSelectedId(config.id);
           // Selecting something that has a console tab focuses that tab.
