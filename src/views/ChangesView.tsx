@@ -6,7 +6,9 @@ import {
   normaliseEndings,
   onlyHunks,
 } from "../components/diffLogic";
-import { buildSections, statusLetter, type FileSection } from "./changesLogic";
+import { buildSections, sortFilesByRisk, statusLetter, type FileSection } from "./changesLogic";
+import { fileRisk, hunkRisk, type RiskIndex } from "../components/riskLogic";
+import { confidenceForFile } from "../components/confidenceLogic";
 import { Sidebar } from "../components/Sidebar";
 import { IntentPanel } from "../components/IntentPanel";
 import {
@@ -17,6 +19,7 @@ import {
 import { verifyClaimsAction } from "../components/claimVerifyLogic";
 import { ErosionPanel } from "../components/ErosionPanel";
 import { badgeCount } from "../components/erosionLogic";
+import { uncoveredIndicesForPath } from "../components/coverageOfChangeLogic";
 import { StashPanel } from "../components/StashPanel";
 import * as api from "../ipc/api";
 import { applyEditorFontSize, loadEditorFontSize, onEditorFontSizeChange } from "../editorFontSize";
@@ -27,6 +30,7 @@ import {
 } from "../editorFontSizeLogic";
 import type {
   BehavioralReport,
+  ChangeCoverage,
   Changelist,
   ComparisonMode,
   FileChange,
@@ -43,6 +47,7 @@ import type {
   RunConfig,
   Scorecard,
   UnfulfilledClaim,
+  Workspace,
   WorkingStatus,
 } from "../ipc/types";
 
@@ -101,11 +106,18 @@ const MODE_LABELS: Record<ComparisonMode, string> = {
 };
 
 export function ChangesView({
+  workspace,
   behavioral,
   onOpenReview,
   onRunBehavioral,
   onVerifyClaims,
 }: {
+  /**
+   * The workspace this view is for, passed down rather than fetched, so it always
+   * matches the tab that mounted it — a background poll must never read the
+   * backend's *active* workspace, which may be another tab.
+   */
+  workspace: Workspace;
   /**
    * The finished before/after report, owned by `App` (the run itself happens in
    * the floating `BehavioralPanel`). Held here only to badge each intent card
@@ -179,6 +191,7 @@ export function ChangesView({
   const statusSignature = useRef<string | null>(null);
   const intentSignature = useRef<string | null>(null);
   const erosionSignature = useRef<string | null>(null);
+  const coverageSignature = useRef<string | null>(null);
   busyRef.current = busy;
 
   /**
@@ -205,14 +218,24 @@ export function ChangesView({
   const [intentGroups, setIntentGroups] = useState<IntentGroup[]>([]);
   const [scorecard, setScorecard] = useState<Scorecard>(EMPTY_SCORECARD);
   const [unfulfilled, setUnfulfilled] = useState<UnfulfilledClaim[]>([]);
+  const [evidenced, setEvidenced] = useState<UnfulfilledClaim[]>([]);
   const [erosion, setErosion] = useState<ErosionReport | null>(null);
+  /**
+   * Coverage of the changed lines from the last coverage-enabled test run,
+   * mapped onto the current diff. Feeds the amber "uncovered" wash in the diff
+   * pane (any grouping) and the summary + per-card badges in the intent view.
+   * `null` until a coverage run has been collected.
+   */
+  const [coverage, setCoverage] = useState<ChangeCoverage | null>(null);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   /**
    * The runtime before/after comparison for the current intent view, and the
    * config it runs. The intent sidebar has no console of its own, so the run's
    * streamed output is condensed into a one-line status rather than shown raw.
    */
-  const [configs, setConfigs] = useState<RunConfig[]>([]);
+  // Derived from the workspace prop, not fetched: the before/after action needs
+  // this tab's configs, which must not come from the backend's active workspace.
+  const configs: RunConfig[] = workspace.configs;
   /** The compact before/after actions menu in the intent header. */
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   /**
@@ -292,16 +315,6 @@ export function ChangesView({
     void refreshStatus();
   }, [refreshStatus]);
 
-  // The run configs, so the before/after action has a config to replay. A test
-  // config is preferred (its outcomes are the sharpest evidence); otherwise the
-  // first config the workspace knows about.
-  useEffect(() => {
-    void api
-      .currentWorkspace()
-      .then((ws) => setConfigs(ws?.configs ?? []))
-      .catch(() => setConfigs([]));
-  }, []);
-
   const behavioralConfig = pickBehavioralConfig(configs);
   // Whether "Verify claims" can run, against which config, and why — the whole
   // decision lives in the tested helper.
@@ -341,6 +354,7 @@ export function ChangesView({
         setIntentGroups(review.groups);
         setScorecard(review.scorecard);
         setUnfulfilled(review.unfulfilled);
+        setEvidenced(review.evidenced ?? []);
         setProviders(status);
       }
     } catch (e) {
@@ -376,17 +390,47 @@ export function ChangesView({
     void refreshErosion();
   }, [refreshErosion, status]);
 
+  /**
+   * Re-read the coverage-of-change map. Non-streaming (like the erosion scan):
+   * it reads the cached artifact from the last coverage-enabled test run and
+   * maps it onto the diff in the current mode. Runs for every grouping except
+   * stashes, because the amber wash in the diff pane is shown in the files and
+   * erosion views too, not only intent.
+   */
+  const refreshCoverage = useCallback(async () => {
+    if (grouping === "stashes") return;
+    try {
+      const report = await api.coverageOfChange(mode);
+      const signature = JSON.stringify(report);
+      if (signature !== coverageSignature.current) {
+        coverageSignature.current = signature;
+        setCoverage(report);
+      }
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
+  }, [grouping, mode]);
+
+  useEffect(() => {
+    void refreshCoverage();
+  }, [refreshCoverage, status]);
+
   // Erosion flags are keyed by DiffLine.index, which only means anything within
   // one comparison mode. Drop them the instant the mode changes so a risk badge
   // can never intersect a stale flag against a differently-numbered diff; the
   // effect above then rescans for the new mode.
   useEffect(() => {
     setErosion(null);
-    // The intent and erosion signatures are keyed to the diff's line numbering,
-    // which is per-mode; clear them so the next scan is never suppressed by a
-    // match against the previous mode's result.
+    // Coverage's uncovered indices are DiffLine.index values too, so they are
+    // only valid for one mode — drop them the instant the mode changes so the
+    // amber wash can never paint against a differently-numbered diff.
+    setCoverage(null);
+    // The intent, erosion and coverage signatures are keyed to the diff's line
+    // numbering, which is per-mode; clear them so the next scan is never
+    // suppressed by a match against the previous mode's result.
     erosionSignature.current = null;
     intentSignature.current = null;
+    coverageSignature.current = null;
   }, [mode]);
 
   /**
@@ -407,9 +451,10 @@ export function ChangesView({
       void refreshStatus();
       void refreshIntent();
       void refreshErosion();
+      void refreshCoverage();
     }, POLL_MS);
     return () => window.clearInterval(id);
-  }, [refreshStatus, refreshIntent, refreshErosion, grouping]);
+  }, [refreshStatus, refreshIntent, refreshErosion, refreshCoverage, grouping]);
 
   const loadFile = useCallback(
     async (path: string, comparison: ComparisonMode) => {
@@ -439,7 +484,8 @@ export function ChangesView({
     if (selectedPath) await loadFile(selectedPath, mode);
     await refreshIntent();
     await refreshErosion();
-  }, [refreshStatus, loadFile, selectedPath, mode, refreshIntent, refreshErosion]);
+    await refreshCoverage();
+  }, [refreshStatus, loadFile, selectedPath, mode, refreshIntent, refreshErosion, refreshCoverage]);
 
   async function withBusy(action: () => Promise<void>) {
     setBusy(true);
@@ -680,7 +726,55 @@ export function ChangesView({
     return contents?.baseline ?? null;
   }, [grouping, groupHunks, diff, contents]);
   const canRevertAll = shownDiff != null && allChangedIndices(shownDiff).length > 0;
-  const sections = buildSections(files, groups);
+  // The uncovered changed-line indices for the open file only. Scoped by path
+  // (not the whole report) because DiffLine.index is per-file, so an index from
+  // another file could collide with a real line number in this one.
+  const uncoveredForFile = uncoveredIndicesForPath(coverage, selectedPath);
+
+  /**
+   * Per-line risk for the open file, computed against the **full** diff so the
+   * hunk indices line up with the intent groups' `files[].hunks` (which index
+   * the full `FileDiff.hunks`). The entries are keyed by `DiffLine.index`, which
+   * survives the `onlyHunks` scoping unchanged, so they still land correctly
+   * when the diff pane shows only a card's hunks. Derived from erosion flags and
+   * intent groups already on the client — nothing new is fetched — so it clears
+   * and recomputes with the mode exactly as those two do.
+   */
+  const riskForFile = useMemo<RiskIndex[]>(() => {
+    if (!diff || !selectedPath) return [];
+    const flags = erosion?.flags ?? [];
+    const out: RiskIndex[] = [];
+    diff.hunks.forEach((hunk, hunkIndex) => {
+      const level = hunkRisk(selectedPath, hunkIndex, diff, flags, intentGroups);
+      if (!level) return;
+      for (const line of hunk.lines) {
+        if (line.origin === "context") continue;
+        out.push({ index: line.index, level });
+      }
+    });
+    return out;
+  }, [diff, selectedPath, erosion, intentGroups]);
+
+  /**
+   * Per-line agent self-confidence for the open file — the confidence heatmap.
+   * Fans each intent group's stated `selfConfidence` out to the changed
+   * `DiffLine.index` values it owns (via `files[].lineIndices`), strongest tint
+   * on `low`. Derived from the intent grouping already on the client, so it
+   * clears and recomputes with the mode exactly as the risk overlay does. The
+   * indices are keyed by `DiffLine.index`, which survives the `onlyHunks`
+   * scoping, so they still land when the pane shows only a card's hunks.
+   */
+  const confidenceForOpenFile = useMemo(() => {
+    if (!diff || !selectedPath) return [];
+    return confidenceForFile(selectedPath, diff, intentGroups);
+  }, [diff, selectedPath, intentGroups]);
+
+  // Surface the riskier files first within each section, and keep the plain git
+  // order for everything unweighted. Uses the same erosion + intent signals; in
+  // the files view those are quiet, so this is mostly the sensitive-path emphasis.
+  const sections = sortFilesByRisk(buildSections(files, groups), (path) =>
+    fileRisk(path, erosion?.flags ?? [], intentGroups),
+  );
   /** What the marker strip marks and what F7 steps through. */
   const differences = shownDiff?.hunks.length ?? 0;
 
@@ -711,10 +805,15 @@ export function ChangesView({
 
   function renderFileRow(change: FileChange, section: FileSection) {
     const { letter, className } = statusLetter(change, section.side);
+    // Emphasis for a file the risk signals elevated; abstains (no class) for an
+    // ordinary one. Same signals as the sort above.
+    const risk = fileRisk(change.path, erosion?.flags ?? [], intentGroups);
     return (
       <button
         key={`${section.key}:${change.path}`}
-        className={`row ${change.path === selectedPath ? "selected" : ""}`}
+        className={`row ${change.path === selectedPath ? "selected" : ""}${
+          risk ? ` risk-${risk.level}` : ""
+        }`}
         onClick={() => openFile(change.path)}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -907,6 +1006,7 @@ export function ChangesView({
               groups={intentGroups}
               scorecard={scorecard}
               unfulfilled={unfulfilled}
+              evidenced={evidenced}
               providers={providers}
               selectedGroup={selectedGroup}
               selectedPath={selectedPath}
@@ -927,6 +1027,7 @@ export function ChangesView({
               onClearIntent={clearCardIntent}
               behavioral={behavioral}
               erosionFlags={erosion?.flags}
+              coverage={coverage}
             />
           </>
         )}
@@ -1276,6 +1377,9 @@ export function ChangesView({
                 onSave={save}
                 onSelectionChange={setSelectedLines}
                 highlight={highlight}
+                uncovered={uncoveredForFile}
+                risk={riskForFile}
+                confidence={confidenceForOpenFile}
                 handleRef={diffHandle}
               />
             )

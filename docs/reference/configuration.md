@@ -172,7 +172,7 @@ A multi-targeted project (`<TargetFrameworks>`) multiplies the above by framewor
 
 ## .NET user secrets
 
-Secrets are deliberately **not** part of `config.json` (which is checked in). The Run tab's **Secrets…** button edits the standard .NET user-secrets store: the project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere), which the .NET configuration system reads at runtime. Saving secrets for a project without an id adds one to the `.csproj`, exactly like `dotnet user-secrets init`. Core logic: `crates/core/src/secrets.rs`.
+Secrets are deliberately **not** part of `config.json` (which is checked in). The Run tab's **Secrets…** button opens the standard .NET user-secrets store as an ordinary editor tab: the project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere), which the .NET configuration system reads at runtime. Saving secrets for a project without an id adds one to the `.csproj`, exactly like `dotnet user-secrets init`. Core logic: `crates/core/src/secrets.rs`.
 
 ## `RunConfig` fields
 

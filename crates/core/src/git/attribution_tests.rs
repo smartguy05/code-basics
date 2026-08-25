@@ -86,6 +86,7 @@ fn labelled(record: IntentRecord, text: &str) -> Intents {
         paths: Vec::new(),
         anchor: None,
         source: LabelSource::Declared,
+        self_confidence: None,
     };
     Intents {
         records: vec![record],

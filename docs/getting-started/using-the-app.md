@@ -47,7 +47,7 @@ Detected runners: VSTest and Microsoft.Testing.Platform for .NET, Vitest and Jes
 
 Application launches: .NET executable projects (including `launchSettings.json` profiles) and `package.json` scripts. Rust crates are detected too — a `Cargo.toml` becomes a project, classified as an executable or a library — but detection is all it is: no `cargo run` or `cargo test` configuration is offered, deliberately, since that would add entries to this tab and the Tests tab for every Rust repository. To run Rust, drop in the `cargo-nextest` [declarative adapter](../guides/adding-an-ecosystem.md); it supplies configurations for the same directory rather than being shadowed by the built-in detection. Configurations are picked from the dropdown in the titlebar, next to the branch widget — its status dot is grey when idle, yellow while building/starting, green once the app is up, red on failure. Output streams to a console as it is produced, including bare-`\r` progress redraws. Each run (and each build action) gets its own console tab labeled with the configuration name, so running several projects at once keeps their output separate; closing a tab does not stop its process.
 
-The sidebar is a directory tree of the workspace, filtered like the project scan (no `node_modules`, `bin`, `obj`, …) but with no depth limit — each directory is listed the first time it is expanded. Clicking a file opens it in an editor pane above the console (syntax highlighting per extension, tabs per open file). **Ctrl+S** saves; unsaved files show a ● on their tab, and closing such a tab discards the changes. The divider between editor and console drags to resize, and the split persists.
+The sidebar is a directory tree of the workspace, filtered like the project scan (no `node_modules`, `bin`, `obj`, …) but with no depth limit — each directory is listed the first time it is expanded. Clicking a file opens it in an editor pane above the console (syntax highlighting per extension, tabs per open file). **Ctrl+S** saves and **Ctrl+/** toggles line comments for the file's language; unsaved files show a ● on their tab, and closing such a tab discards the changes. The divider between editor and console drags to resize, and the split persists.
 
 The file tabs behave like a browser's. **The back and forward mouse buttons step through the files you have been looking at** — open one file, then another, and *back* returns you to the first; this includes jumps made by [middle-clicking a symbol](#finding-where-a-method-is-used) to go to its definition, so *back* brings you home from a jump into another file. This works while the Run tab is on screen. **Pin a tab** with the 📌 that appears on it (hover a tab, or it stays lit once pinned): pinned tabs move to a separate row above the rest and stay put, so a file you keep returning to is not lost among the others. Middle-click still closes a tab, pinned or not.
 
@@ -85,7 +85,7 @@ The dropdown's list can be arranged to taste: the ☆ on each row stars it as a 
 
 For .NET configurations the toolbar has 🔨 build / ⟳ rebuild / 🧹 clean buttons, and an **Env** dropdown that sets `ASPNETCORE_ENVIRONMENT` for the run (default `Development`). Options are managed inside the dropdown itself — a free-text row adds one, the × beside an option removes it, and "(config default)" passes the configuration through untouched. The list is per-workspace and personal (localStorage), not written to `config.json`.
 
-For .NET configurations, **Secrets…** edits the project's [user secrets](../reference/configuration.md#net-user-secrets) — the same store `dotnet user-secrets` and Rider manage, kept under your user profile rather than in the repository. Saving for a project without a `<UserSecretsId>` adds one to the `.csproj` first.
+For .NET configurations, **Secrets…** opens the project's [user secrets](../reference/configuration.md#net-user-secrets) as an ordinary editor tab (`secrets.json`, with JSON highlighting and Ctrl+S to save) — the Rider way — rather than a modal. It is the same store `dotnet user-secrets` and Rider manage, kept under your user profile rather than in the repository. Saving for a project without a `<UserSecretsId>` adds one to the `.csproj` first; opening the tab changes nothing until you save.
 
 ### Changes
 
@@ -145,6 +145,23 @@ Reads the real managed heap of a .NET process — either from the crash dump the
 Two limits define the whole feature: **no method is ever called** and **no property is ever evaluated**, because this reads memory rather than a running execution context (auto-properties are the exception — they have a backing field). In exchange, inspecting cannot throw, deadlock, or alter what it inspects. Anything unreadable is shown as an explicit gap with a reason, and anything cut short by a limit says so — never a shorter list that looks complete.
 
 Crash-dump capture is opt-in per workspace and off by default, because a dump is a verbatim copy of process memory. Attaching to a running process offers **every** attachable .NET process on the machine, each labelled *launched*, *descendant* or *unrelated* — the `dotnet run` child is usually the one you want, since the pid code-basics started is the CLI launcher. Full detail, including what attaching costs the target: [Inspecting objects](../guides/inspecting-objects.md).
+
+## Terminals
+
+Not one of the six views but available over all of them: the **+ Terminal** button in the titlebar opens a floating, interactive terminal window. It runs your shell (PowerShell on Windows, `$SHELL` on macOS/Linux) as a real pseudo-terminal, so it is a genuine interactive session — you can launch Claude Code, run a build, tail a log, anything — and type into it, arrow keys and prompts and all. It starts in the open workspace's directory.
+
+Each terminal floats over the app like the agent panel: drag it by its header, resize it from the corner, or **minimize** it to a small pill. Minimized terminals keep running, and the pill **flashes** when a hidden session produces new output, so a background task finishing (or Claude Code asking for something) gets your attention without staying on screen. Open as many as you like — they cascade so they do not stack exactly — and they survive switching between the tabs. Closing a terminal ends its whole process tree, so a shell that launched `claude` (and its `node` child) is cleaned up with it.
+
+## Notes
+
+Also available over all views: the **Notes** button in the titlebar opens a floating scratchpad for free-form notes, reminders, and prompts you want to keep for later. Like a terminal it floats over the app — drag it by its header, resize it from the corner, and **minimize** it to a thin labeled bar that expands back when you click it.
+
+One panel holds several **named notes**: click **+** to start one, click a tab to switch, double-click a tab to rename it, and the **✕** on a tab deletes it. Typing autosaves after a short pause. Notes are stored **globally** — under your user config directory (`%APPDATA%\code-basics\notes.json` on Windows; `$XDG_CONFIG_HOME`/`~/.config` elsewhere), *not* in the workspace — so the same scratchpad follows you into every project. (Set `CB_NOTES_PATH` to override the file location.)
+
+Two actions sit under the active note:
+
+- **Send to agent ▶** runs the note's text as a prompt in the agent panel (the same panel the adversarial Review and Run Agent use), against the open workspace. Pick the agent, model, and read-only/edit posture as usual — the note *is* the prompt, so there is no prompt to choose.
+- **Save as instruction** writes the note into your instruction library as a `.md` template, so it then appears under **[Enhancements](../guides/instruction-enhancements.md) → Add Instructions** and can be spliced into a workspace's `CLAUDE.md`/`AGENTS.md`.
 
 ## Where app state lives
 

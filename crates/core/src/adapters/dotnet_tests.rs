@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::dotnet::*;
-use crate::model::{ConfigSource, ProjectKind, RunConfig, RunKind, TestRunner};
+use crate::model::{ConfigSource, CoverageFormat, ProjectKind, RunConfig, RunKind, TestRunner};
 
 fn csproj(body: &str) -> ProjectFile {
     parse_project_file(&format!(
@@ -367,9 +367,49 @@ fn ctx<'a>(root: &'a Path, results: &'a Path, runner: TestRunner) -> BuildContex
         trx_extension_available: true,
         has_launch_settings: false,
         filter: None,
+        coverage: false,
         dumps_dir: None,
         dump_env: None,
     }
+}
+
+fn coverage_ctx<'a>(root: &'a Path, results: &'a Path, runner: TestRunner) -> BuildContext<'a> {
+    BuildContext {
+        coverage: true,
+        ..ctx(root, results, runner)
+    }
+}
+
+#[test]
+fn coverage_mode_collects_xplat_coverage_and_sets_the_spec() {
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/.code-basics/results");
+    let inv = test_invocation(
+        &test_config(),
+        &coverage_ctx(root, results, TestRunner::VsTest),
+    );
+
+    assert!(inv
+        .args
+        .iter()
+        .any(|a| a == "--collect:XPlat Code Coverage"));
+    assert!(inv.args.iter().any(|a| a == "--results-directory"));
+
+    let spec = inv.coverage.expect("coverage spec set");
+    assert_eq!(spec.format, CoverageFormat::Cobertura);
+    // Cobertura's spec points at the results *directory*; the consumer finds
+    // the newest coverage.cobertura.xml under a GUID subfolder.
+    assert_eq!(spec.path, results.to_path_buf());
+}
+
+#[test]
+fn a_non_coverage_test_run_is_byte_identical_to_today() {
+    let root = Path::new("/repo");
+    let results = Path::new("/repo/.code-basics/results");
+    let plain = test_invocation(&test_config(), &ctx(root, results, TestRunner::VsTest));
+
+    assert!(plain.coverage.is_none());
+    assert!(!plain.args.iter().any(|a| a.contains("XPlat Code Coverage")));
 }
 
 fn app_config() -> RunConfig {

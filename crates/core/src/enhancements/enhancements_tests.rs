@@ -402,3 +402,64 @@ fn list_prompts_uses_the_file_stem_when_no_front_matter() {
     assert_eq!(prompts[0].title, "bare");
     assert_eq!(prompts[0].body.trim(), "Just a raw prompt body.");
 }
+
+// --- Saving a note as an instruction template ----------------------------
+
+#[test]
+fn slugify_makes_a_filesystem_safe_id() {
+    assert_eq!(slugify("Deploy Steps"), "deploy-steps");
+    assert_eq!(
+        slugify("  Trim & Collapse  --  runs "),
+        "trim-collapse-runs"
+    );
+    assert_eq!(slugify("CAPS_and_under"), "caps-and-under");
+    // All punctuation / empty falls back rather than yielding an empty filename.
+    assert_eq!(slugify("!!!"), "note");
+    assert_eq!(slugify(""), "note");
+}
+
+#[test]
+fn serialize_template_round_trips_through_parse_template() {
+    let body = "Line one.\nLine two with `code` and a stray --- inside.";
+    let text = serialize_template("deploy-steps", "Deploy Steps", body);
+    let parsed = parse_template(&text, "deploy-steps");
+    assert_eq!(parsed.id, "deploy-steps");
+    assert_eq!(parsed.title, "Deploy Steps");
+    assert_eq!(parsed.placement, Placement::End);
+    assert_eq!(parsed.body, body, "body preserved verbatim");
+}
+
+#[test]
+fn serialize_template_flattens_a_multiline_title() {
+    let text = serialize_template("t", "Line A\nLine B", "body");
+    let parsed = parse_template(&text, "t");
+    assert_eq!(parsed.title, "Line A Line B");
+}
+
+#[test]
+fn save_template_writes_a_discoverable_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = save_template(dir.path(), "Deploy Steps", "Do the thing.").unwrap();
+    assert_eq!(
+        path.file_name().unwrap().to_str().unwrap(),
+        "deploy-steps.md"
+    );
+    assert!(path.exists());
+
+    // It shows up in the instruction listing and as a runnable prompt.
+    let templates = discover(dir.path());
+    assert_eq!(templates.len(), 1);
+    assert_eq!(templates[0].id, "deploy-steps");
+    assert_eq!(templates[0].title, "Deploy Steps");
+    assert_eq!(templates[0].body.trim(), "Do the thing.");
+}
+
+#[test]
+fn save_template_refreshes_a_same_slug_file_rather_than_duplicating() {
+    let dir = tempfile::tempdir().unwrap();
+    save_template(dir.path(), "Deploy Steps", "first").unwrap();
+    save_template(dir.path(), "Deploy  Steps", "second").unwrap();
+    let templates = discover(dir.path());
+    assert_eq!(templates.len(), 1, "same slug refreshes, not duplicates");
+    assert_eq!(templates[0].body.trim(), "second");
+}

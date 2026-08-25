@@ -79,6 +79,25 @@ pub async fn remove_enhancement(
     Ok(enhancements::list(&dir, &root))
 }
 
+/// Save a note (from the Notes panel) into the instruction library as a `.md`
+/// template, so it then appears in the "Add Instructions" menu.
+///
+/// User-owned like the prompt library, so it needs no workspace: it writes into
+/// the same seeded templates directory `list_enhancements` reads. The decisions —
+/// the slug, the front matter, the refresh-on-same-slug — all live in
+/// [`cb_core::enhancements`].
+#[tauri::command]
+pub async fn save_note_as_instruction(
+    app: AppHandle,
+    title: String,
+    body: String,
+) -> Result<(), String> {
+    let dir = seeded_dir(&app);
+    enhancements::save_template(&dir, &title, &body)
+        .map(|_| ())
+        .map_err(|e| format!("{e:#}"))
+}
+
 /// The seeded prompts directory.
 ///
 /// Shared with the review command (`commands::review`), which *runs* a chosen

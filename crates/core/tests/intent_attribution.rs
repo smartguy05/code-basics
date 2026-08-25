@@ -213,6 +213,7 @@ fn a_declared_reason_binds_across_turns_through_the_public_review() {
             paths: vec!["f.rs".into()],
             anchor: None,
             source: LabelSource::Declared,
+            self_confidence: None,
         }],
     };
 

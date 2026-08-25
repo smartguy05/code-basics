@@ -16,6 +16,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use cb_core::erosion;
+use cb_core::git::{ComparisonMode, Repo};
 use cb_core::process::resolve_program;
 use cb_core::qgate::{self, Gate};
 use serde_json::Value;
@@ -109,6 +111,14 @@ fn gate() -> anyhow::Result<Option<String>> {
         )));
     }
 
+    // Erosion advisory — non-blocking (stderr, exit 0). The detector ranks
+    // nothing and carries no severity, so it never gates; it sits with the
+    // memory reminder. Reached only after the blocking checks short-circuited.
+    // Abstain on any failure: a diff we could not compute says nothing.
+    if let Some(msg) = erosion_reminder(&root) {
+        eprintln!("{msg}");
+    }
+
     // Memory advisory — non-blocking (stderr, exit 0).
     if qgate::should_remind_memories(&changed) {
         eprintln!(
@@ -166,6 +176,20 @@ fn applicable(gate: Gate, root: &Path) -> bool {
             .unwrap_or(false),
         Gate::Rustfmt | Gate::Clippy => root.join("Cargo.toml").exists(),
     }
+}
+
+/// The non-blocking erosion advisory for the working tree, or `None` to say
+/// nothing. Delegates the wording and the empty-vs-something decision to
+/// [`qgate::erosion_reminder`]; this does only the I/O (open the repo, compute
+/// the diff, run the rules) and **abstains on any error** — a scan we could not
+/// run must never speak, exactly as the blocking gates abstain on a check they
+/// could not spawn.
+fn erosion_reminder(root: &Path) -> Option<String> {
+    let repo = Repo::open(root).ok()?;
+    let diffs = repo.diff_all(ComparisonMode::WorkingToHead).ok()?;
+    let (rules, _warnings) = erosion::all_rules(root);
+    let report = erosion::scan_diffs(&diffs, &rules);
+    qgate::erosion_reminder(&report)
 }
 
 /// Run a gate. `Some(output)` means it failed (and carries the combined

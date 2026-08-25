@@ -106,6 +106,7 @@ async fn enumerate(
         cwd: cwd.to_path_buf(),
         env: BTreeMap::new(),
         report: None,
+        coverage: None,
         warnings: Vec::new(),
     };
 
@@ -116,7 +117,7 @@ async fn enumerate(
     tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
     let ran = state
-        .supervisor
+        .active_supervisor()?
         .run(&format!("inspect:list-{session_id}"), &invocation, tx)
         .await;
 
@@ -169,7 +170,7 @@ pub async fn inspect_attachable(
         return Ok(AttachableList::default());
     };
     let listed = enumerate(&app, &state, &workspace.root).await?;
-    let running = state.supervisor.running().await;
+    let running = state.active_supervisor()?.running().await;
     Ok(AttachableList {
         processes: session::attribute(&listed.processes, &running, &workspace.configs),
         warnings: listed.warnings,
@@ -249,7 +250,7 @@ pub async fn inspect_capture(
                  Nothing is known about whether it is still there. {e}"
                 )
             })?;
-        let running = state.supervisor.running().await;
+        let running = state.active_supervisor()?.running().await;
         let attachable = session::attribute(&listed.processes, &running, &workspace.configs);
         if let Some(reason) = session::live_target_reason(&target, &attachable) {
             return Err(reason);
@@ -280,6 +281,7 @@ pub async fn inspect_capture(
             cwd: workspace_root.clone(),
             env: BTreeMap::new(),
             report: None,
+            coverage: None,
             warnings: Vec::new(),
         };
 
@@ -287,7 +289,7 @@ pub async fn inspect_capture(
         forward(rx, channel.clone());
 
         state
-            .supervisor
+            .active_supervisor()?
             .run(&format!("inspect:{session_id}"), &invocation, tx)
             .await
             .map_err(|e| format!("{e:#}"))?;

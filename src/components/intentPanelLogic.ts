@@ -1,6 +1,5 @@
 import type {
   ComparisonMode,
-  ErosionCategory,
   ErosionFlag,
   FileChange,
   IntentGroup,
@@ -9,6 +8,7 @@ import type {
   Scorecard,
   UnfulfilledClaim,
 } from "../ipc/types";
+import { HIGH_RISK_EROSION, SENSITIVE_PATTERNS } from "./riskLogic";
 
 /**
  * Whether a file's changes are in the index, so an intent card can show what is
@@ -340,30 +340,10 @@ export function scopeCreep(
  *
  * The `reasons` drive the tooltip, in the order the checks run.
  */
-// Matched at a path boundary (start, or after / \ . _ -), never as a bare
-// substring, so "author(s)" is not read as "auth" and an ordinary "config" file
-// is not flagged at all (it was dropped — far too broad to be a signal). Each
-// marker names a location where a mistake costs more than usual.
-const SENSITIVE_PATTERNS: RegExp[] = [
-  /(^|[/\\._-])auth(?!or)/i, // auth, authn, authz, authentication — not author(s)
-  /(^|[/\\._-])(security|secure)([/\\._-]|$)/i,
-  /(^|[/\\._-])crypto/i,
-  /(^|[/\\._-])secret/i,
-  /(^|[/\\._-])credential/i,
-  /(^|[/\\._-])passw(or)?d/i, // password / passwd
-  /(^|[/\\._-])payment/i,
-  /(^|[/\\._-])billing/i,
-  /(^|[/\\._-])migrations?([/\\._-]|$)/i,
-  /(^|[/\\._-])\.?env([/\\._-]|$)/i, // .env, .env.local, env/
-];
-
-/** Erosion categories severe enough to push a card from "elevated" to "high". */
-const HIGH_RISK_EROSION: ErosionCategory[] = [
-  "secret",
-  "removedSafeguard",
-  "deletedAssertion",
-];
-
+// `SENSITIVE_PATTERNS` (sensitive path markers) and `HIGH_RISK_EROSION` (the
+// erosion categories that push a card from "elevated" to "high") are defined
+// once in `riskLogic.ts` and imported above, so the per-card badge here and the
+// per-file / per-hunk risk-weighted diff read the exact same rules.
 export function cardRisk(
   group: IntentGroup,
   erosionFlags: ErosionFlag[],

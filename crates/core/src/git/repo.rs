@@ -1394,6 +1394,7 @@ impl Repo {
             // helpers, SSH agent and keychain from their own environment.
             env: Default::default(),
             report: None,
+            coverage: None,
             warnings: Vec::new(),
         }
     }

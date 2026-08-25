@@ -16,7 +16,7 @@ src/
 │   ├── RunView.tsx       file-tree sidebar, editor pane (back/forward file
 │   │                     history + pinnable tabs) over per-run console tabs,
 │   │                     config dropdown (portaled to the titlebar), env picker,
-│   │                     build actions, secrets
+│   │                     build actions, and .NET secrets opened as an editor tab
 │   ├── editorNavLogic.ts editor back/forward stack + tab pin/partition (pure)
 │   ├── TestsView.tsx     test configs, run / re-run failed, live progress + tree
 │   ├── ChangesView.tsx   git status, comparison modes, side-by-side/inline diff;
@@ -55,6 +55,14 @@ src/
 ├── components/
 │   ├── OutputConsole.tsx xterm.js terminal: links, severity colours, search/filter,
 │   │                     copy-on-select, context menu with Copy diagnostics
+│   ├── TerminalPanel.tsx floating interactive terminal (drag/resize/minimize-to-
+│   │                     pill, flash on output) over a PTY session
+│   ├── TerminalView.tsx  raw xterm wrapper: bytes in, keystrokes out — NOT
+│   │                     OutputConsole (its filtering corrupts a live TUI)
+│   ├── NotesPanel.tsx    floating notes/scratchpad (drag/resize/minimize-to-bar):
+│   │                     named-note tabs, autosave, send-to-agent, save-as-instruction
+│   ├── notesLogic.ts     pure note ops (add/rename/delete/updateBody), active-tab
+│   │                     selection, persistence keys (tested; no DOM)
 │   ├── TestTree.tsx      collapsible outcome tree with text/outcome filters
 │   ├── ObjectTree.tsx    inspected object graph: one distinct rendering per
 │                         ObjectValue, so "null" never looks like "unreadable"
@@ -73,7 +81,11 @@ src/
 │   ├── RunConfigMenu.tsx titlebar run-config dropdown: status dots, favourites,
 │   │                     reorder, new/import items (portal from RunView)
 │   ├── FileTree.tsx      lazy workspace directory tree (one fs_list_dir per expand)
-│   ├── FileEditor.tsx    CodeMirror editor over one file; Ctrl+S saves, Ctrl+F finds
+│   ├── FileEditor.tsx    CodeMirror editor over one EditorSource (a workspace file
+│   │                     or a project's secrets); Ctrl+S saves, Ctrl+F finds,
+│   │                     Ctrl+/ toggles comments
+│   ├── editorSourceLogic.ts  what backs an editor tab — workspace file vs. secrets:
+│   │                     id, label, language hint, whether LSP applies (pure)
 │   │                     in-file (@codemirror/search), reports dirty,
 │   │                     reveals a requested line (clamped, token-guarded), and owns
 │   │                     the whole language-server client (didOpen/didChange/didClose,
@@ -97,7 +109,6 @@ src/
 │   ├── language.ts       file-extension → CodeMirror language mode, plus the
 │   │                     shared syntax-colour theme and bracket matching
 │   ├── EnvironmentPicker.tsx  ASPNETCORE_ENVIRONMENT dropdown with in-menu add/remove
-│   ├── SecretsEditor.tsx .NET user-secrets modal
 │   ├── Sidebar.tsx       the resizable left column (shared stored width)
 │   ├── ErrorBoundary.tsx last-resort error screen instead of a blank window
 │   └── RiderImportDialog.tsx  review step before an import is saved
@@ -148,13 +159,15 @@ The Run tab's file tabs behave like a browser's, and both behaviours keep their 
 ## Components worth knowing
 
 - **OutputConsole** wraps xterm.js (fit, web-links, and search addons) behind a `ConsoleHandle` (`write` / `clear` / `handle(event)`) exposed via `useImperativeHandle`. A real terminal matters because runners redraw progress with bare `\r` and ANSI escapes — the backend deliberately preserves those ([core crate](core-crate.md#process)), and xterm renders them faithfully. On top: URLs open in the system browser, unstyled severity markers are coloured client-side, Ctrl+F opens a find/filter bar (severity threshold + text, rebuilt from a raw-text tail of the output), selection copies, and the right-click menu offers Copy all / Copy diagnostics (command line + exit + last 100 lines). Panes hosting a terminal must be `overflow: hidden` — an outer scrollbar fights the fit addon.
+- **TerminalPanel / TerminalView** are the [floating interactive terminals](../getting-started/using-the-app.md#terminals), hosted at the app level (like the agent panel) so a running session survives a tab switch. `TerminalPanel` is the draggable, resizable, minimize-to-pill shell modelled on `ReviewPanel`; it reuses `reviewLayoutLogic.ts` (its own persistence key + a cascade offset so several do not stack) and flashes the pill when a minimized session produces output — every such decision in the tested `terminalLogic.ts`. `TerminalView` is a deliberately thin, **raw** xterm wrapper: PTY bytes written straight in, keystrokes straight out via `onData`, and none of `OutputConsole`'s re-colouring/filtering/rebuild, which would corrupt a program that redraws its own screen (Claude Code's TUI, a shell line editor). It relies on xterm answering Device Status Report queries itself, so an interactive shell in a PTY does not hang. Backed by [`cb_core::pty`](core-crate.md#pty) through the `terminal_*` commands.
+- **NotesPanel** is the floating [notes / scratchpad](../getting-started/using-the-app.md#notes), hosted at the app level (one global instance, opened from the titlebar **Notes** button) so it survives a tab switch. It reuses `reviewLayoutLogic.ts` — with its own persistence key — for the drag/resize/minimize shell, minimizing to a thin labeled bar rather than a pill. A tab strip switches between several named notes; edits autosave (debounced) through the `read_notes`/`write_notes` commands over [`cb_core::notes`](core-crate.md#notes), and the panel flushes any pending write on close. Every decision — create/rename/delete, which tab is active after a delete, the persistence keys — lives in the tested `notesLogic.ts`; the component decides nothing. **Send to agent** opens the shared `ReviewPanel` with the note's text as `initialPromptBody` (an inline prompt in place of a library one — the prompt picker hides), and **Save as instruction** calls `save_note_as_instruction` to add the note to the Enhancements instruction library. Notes are **user-global**, not per-workspace, so unlike the other views the panel reads and writes a file under the user config directory rather than `.code-basics/`.
 - **DiffView** builds on CodeMirror 6's merge package with per-language syntax highlighting (JS/TS, JSON, CSS, HTML, Python, Rust, XML, C++): side-by-side `MergeView` by default (editors auto-size, `.diff-host` scrolls — the revert buttons are positioned in document coordinates) or the unified `unifiedMergeView`. It renders the `FileDiff` hunks from the backend and lets the user select individual changed lines; selections become the `lines: number[]` passed to `git_stage_lines` / `git_revert_lines`. `allChangedIndices` selects a whole file's changes at once.
 - **TestTree** renders `TestNode` hierarchies with worst-outcome colouring, duration formatting, expansion state, and combined text + outcome filtering.
 - **ConfigEditor** edits a `RunConfig`. Environment variables are typed as `KEY=value` lines and split on the *first* `=` only, so connection strings, base64, and JWTs survive intact.
 - **RiderImportDialog** shows the conversion preview — including per-config warnings — and writes nothing until the user confirms ([Rider import](../guides/rider-import.md)).
 - **RunConfigMenu** is rendered by `RunView` (which owns selection, favourites and process status) but displayed in the titlebar via `createPortal` into `#run-config-slot` — the state stays in the view without being lifted to `App`.
 - **SearchEverywhere** is an overlay with one control: an input, four scope buttons, and a ranked list grouped Files / Symbols / Actions. Every decision it looks like it makes is a call into `searchLogic.ts` — `recogniseShortcut` (the whole keybinding table as one expression), `nextIndex` (wrapping arrow-key movement, and normalising a selection left over from a longer list), `highlightSpans` (`SearchHit.positions` are **character** indices, so the label is decomposed with `Array.from` and never sliced as a raw string), `lineToPos` (clamping, because CodeMirror's `doc.line()` throws out of range and the index is a snapshot). The ranking, the scope filtering and the `Foo:123` line suffix are `cb-core`'s and are not re-implemented here; the raw query text is passed through and the line is read off the hit. Keystrokes are debounced 80 ms and each search carries a sequence number, so a slow reply to an older query cannot land on top of a newer one.
-- **FileEditor** instances stay mounted while hidden — like console sessions — so undo history and unsaved edits survive switching file tabs. Files load via `fs_read_file` and save with Ctrl+S via `fs_write_file`; the editor/console split fraction persists in `localStorage` (`code-basics.editorSplit`). It is also the whole client of the language-server surface, because the `didOpen`/`didClose` pair a server is owed is exactly this component's lifetime — see [below](#find-usages-and-go-to-definition).
+- **FileEditor** instances stay mounted while hidden — like console sessions — so undo history and unsaved edits survive switching file tabs. Each is keyed by an **`EditorSource`** (`editorSourceLogic.ts`), not a bare path: a `workspace` file loads/saves via `fs_read_file`/`fs_write_file` and drives the language server, while a .NET project's **user secrets open as a `secrets.json` tab** — source `secrets`, backed by `read_project_secrets`/`write_project_secrets`, with the whole language-server surface switched off (no usages rows, no `didOpen`). The open-file model keys on `file.id`; the editor/console split fraction persists in `localStorage` (`code-basics.editorSplit`). Because the editor is the whole client of the language-server surface, the `didOpen`/`didClose` pair a server is owed is exactly a workspace tab's lifetime — see [below](#find-usages-and-go-to-definition). Two CodeMirror specifics it pins: `drawSelection()` hides the native caret, so the drawn caret is forced visible with `&.cm-focused .cm-cursor { display: block }` (the base reveal selector does not match in the WebView, and without this there is no caret); and **Ctrl+/** (`toggleComment`) is bound explicitly with `preventDefault` ahead of `defaultKeymap` so the WebView cannot swallow it.
 
 ## Find usages and go to definition
 

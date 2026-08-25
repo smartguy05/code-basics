@@ -117,15 +117,15 @@ describe("navMouseAction", () => {
 
 describe("partitionTabs", () => {
   const files = [
-    { path: "a", name: "a" },
-    { path: "b", name: "b" },
-    { path: "c", name: "c" },
+    { id: "a", name: "a" },
+    { id: "b", name: "b" },
+    { id: "c", name: "c" },
   ];
 
   it("splits into pinned and unpinned, preserving order within each group", () => {
     const { pinned, unpinned } = partitionTabs(files, new Set(["c", "a"]));
-    expect(pinned.map((f) => f.path)).toEqual(["a", "c"]);
-    expect(unpinned.map((f) => f.path)).toEqual(["b"]);
+    expect(pinned.map((f) => f.id)).toEqual(["a", "c"]);
+    expect(unpinned.map((f) => f.id)).toEqual(["b"]);
   });
 
   it("puts everything in the unpinned group when nothing is pinned", () => {
@@ -134,10 +134,10 @@ describe("partitionTabs", () => {
     expect(unpinned).toEqual(files);
   });
 
-  it("ignores pinned paths that are not open", () => {
+  it("ignores pinned ids that are not open", () => {
     const { pinned, unpinned } = partitionTabs(files, new Set(["z"]));
     expect(pinned).toEqual([]);
-    expect(unpinned.map((f) => f.path)).toEqual(["a", "b", "c"]);
+    expect(unpinned.map((f) => f.id)).toEqual(["a", "b", "c"]);
   });
 });
 

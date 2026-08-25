@@ -16,6 +16,7 @@ export function RunConfigMenu({
   dotClass,
   canMove,
   groupLabel,
+  active,
   onSelect,
   onToggleFavorite,
   onMove,
@@ -23,6 +24,12 @@ export function RunConfigMenu({
   onImport,
 }: {
   configs: RunConfig[];
+  /**
+   * Whether this Run view's workspace is the foreground tab. Only the active
+   * tab's menu portals into the single `#run-config-slot`, so several open
+   * codebases do not stack their dropdowns in one titlebar.
+   */
+  active: boolean;
   selectedId: string | null;
   favorites: Set<string>;
   /** Status-dot class for a config: grey idle, yellow busy, green up, red failed. */
@@ -51,7 +58,7 @@ export function RunConfigMenu({
     setSlot(document.getElementById("run-config-slot"));
   }, []);
 
-  if (!slot) return null;
+  if (!slot || !active) return null;
 
   const selected = configs.find((c) => c.id === selectedId) ?? null;
 

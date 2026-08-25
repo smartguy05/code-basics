@@ -234,6 +234,30 @@ pub enum ReportFormat {
     JunitXml,
 }
 
+/// The code-coverage report format a run is expected to leave behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum CoverageFormat {
+    /// Cobertura XML — what coverlet's `XPlat Code Coverage` collector writes.
+    Cobertura,
+    /// LCOV text — what Vitest's / Jest's `lcov` reporter writes.
+    Lcov,
+}
+
+/// Where a run's code-coverage report lands, and in which format.
+///
+/// Unlike [`ReportSpec`], `path` is **not always a file**: for
+/// [`CoverageFormat::Cobertura`] it is the `--results-directory` coverlet was
+/// told to use, and the consumer must locate the newest `coverage.cobertura.xml`
+/// inside a GUID subfolder under it. For [`CoverageFormat::Lcov`] it is the
+/// `lcov.info` file itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageSpec {
+    pub path: PathBuf,
+    pub format: CoverageFormat,
+}
+
 /// A fully resolved command, ready to hand to the process supervisor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -246,6 +270,11 @@ pub struct Invocation {
     /// Present for test runs; absent for application launches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<ReportSpec>,
+    /// Where this run's code-coverage report will land, when coverage was
+    /// requested. Absent — the default — for an ordinary run, which leaves the
+    /// command line unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<CoverageSpec>,
     /// Problems detected while building the invocation that do not prevent it
     /// from running, but that the user should see (e.g. a missing TRX package).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -459,6 +488,14 @@ mod tests {
             serde_json::to_string(&ReportFormat::JestLike).unwrap(),
             "\"jestLike\""
         );
+        assert_eq!(
+            serde_json::to_string(&CoverageFormat::Cobertura).unwrap(),
+            "\"cobertura\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CoverageFormat::Lcov).unwrap(),
+            "\"lcov\""
+        );
     }
 
     #[test]
@@ -567,6 +604,7 @@ mod tests {
             cwd: PathBuf::from("/repo"),
             env: BTreeMap::new(),
             report: None,
+            coverage: None,
             warnings: Vec::new(),
         }
     }
@@ -586,7 +624,22 @@ mod tests {
         let json = serde_json::to_value(invocation()).unwrap();
 
         assert!(json.get("report").is_none());
+        assert!(json.get("coverage").is_none());
         assert!(json.get("warnings").is_none());
+    }
+
+    #[test]
+    fn a_coverage_invocation_carries_its_coverage_spec_across() {
+        let mut inv = invocation();
+        inv.coverage = Some(CoverageSpec {
+            path: PathBuf::from(".code-basics/results"),
+            format: CoverageFormat::Cobertura,
+        });
+
+        let json = serde_json::to_value(&inv).unwrap();
+
+        assert_eq!(keys(&json["coverage"]), ["format", "path"]);
+        assert_eq!(json["coverage"]["format"], serde_json::json!("cobertura"));
     }
 
     #[test]

@@ -157,6 +157,27 @@ pub enum LabelSource {
     Inferred,
 }
 
+/// How sure the agent said it was that its own change is correct.
+///
+/// This is **not** [`crate::git::attribution::Confidence`], which measures how
+/// well the matcher tied a recorded edit onto the current diff — a property of
+/// the tooling. This is a property of the *agent's own belief*, offered
+/// voluntarily in the closing message. The two are deliberately kept apart: a
+/// change the matcher is certain it located may still be one the author flagged
+/// as shaky, and vice versa.
+///
+/// There is no `Unknown` variant, and there deliberately is not: the field is
+/// [`Option`], so absence is absence. An agent that says nothing has said
+/// nothing, and the feature abstains rather than inventing a middle value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SelfConfidence {
+    /// "Please review this closely" — the agent is unsure the change is right.
+    Low,
+    Medium,
+    High,
+}
+
 /// A reason, recorded once per turn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +196,12 @@ pub struct IntentLabel {
     /// Whether the agent offered this as a label or it was mined from prose.
     #[serde(default)]
     pub source: LabelSource,
+    /// How sure the agent said it was, when it appended a `[confidence: …]`
+    /// token to the `Intent:` line. Optional and sparse: absent whenever the
+    /// agent said nothing, so a record written before this field existed still
+    /// parses (`#[serde(default)]`) and never serialises a null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_confidence: Option<SelfConfidence>,
 }
 
 /// The user's prompt for one turn.

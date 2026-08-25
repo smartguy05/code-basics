@@ -12,6 +12,7 @@
 # category is one of:
 #   deletedAssertion | ignoredTest | widenedCatch | removedNullCheck
 #   unsafeCast | leftoverStub | removedSafeguard | droppedLog
+#   secret | schemaRisk
 #
 # extensions (optional): file suffixes the rule applies to; empty = every file.
 # prodOnly (optional): skip files that look like tests (for TODO/stub rules).

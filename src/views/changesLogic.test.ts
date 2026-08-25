@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildSections, statusLetter, type FileSection } from "./changesLogic";
+import {
+  buildSections,
+  sortFilesByRisk,
+  statusLetter,
+  type FileSection,
+} from "./changesLogic";
 import type { ChangeKind, Changelist, FileChange } from "../ipc/types";
 
 function change(
@@ -153,5 +158,65 @@ describe("buildSections", () => {
     expect(inSection(sections, "group:one")).toEqual(["a.ts"]);
     expect(inSection(sections, "group:two")).toEqual([]);
     expect(inSection(sections, "unstaged")).toEqual([]);
+  });
+});
+
+describe("sortFilesByRisk", () => {
+  /** A risk lookup driven by a fixed score table; anything absent abstains. */
+  const riskOf = (scores: Record<string, number>) => (path: string) => {
+    const score = scores[path];
+    return score === undefined ? null : { level: "elevated" as const, score };
+  };
+
+  it("orders files within a section by risk score, highest first", () => {
+    const files = [
+      change("low.ts", null, "modified"),
+      change("high.ts", null, "modified"),
+      change("mid.ts", null, "modified"),
+    ];
+    const sorted = sortFilesByRisk(
+      buildSections(files, []),
+      riskOf({ "low.ts": 1, "mid.ts": 3, "high.ts": 9 }),
+    );
+    const unstaged = sorted.find((s) => s.key === "unstaged");
+    expect(unstaged?.files.map((f) => f.path)).toEqual(["high.ts", "mid.ts", "low.ts"]);
+  });
+
+  it("keeps git order for files that score equally (stable)", () => {
+    const files = [
+      change("a.ts", null, "modified"),
+      change("b.ts", null, "modified"),
+      change("c.ts", null, "modified"),
+    ];
+    // No file has any risk signal — every score is 0, so the order must not move.
+    const sorted = sortFilesByRisk(buildSections(files, []), riskOf({}));
+    const unstaged = sorted.find((s) => s.key === "unstaged");
+    expect(unstaged?.files.map((f) => f.path)).toEqual(["a.ts", "b.ts", "c.ts"]);
+  });
+
+  it("sorts within each partition, never across them", () => {
+    const files = [
+      change("s.ts", "modified", null),
+      change("u1.ts", null, "modified"),
+      change("u2.ts", null, "modified"),
+    ];
+    // The staged file scores highest, but it must stay in Staged, not jump into
+    // the unstaged list.
+    const sorted = sortFilesByRisk(
+      buildSections(files, []),
+      riskOf({ "s.ts": 100, "u2.ts": 5 }),
+    );
+    expect(sorted.find((s) => s.key === "staged")?.files.map((f) => f.path)).toEqual(["s.ts"]);
+    expect(sorted.find((s) => s.key === "unstaged")?.files.map((f) => f.path)).toEqual([
+      "u2.ts",
+      "u1.ts",
+    ]);
+  });
+
+  it("preserves section labels, sides and keep-when-empty", () => {
+    const sections = buildSections([], [{ name: "feature", paths: [] }]);
+    const sorted = sortFilesByRisk(sections, riskOf({}));
+    expect(sorted.map((s) => s.key)).toEqual(["staged", "group:feature", "unstaged"]);
+    expect(sorted.map((s) => s.keepWhenEmpty)).toEqual([false, true, false]);
   });
 });

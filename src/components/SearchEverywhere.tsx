@@ -12,7 +12,7 @@ import {
   searchKey,
   type SearchScope,
 } from "./searchLogic";
-import type { SearchHit, SymbolIndexStatus } from "../ipc/types";
+import type { SearchHit, SymbolIndexStatus, Workspace } from "../ipc/types";
 
 /**
  * The search palette: one overlay over the whole app that finds a file, a
@@ -64,9 +64,23 @@ function baseName(path: string): string {
 }
 
 export function SearchEverywhere({
+  workspace,
+  active,
   onOpenFile,
   onRunAction,
 }: {
+  /**
+   * The workspace this palette searches, passed down rather than fetched: with
+   * several codebases open, `current_workspace` would answer with whichever tab
+   * is active, which need not be the one this palette belongs to.
+   */
+  workspace: Workspace;
+  /**
+   * Whether this palette's workspace is the foreground tab. Only the active tab
+   * binds the global Shift-Shift / Ctrl+N listener — otherwise every open
+   * codebase would race to open its own palette on one keystroke.
+   */
+  active: boolean;
   /** Open a workspace-relative file, optionally revealing a 1-based line. */
   onOpenFile: (path: string, name: string, line?: number) => void;
   /** Select the configuration behind an action hit. It is never started here. */
@@ -175,6 +189,9 @@ export function SearchEverywhere({
   // the same reason `OutputConsole` takes Ctrl+F that way: a chord that reaches
   // the webview's own handling is a chord the app has lost.
   useEffect(() => {
+    // Only the foreground tab's palette listens, so one keystroke does not open
+    // a palette in every open codebase.
+    if (!active) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) return;
 
@@ -200,7 +217,7 @@ export function SearchEverywhere({
 
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [openAt]);
+  }, [openAt, active]);
 
   /** Bumped to restart the status read after a rebuild is asked for. */
   const [statusToken, setStatusToken] = useState(0);
@@ -237,29 +254,13 @@ export function SearchEverywhere({
     };
   }, [open, statusToken]);
 
-  // Which action rows are worth offering. Re-read on every open rather than
-  // once: a rescan, an import or a deleted configuration all change the answer
-  // while this component stays mounted, and a set cached from the first open
-  // would keep offering a configuration the workspace no longer has.
+  // Which action rows are worth offering, derived from this tab's own workspace.
+  // Recomputed when its configs change — a rescan, an import or a deleted
+  // configuration hands down a fresh `workspace` prop — so the set never offers a
+  // configuration the workspace no longer has, and never one from another tab.
   useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    api
-      .currentWorkspace()
-      .then((workspace) => {
-        // `current_workspace` answers null when nothing is open — the palette
-        // is reachable then, and an empty set is the honest answer.
-        if (!cancelled) setActionable(actionableIds(workspace?.configs ?? []));
-      })
-      .catch(() => {
-        // No workspace open, or the call failed: either way nothing here can
-        // serve an action row, and an empty set says exactly that.
-        if (!cancelled) setActionable(new Set<string>());
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
+    setActionable(actionableIds(workspace.configs));
+  }, [workspace.configs]);
 
   // The search itself, debounced.
   useEffect(() => {

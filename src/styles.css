@@ -186,6 +186,69 @@ textarea:focus {
   display: none;
 }
 
+/* One open codebase. Fills the space under the tab strips; only the foreground
+   one is shown, the rest stay mounted (so their processes/terminals keep
+   running) but hidden. `display: flex` beats the UA `[hidden]` rule, hence the
+   explicit override. */
+.workspace-tab {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workspace-tab[hidden] {
+  display: none;
+}
+
+/* The open-codebases tab strip: a row of workspace tabs above the inner tabs. */
+.ws-tabs {
+  align-items: center;
+  padding: 2px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.ws-tab {
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 4px 4px 0 0;
+}
+.ws-tab.active {
+  border-bottom-color: var(--accent);
+  background: var(--bg-raised);
+}
+.ws-tab-label {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 4px 8px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-tab.active .ws-tab-label {
+  color: var(--text);
+}
+.ws-tab-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 2px 6px;
+  line-height: 1;
+}
+.ws-tab-close:hover {
+  color: var(--text);
+}
+.ws-tab-add {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 4px 8px;
+}
+
 .sidebar {
   width: 280px; /* overridden by the Sidebar component's stored width */
   flex: 0 0 auto;
@@ -589,6 +652,27 @@ textarea:focus {
   margin-top: 4px;
   padding-top: 4px;
 }
+
+/* The coverage-of-change summary above the intent cards, twin of
+   .behavioral-overall. */
+.coverage-overall {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+/* The per-card "N uncovered" pill. Amber, matching the .cb-line-uncovered diff
+   wash so the card badge and the tinted lines read as one signal. */
+.coverage-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  border-radius: 3px;
+  border: 1px solid var(--skip);
+  color: var(--skip);
+  white-space: nowrap;
+  vertical-align: middle;
+}
 .behavioral-delta {
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
@@ -596,6 +680,24 @@ textarea:focus {
 .behavioral-delta.positive { color: var(--pass); }
 .behavioral-delta.warning { color: var(--fail); }
 .behavioral-delta.neutral { color: var(--text-faint); }
+
+/* The per-claim checklist above the cards: one row per declared intent with a
+   ✗/✓/✓✓ marker. Replaces the old flat unfulfilled list. */
+.claim-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.claim-mark {
+  font-variant-numeric: tabular-nums;
+  flex: none;
+  width: 1.4em;
+  text-align: center;
+  color: var(--text-faint);
+}
+.claim-mark.unmatched { color: var(--fail); }
+.claim-mark.evidenced { color: var(--pass); }
+.claim-mark.corroborated { color: var(--pass); }
 
 /* The assembled before/after report, shown below the console in the floating
    BehavioralPanel. Scrolls on its own so a long report never pushes the console
@@ -1068,6 +1170,143 @@ textarea:focus {
   height: 100%;
 }
 
+/* Floating interactive terminals ----------------------------------------- */
+
+/* Reuses the .review-panel base (float, drag, resize, minimize-to-pill). A
+   terminal earns a little more default room than the agent panel. */
+.terminal-panel {
+  width: min(760px, 64vw);
+  height: min(520px, 66vh);
+}
+
+/* xterm fights a scrollbar, so the terminal pane is strictly overflow:hidden,
+   the same rule the review console follows. */
+.terminal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--border-strong);
+}
+
+.terminal-host {
+  height: 100%;
+  background: var(--bg-inset);
+  padding: 4px 6px;
+}
+
+/* Notes / scratchpad panel ------------------------------------------------ */
+
+/* Reuses the .review-panel base (float, drag, resize). A little narrower than a
+   terminal — it holds text, not a wide TUI. */
+.notes-panel {
+  width: min(560px, 48vw);
+  height: min(520px, 66vh);
+}
+
+/* Minimized: a thin labeled bar pinned to the right, not a rounded pill — the
+   requested "collapse to a thin bar with a label that expands back". */
+.notes-pill {
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  writing-mode: horizontal-tb;
+}
+
+.notes-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-strong);
+  overflow-x: auto;
+}
+
+.notes-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--text-faint);
+}
+
+.notes-tab.active {
+  background: var(--bg-inset);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.notes-tab-close {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.notes-tab-close:hover {
+  color: var(--text);
+}
+
+.notes-tab-add {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  border-radius: 5px;
+  cursor: pointer;
+  padding: 2px 8px;
+}
+
+.notes-tab-rename {
+  font-size: 12px;
+  padding: 3px 6px;
+  min-width: 90px;
+}
+
+.notes-editor {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: none;
+  border-top: 1px solid var(--border-strong);
+  background: var(--bg-inset);
+  color: var(--text);
+  padding: 10px 12px;
+  font-family: var(--mono, monospace);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.notes-editor:focus {
+  outline: none;
+}
+
+.notes-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-strong);
+}
+
+.notes-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  border-top: 1px solid var(--border-strong);
+}
+
+.terminal-host .xterm {
+  height: 100%;
+}
+
 /* --------------------------------------------------------------------- */
 /* Changes / diff                                                         */
 /* --------------------------------------------------------------------- */
@@ -1075,6 +1314,18 @@ textarea:focus {
 .file-list .row {
   font-family: var(--mono);
   font-size: 12px;
+}
+
+/* Risk-weighted file rows: a left accent stripe marks a file the risk signals
+   raised, so the riskier files (already sorted to the top of their section)
+   also read as riskier. A tint would fight the `.row.selected` accent-dim
+   background, so this is a stripe only — it survives selection unchanged. */
+.file-list .row.risk-high {
+  box-shadow: inset 2px 0 0 var(--fail);
+}
+
+.file-list .row.risk-elevated {
+  box-shadow: inset 2px 0 0 var(--skip);
 }
 
 .file-list .status {
@@ -1174,6 +1425,25 @@ textarea:focus {
 .diff-markers .mark.addition { background: var(--diff-add-edge); }
 .diff-markers .mark.deletion { background: var(--diff-del-edge); }
 .diff-markers .mark.modification { background: var(--diff-mod-edge); }
+
+/* Risk weight on a mark: a high/elevated hunk widens its mark to fill the strip
+   and outlines it so it stands out at a glance; a formatting-only hunk fades so
+   the strip's real changes read first. The kind colour underneath is kept. */
+.diff-markers .mark.risk-high,
+.diff-markers .mark.risk-elevated {
+  left: 0;
+  right: 0;
+  outline: 1px solid var(--fail);
+  outline-offset: -1px;
+}
+
+.diff-markers .mark.risk-elevated {
+  outline-color: var(--skip);
+}
+
+.diff-markers .mark.risk-formatting {
+  opacity: 0.4;
+}
 
 .diff-hscroll {
   grid-row: 2;
@@ -1343,6 +1613,70 @@ textarea:focus {
   background: rgba(90, 120, 220, 0.22) !important;
   outline: 1px solid var(--accent);
   outline-offset: -1px;
+}
+
+/* Changed lines the last coverage-enabled test run never executed, driven by a
+   CodeMirror decoration.
+
+   Amber and marked with a left stripe so it reads as "the tests never ran this
+   changed line" — distinct from the blue "you picked this line" selection above,
+   and loud enough to see through the green wash a changed (added) line already
+   carries. */
+.cb-line-uncovered {
+  background: rgba(201, 162, 39, 0.16) !important;
+  box-shadow: inset 3px 0 0 var(--skip);
+}
+
+/* Risk-weighted diff: emphasis for changed lines a risk signal raised, and a
+   recede for formatting-only ones. A separate layer from the selection and
+   uncovered washes above (blue "you picked this" / amber "tests never ran
+   this") — these say "this change is riskier" or "this is just formatting", a
+   different claim, so they get their own left-stripe colours.
+
+   `high` is the erosion-grade danger (a removed assertion or safeguard, a
+   hardcoded secret) and reads in the red the diff already uses for danger;
+   `elevated` is the softer skip/amber the app uses for "worth a look". Both
+   only add a left stripe and a faint tint, so the green/red diff wash under a
+   changed line still reads through. */
+.cb-line-risk-high {
+  background: rgba(224, 85, 97, 0.14) !important;
+  box-shadow: inset 3px 0 0 var(--fail);
+}
+
+.cb-line-risk-elevated {
+  box-shadow: inset 3px 0 0 var(--skip);
+}
+
+/* Formatting-only lines recede: dimmed so real changes win the eye. It is a
+   de-emphasis, not a highlight, so it carries no stripe and no tint — just less
+   presence. */
+.cb-line-formatting-dim {
+  opacity: 0.55;
+}
+
+/* Confidence heatmap: tint a changed line by how confident the agent said it was
+   in the intent that produced it. A separate layer from the selection, uncovered
+   and risk washes above — those say "you picked this" (blue), "the tests never
+   ran this" (amber) and "this change is riskier" (red); these say "the agent was
+   *unsure* about this", a different claim, so they get their own left-stripe
+   scale.
+
+   The scale runs the opposite way to intuition on purpose: `low` confidence is
+   the *loudest*, because that is the line the agent asked to be reviewed closely,
+   and `high` is the faintest, because a change the agent was sure of needs the
+   least of the reviewer's attention. All three only add a left stripe and a faint
+   tint, so the green/red diff wash under a changed line still reads through. */
+.cb-line-confidence-low {
+  background: rgba(224, 85, 97, 0.14) !important;
+  box-shadow: inset 3px 0 0 var(--fail);
+}
+
+.cb-line-confidence-medium {
+  box-shadow: inset 3px 0 0 var(--skip);
+}
+
+.cb-line-confidence-high {
+  box-shadow: inset 3px 0 0 rgba(122, 160, 122, 0.55);
 }
 
 /* Diff colours.

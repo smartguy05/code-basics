@@ -23,6 +23,8 @@ pub mod install;
 
 use serde_json::Value;
 
+use crate::erosion::ErosionReport;
+
 /// A blocking check the gate can run. Each maps to one command line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gate {
@@ -124,6 +126,39 @@ pub fn touched_memories(changed: &[String]) -> bool {
 /// `.memories/` file touched?
 pub fn should_remind_memories(changed: &[String]) -> bool {
     touched_source(changed) && !touched_memories(changed)
+}
+
+/// How many individual erosion flags the reminder lists before it summarises
+/// the remainder as a count, so a large diff cannot flood the turn-end output.
+const EROSION_FLAG_CAP: usize = 20;
+
+/// A **non-blocking** reminder of the erosion signals in the change set, or
+/// `None` when the scan found nothing (empty `flags`).
+///
+/// Advisory only, and deliberately so: the erosion detector ranks nothing and
+/// carries no severity, so this states no verdict — it lists what was located
+/// (`path:line  category  message` per flag, capped with an "and N more" tail)
+/// and leaves the judgement to the reader. It sits with the memory reminder,
+/// never with the blocking gates.
+pub fn erosion_reminder(report: &ErosionReport) -> Option<String> {
+    if report.flags.is_empty() {
+        return None;
+    }
+    let total = report.flags.len();
+    let mut lines = vec![format!(
+        "{total} potential erosion signal{}:",
+        if total == 1 { "" } else { "s" }
+    )];
+    for flag in report.flags.iter().take(EROSION_FLAG_CAP) {
+        lines.push(format!(
+            "  {}:{}  {:?}  {}",
+            flag.path, flag.line, flag.category, flag.message
+        ));
+    }
+    if total > EROSION_FLAG_CAP {
+        lines.push(format!("  ...and {} more", total - EROSION_FLAG_CAP));
+    }
+    Some(lines.join("\n"))
 }
 
 /// The AI-REJECTED head-line token, assembled so this source file does not

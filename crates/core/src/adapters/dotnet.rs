@@ -23,7 +23,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::model::{
-    ConfigSource, Invocation, ProjectKind, ReportFormat, ReportSpec, RunConfig, RunKind, TestRunner,
+    ConfigSource, CoverageFormat, CoverageSpec, Invocation, ProjectKind, ReportFormat, ReportSpec,
+    RunConfig, RunKind, TestRunner,
 };
 
 /// Values read out of a `.csproj` / `.fsproj` or a `Directory.Build.props`.
@@ -625,6 +626,10 @@ pub struct BuildContext<'a> {
     pub has_launch_settings: bool,
     /// Fully qualified names to restrict the run to, for "re-run failed".
     pub filter: Option<Vec<String>>,
+    /// Whether to collect code coverage. When set, the test command gains
+    /// `--collect:"XPlat Code Coverage"` and the invocation carries a
+    /// [`crate::model::CoverageSpec`] pointing at the results directory.
+    pub coverage: bool,
     /// Where the runtime should write crash dumps, when the workspace has
     /// opted into capturing them. `None` — the default — arms nothing.
     ///
@@ -694,6 +699,24 @@ pub fn test_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
     if ctx.dumps_dir.is_some() {
         warnings.push(CAPTURE_ARMED_WARNING.to_string());
     }
+
+    // Coverage is collected by coverlet's data collector, which works under
+    // both VSTest and MTP. It writes `coverage.cobertura.xml` into a GUID
+    // subfolder under `--results-directory` (already passed below), so the
+    // spec points at that directory and the consumer finds the newest file.
+    let coverage = if ctx.coverage {
+        // A single argv element — the space is part of the collector name; no
+        // shell quoting is involved because args are passed directly.
+        args.push("--collect:XPlat Code Coverage".into());
+        args.push("--results-directory".into());
+        args.push(ctx.results_dir.display().to_string());
+        Some(CoverageSpec {
+            path: ctx.results_dir.to_path_buf(),
+            format: CoverageFormat::Cobertura,
+        })
+    } else {
+        None
+    };
 
     if let Some(project) = &config.project {
         args.push(ctx.workspace_root.join(project).display().to_string());
@@ -814,6 +837,7 @@ pub fn test_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
             path: report_path,
             format: ReportFormat::Trx,
         }),
+        coverage,
         warnings,
     }
 }
@@ -884,6 +908,7 @@ pub fn run_invocation(config: &RunConfig, ctx: &BuildContext) -> Invocation {
         cwd: resolve_cwd(config, ctx.workspace_root),
         env: dump_layered_env(config, ctx),
         report: None,
+        coverage: None,
         warnings,
     }
 }
@@ -928,6 +953,7 @@ pub fn build_action_invocation(
         cwd: resolve_cwd(config, workspace_root),
         env: config.env.clone(),
         report: None,
+        coverage: None,
         warnings: Vec::new(),
     }
 }

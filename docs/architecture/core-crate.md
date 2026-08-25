@@ -106,6 +106,14 @@ The single place that spawns anything: test runs, app launches, git network call
 - `kill` terminates the process **tree**: a new process group at spawn time (Unix `setpgid`, Windows process groups), because killing only the wrapper leaves `dotnet run`'s assembly or a dev-server holding its port.
 - Colour-friendly defaults are layered under the config's own env: `FORCE_COLOR=1`, and the configuration key that re-enables .NET's console-logger colours under redirection (`Logging__Console__FormatterOptions__ColorBehavior=Enabled`).
 
+## `pty`
+
+The **second** place that spawns a process, and the only bidirectional one — behind the [floating terminals](../getting-started/using-the-app.md#terminals). `process` is output-only (`stdin` null, streams to exit), which is right for a test run and useless for a shell you type into. `PtyManager` allocates a real pseudo-terminal instead (ConPTY on Windows, forkpty on Unix, via `portable-pty`): stdin stays open, the child sees a TTY, and the session resizes as the window does, so an interactive program — Claude Code's TUI included — runs unchanged.
+
+- Same handle shape as `Supervisor` (cheap to clone, a session map keyed by a caller-minted id, tree-kill on close via `process::kill_tree`), but the map is a `std::sync::Mutex`: the reader thread (portable-pty's reader is a synchronous `Read`) and the waiter thread run on plain OS threads with no async runtime.
+- `TerminalEvent` is deliberately **not** `ProcessEvent`: a PTY multiplexes stdout and stderr onto one stream (no `stream` field) and the shell prints its own prompt (no `Started` banner). Output is one merged raw stream written straight to xterm.
+- `shell` is pure and holds the two decisions worth testing without a process: `default_shell` (Windows `pwsh`→`powershell`→`cmd`; Unix `$SHELL`→`bash`→`sh`), `clamp_size` (floor 1×1 — xterm can momentarily report 0), and `is_session_marker`. The last strips the Claude Code child-session markers this app inherits when it is itself launched from a Claude Code session (`CLAUDE_CODE_*`, plus bare `CLAUDECODE`/`CLAUDE_PID`/`CLAUDE_EFFORT`/`AI_AGENT`); left in place a nested `claude` runs as a child — transcripts off, parent IPC socket reused — instead of a fresh top-level session.
+
 ## `symbols`
 
 What a workspace declares, and finding it fast — the index the search palette sits on. The layering is one-directional, and each layer is testable on its own terms:
@@ -201,6 +209,12 @@ Workspace file access for the Run tab's directory tree and editor. `list_dir` li
 ## `secrets`
 
 .NET user secrets, the way `dotnet user-secrets` and Rider manage them: a project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere) — secrets never touch the workspace. `read` returns id/path/content; `write` validates against the same JSON dialect .NET's configuration loader accepts (comments and trailing commas included) and adds a `<UserSecretsId>` to the project file first when missing, like `dotnet user-secrets init`.
+
+## `notes`
+
+The global [notes / scratchpad](../getting-started/using-the-app.md#notes) store, `code-basics/notes.json`. Unlike almost everything else this crate persists, notes are **user-global, not per-workspace**: `notes_path()` resolves the file beside the enhancements library under the user config directory (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` / `~/.config` elsewhere; `CB_NOTES_PATH` overrides the whole path), so the same scratchpad is available in every project and there is no `.code-basics/` gitignore entry to keep in step. `load` is tolerant the way `enhancements::runs` is — a missing or corrupt file is an empty `NotesFile` (`version` 1, no notes), never an error, so a bad file cannot stop the panel opening — and `save` writes pretty JSON, creating the directory first. A `NotesFile` is a schema `version` plus an ordered `Vec<Note>` (`id`/`title`/`body`/`createdAtMs`/`updatedAtMs`); the camelCase keys are pinned by a test, the same contract as `model`.
+
+The related **"save a note as an instruction"** action lives in `enhancements` (the [instruction-enhancements](../guides/instruction-enhancements.md) library): `slugify` + `serialize_template` emit a `.md` template that round-trips back through `parse_template` (pinned by a test), and `save_template` writes `<slug>.md` into the instruction library, refreshing a same-slug file rather than duplicating it.
 
 ## `model`
 

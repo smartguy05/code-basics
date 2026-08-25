@@ -1,3 +1,4 @@
+import { moreSevereHunkRisk, type HunkRiskLevel, type RiskIndex } from "./riskLogic";
 import type { FileDiff, Hunk } from "../ipc/types";
 
 /**
@@ -92,6 +93,12 @@ export interface ChangeMark {
   top: number;
   height: number;
   kind: ChangeKind;
+  /**
+   * The risk weight of this hunk, for emphasising or receding its mark on the
+   * strip. Absent when the hunk tripped no risk signal — the ordinary change,
+   * which keeps its plain mark (see `changeMarks`).
+   */
+  risk?: HunkRiskLevel;
 }
 
 function kindOf(hunk: Hunk): ChangeKind | null {
@@ -122,8 +129,17 @@ function kindOf(hunk: Hunk): ChangeKind | null {
  * signal that something changed down there, whereas silently omitting it makes
  * an incomplete picture look complete.
  */
-export function changeMarks(diff: FileDiff, totalLines: number): ChangeMark[] {
+export function changeMarks(
+  diff: FileDiff,
+  totalLines: number,
+  risk: RiskIndex[] = [],
+): ChangeMark[] {
   if (totalLines <= 0) return [];
+
+  // The risk weight of each changed line, so a hunk's mark can take the most
+  // severe weight any of its lines carries. The list is the same per-line risk
+  // the diff overlay paints, so the strip and the overlay never disagree.
+  const riskByIndex = new Map<number, HunkRiskLevel>(risk.map((r) => [r.index, r.level]));
 
   const marks: ChangeMark[] = [];
 
@@ -140,7 +156,13 @@ export function changeMarks(diff: FileDiff, totalLines: number): ChangeMark[] {
     const top = Math.min(1, (start - 1) / totalLines);
     const height = Math.min(1 - top, span / totalLines);
 
-    marks.push({ top, height, kind });
+    let hunkRisk: HunkRiskLevel | undefined;
+    for (const line of hunk.lines) {
+      const level = riskByIndex.get(line.index);
+      if (level) hunkRisk = moreSevereHunkRisk(hunkRisk, level);
+    }
+
+    marks.push(hunkRisk ? { top, height, kind, risk: hunkRisk } : { top, height, kind });
   }
 
   return marks;

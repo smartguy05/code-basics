@@ -8,6 +8,7 @@ import type {
   BehavioralReport,
   Branch,
   BuildAction,
+  ChangeCoverage,
   Changelists,
   Commit,
   ComparisonMode,
@@ -30,6 +31,7 @@ import type {
   LspStatus,
   MergeReport,
   NetworkKind,
+  NotesFile,
   ProcessEvent,
   ProjectSecrets,
   PromptInfo,
@@ -47,6 +49,7 @@ import type {
   SearchScope,
   StashEntry,
   SymbolIndexStatus,
+  TerminalEvent,
   TestRunOutcome,
   UsageResult,
   ValidationError,
@@ -58,13 +61,45 @@ import type {
 // Workspace
 // ---------------------------------------------------------------------------
 
+/**
+ * Open a codebase. With multiple workspaces the backend ADDS this root to its
+ * open set (keyed by canonical root) and makes it the active one — it no longer
+ * evicts whatever was open before. Opening an already-open root focuses and
+ * rescans it. The returned `Workspace` is the freshly opened one.
+ */
 export const openWorkspace = (path: string) =>
   invoke<Workspace>("open_workspace", { path });
 
+/** The currently ACTIVE workspace (the foreground tab), or null if none is open. */
 export const currentWorkspace = () =>
   invoke<Workspace | null>("current_workspace");
 
 export const rescanWorkspace = () => invoke<Workspace>("rescan_workspace");
+
+/**
+ * Every open workspace, in no particular order — the frontend orders its own tab
+ * strip. Used to rebuild the tab bar after a reload, since there is no event
+ * channel; identity is `Workspace.root`.
+ */
+export const listOpenWorkspaces = () =>
+  invoke<Workspace[]>("list_open_workspaces");
+
+/**
+ * Make `root` the active workspace that the argument-free commands resolve
+ * against. A cheap pointer move that tears nothing down — background workspaces
+ * keep running. Must be awaited BEFORE the newly-active views issue their
+ * commands, or they would query the previous workspace.
+ */
+export const setActiveWorkspace = (root: string) =>
+  invoke<void>("set_active_workspace", { root });
+
+/**
+ * Close an open workspace: removes its slot, tears down its language server and
+ * cancels its running processes, and repoints the active workspace to another
+ * open one (or none). Returns the new active root, or null when nothing is left.
+ */
+export const closeWorkspace = (root: string) =>
+  invoke<string | null>("close_workspace", { root });
 
 export const saveConfig = (config: RunConfig) =>
   invoke<Workspace>("save_config", { config });
@@ -138,6 +173,21 @@ export const agentRuns = () => invoke<PromptRuns>("agent_runs");
 export const markAgentRun = (promptId: string) =>
   invoke<void>("mark_agent_run", { promptId });
 
+/** Save a Notes-panel note into the instruction library as a `.md` template. */
+export const saveNoteAsInstruction = (title: string, body: string) =>
+  invoke<void>("save_note_as_instruction", { title, body });
+
+// ---------------------------------------------------------------------------
+// Notes / scratchpad (user-global, not per-workspace)
+// ---------------------------------------------------------------------------
+
+/** Read the global notes file. Missing/unreadable yields an empty set. */
+export const readNotes = () => invoke<NotesFile>("read_notes");
+
+/** Write the global notes file, creating its directory if absent. */
+export const writeNotes = (file: NotesFile) =>
+  invoke<void>("write_notes", { file });
+
 // ---------------------------------------------------------------------------
 // Running
 // ---------------------------------------------------------------------------
@@ -179,14 +229,35 @@ export function runTests(
   configId: string,
   onlyFailed: boolean,
   onEvent: (event: ProcessEvent) => void,
+  /**
+   * Collect code coverage and map it onto the current diff. Off by default so an
+   * ordinary run's command line is unchanged; when set, the mapped result is
+   * cached for {@link coverageOfChange}. Trailing so existing calls are
+   * unaffected.
+   */
+  withCoverage = false,
 ): Promise<TestRunOutcome> {
   const channel = new Channel<ProcessEvent>();
   channel.onmessage = onEvent;
-  return invoke<TestRunOutcome>("run_tests", { configId, onlyFailed, channel });
+  return invoke<TestRunOutcome>("run_tests", {
+    configId,
+    onlyFailed,
+    withCoverage,
+    channel,
+  });
 }
 
 export const lastTestRun = (configId: string) =>
   invoke<TestRunOutcome | null>("last_test_run", { configId });
+
+/**
+ * The last coverage-of-change map for the active workspace: which changed lines
+ * the most recent coverage-enabled test run never executed. Non-streaming, like
+ * {@link erosionScan}. Returns an empty map carrying a warning when no coverage
+ * has been collected yet.
+ */
+export const coverageOfChange = (mode: ComparisonMode) =>
+  invoke<ChangeCoverage>("coverage_of_change", { mode });
 
 // ---------------------------------------------------------------------------
 // Agent runs (adversarial review + Run Agent)
@@ -204,7 +275,7 @@ export type AgentMode = "read-only" | "edit";
  * so callers should not await it before rendering the console.
  */
 export function startReview(
-  promptId: string,
+  promptId: string | undefined,
   agentId: string,
   model: string | undefined,
   mode: AgentMode,
@@ -215,16 +286,70 @@ export function startReview(
    * unchanged. Trailing so existing five-argument calls are unaffected.
    */
   context?: string,
+  /**
+   * An inline prompt body — a note's text sent straight to the agent — used in
+   * place of a library prompt. When present it wins over `promptId`; when absent
+   * the run falls back to the library prompt named by `promptId`.
+   */
+  promptBody?: string,
 ): Promise<void> {
   const channel = new Channel<ProcessEvent>();
   channel.onmessage = onEvent;
-  return invoke<void>("start_review", { promptId, agentId, model, mode, context, channel });
+  return invoke<void>("start_review", {
+    promptId,
+    promptBody,
+    agentId,
+    model,
+    mode,
+    context,
+    channel,
+  });
 }
 
 export const cancelReview = () => invoke<boolean>("cancel_review");
 
 /** The review agents whose CLI is installed, in preference order. */
 export const reviewAgents = () => invoke<ReviewAgentInfo[]>("review_agents");
+
+// ---------------------------------------------------------------------------
+// Interactive terminals
+// ---------------------------------------------------------------------------
+
+/**
+ * Open an interactive terminal, streaming its raw output to `onEvent`, and
+ * resolve to the session id used by {@link terminalWrite}/{@link terminalResize}
+ * /{@link terminalClose}. Output is one merged stream written straight to xterm
+ * — no post-processing — because an interactive TUI (Claude Code's included)
+ * redraws its own screen.
+ *
+ * `cols`/`rows` are the initial size; `cwd` defaults to the open workspace when
+ * omitted.
+ */
+export function terminalOpen(
+  cols: number,
+  rows: number,
+  onEvent: (event: TerminalEvent) => void,
+  cwd?: string,
+): Promise<string> {
+  const channel = new Channel<TerminalEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>("terminal_open", { cwd, cols, rows, channel });
+}
+
+/** Send keystrokes (or any bytes) to a terminal. */
+export const terminalWrite = (id: string, data: string) =>
+  invoke<void>("terminal_write", { id, data });
+
+/** Tell a terminal its viewport changed size. */
+export const terminalResize = (id: string, cols: number, rows: number) =>
+  invoke<void>("terminal_resize", { id, cols, rows });
+
+/** Close a terminal, killing its process tree. Resolves whether one was open. */
+export const terminalClose = (id: string) =>
+  invoke<boolean>("terminal_close", { id });
+
+/** The ids of every open terminal. */
+export const terminalList = () => invoke<string[]>("terminal_list");
 
 // ---------------------------------------------------------------------------
 // Git

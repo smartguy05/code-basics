@@ -1465,6 +1465,7 @@ fn mermaid_id_matches_committed_fixture() {
             path.display()
         )
     });
+    let committed = committed.replace("\r\n", "\n");
 
     assert_eq!(
         committed, generated,

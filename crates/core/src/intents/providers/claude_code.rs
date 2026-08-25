@@ -472,6 +472,8 @@ fn process_entry(
                             // Mined out of prose an agent wrote for a
                             // human, never offered as a card title.
                             source: LabelSource::Inferred,
+                            // Mined prose carries no self-confidence token.
+                            self_confidence: None,
                         });
                     }
                 }

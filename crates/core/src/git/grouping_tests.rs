@@ -579,6 +579,7 @@ fn labelled_record(path: &str, lines: &[&str], label: &str, source: LabelSource)
             paths: Vec::new(),
             anchor: None,
             source,
+            self_confidence: None,
         }],
     }
 }
@@ -679,6 +680,7 @@ fn a_user_note_wins_the_line_and_marks_the_card() {
                 paths: Vec::new(),
                 anchor: None,
                 source: LabelSource::Declared,
+                self_confidence: None,
             },
             IntentLabel {
                 provider: ProviderId::User,
@@ -687,6 +689,7 @@ fn a_user_note_wins_the_line_and_marks_the_card() {
                 paths: vec!["a.rs".into()],
                 anchor: None,
                 source: LabelSource::Declared,
+                self_confidence: None,
             },
         ],
     };
@@ -722,6 +725,7 @@ fn scoped_labels(pairs: &[(&str, &str, &[&str])]) -> Intents {
                 paths: paths.iter().map(|p| p.to_string()).collect(),
                 anchor: None,
                 source: LabelSource::Declared,
+                self_confidence: None,
             })
             .collect(),
     }
@@ -746,6 +750,80 @@ fn a_declared_reason_titles_a_geometry_less_file() {
     assert!(!groups[0].files[0].line_indices.is_empty());
 }
 
+// -- the agent's self-reported confidence reaches its card ------------------
+
+/// A declared reason that named a `[confidence: …]` level carries that level
+/// onto its intent card, distinct from the matcher's own `confidence`.
+#[test]
+fn a_declared_labels_self_confidence_reaches_its_group() {
+    let d = simple("f.rs", &["+    let x = compute_bound();"], "fn go() {");
+    let record = IntentRecord {
+        provider: ProviderId::ClaudeCode,
+        turn_id: "t1".into(),
+        tool_use_id: "tool-1".into(),
+        seq: 1,
+        path: "f.rs".into(),
+        edit: IntentEdit {
+            old_lines: Vec::new(),
+            new_lines: vec!["    let x = compute_bound();".into()],
+            whole_file: false,
+        },
+        branch: None,
+    };
+    let intents = Intents {
+        records: vec![record],
+        labels: vec![IntentLabel {
+            provider: ProviderId::ClaudeCode,
+            turn_id: "t1".into(),
+            label: "rewrite the bound".into(),
+            paths: Vec::new(),
+            anchor: None,
+            source: LabelSource::Declared,
+            self_confidence: Some(SelfConfidence::Low),
+        }],
+    };
+
+    let groups = with_intent(&[d], &intents);
+
+    let card = groups
+        .iter()
+        .find(|g| g.label == "rewrite the bound")
+        .expect("the declared intent card");
+    assert_eq!(card.kind, GroupKind::Intent);
+    assert_eq!(card.self_confidence, Some(SelfConfidence::Low));
+}
+
+/// A declared reason that stated nothing leaves the card abstaining: the field
+/// is absent, never a defaulted middle value.
+#[test]
+fn a_declared_label_without_a_stated_confidence_leaves_the_group_none() {
+    let d = simple("f.rs", &["+    let x = 1;"], "fn go() {");
+    let intents = scoped_labels(&[("t1", "fix cancellation", &["f.rs"])]);
+
+    let groups = with_intent(&[d], &intents);
+
+    assert_eq!(groups[0].kind, GroupKind::Intent);
+    assert_eq!(groups[0].self_confidence, None);
+}
+
+/// Two declared claims merging into one card keep the most cautious level.
+#[test]
+fn a_group_gathering_several_confidences_keeps_the_most_cautious() {
+    assert_eq!(
+        more_cautious(Some(SelfConfidence::High), Some(SelfConfidence::Low)),
+        Some(SelfConfidence::Low)
+    );
+    // A stated level always wins over silence.
+    assert_eq!(
+        more_cautious(None, Some(SelfConfidence::Medium)),
+        Some(SelfConfidence::Medium)
+    );
+    assert_eq!(
+        more_cautious(Some(SelfConfidence::High), None),
+        Some(SelfConfidence::High)
+    );
+}
+
 /// Two records, each declaring its own reason, both matched within one file.
 fn two_declared_records(path: &str, a_lines: &[&str], b_lines: &[&str]) -> Intents {
     let record = |turn: &str, seq: u64, lines: &[&str]| IntentRecord {
@@ -768,6 +846,7 @@ fn two_declared_records(path: &str, a_lines: &[&str], b_lines: &[&str]) -> Inten
         paths: Vec::new(),
         anchor: None,
         source: LabelSource::Declared,
+        self_confidence: None,
     };
     Intents {
         records: vec![record("tA", 1, a_lines), record("tB", 2, b_lines)],
@@ -925,6 +1004,7 @@ fn an_evidenced_reason_is_not_repeated_as_an_ambiguous_candidate() {
         paths: vec!["f.rs".into()],
         anchor: None,
         source: LabelSource::Declared,
+        self_confidence: None,
     };
     let intents = Intents {
         records: vec![record],
@@ -1184,6 +1264,7 @@ fn one_intent_spanning_two_files_becomes_a_single_card() {
             paths: Vec::new(),
             anchor: None,
             source: LabelSource::Declared,
+            self_confidence: None,
         }],
     };
 
@@ -1334,6 +1415,7 @@ fn an_intent_group_serialises_with_the_keys_the_ui_reads() {
         }],
         line_count: 2,
         confidence: Confidence::High,
+        self_confidence: None,
         user_authored: false,
     };
 
@@ -1366,10 +1448,41 @@ fn a_group_without_a_symbol_omits_the_key_rather_than_sending_null() {
         files: Vec::new(),
         line_count: 0,
         confidence: Confidence::High,
+        self_confidence: None,
         user_authored: false,
     };
 
     assert!(!keys(&serde_json::to_value(&group).unwrap()).contains(&"symbol".to_string()));
+}
+
+/// The agent's self-reported confidence crosses IPC under the camelCase key
+/// `selfConfidence`, present only when the agent stated one — absent (never
+/// null) otherwise, so the optional mirror reads it correctly.
+#[test]
+fn self_confidence_appears_only_when_the_agent_stated_one() {
+    let base = IntentGroup {
+        id: "intent:t1:x".into(),
+        kind: GroupKind::Intent,
+        label: "x".into(),
+        candidates: Vec::new(),
+        symbol: None,
+        files: Vec::new(),
+        line_count: 0,
+        confidence: Confidence::High,
+        self_confidence: None,
+        user_authored: false,
+    };
+
+    let absent = serde_json::to_value(&base).unwrap();
+    assert!(!keys(&absent).contains(&"selfConfidence".to_string()));
+
+    let stated = IntentGroup {
+        self_confidence: Some(SelfConfidence::Low),
+        ..base
+    };
+    let value = serde_json::to_value(&stated).unwrap();
+    assert!(keys(&value).contains(&"selfConfidence".to_string()));
+    assert_eq!(value["selfConfidence"], "low");
 }
 
 /// Candidates are omitted when empty (the normal case) and present when the
@@ -1385,6 +1498,7 @@ fn candidates_key_appears_only_when_non_empty() {
         files: Vec::new(),
         line_count: 0,
         confidence: Confidence::Low,
+        self_confidence: None,
         user_authored: false,
     };
 

@@ -341,6 +341,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             env: BTreeMap::new(),
             report: None,
+            coverage: None,
             warnings: Vec::new(),
         }
     }

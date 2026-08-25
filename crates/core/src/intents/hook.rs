@@ -37,7 +37,7 @@ use serde_json::Value;
 use super::patchfmt;
 use super::{
     append_edit, append_label, intents_dir, next_seq, IntentEdit, IntentLabel, IntentRecord,
-    LabelSource, ProviderId,
+    LabelSource, ProviderId, SelfConfidence,
 };
 
 /// Did the command line ask for recording rather than for the application?
@@ -236,6 +236,9 @@ Scope it to particular files if the turn did unrelated things:\n\
 \n\
     Intent(src/api.ts, src/apiLogic.test.ts): <why, for those files>\n\
 \n\
+You may append [confidence: low|medium|high] to mark how sure you are the \
+change is correct — low asks the reviewer to look closely.\n\
+\n\
 Keep it short enough to read at a glance — it titles a group of hunks in the \
 Changes tab, not a commit message.";
 
@@ -429,7 +432,7 @@ fn ingest_label(root: &Path, provider: ProviderId, payload: &Value) -> Result<us
         return Ok(0);
     }
 
-    for (paths, text, source) in &labels {
+    for (paths, text, source, self_confidence) in &labels {
         append_label(
             root,
             &IntentLabel {
@@ -439,6 +442,7 @@ fn ingest_label(root: &Path, provider: ProviderId, payload: &Value) -> Result<us
                 paths: paths.clone(),
                 anchor: None,
                 source: *source,
+                self_confidence: *self_confidence,
             },
         )?;
     }
@@ -451,22 +455,28 @@ fn ingest_label(root: &Path, provider: ProviderId, payload: &Value) -> Result<us
 /// Explicit `Intent:` lines are preferred. Failing those, the first sentence
 /// stands in — coarse, but an unexplained change is worse. The two are not
 /// interchangeable and the caller is told which it got: see [`LabelSource`].
-pub fn parse_labels_with_source(message: &str) -> Vec<(Vec<String>, String, LabelSource)> {
+pub fn parse_labels_with_source(
+    message: &str,
+) -> Vec<(Vec<String>, String, LabelSource, Option<SelfConfidence>)> {
     let declared = parse_declared_labels(message);
     if !declared.is_empty() {
         return declared
             .into_iter()
-            .map(|(paths, text)| (paths, text, LabelSource::Declared))
+            .map(|(paths, text, confidence)| (paths, text, LabelSource::Declared, confidence))
             .collect();
     }
 
+    // An inferred first sentence never carries a self-confidence: the token is
+    // something the agent has to write on purpose, and prose mined out of a chat
+    // message did not offer one.
     first_sentence(message)
-        .map(|text| vec![(Vec::new(), text, LabelSource::Inferred)])
+        .map(|text| vec![(Vec::new(), text, LabelSource::Inferred, None)])
         .unwrap_or_default()
 }
 
-/// Only the explicitly declared `Intent:` lines.
-pub fn parse_declared_labels(message: &str) -> Vec<(Vec<String>, String)> {
+/// Only the explicitly declared `Intent:` lines, each with the optional
+/// self-confidence the agent appended.
+pub fn parse_declared_labels(message: &str) -> Vec<(Vec<String>, String, Option<SelfConfidence>)> {
     let mut found = Vec::new();
 
     for line in message.lines() {
@@ -495,25 +505,72 @@ pub fn parse_declared_labels(message: &str) -> Vec<(Vec<String>, String)> {
         let Some(text) = text.trim().strip_prefix(':') else {
             continue;
         };
+
+        // Pull off any trailing `[confidence: …]` token *before* the label is
+        // judged or stored, so the card shows the reason without the mechanism
+        // and `is_usable_label` measures only the words that title it.
+        let (text, self_confidence) = strip_confidence_token(text.trim());
         let text = text.trim();
 
         if is_usable_label(text) {
-            found.push((paths, text.to_string()));
+            found.push((paths, text.to_string(), self_confidence));
         }
     }
 
     found
 }
 
+/// Split a trailing `[confidence: low|medium|high]` token off a declared label.
+///
+/// The token is the one piece of structured metadata the free-text `Intent:`
+/// line can carry, and it is optional and voluntary. This returns the label
+/// with the token removed and the level it named, and it abstains — `None`,
+/// leaving the label untouched — on anything it does not recognise: no
+/// bracket, a bracket that does not close the string, a keyword other than
+/// `confidence`, or a level other than the three words. Matching is
+/// case-insensitive on both the keyword and the level.
+///
+/// An unrecognised level is left *on* the label deliberately: dropping text we
+/// could not parse would hide a change the author may have meant to say, and a
+/// wrong value is worse than no value here as everywhere else in this module.
+fn strip_confidence_token(text: &str) -> (String, Option<SelfConfidence>) {
+    let trimmed = text.trim_end();
+
+    let Some(open) = trimmed.rfind('[') else {
+        return (text.to_string(), None);
+    };
+    if !trimmed.ends_with(']') {
+        return (text.to_string(), None);
+    }
+
+    let inside = trimmed[open + 1..trimmed.len() - 1].trim();
+    let Some(rest) = strip_prefix_ignoring_case(inside, "confidence") else {
+        return (text.to_string(), None);
+    };
+    let Some(level) = rest.trim_start().strip_prefix(':') else {
+        return (text.to_string(), None);
+    };
+
+    let confidence = match level.trim().to_lowercase().as_str() {
+        "low" => SelfConfidence::Low,
+        "medium" => SelfConfidence::Medium,
+        "high" => SelfConfidence::High,
+        _ => return (text.to_string(), None),
+    };
+
+    (trimmed[..open].trim_end().to_string(), Some(confidence))
+}
+
 /// Declared lines, or the first sentence when there are none.
 ///
 /// Kept as the plain view for callers that only want the words; anything that
 /// records a label wants [`parse_labels_with_source`] instead, because a card
-/// may only claim a *stated* intent for a declared one.
+/// may only claim a *stated* intent for a declared one, and the self-confidence
+/// token is dropped here for the same reason.
 pub fn parse_labels(message: &str) -> Vec<(Vec<String>, String)> {
     parse_labels_with_source(message)
         .into_iter()
-        .map(|(paths, text, _)| (paths, text))
+        .map(|(paths, text, _, _)| (paths, text))
         .collect()
 }
 

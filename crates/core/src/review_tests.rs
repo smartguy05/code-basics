@@ -3,7 +3,7 @@
 
 use crate::review::{
     agent_args, compose_prompt, detect_agents, models_for, parse_codex_models, resolve_model,
-    AgentMode, ReviewAgent, CLAUDE_DEFAULT_MODEL, CLAUDE_EDIT_PERMISSION_MODE,
+    resolve_prompt_body, AgentMode, ReviewAgent, CLAUDE_DEFAULT_MODEL, CLAUDE_EDIT_PERMISSION_MODE,
     CLAUDE_PERMISSION_MODE, CODEX_EDIT_SANDBOX, CODEX_SANDBOX,
 };
 
@@ -350,4 +350,30 @@ fn detected_agents_are_a_subset_of_all_with_no_duplicates() {
     let mut seen = detected.clone();
     seen.dedup();
     assert_eq!(seen.len(), detected.len(), "no duplicates");
+}
+
+// --- Choosing between an inline body and a library prompt ----------------
+
+#[test]
+fn an_inline_body_wins_over_a_library_prompt() {
+    let got = resolve_prompt_body(Some("run my note"), Some("library prompt")).unwrap();
+    assert_eq!(got, "run my note");
+}
+
+#[test]
+fn a_blank_inline_body_falls_back_to_the_library_prompt() {
+    let got = resolve_prompt_body(Some("   \n  "), Some("library prompt")).unwrap();
+    assert_eq!(got, "library prompt");
+}
+
+#[test]
+fn the_library_prompt_is_used_when_there_is_no_inline_body() {
+    let got = resolve_prompt_body(None, Some("library prompt")).unwrap();
+    assert_eq!(got, "library prompt");
+}
+
+#[test]
+fn neither_source_is_an_error_rather_than_an_empty_prompt() {
+    assert!(resolve_prompt_body(None, None).is_err());
+    assert!(resolve_prompt_body(Some("  "), None).is_err());
 }

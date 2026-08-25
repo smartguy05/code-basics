@@ -139,7 +139,7 @@ export function TestsView({
     };
   }, [selectedConfig]);
 
-  async function run(onlyFailed: boolean) {
+  async function run(onlyFailed: boolean, withCoverage = false) {
     if (!selectedConfig || running) return;
 
     setRunning(true);
@@ -156,10 +156,15 @@ export function TestsView({
     const startedAt = Math.floor(Date.now() / 1000);
 
     try {
-      const result = await api.runTests(selectedConfig, onlyFailed, (event) => {
-        consoleRef.current?.handle(event);
-        trackLive(event);
-      });
+      const result = await api.runTests(
+        selectedConfig,
+        onlyFailed,
+        (event) => {
+          consoleRef.current?.handle(event);
+          trackLive(event);
+        },
+        withCoverage,
+      );
       setOutcome(result);
       setSelectedNode(null);
       if (result.result.summary.failed > 0) void findRunDump(startedAt);
@@ -206,6 +211,13 @@ export function TestsView({
 
         <button className="primary" onClick={() => run(false)} disabled={running}>
           Run
+        </button>
+        <button
+          onClick={() => run(false, true)}
+          disabled={running}
+          title="Run the tests collecting code coverage, then map it onto your current diff — the Changes tab tints changed lines the tests never ran and badges each intent card with its uncovered count"
+        >
+          Run with coverage
         </button>
         <button
           onClick={() => run(true)}

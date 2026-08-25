@@ -257,6 +257,25 @@ pub fn compose_prompt(context: Option<&str>, body: &str) -> String {
     }
 }
 
+/// Resolve which prompt body a review will run.
+///
+/// A run can be driven by a **library** prompt (the Review / Run Agent entries)
+/// or by an **inline** body typed elsewhere (a Notes-panel note sent to the
+/// agent). An inline body wins when present — it is the more specific request —
+/// and a blank inline body is treated as absent so an accidental empty string
+/// does not shadow a chosen library prompt. With neither, there is nothing to
+/// run and that is an error, not a silent empty prompt. Pure, so the precedence
+/// is pinned by a test.
+pub fn resolve_prompt_body(inline: Option<&str>, library: Option<&str>) -> Result<String, String> {
+    if let Some(inline) = inline.map(str::trim).filter(|s| !s.is_empty()) {
+        return Ok(inline.to_string());
+    }
+    match library {
+        Some(body) => Ok(body.to_string()),
+        None => Err("no prompt to run: neither an inline body nor a library prompt".into()),
+    }
+}
+
 /// The argument vector for the agent, given a posture, a resolved model and the
 /// prompt body.
 ///

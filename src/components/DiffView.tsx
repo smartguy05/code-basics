@@ -34,7 +34,9 @@ import {
   type ScrollMetrics,
 } from "./diffLogic";
 import { onEditorFontSizeChange } from "../editorFontSize";
-import type { FileDiff } from "../ipc/types";
+import type { HunkRiskLevel, RiskIndex } from "./riskLogic";
+import { confidenceClass } from "./confidenceLogic";
+import type { FileDiff, SelfConfidence } from "../ipc/types";
 
 /** Highlight for lines the user has picked for revert or staging. */
 const setSelectedLines = StateEffect.define<Set<number>>();
@@ -52,6 +54,110 @@ const selectedLineField = StateField.define<DecorationSet>({
         marks.push(
           Decoration.line({ class: "cb-line-selected" }).range(line.from),
         );
+      }
+      return Decoration.set(marks);
+    }
+    return tr.docChanged ? value.map(tr.changes) : value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/**
+ * Wash for changed lines the last coverage-enabled test run never executed.
+ *
+ * A separate field from {@link selectedLineField} with its own colour on
+ * purpose: "you picked this line" (blue) and "the tests never ran this changed
+ * line" (amber) are different claims and must never be confused for one another.
+ */
+const setUncoveredLines = StateEffect.define<Set<number>>();
+
+const uncoveredLineField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (!effect.is(setUncoveredLines)) continue;
+
+      const marks = [];
+      for (const lineNumber of [...effect.value].sort((a, b) => a - b)) {
+        if (lineNumber < 1 || lineNumber > tr.state.doc.lines) continue;
+        const line = tr.state.doc.line(lineNumber);
+        marks.push(
+          Decoration.line({ class: "cb-line-uncovered" }).range(line.from),
+        );
+      }
+      return Decoration.set(marks);
+    }
+    return tr.docChanged ? value.map(tr.changes) : value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/**
+ * Risk emphasis for changed lines, its own decoration layer.
+ *
+ * A third field beside {@link selectedLineField} and {@link uncoveredLineField},
+ * with its own colours on purpose: "you picked this" (blue), "the tests never
+ * ran this" (amber) and "this change is riskier / this is just formatting" are
+ * three different claims and must never be confused. `high`/`elevated` emphasise
+ * (a left accent + tint); `formatting` is the one that *recedes* (dimmed), so
+ * whitespace noise stops competing for the eye.
+ */
+const RISK_CLASS: Record<HunkRiskLevel, string> = {
+  high: "cb-line-risk-high",
+  elevated: "cb-line-risk-elevated",
+  formatting: "cb-line-formatting-dim",
+};
+
+const setRiskLines = StateEffect.define<Map<number, HunkRiskLevel>>();
+
+const riskLineField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (!effect.is(setRiskLines)) continue;
+
+      const marks = [];
+      // Sorted by line number so the ranges are added in document order, which
+      // `Decoration.set` requires.
+      for (const [lineNumber, level] of [...effect.value].sort((a, b) => a[0] - b[0])) {
+        if (lineNumber < 1 || lineNumber > tr.state.doc.lines) continue;
+        const line = tr.state.doc.line(lineNumber);
+        marks.push(Decoration.line({ class: RISK_CLASS[level] }).range(line.from));
+      }
+      return Decoration.set(marks);
+    }
+    return tr.docChanged ? value.map(tr.changes) : value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/**
+ * Confidence heatmap for changed lines, its own decoration layer.
+ *
+ * A fourth field beside {@link selectedLineField}, {@link uncoveredLineField}
+ * and {@link riskLineField}, with its own colours on purpose: "you picked this"
+ * (blue), "the tests never ran this" (amber), "this change is riskier" and "the
+ * agent said it was *unsure* about this" are all different claims and must never
+ * be confused. The tint is **strongest on `low`** — the line the agent asked to
+ * be reviewed closely — and fades toward `high`, so the eye lands where the
+ * doubt was. A line whose group stated no confidence carries no entry here and
+ * so no tint at all (the abstain case, decided in `confidenceLogic`).
+ */
+const setConfidenceLines = StateEffect.define<Map<number, SelfConfidence>>();
+
+const confidenceLineField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (!effect.is(setConfidenceLines)) continue;
+
+      const marks = [];
+      // Sorted by line number so the ranges are added in document order, which
+      // `Decoration.set` requires.
+      for (const [lineNumber, level] of [...effect.value].sort((a, b) => a[0] - b[0])) {
+        if (lineNumber < 1 || lineNumber > tr.state.doc.lines) continue;
+        const line = tr.state.doc.line(lineNumber);
+        marks.push(Decoration.line({ class: confidenceClass(level) }).range(line.from));
       }
       return Decoration.set(marks);
     }
@@ -129,6 +235,33 @@ export interface DiffViewProps {
    * afterwards; this only seeds it.
    */
   highlight?: number[];
+  /**
+   * Diff line indices for changed lines the last coverage-enabled test run
+   * never executed, tinted amber in their own decoration layer (distinct from
+   * the selection highlight). These are only meaningful for the file and
+   * comparison mode the diff was built in, so the caller passes the current
+   * file's set and clears it on a mode change.
+   */
+  uncovered?: number[];
+  /**
+   * Per-line risk weight for the current file and comparison mode: each entry
+   * pairs a `DiffLine.index` with the weight its hunk carries. Painted in its
+   * own decoration layer (emphasis for `high`/`elevated`, dimming for
+   * `formatting`) and folded into the marker strip. Like `uncovered`, these
+   * indices are only meaningful for the mode the diff was built in, so the
+   * caller clears them on a mode change.
+   */
+  risk?: RiskIndex[];
+  /**
+   * Per-line agent self-confidence for the current file and comparison mode:
+   * each entry pairs a `DiffLine.index` with the level the intent that produced
+   * it stated. Painted in its own decoration layer (strongest tint on `low`, the
+   * line the agent flagged for close review; faintest on `high`). Like `risk`
+   * and `uncovered`, these indices are only meaningful for the mode the diff was
+   * built in, so the caller clears them on a mode change. Absent for any line
+   * whose group stated no confidence — the heatmap abstains rather than guessing.
+   */
+  confidence?: { index: number; level: SelfConfidence }[];
   /** Imperative handle for the toolbar's and F7's jump-to-change. */
   handleRef?: RefObject<DiffViewHandle | null>;
   /**
@@ -160,6 +293,9 @@ export function DiffView({
   onSave,
   onSelectionChange,
   highlight,
+  uncovered,
+  risk,
+  confidence,
   handleRef,
   lineWhy,
 }: DiffViewProps) {
@@ -295,6 +431,9 @@ export function DiffView({
         ...historyKeymap,
       ]),
       selectedLineField,
+      uncoveredLineField,
+      riskLineField,
+      confidenceLineField,
       EditorView.editable.of(editable),
       // Hover a line to see its recorded intent, when a resolver is supplied
       // (the History tab). Reads through the handlers ref so it always sees the
@@ -614,6 +753,71 @@ export function DiffView({
     handlers.current.onSelectionChange([...selected]);
   }, [selected]);
 
+  // Paint the uncovered wash. Driven straight off the `uncovered` prop rather
+  // than local state, and keyed on the joined indices so a parent that rebuilds
+  // an equal array on every render (the poll does) does not re-dispatch. The map
+  // from diff index to line number is this file's, so an index belonging to no
+  // line here simply paints nothing.
+  const uncoveredKey = uncovered?.join(",") ?? "";
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+
+    const wanted = new Set(
+      uncoveredKey === "" ? [] : uncoveredKey.split(",").map(Number),
+    );
+    const lines = new Set<number>();
+    for (const [lineNumber, index] of lineToDiffIndex) {
+      if (wanted.has(index)) lines.add(lineNumber);
+    }
+    view.dispatch({ effects: setUncoveredLines.of(lines) });
+    // The rebuild triggers are in the deps so a layout / whitespace toggle,
+    // which builds a fresh editor with an empty field, repaints the wash rather
+    // than dropping it until the next diff change.
+  }, [uncoveredKey, lineToDiffIndex, path, baseline, working, layout, editable, collapseUnchanged, ignoreWhitespace]);
+
+  // Paint the risk emphasis. Same shape as the uncovered wash above: driven off
+  // the `risk` prop, keyed on the serialised entries so an equal array rebuilt
+  // each render (the poll does) does not re-dispatch, and re-run on the rebuild
+  // triggers so a layout / whitespace toggle repaints rather than dropping it.
+  const riskKey = (risk ?? []).map((entry) => `${entry.index}:${entry.level}`).join(",");
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+
+    const byIndex = new Map<number, HunkRiskLevel>();
+    for (const entry of risk ?? []) byIndex.set(entry.index, entry.level);
+
+    const lines = new Map<number, HunkRiskLevel>();
+    for (const [lineNumber, index] of lineToDiffIndex) {
+      const level = byIndex.get(index);
+      if (level) lines.set(lineNumber, level);
+    }
+    view.dispatch({ effects: setRiskLines.of(lines) });
+  }, [riskKey, lineToDiffIndex, path, baseline, working, layout, editable, collapseUnchanged, ignoreWhitespace]);
+
+  // Paint the confidence heatmap. Same shape as the risk emphasis above: driven
+  // off the `confidence` prop, keyed on the serialised entries so an equal array
+  // rebuilt each render does not re-dispatch, and re-run on the rebuild triggers
+  // so a layout / whitespace toggle repaints rather than dropping it.
+  const confidenceKey = (confidence ?? [])
+    .map((entry) => `${entry.index}:${entry.level}`)
+    .join(",");
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+
+    const byIndex = new Map<number, SelfConfidence>();
+    for (const entry of confidence ?? []) byIndex.set(entry.index, entry.level);
+
+    const lines = new Map<number, SelfConfidence>();
+    for (const [lineNumber, index] of lineToDiffIndex) {
+      const level = byIndex.get(index);
+      if (level) lines.set(lineNumber, level);
+    }
+    view.dispatch({ effects: setConfidenceLines.of(lines) });
+  }, [confidenceKey, lineToDiffIndex, path, baseline, working, layout, editable, collapseUnchanged, ignoreWhitespace]);
+
   // Clicking the gutter toggles a line's selection.
   useEffect(() => {
     const host = hostRef.current;
@@ -673,7 +877,7 @@ export function DiffView({
     );
   }
 
-  const marks = changeMarks(diff, docLines);
+  const marks = changeMarks(diff, docLines, risk);
   const thumb = scrollThumb(metrics);
 
   /** Drag the thumb, or click the track to jump to that offset. */
@@ -733,7 +937,7 @@ export function DiffView({
         {marks.map((mark, index) => (
           <button
             key={index}
-            className={`mark ${mark.kind}`}
+            className={`mark ${mark.kind}${mark.risk ? ` risk-${mark.risk}` : ""}`}
             style={{ top: `${mark.top * 100}%`, height: `${mark.height * 100}%` }}
             // The strip is drawn from the working document's line count, so a
             // mark's own position is the line to go to.
