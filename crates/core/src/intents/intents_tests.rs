@@ -108,6 +108,84 @@ fn an_intent_prompt_serialises_with_the_keys_the_note_reads() {
     assert_eq!(keys, ["prompt", "provider", "turnId"]);
 }
 
+// -- self-reported confidence -----------------------------------------------
+
+#[test]
+fn self_confidence_serialises_in_camel_case() {
+    let json = serde_json::to_string(&[
+        SelfConfidence::Low,
+        SelfConfidence::Medium,
+        SelfConfidence::High,
+    ])
+    .unwrap();
+
+    assert_eq!(json, r#"["low","medium","high"]"#);
+}
+
+#[test]
+fn a_label_with_a_self_confidence_round_trips_with_the_camel_case_key() {
+    let dir = workspace();
+    append_label(
+        dir.path(),
+        &IntentLabel {
+            provider: ProviderId::ClaudeCode,
+            turn_id: "turn-1".into(),
+            label: "rewrite the tokenizer".into(),
+            paths: Vec::new(),
+            anchor: None,
+            source: LabelSource::Declared,
+            self_confidence: Some(SelfConfidence::Low),
+        },
+    )
+    .unwrap();
+
+    // The wire key is camelCase, so the hand-written mirror reads it.
+    let raw = std::fs::read_to_string(labels_path(dir.path())).unwrap();
+    assert!(
+        raw.contains(r#""selfConfidence":"low""#),
+        "expected the camelCase key, got: {raw}"
+    );
+
+    let intents = load(dir.path(), &LoadOptions::default()).unwrap();
+    assert_eq!(intents.labels[0].self_confidence, Some(SelfConfidence::Low));
+}
+
+/// Absence is absence: a label with no stated confidence must omit the key
+/// entirely rather than send a null, so the optional mirror reads it as absent.
+#[test]
+fn a_label_without_a_self_confidence_omits_the_key() {
+    let value = serde_json::to_value(IntentLabel {
+        provider: ProviderId::ClaudeCode,
+        turn_id: "turn-1".into(),
+        label: "no confidence stated".into(),
+        paths: Vec::new(),
+        anchor: None,
+        source: LabelSource::Declared,
+        self_confidence: None,
+    })
+    .unwrap();
+
+    assert!(
+        !value.as_object().unwrap().contains_key("selfConfidence"),
+        "an absent confidence must not serialise a key"
+    );
+}
+
+/// A label recorded before this field existed must still parse — and abstain.
+#[test]
+fn a_label_recorded_before_the_confidence_field_existed_reads_as_none() {
+    let json = r#"{
+        "provider": "claudeCode",
+        "turnId": "turn-1",
+        "label": "an older record",
+        "source": "declared"
+    }"#;
+
+    let label: IntentLabel = serde_json::from_str(json).unwrap();
+
+    assert_eq!(label.self_confidence, None);
+}
+
 #[test]
 fn clear_also_removes_the_prompts_file() {
     let dir = workspace();
@@ -260,6 +338,7 @@ fn label(turn: &str, text: &str, paths: &[&str]) -> IntentLabel {
         paths: paths.iter().map(|s| s.to_string()).collect(),
         anchor: None,
         source: LabelSource::Declared,
+        self_confidence: None,
     }
 }
 
@@ -522,6 +601,7 @@ fn effective_label_never_crosses_a_turn_for_an_inferred_label() {
             paths: vec!["src/a.rs".into()],
             anchor: None,
             source: LabelSource::Inferred,
+            self_confidence: None,
         }],
     };
 
@@ -719,6 +799,7 @@ fn an_inferred_label_that_reads_as_narration_is_dropped_on_load() {
             paths: Vec::new(),
             anchor: None,
             source: LabelSource::Inferred,
+            self_confidence: None,
         },
     )
     .unwrap();
@@ -743,6 +824,7 @@ fn a_declared_label_survives_load_whatever_it_says() {
             paths: Vec::new(),
             anchor: None,
             source: LabelSource::Declared,
+            self_confidence: None,
         },
     )
     .unwrap();
@@ -766,6 +848,7 @@ fn an_inferred_label_too_short_to_say_anything_is_dropped_on_load() {
             paths: Vec::new(),
             anchor: None,
             source: LabelSource::Inferred,
+            self_confidence: None,
         },
     )
     .unwrap();

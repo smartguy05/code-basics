@@ -80,6 +80,7 @@ fn label(turn: &str, text: &str, source: LabelSource) -> IntentLabel {
         paths: Vec::new(),
         anchor: None,
         source,
+        self_confidence: None,
     }
 }
 
@@ -92,6 +93,7 @@ fn plabel(turn: &str, text: &str, paths: &[&str], source: LabelSource) -> Intent
         paths: paths.iter().map(|s| s.to_string()).collect(),
         anchor: None,
         source,
+        self_confidence: None,
     }
 }
 
@@ -232,6 +234,86 @@ fn an_unfulfilled_claim_names_the_files_the_turn_touched() {
 
     assert_eq!(out.unfulfilled.len(), 1);
     assert_eq!(out.unfulfilled[0].paths, vec!["a.rs", "b.rs"]);
+}
+
+// -- evidenced claims -------------------------------------------------------
+
+/// The evidenced half of the claim universe is now surfaced, not just counted:
+/// a declared intent with a matching attribution span lands in `evidenced` (and
+/// not `unfulfilled`), one without lands in `unfulfilled` (and not `evidenced`),
+/// and the two lists partition the claims-in-play with no overlap.
+#[test]
+fn evidenced_claims_are_listed_and_partitioned_from_unfulfilled() {
+    let matched = simple(
+        "a.rs",
+        &["+    let a_distinctive_matched_line = compute();"],
+    );
+    let unmatched = simple("b.rs", &["+    let an_unrelated_change = 0;"]);
+    let intents = Intents {
+        records: vec![
+            record(
+                "turn-1",
+                "a.rs",
+                &["    let a_distinctive_matched_line = compute();"],
+                1,
+            ),
+            record("turn-2", "b.rs", &["    let recorded_but_absent = 9;"], 2),
+        ],
+        labels: vec![
+            label("turn-1", "the evidenced intent", LabelSource::Declared),
+            label("turn-2", "the unmatched intent", LabelSource::Declared),
+        ],
+    };
+
+    let out = build(&[matched, unmatched], &intents);
+
+    let evidenced_labels: Vec<&str> = out.evidenced.iter().map(|c| c.label.as_str()).collect();
+    let unfulfilled_labels: Vec<&str> = out.unfulfilled.iter().map(|c| c.label.as_str()).collect();
+
+    assert_eq!(evidenced_labels, vec!["the evidenced intent"]);
+    assert_eq!(unfulfilled_labels, vec!["the unmatched intent"]);
+    assert!(!evidenced_labels.contains(&"the unmatched intent"));
+    assert!(!unfulfilled_labels.contains(&"the evidenced intent"));
+    // The evidenced entry carries the file the turn touched, like an unmatched one.
+    assert_eq!(out.evidenced[0].turn_id, "turn-1");
+    assert_eq!(out.evidenced[0].paths, vec!["a.rs"]);
+}
+
+/// The list and the tally can never disagree: `evidenced.len()` is exactly
+/// `scorecard.evidenced`, across a mix of matched and unmatched claims.
+#[test]
+fn evidenced_list_length_equals_the_scorecard_count() {
+    let matched = simple(
+        "a.rs",
+        &["+    let a_distinctive_matched_line = compute();"],
+    );
+    let unmatched = simple("b.rs", &["+    let an_unrelated_change = 0;"]);
+    let intents = Intents {
+        records: vec![
+            record(
+                "turn-1",
+                "a.rs",
+                &["    let a_distinctive_matched_line = compute();"],
+                1,
+            ),
+            record("turn-2", "b.rs", &["    let recorded_but_absent = 9;"], 2),
+        ],
+        labels: vec![
+            label("turn-1", "the evidenced intent", LabelSource::Declared),
+            label("turn-2", "the unmatched intent", LabelSource::Declared),
+        ],
+    };
+
+    let out = build(&[matched, unmatched], &intents);
+
+    assert_eq!(out.evidenced.len() as u32, out.scorecard.evidenced);
+    assert_eq!(out.scorecard.evidenced, 1);
+    assert_eq!(out.scorecard.unmatched, 1);
+    // The two lists together account for every claim in play.
+    assert_eq!(
+        (out.evidenced.len() + out.unfulfilled.len()) as u32,
+        out.scorecard.claims
+    );
 }
 
 // -- scorecard --------------------------------------------------------------
@@ -793,13 +875,14 @@ fn keys(value: &serde_json::Value) -> Vec<String> {
 fn an_intent_review_serialises_with_the_keys_the_ui_reads() {
     let out = IntentReview {
         groups: Vec::new(),
+        evidenced: Vec::new(),
         unfulfilled: Vec::new(),
         scorecard: Scorecard::default(),
     };
 
     assert_eq!(
         keys(&serde_json::to_value(&out).unwrap()),
-        ["groups", "scorecard", "unfulfilled"]
+        ["evidenced", "groups", "scorecard", "unfulfilled"]
     );
 }
 

@@ -56,6 +56,13 @@ or a directory to cover everything you edited beneath it (e.g.
 `Intent(src/components): …`). Prefer naming the specific files; reach for a
 directory only when the turn's edits are one cohesive set under it.
 
+You may append `[confidence: low|medium|high]` to an Intent line to mark how sure
+you are the change is correct (low = please review closely):
+
+```
+Intent(src/parser.ts): rewrite the tokenizer [confidence: low]
+```
+
 A scoped line covers the files it names; one plain line may cover the rest.
 Keep each label short enough to read at a glance — it titles a group of hunks
 in the Changes tab, not a commit message.

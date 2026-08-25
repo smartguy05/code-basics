@@ -81,6 +81,10 @@ pub struct Scorecard {
 #[serde(rename_all = "camelCase")]
 pub struct IntentReview {
     pub groups: Vec<IntentGroup>,
+    /// The evidenced half of the claim universe — declared intents an accepted
+    /// span now matches. The same row shape as `unfulfilled`, so the UI renders
+    /// one per-claim checklist across both; `evidenced.len() == scorecard.evidenced`.
+    pub evidenced: Vec<UnfulfilledClaim>,
     pub unfulfilled: Vec<UnfulfilledClaim>,
     pub scorecard: Scorecard,
 }
@@ -103,22 +107,28 @@ pub fn review(
     let groups = grouping::group(diffs, &attributions, intents);
     let evidenced_set = evidenced_claims(&attributions);
     let claims = claims_in_play(diffs, &attributions, intents, bound_bare.as_ref());
-    let claim_total = claims.len() as u32;
 
-    let mut unfulfilled: Vec<UnfulfilledClaim> = claims
+    // Partition the whole claim universe by membership in the accepted-span set,
+    // rather than filtering to the unmatched subset and discarding the rest. The
+    // evidenced half is now a returned list, not just a count — same row shape,
+    // so one checklist renders both.
+    let sort = |a: &UnfulfilledClaim, b: &UnfulfilledClaim| {
+        a.turn_id.cmp(&b.turn_id).then(a.label.cmp(&b.label))
+    };
+    let (mut evidenced, mut unfulfilled): (Vec<UnfulfilledClaim>, Vec<UnfulfilledClaim>) = claims
         .into_iter()
-        .filter(|claim| !evidenced_set.contains(&(claim.turn_id.clone(), claim.label.clone())))
-        .collect();
+        .partition(|claim| evidenced_set.contains(&(claim.turn_id.clone(), claim.label.clone())));
     // Deterministic, and reads in turn order.
-    unfulfilled.sort_by(|a, b| a.turn_id.cmp(&b.turn_id).then(a.label.cmp(&b.label)));
+    evidenced.sort_by(sort);
+    unfulfilled.sort_by(sort);
 
-    // Evidenced is whatever is left once the unmatched are removed, so the two
-    // can never disagree with the list.
-    let evidenced = claim_total - unfulfilled.len() as u32;
-    let scorecard = scorecard(diffs, &attributions, &unfulfilled, evidenced);
+    let scorecard = scorecard(diffs, &attributions, &unfulfilled, evidenced.len() as u32);
+    // The list the reviewer opens and the number they read must never disagree.
+    debug_assert_eq!(scorecard.evidenced as usize, evidenced.len());
 
     IntentReview {
         groups,
+        evidenced,
         unfulfilled,
         scorecard,
     }

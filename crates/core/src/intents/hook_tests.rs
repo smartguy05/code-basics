@@ -352,6 +352,56 @@ fn a_line_with_a_multibyte_character_where_the_keyword_would_end_does_not_panic(
     assert_eq!(labels[0].1, "rename Café — the accented one");
 }
 
+// -- self-reported confidence token -----------------------------------------
+
+#[test]
+fn a_declared_intent_can_carry_a_self_confidence_token() {
+    let labels =
+        parse_declared_labels("Intent(src/parser.ts): rewrite the tokenizer [confidence: low]");
+
+    assert_eq!(labels.len(), 1);
+    // The token is stripped from the displayed label.
+    assert_eq!(labels[0].1, "rewrite the tokenizer");
+    assert_eq!(labels[0].2, Some(crate::intents::SelfConfidence::Low));
+}
+
+#[test]
+fn a_declared_intent_without_a_token_has_no_self_confidence() {
+    let labels = parse_declared_labels("Intent: add retry to token refresh");
+
+    assert_eq!(labels[0].1, "add retry to token refresh");
+    assert_eq!(labels[0].2, None);
+}
+
+#[test]
+fn the_confidence_token_is_matched_case_insensitively() {
+    let labels = parse_declared_labels("Intent: widen the timeout [Confidence: HIGH]");
+
+    assert_eq!(labels[0].1, "widen the timeout");
+    assert_eq!(labels[0].2, Some(crate::intents::SelfConfidence::High));
+}
+
+/// An unrecognised level abstains — no value — and leaves the bracketed text on
+/// the label rather than dropping words the parser did not understand.
+#[test]
+fn an_unknown_confidence_level_abstains_and_keeps_the_text() {
+    let labels = parse_declared_labels("Intent: rework the cache [confidence: unsure]");
+
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels[0].1, "rework the cache [confidence: unsure]");
+    assert_eq!(labels[0].2, None);
+}
+
+/// The plain `parse_labels` view drops the token from the label text too, so
+/// nothing downstream that only wants the words ever sees the mechanism.
+#[test]
+fn parse_labels_strips_the_confidence_token_from_the_label() {
+    let labels = parse_labels("Intent: fix the parser [confidence: medium]");
+
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels[0].1, "fix the parser");
+}
+
 // -- The narration gate on inferred labels ----------------------------------
 //
 // A mined first sentence was written for a human reading a chat, not as a card

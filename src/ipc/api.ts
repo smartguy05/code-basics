@@ -8,6 +8,7 @@ import type {
   BehavioralReport,
   Branch,
   BuildAction,
+  ChangeCoverage,
   Changelists,
   Commit,
   ComparisonMode,
@@ -228,14 +229,35 @@ export function runTests(
   configId: string,
   onlyFailed: boolean,
   onEvent: (event: ProcessEvent) => void,
+  /**
+   * Collect code coverage and map it onto the current diff. Off by default so an
+   * ordinary run's command line is unchanged; when set, the mapped result is
+   * cached for {@link coverageOfChange}. Trailing so existing calls are
+   * unaffected.
+   */
+  withCoverage = false,
 ): Promise<TestRunOutcome> {
   const channel = new Channel<ProcessEvent>();
   channel.onmessage = onEvent;
-  return invoke<TestRunOutcome>("run_tests", { configId, onlyFailed, channel });
+  return invoke<TestRunOutcome>("run_tests", {
+    configId,
+    onlyFailed,
+    withCoverage,
+    channel,
+  });
 }
 
 export const lastTestRun = (configId: string) =>
   invoke<TestRunOutcome | null>("last_test_run", { configId });
+
+/**
+ * The last coverage-of-change map for the active workspace: which changed lines
+ * the most recent coverage-enabled test run never executed. Non-streaming, like
+ * {@link erosionScan}. Returns an empty map carrying a warning when no coverage
+ * has been collected yet.
+ */
+export const coverageOfChange = (mode: ComparisonMode) =>
+  invoke<ChangeCoverage>("coverage_of_change", { mode });
 
 // ---------------------------------------------------------------------------
 // Agent runs (adversarial review + Run Agent)

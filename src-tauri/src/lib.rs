@@ -131,6 +131,7 @@ pub fn run() {
             commands::run::running_ids,
             commands::run::run_tests,
             commands::run::last_test_run,
+            commands::run::coverage_of_change,
             commands::review::start_review,
             commands::review::cancel_review,
             commands::review::review_agents,

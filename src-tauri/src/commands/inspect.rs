@@ -106,6 +106,7 @@ async fn enumerate(
         cwd: cwd.to_path_buf(),
         env: BTreeMap::new(),
         report: None,
+        coverage: None,
         warnings: Vec::new(),
     };
 
@@ -280,6 +281,7 @@ pub async fn inspect_capture(
             cwd: workspace_root.clone(),
             env: BTreeMap::new(),
             report: None,
+            coverage: None,
             warnings: Vec::new(),
         };
 

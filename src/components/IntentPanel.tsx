@@ -16,7 +16,6 @@ import {
   scopeCreep,
   scorecardLine,
   stagedState,
-  unfulfilledCaption,
   type StagedState,
 } from "./intentPanelLogic";
 import {
@@ -24,9 +23,21 @@ import {
   behavioralScoreLine,
   deltaLine,
 } from "./behavioralPanelLogic";
+import {
+  claimChecklistCaption,
+  claimRows,
+  type ClaimRow,
+  type ClaimState,
+} from "./claimChecklistLogic";
+import {
+  cardCoverage,
+  coverageSummaryLine,
+  hasCoverage,
+} from "./coverageOfChangeLogic";
 import type {
   BehavioralReport,
   CardBehavior,
+  ChangeCoverage,
   ComparisonMode,
   Confidence,
   ErosionFlag,
@@ -110,6 +121,51 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
   user: "You",
 };
 
+/**
+ * The marker for each claim state in the per-claim checklist.
+ *
+ *  - `unmatched`    — ✗, warning: no changed hunk evidences it (still neutral
+ *    wording; the change may simply have moved past the matcher).
+ *  - `evidenced`    — ✓, positive: a matched span backs it.
+ *  - `corroborated` — ✓✓, positive: also produced an observable runtime delta.
+ */
+const CLAIM_MARK: Record<ClaimState, { mark: string; className: string; title: string }> = {
+  unmatched: {
+    mark: "✗",
+    className: "unmatched",
+    title:
+      "The agent stated this, but no changed hunk matches it here. It may be " +
+      "committed, later overwritten, hand-reverted, or reformatted past the " +
+      "matcher — reported, not assumed undone.",
+  },
+  evidenced: {
+    mark: "✓",
+    className: "evidenced",
+    title: "A matched change in this diff backs this stated intent.",
+  },
+  corroborated: {
+    mark: "✓✓",
+    className: "corroborated",
+    title:
+      "A matched change backs this, and the before/after run attributed an " +
+      "observable runtime difference to its card.",
+  },
+};
+
+/** One row of the per-claim checklist: its marker, label and touched paths. */
+function ClaimRowView({ row }: { row: ClaimRow }) {
+  const tag = CLAIM_MARK[row.state];
+  return (
+    <div className={`claim-row ${tag.className}`} style={{ fontSize: 11, marginTop: 2 }} title={tag.title}>
+      <span className={`claim-mark ${tag.className}`} aria-hidden>
+        {tag.mark}
+      </span>
+      <span className="label">{row.label}</span>
+      {row.paths.length > 0 && <span className="faint"> — {row.paths.join(", ")}</span>}
+    </div>
+  );
+}
+
 /** The small before/after pill on a card, coloured by `behavioralBadge`. */
 function BehavioralBadge({ card }: { card: CardBehavior }) {
   const badge = behavioralBadge(card);
@@ -147,12 +203,36 @@ function RiskBadge({ risk }: { risk: { level: "elevated" | "high"; reasons: stri
   );
 }
 
+/**
+ * The quiet coverage pill on a card, shown only when the last coverage-enabled
+ * run left some of this card's own changed lines unexecuted. Amber like the diff
+ * wash, so the two read as the same signal.
+ */
+function CoverageBadge({ count }: { count: number }) {
+  return (
+    <span
+      className="coverage-badge"
+      title={`${count} changed line${
+        count === 1 ? "" : "s"
+      } in this card were not executed by the last coverage run — open the file to see them tinted in the diff`}
+    >
+      {count} uncovered
+    </span>
+  );
+}
+
 export interface IntentPanelProps {
   groups: IntentGroup[];
   /** The per-turn coverage tally, shown above the cards. */
   scorecard: Scorecard;
   /** Declared intents no changed hunk evidences — shown as review items. */
   unfulfilled: UnfulfilledClaim[];
+  /**
+   * The evidenced half of the claim universe — declared intents an accepted
+   * span matches. Same row shape as {@link unfulfilled}; together they render
+   * the per-claim checklist. Absent before the first refresh — treated as none.
+   */
+  evidenced: UnfulfilledClaim[];
   providers: ProviderStatus[];
   selectedGroup: string | null;
   /** The file open in the diff pane, so the card can mark its row. */
@@ -205,12 +285,20 @@ export interface IntentPanelProps {
    * none, so the badge simply stays quiet rather than guessing.
    */
   erosionFlags?: ErosionFlag[];
+  /**
+   * Coverage of the changed lines from the last coverage-enabled test run,
+   * mapped onto this diff. Drives the summary line above the cards and a
+   * per-card "N uncovered" badge. Absent/null until a coverage run has happened
+   * — treated as none, never as "fully covered".
+   */
+  coverage?: ChangeCoverage | null;
 }
 
 export function IntentPanel({
   groups,
   scorecard,
   unfulfilled,
+  evidenced,
   providers,
   selectedGroup,
   selectedPath,
@@ -231,6 +319,7 @@ export function IntentPanel({
   onClearIntent,
   behavioral,
   erosionFlags,
+  coverage,
 }: IntentPanelProps) {
   const capturing = providers.some((p) => p.capture != null);
   const flags = erosionFlags ?? [];
@@ -239,8 +328,11 @@ export function IntentPanel({
     (behavioral?.attributions ?? []).map((card) => [card.groupId, card]),
   );
   const hint = intentDataHint(groups, providers);
-  const unfulfilledHeading = unfulfilledCaption(unfulfilled);
   const scope = scopeCreep(scorecard, groups);
+  // The per-claim checklist: one row per declared intent, states ordered most
+  // actionable first. Replaces the flat unfulfilled list below.
+  const checklist = claimRows(evidenced, unfulfilled, behavioral);
+  const checklistCaption = claimChecklistCaption(checklist);
 
   // Collapsed once capture is confirmed on — a working feature does not need its
   // setup pane taking up the top of the panel — and open while it is off, so the
@@ -271,7 +363,7 @@ export function IntentPanel({
   // Whether the folded summary has anything in it — no twisty, no click target
   // when there is nothing to reveal.
   const hasSummaryDetails =
-    groups.length > 0 || scope != null || unfulfilledHeading != null;
+    groups.length > 0 || scope != null || checklist.length > 0;
 
   const renderCard = (group: IntentGroup) => (
     <GroupCard
@@ -279,6 +371,12 @@ export function IntentPanel({
       group={group}
       behavior={behaviorByGroup.get(group.id) ?? null}
       risk={cardRisk(group, flags)}
+      // The card's own changed-line indices across its files, intersected with
+      // the uncovered set — the same Set-has shape `cardRisk` uses for erosion.
+      uncoveredCount={cardCoverage(
+        new Set(group.files.flatMap((f) => f.lineIndices)),
+        coverage,
+      )}
       selected={group.id === selectedGroup}
       selectedPath={group.id === selectedGroup ? selectedPath : null}
       statusFiles={statusFiles}
@@ -428,27 +526,19 @@ export function IntentPanel({
             </div>
           )}
 
-          {unfulfilledHeading && (
-            <div className="warning" style={{ fontSize: 12 }}>
-              <div style={{ marginBottom: 4 }}>{unfulfilledHeading}</div>
-              {unfulfilled.map((claim) => (
+          {checklist.length > 0 && (
+            <div className="claim-checklist" style={{ padding: "2px 8px 6px" }}>
+              {checklistCaption && (
                 <div
-                  key={`${claim.turnId}:${claim.label}`}
-                  style={{ fontSize: 11, marginTop: 2 }}
-                  // These are informational: there is nothing in the tree to act
-                  // on, and a stated intent may simply have landed and moved past
-                  // the matcher's reach rather than being undone.
-                  title={
-                    "The agent stated this, but no changed hunk matches it here. " +
-                    "It may be committed, later overwritten, hand-reverted, or " +
-                    "reformatted past the matcher — reported, not assumed undone."
-                  }
+                  className="faint"
+                  style={{ fontSize: 11, marginBottom: 4 }}
+                  title="One row per declared intent: ✗ unmatched (no change found here), ✓ evidenced (a matched change backs it), ✓✓ corroborated (also produced a runtime delta)."
                 >
-                  <span className="label">{claim.label}</span>
-                  {claim.paths.length > 0 && (
-                    <span className="faint"> — {claim.paths.join(", ")}</span>
-                  )}
+                  {checklistCaption}
                 </div>
+              )}
+              {checklist.map((row, i) => (
+                <ClaimRowView key={`${row.state}:${row.label}:${i}`} row={row} />
               ))}
             </div>
           )}
@@ -497,6 +587,24 @@ export function IntentPanel({
         </div>
       )}
 
+      {hasCoverage(coverage) && (
+        <div className="coverage-overall">
+          <div
+            className="muted"
+            style={{ padding: "2px 8px 4px", fontSize: 11 }}
+            title="Coverage of the changed lines from the last coverage-enabled test run: how many were executed, how many never ran, and how many the tool could not classify (abstained)."
+          >
+            {coverageSummaryLine(coverage)}
+          </div>
+
+          {coverage.warnings.map((warning) => (
+            <div key={warning} className="warning" style={{ fontSize: 11 }}>
+              {warning}
+            </div>
+          ))}
+        </div>
+      )}
+
       {groups.length === 0 && (
         <div className="muted" style={{ padding: 8, fontSize: 12 }}>
           No changes to group.
@@ -528,6 +636,7 @@ function GroupCard({
   group,
   behavior,
   risk,
+  uncoveredCount,
   selected,
   selectedPath,
   statusFiles,
@@ -546,6 +655,8 @@ function GroupCard({
   group: IntentGroup;
   behavior: CardBehavior | null;
   risk: { level: "elevated" | "high"; reasons: string[] } | null;
+  /** How many of this card's own changed lines the last coverage run missed. */
+  uncoveredCount: number;
   selected: boolean;
   selectedPath: string | null;
   statusFiles: FileChange[];
@@ -633,6 +744,7 @@ function GroupCard({
         <span className="label">{cardHeadline(group)}</span>
         {behavior && <BehavioralBadge card={behavior} />}
         {risk && <RiskBadge risk={risk} />}
+        {uncoveredCount > 0 && <CoverageBadge count={uncoveredCount} />}
         <StageTag state={groupStagedState(group.files.map((f) => f.path), statusFiles)} />
         <span className="confidence" title={`${group.confidence} confidence`}>
           {CONFIDENCE_MARK[group.confidence]}

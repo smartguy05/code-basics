@@ -1,0 +1,6 @@
+# Golden test fixtures are read from disk and compared byte-for-byte by tests
+# (e.g. crates/core/src/architecture/mermaid_tests.rs). Force LF in the working
+# tree on every platform so a Windows `core.autocrlf` checkout cannot inject CR
+# and break the comparison. These files are already stored LF in the repo, so
+# this changes only how they are checked out, never the index.
+crates/core/fixtures/** text eol=lf

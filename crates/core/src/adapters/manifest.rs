@@ -220,6 +220,8 @@ pub fn build_invocation(
             path: report_path,
             format,
         }),
+        // Declarative manifest adapters do not describe a coverage report.
+        coverage: None,
         warnings,
     }
 }

@@ -252,6 +252,129 @@ fn the_builtin_secret_rules_flag_leaks_but_not_placeholders() {
     );
 }
 
+// -- schema risk ------------------------------------------------------------
+
+#[test]
+fn an_introduced_migration_drop_column_is_flagged() {
+    let diff = file(
+        "Migrations/0001_init.cs",
+        &[r#"+    migrationBuilder.DropColumn(name: "X", table: "Y");"#],
+    );
+    let schema_rules: Vec<ErosionRule> = crate::erosion::builtin_rules()
+        .into_iter()
+        .filter(|r| r.category == ErosionCategory::SchemaRisk)
+        .collect();
+
+    let report = scan_diffs(&[diff], &schema_rules);
+
+    assert_eq!(report.flags.len(), 1);
+    assert_eq!(report.flags[0].category, ErosionCategory::SchemaRisk);
+    assert_eq!(report.flags[0].origin, LineOrigin::Addition);
+}
+
+// -- log-level downgrade ----------------------------------------------------
+
+#[test]
+fn an_error_to_debug_downgrade_of_the_same_statement_is_flagged_once() {
+    // Same message, severity lowered Error -> Debug: one flag on the ADDED line.
+    let diff = file(
+        "Service.cs",
+        &[
+            r#"-        _logger.LogError("failed to save order {Id}", id);"#,
+            r#"+        _logger.LogDebug("failed to save order {Id}", id);"#,
+        ],
+    );
+
+    let report = scan_diffs(&[diff], &[]);
+
+    let downgrades: Vec<&ErosionFlag> = report
+        .flags
+        .iter()
+        .filter(|f| f.category == ErosionCategory::LogDowngrade)
+        .collect();
+    assert_eq!(downgrades.len(), 1, "one downgrade, got {:?}", report.flags);
+    let flag = downgrades[0];
+    // The flag lands on the lower-severity ADDED line.
+    assert_eq!(flag.origin, LineOrigin::Addition);
+    assert_eq!(flag.line, 1, "cited by the added line's new line number");
+    assert_eq!(
+        flag.index, 1,
+        "the added DiffLine's index, for the click target"
+    );
+    assert!(flag.content.contains("LogDebug"));
+}
+
+#[test]
+fn a_downgrade_with_a_different_message_does_not_flag() {
+    // Different messages: these are not the same statement, so abstain.
+    let diff = file(
+        "Service.cs",
+        &[
+            r#"-        _logger.LogError("failed to save order {Id}", id);"#,
+            r#"+        _logger.LogDebug("connection pool exhausted");"#,
+        ],
+    );
+
+    let report = scan_diffs(&[diff], &[]);
+
+    assert!(
+        report
+            .flags
+            .iter()
+            .all(|f| f.category != ErosionCategory::LogDowngrade),
+        "different messages must not pair, got {:?}",
+        report.flags
+    );
+}
+
+#[test]
+fn an_ambiguous_downgrade_does_not_flag() {
+    // Two removed error lines share the message key; a single added debug line
+    // cannot be uniquely paired, so abstain.
+    let diff = file(
+        "Service.cs",
+        &[
+            r#"-        _logger.LogError("retrying");"#,
+            r#"-        _logger.LogError("retrying");"#,
+            r#"+        _logger.LogDebug("retrying");"#,
+        ],
+    );
+
+    let report = scan_diffs(&[diff], &[]);
+
+    assert!(
+        report
+            .flags
+            .iter()
+            .all(|f| f.category != ErosionCategory::LogDowngrade),
+        "ambiguous pairing must abstain, got {:?}",
+        report.flags
+    );
+}
+
+#[test]
+fn an_upgrade_is_not_a_downgrade() {
+    // Debug -> Error is a strengthening, never flagged.
+    let diff = file(
+        "Service.cs",
+        &[
+            r#"-        _logger.LogDebug("failed to save order {Id}", id);"#,
+            r#"+        _logger.LogError("failed to save order {Id}", id);"#,
+        ],
+    );
+
+    let report = scan_diffs(&[diff], &[]);
+
+    assert!(
+        report
+            .flags
+            .iter()
+            .all(|f| f.category != ErosionCategory::LogDowngrade),
+        "an upgrade must not flag, got {:?}",
+        report.flags
+    );
+}
+
 // -- path scoping -----------------------------------------------------------
 
 #[test]

@@ -22,6 +22,31 @@ pub fn build(
     config: &RunConfig,
     filter: Option<&[String]>,
 ) -> Result<Invocation, String> {
+    build_with(workspace, config, filter, false)
+}
+
+/// Build the command for a **coverage** test run.
+///
+/// Identical to [`build`] except that the ecosystem adapters that support it
+/// (dotnet, node) add their coverage flags and set [`Invocation::coverage`].
+/// A separate entry point rather than a parameter on [`build`] so the existing
+/// callers — application launches, compound members, the run tab — are
+/// untouched and keep producing byte-identical commands. Adapters that do not
+/// understand coverage (declarative manifests) simply ignore the request.
+pub fn build_coverage(
+    workspace: &Workspace,
+    config: &RunConfig,
+    filter: Option<&[String]>,
+) -> Result<Invocation, String> {
+    build_with(workspace, config, filter, true)
+}
+
+fn build_with(
+    workspace: &Workspace,
+    config: &RunConfig,
+    filter: Option<&[String]>,
+    coverage: bool,
+) -> Result<Invocation, String> {
     let root = workspace.root.as_path();
     let results = config::results_dir(root);
 
@@ -45,9 +70,10 @@ pub fn build(
                 &results,
                 filter,
                 dumps.as_ref(),
+                coverage,
             ))
         }
-        "node" => build_node(workspace, config, &results, filter),
+        "node" => build_node(workspace, config, &results, filter, coverage),
         // Anything else must come from a declarative manifest.
         other => build_from_manifest(workspace, config, &results, filter, other),
     }
@@ -137,6 +163,7 @@ fn build_dotnet(
     results: &Path,
     filter: Option<&[String]>,
     dumps: Option<&ArmedDumps>,
+    coverage: bool,
 ) -> Invocation {
     let root = workspace.root.as_path();
 
@@ -164,6 +191,7 @@ fn build_dotnet(
         trx_extension_available: trx_available,
         has_launch_settings,
         filter: filter.map(<[String]>::to_vec),
+        coverage,
         dumps_dir: dumps.map(|d| d.dir.as_path()),
         dump_env: dumps.map(|d| &d.env),
     };
@@ -179,6 +207,7 @@ fn build_node(
     config: &RunConfig,
     results: &Path,
     filter: Option<&[String]>,
+    coverage: bool,
 ) -> Result<Invocation, String> {
     let root = workspace.root.as_path();
     let project_dir = node::project_dir(root, config.project.as_ref());
@@ -204,6 +233,7 @@ fn build_node(
                 runner,
                 results,
                 filter,
+                coverage,
             ))
         }
         RunKind::App => Ok(node::script_invocation(config, root, &project_dir, manager)),

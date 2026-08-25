@@ -105,6 +105,7 @@ pub async fn start_review(
         cwd: root,
         env: Default::default(),
         report: None,
+        coverage: None,
         warnings: Vec::new(),
     };
 

@@ -85,3 +85,31 @@ export function buildSections(
     },
   ];
 }
+
+/**
+ * Re-order the files *within* each section so the riskier ones surface first,
+ * without disturbing the Staged / group / Unstaged partition.
+ *
+ * The partition is a git fact and must not move — only the order inside a
+ * section is a display choice, so this maps each section to a re-ordered copy
+ * and leaves everything else (labels, sides, keep-when-empty) untouched.
+ *
+ * The sort is by risk score descending and is **stable**: files that score
+ * equally — every file with no risk signal at all scores 0 — keep the order
+ * `git status` reported them in. Sorting on a decorated copy carrying the
+ * original index guarantees that regardless of the engine's own sort
+ * stability. `riskOf` abstaining (`null`) is a score of 0, so an unweighted
+ * list comes back in exactly its original order.
+ */
+export function sortFilesByRisk(
+  sections: FileSection[],
+  riskOf: (path: string) => { level: "high" | "elevated"; score: number } | null,
+): FileSection[] {
+  return sections.map((section) => ({
+    ...section,
+    files: section.files
+      .map((file, index) => ({ file, index, score: riskOf(file.path)?.score ?? 0 }))
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .map((entry) => entry.file),
+  }));
+}

@@ -178,6 +178,35 @@ describe("changeMarks", () => {
     expect(marks).toHaveLength(2);
     expect(marks.at(0)!.top).toBeLessThan(marks.at(1)!.top);
   });
+
+  it("carries no risk key when no risk index is given", () => {
+    const diff = diffOf([placed(51, ["addition", "addition"])]);
+    // `placed` numbers a hunk's lines from 0, so this two-line hunk holds
+    // indices 0 and 1.
+    expect(changeMarks(diff, 100)).toEqual([{ top: 0.5, height: 0.02, kind: "addition" }]);
+  });
+
+  it("sets a hunk-mark's risk from its lines' risk indices", () => {
+    const diff = diffOf([placed(51, ["addition", "addition"])]);
+    const mark = changeMarks(diff, 100, [{ index: 1, level: "elevated" }]).at(0);
+    expect(mark?.risk).toBe("elevated");
+  });
+
+  it("takes the most severe risk among a hunk's lines", () => {
+    const diff = diffOf([placed(1, ["addition", "addition"])]);
+    const mark = changeMarks(diff, 10, [
+      { index: 0, level: "formatting" },
+      { index: 1, level: "high" },
+    ]).at(0);
+    expect(mark?.risk).toBe("high");
+  });
+
+  it("ignores a risk index that belongs to no line in the hunk", () => {
+    const diff = diffOf([placed(1, ["addition"])]);
+    // The hunk's only line is index 0; a stray index 9 must not stick.
+    const mark = changeMarks(diff, 10, [{ index: 9, level: "high" }]).at(0);
+    expect(mark?.risk).toBeUndefined();
+  });
 });
 
 describe("nextChangeLine", () => {

@@ -78,6 +78,7 @@ fn declared(turn: &str, text: &str) -> IntentLabel {
         paths: Vec::new(),
         anchor: None,
         source: LabelSource::Declared,
+        self_confidence: None,
     }
 }
 

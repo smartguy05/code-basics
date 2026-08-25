@@ -183,6 +183,8 @@ pub fn to_intents(list: &[UserIntent]) -> (Vec<IntentRecord>, Vec<IntentLabel>) 
             paths,
             anchor: None,
             source: LabelSource::Declared,
+            // A user note is not an agent's self-report.
+            self_confidence: None,
         });
     }
 

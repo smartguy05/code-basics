@@ -2,10 +2,98 @@
 //! the original `quality-gate-logic.mjs` pinned.
 
 use super::*;
+use crate::erosion::scan::{ErosionFlag, ErosionReport};
+use crate::erosion::ErosionCategory;
+use crate::git::patch::LineOrigin;
 use serde_json::json;
 
 fn v(paths: &[&str]) -> Vec<String> {
     paths.iter().map(|s| s.to_string()).collect()
+}
+
+fn flag(path: &str, line: u32, category: ErosionCategory, message: &str) -> ErosionFlag {
+    ErosionFlag {
+        path: path.to_string(),
+        line,
+        index: 0,
+        origin: LineOrigin::Addition,
+        category,
+        rule_id: "test-rule".to_string(),
+        message: message.to_string(),
+        content: "x".to_string(),
+    }
+}
+
+#[test]
+fn erosion_reminder_none_when_no_flags() {
+    let report = ErosionReport::default();
+    assert_eq!(erosion_reminder(&report), None);
+}
+
+#[test]
+fn erosion_reminder_lists_each_flag() {
+    let report = ErosionReport {
+        flags: vec![
+            flag(
+                "src/a.rs",
+                12,
+                ErosionCategory::UnsafeCast,
+                "introduced .unwrap()",
+            ),
+            flag(
+                "src/b.ts",
+                4,
+                ErosionCategory::IgnoredTest,
+                "test marked .skip",
+            ),
+        ],
+        warnings: vec![],
+    };
+    let msg = erosion_reminder(&report).expect("some flags");
+    assert!(msg.starts_with("2 potential erosion signals:"));
+    assert!(msg.contains("src/a.rs:12  UnsafeCast  introduced .unwrap()"));
+    assert!(msg.contains("src/b.ts:4  IgnoredTest  test marked .skip"));
+    // No "and N more" tail below the cap.
+    assert!(!msg.contains("more"));
+}
+
+#[test]
+fn erosion_reminder_singular_header_for_one_flag() {
+    let report = ErosionReport {
+        flags: vec![flag(
+            "src/a.rs",
+            1,
+            ErosionCategory::DroppedLog,
+            "removed log line",
+        )],
+        warnings: vec![],
+    };
+    let msg = erosion_reminder(&report).unwrap();
+    assert!(msg.starts_with("1 potential erosion signal:"));
+}
+
+#[test]
+fn erosion_reminder_caps_and_counts_the_remainder() {
+    let flags: Vec<ErosionFlag> = (0..25)
+        .map(|i| {
+            flag(
+                "src/a.rs",
+                i,
+                ErosionCategory::LeftoverStub,
+                "TODO left in production path",
+            )
+        })
+        .collect();
+    let report = ErosionReport {
+        flags,
+        warnings: vec![],
+    };
+    let msg = erosion_reminder(&report).unwrap();
+    assert!(msg.starts_with("25 potential erosion signals:"));
+    // 20 listed + header + tail line.
+    let listed = msg.lines().filter(|l| l.contains("LeftoverStub")).count();
+    assert_eq!(listed, 20);
+    assert!(msg.contains("...and 5 more"));
 }
 
 #[test]

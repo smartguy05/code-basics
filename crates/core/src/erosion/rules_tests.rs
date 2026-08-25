@@ -146,13 +146,15 @@ fn categories_serialise_in_camel_case() {
         ErosionCategory::LeftoverStub,
         ErosionCategory::RemovedSafeguard,
         ErosionCategory::DroppedLog,
+        ErosionCategory::LogDowngrade,
         ErosionCategory::Secret,
+        ErosionCategory::SchemaRisk,
     ])
     .unwrap();
 
     assert_eq!(
         json,
-        r#"["deletedAssertion","ignoredTest","widenedCatch","removedNullCheck","unsafeCast","leftoverStub","removedSafeguard","droppedLog","secret"]"#
+        r#"["deletedAssertion","ignoredTest","widenedCatch","removedNullCheck","unsafeCast","leftoverStub","removedSafeguard","droppedLog","logDowngrade","secret","schemaRisk"]"#
     );
 }
 
@@ -175,5 +177,22 @@ fn builtin_rules_include_secret_detectors() {
     assert!(
         secret.iter().all(|r| !r.prod_only),
         "secret rules are not prod-only"
+    );
+}
+
+/// Destructive schema/migration changes ship out of the box; each reads the
+/// added side, since a destructive statement is a leak only when introduced.
+#[test]
+fn builtin_rules_include_schema_risk_detectors() {
+    let rules = builtin_rules();
+    let schema: Vec<&ErosionRule> = rules
+        .iter()
+        .filter(|r| r.category == ErosionCategory::SchemaRisk)
+        .collect();
+
+    assert!(!schema.is_empty(), "expected built-in schema-risk rules");
+    assert!(
+        schema.iter().all(|r| r.side == RuleSide::Added),
+        "schema-risk rules read the added side"
     );
 }

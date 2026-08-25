@@ -209,7 +209,7 @@ Each rule is one regex against one **side** of the diff. The built-in set ships 
 ```toml
 [[rule]]
 id = "no-fire-and-forget-task"
-category = "widenedCatch"   # deletedAssertion | ignoredTest | widenedCatch | removedNullCheck | unsafeCast | leftoverStub | removedSafeguard | droppedLog
+category = "widenedCatch"   # deletedAssertion | ignoredTest | widenedCatch | removedNullCheck | unsafeCast | leftoverStub | removedSafeguard | droppedLog | secret | schemaRisk
 side = "added"              # added (things introduced) | removed (things taken away)
 pattern = 'Task\.Run\('     # regex matched against a changed line's content; a context line is never matched
 message = "Fire-and-forget Task.Run swallows failures."

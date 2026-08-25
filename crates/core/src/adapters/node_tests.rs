@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use super::node::*;
-use crate::model::{ConfigSource, ProjectKind, RunConfig, RunKind, TestRunner};
+use crate::model::{ConfigSource, CoverageFormat, ProjectKind, RunConfig, RunKind, TestRunner};
 
 fn pkg(json: &str) -> PackageJson {
     parse_package_json(json).expect("valid package.json")
@@ -191,7 +191,64 @@ fn build(
         runner,
         Path::new("/repo/.code-basics/results"),
         filter,
+        false,
     )
+}
+
+/// Build a coverage-mode invocation for the coverage-flag tests.
+fn build_coverage(runner: TestRunner, manager: PackageManager) -> crate::model::Invocation {
+    test_invocation(
+        &test_config(),
+        Path::new("/repo"),
+        Path::new("/repo/apps/web"),
+        manager,
+        runner,
+        Path::new("/repo/.code-basics/results"),
+        None,
+        true,
+    )
+}
+
+#[test]
+fn coverage_mode_adds_the_vitest_lcov_flags_and_sets_the_spec() {
+    let inv = build_coverage(TestRunner::Vitest, PackageManager::Pnpm);
+
+    assert!(inv.args.iter().any(|a| a == "--coverage"));
+    assert!(inv.args.iter().any(|a| a == "--coverage.reporter=lcov"));
+    assert!(inv
+        .args
+        .iter()
+        .any(|a| a.starts_with("--coverage.reportsDirectory=")));
+
+    let spec = inv.coverage.expect("coverage spec set");
+    assert_eq!(spec.format, CoverageFormat::Lcov);
+    assert!(
+        spec.path.ends_with("lcov.info"),
+        "spec points at the lcov file: {}",
+        spec.path.display()
+    );
+}
+
+#[test]
+fn coverage_mode_adds_the_jest_lcov_flags() {
+    let inv = build_coverage(TestRunner::Jest, PackageManager::Npm);
+
+    assert!(inv.args.iter().any(|a| a == "--coverage"));
+    assert!(inv.args.iter().any(|a| a == "--coverageReporters=lcov"));
+    assert!(inv
+        .args
+        .iter()
+        .any(|a| a.starts_with("--coverageDirectory=")));
+    assert_eq!(inv.coverage.unwrap().format, CoverageFormat::Lcov);
+}
+
+#[test]
+fn a_non_coverage_run_is_byte_identical_to_today() {
+    // Coverage must be opt-in: an ordinary run gains no flags and no spec.
+    let plain = build(TestRunner::Vitest, PackageManager::Pnpm, None);
+
+    assert!(plain.coverage.is_none());
+    assert!(!plain.args.iter().any(|a| a.contains("coverage")));
 }
 
 #[test]

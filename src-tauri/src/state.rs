@@ -48,6 +48,7 @@ use cb_core::model::TestRunResult;
 use cb_core::process::Supervisor;
 use cb_core::pty::PtyManager;
 use cb_core::symbols::index::SymbolIndex;
+use cb_core::testing::changecov::ChangeCoverage;
 use cb_core::workspace::Workspace;
 
 #[derive(Default)]
@@ -98,6 +99,11 @@ pub struct WorkspaceSlot {
     /// which tests to name. Keyed by config id, which is unique *within* a
     /// workspace.
     last_test_run: Mutex<HashMap<String, TestRunResult>>,
+    /// The most recent coverage-of-change map per test configuration, so the
+    /// Changes tab can show which changed lines the last coverage run missed
+    /// without re-running anything. Keyed by config id, mirroring
+    /// [`WorkspaceSlot::last_test_run`].
+    last_coverage: Mutex<HashMap<String, ChangeCoverage>>,
     /// The most recent object capture for this workspace. One slot: a capture is
     /// a copy of a process's memory, and holding several would hold more of it
     /// than anything needs.
@@ -124,6 +130,7 @@ impl WorkspaceSlot {
             workspace: Mutex::new(workspace),
             supervisor: Supervisor::default(),
             last_test_run: Mutex::new(HashMap::new()),
+            last_coverage: Mutex::new(HashMap::new()),
             last_inspect: Mutex::new(None),
             symbols: Mutex::new(None),
             symbols_build: Arc::new(SymbolsBuild::default()),
@@ -323,6 +330,39 @@ impl AppState {
         let slot = self.active_slot().ok()?;
         let runs = slot.last_test_run.lock().ok()?;
         runs.get(config_id).cloned()
+    }
+
+    // -- Coverage of change (by explicit root for record, active for read) --
+
+    /// Remember a coverage-of-change map in the slot the run came from.
+    ///
+    /// Keyed by the explicit root, exactly like [`AppState::record_test_run`],
+    /// so a run finishing after another tab is active records into the right
+    /// workspace. Returns whether it was kept — `false` if that workspace has
+    /// since been closed.
+    pub fn record_coverage(&self, root: &Path, config_id: &str, coverage: ChangeCoverage) -> bool {
+        let Some(slot) = self.slot(root) else {
+            return false;
+        };
+        let Ok(mut store) = slot.last_coverage.lock() else {
+            return false;
+        };
+        store.insert(config_id.to_string(), coverage);
+        true
+    }
+
+    /// The last recorded coverage map for a configuration in the active
+    /// workspace, or the newest one recorded if `config_id` is `None`.
+    pub fn previous_coverage(&self, config_id: Option<&str>) -> Option<ChangeCoverage> {
+        let slot = self.active_slot().ok()?;
+        let store = slot.last_coverage.lock().ok()?;
+        match config_id {
+            Some(id) => store.get(id).cloned(),
+            // No configuration named: hand back any one recorded map. The
+            // coverage command reads the workspace's last coverage regardless
+            // of which configuration produced it.
+            None => store.values().next().cloned(),
+        }
     }
 
     // -- Captures (by explicit root for record, active for read) ------------

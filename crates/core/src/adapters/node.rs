@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::model::{
-    ConfigSource, Invocation, ProjectKind, ReportFormat, ReportSpec, RunConfig, RunKind, TestRunner,
+    ConfigSource, CoverageFormat, CoverageSpec, Invocation, ProjectKind, ReportFormat, ReportSpec,
+    RunConfig, RunKind, TestRunner,
 };
 
 /// The parts of a `package.json` this adapter uses.
@@ -197,14 +198,25 @@ pub fn test_invocation(
     runner: TestRunner,
     results_dir: &Path,
     filter: Option<&[String]>,
+    coverage: bool,
 ) -> Invocation {
     let report_path = results_dir.join(format!("{}.json", sanitise(&config.id)));
+    // Each config's coverage lands in its own directory so parallel configs do
+    // not overwrite each other's `lcov.info`.
+    let coverage_dir = results_dir.join(format!("{}-coverage", sanitise(&config.id)));
     let mut warnings = Vec::new();
 
     let (program, mut args) = match runner {
         TestRunner::Vitest => manager.exec_args("vitest"),
         _ => manager.exec_args("jest"),
     };
+
+    // The consumer reads `lcov.info` under the coverage directory; both Vitest
+    // and Jest write it there under that name.
+    let coverage_spec = coverage.then(|| CoverageSpec {
+        path: coverage_dir.join("lcov.info"),
+        format: CoverageFormat::Lcov,
+    });
 
     match runner {
         TestRunner::Vitest => {
@@ -217,6 +229,15 @@ pub fn test_invocation(
             // With more than one reporter the output file must be qualified
             // by reporter name, or Vitest writes the console output there.
             args.push(format!("--outputFile.json={}", report_path.display()));
+
+            if coverage {
+                args.push("--coverage".into());
+                args.push("--coverage.reporter=lcov".into());
+                args.push(format!(
+                    "--coverage.reportsDirectory={}",
+                    coverage_dir.display()
+                ));
+            }
 
             if let Some(names) = filter {
                 if !names.is_empty() {
@@ -231,6 +252,12 @@ pub fn test_invocation(
             // Jest watches by default only in a git repo with no CI env var;
             // being explicit avoids a run that never returns.
             args.push("--watchAll=false".into());
+
+            if coverage {
+                args.push("--coverage".into());
+                args.push("--coverageReporters=lcov".into());
+                args.push(format!("--coverageDirectory={}", coverage_dir.display()));
+            }
 
             if let Some(names) = filter {
                 if !names.is_empty() {
@@ -266,6 +293,7 @@ pub fn test_invocation(
             path: report_path,
             format: ReportFormat::JestLike,
         }),
+        coverage: coverage_spec,
         warnings,
     }
 }
@@ -297,6 +325,7 @@ pub fn script_invocation(
             .unwrap_or_else(|| project_dir.to_path_buf()),
         env: config.env.clone(),
         report: None,
+        coverage: None,
         warnings: Vec::new(),
     }
 }

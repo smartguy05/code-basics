@@ -37,7 +37,7 @@ use specta::Type;
 
 use crate::git::attribution::{Confidence, FileAttribution};
 use crate::git::patch::{FileDiff, Hunk, LineOrigin};
-use crate::intents::{Intents, LabelSource};
+use crate::intents::{Intents, LabelSource, SelfConfidence};
 // The declaration heuristic lives in `symbols` because it is a property of
 // source text, not of a repository; what stays here is the hunk-header half.
 use crate::symbols::declarations::{declaration_name, NOT_A_SYMBOL};
@@ -102,6 +102,17 @@ pub struct IntentGroup {
     /// The weakest confidence of any hunk in the group, so a card never looks
     /// more certain than its shakiest member.
     pub confidence: Confidence,
+    /// How sure the agent said it was that this change is correct, when it
+    /// appended a `[confidence: …]` token to the declared `Intent:` line.
+    ///
+    /// **Distinct from `confidence` above.** That measures how well the matcher
+    /// tied a recorded edit onto the diff — the tooling's trust in the match.
+    /// This is the agent's own stated belief about the code, offered
+    /// voluntarily and therefore usually absent. Only a *declared* reason can
+    /// carry one; an inferred or derived title never does. Omitted from the
+    /// wire when absent, so the UI reads it only when the agent spoke.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_confidence: Option<SelfConfidence>,
     /// The label is a note the *user* wrote (see [`crate::intents::user`]),
     /// rather than a recorded or inferred agent reason. The UI uses this to
     /// distinguish editing your own note from overwriting an agent's intent.
@@ -307,6 +318,29 @@ pub fn changed_content(
     (removed, added)
 }
 
+/// Lower is more cautious, so a group gathering several stated confidences
+/// keeps the one that most asks for review.
+fn caution_rank(confidence: SelfConfidence) -> u8 {
+    match confidence {
+        SelfConfidence::Low => 0,
+        SelfConfidence::Medium => 1,
+        SelfConfidence::High => 2,
+    }
+}
+
+/// The more cautious of two stated confidences, treating absence as "no
+/// statement" rather than as a value: a claim that named a level always wins
+/// over one that named none, and between two levels the lower (more
+/// review-worthy) wins. Per declared claim this is 1:1, so it only ever
+/// combines identical values; the rule exists for the defensive case.
+fn more_cautious(a: Option<SelfConfidence>, b: Option<SelfConfidence>) -> Option<SelfConfidence> {
+    match (a, b) {
+        (Some(x), Some(y)) if caution_rank(y) < caution_rank(x) => Some(y),
+        (Some(x), _) => Some(x),
+        (None, b) => b,
+    }
+}
+
 /// Build the cards for a working tree.
 ///
 /// `diffs` and `attributions` are parallel: both come from the same scan, in
@@ -318,6 +352,28 @@ pub fn group(
 ) -> Vec<IntentGroup> {
     // Keyed so hunks of the same kind and symbol merge across files.
     let mut buckets: BTreeMap<String, Bucket> = BTreeMap::new();
+
+    // The agent's *own* stated confidence for each declared reason, keyed by the
+    // reason's identity so an intent card can carry it however the card came to
+    // exist (a matched span, a same-turn dominant, or a file the reason merely
+    // scopes). Only declared labels contribute — a self-confidence is something
+    // the agent wrote, never something mined from prose.
+    let mut declared_confidence: BTreeMap<(String, String), Option<SelfConfidence>> =
+        BTreeMap::new();
+    for label in &intents.labels {
+        if label.source != LabelSource::Declared {
+            continue;
+        }
+        let key = (label.turn_id.clone(), label.label.clone());
+        let entry = declared_confidence.entry(key).or_insert(None);
+        *entry = more_cautious(*entry, label.self_confidence);
+    }
+    let confidence_for = |turn: &str, label: &str| -> Option<SelfConfidence> {
+        declared_confidence
+            .get(&(turn.to_string(), label.to_string()))
+            .copied()
+            .flatten()
+    };
 
     // Declared intents that attribution actually bound to changed lines
     // *somewhere* in this diff, keyed by the reason's identity. A reason that is
@@ -419,6 +475,7 @@ pub fn group(
                     for ((turn, label), (mut lines, confidence)) in per_intent {
                         lines.sort_unstable();
                         lines.dedup();
+                        let self_confidence = confidence_for(&turn, &label);
                         let key = format!("intent:{turn}:{label}");
                         let bucket = buckets.entry(key.clone()).or_insert_with(|| Bucket {
                             id: key,
@@ -427,12 +484,15 @@ pub fn group(
                             candidates: Vec::new(),
                             symbol: None,
                             confidence,
+                            self_confidence,
                             files: BTreeMap::new(),
                             needs_title: false,
                             symbols: BTreeSet::new(),
                         });
                         bucket.symbols.insert(String::new());
                         bucket.confidence = bucket.confidence.min(confidence);
+                        bucket.self_confidence =
+                            more_cautious(bucket.self_confidence, self_confidence);
                         let entry = bucket
                             .files
                             .entry(diff.path.clone())
@@ -481,6 +541,7 @@ pub fn group(
                             candidates: Vec::new(),
                             symbol: symbol.clone(),
                             confidence: Confidence::Low,
+                            self_confidence: None,
                             files: BTreeMap::new(),
                             needs_title: false,
                             symbols: BTreeSet::new(),
@@ -521,28 +582,35 @@ pub fn group(
                 ))
             });
 
-            let (key, kind, label, symbol, confidence) = match turn {
+            let (key, kind, label, symbol, confidence, self_confidence) = match turn {
                 // A declared reason. Keyed by the *label's* identity, not the
                 // turn that made the edit: one orphan geometry turn can carry
                 // two different declared labels (each scoped to different
                 // files), and those are two intents, not one card.
-                Some((turn, Some(label), Some(LabelSource::Declared), label_turn, confidence)) => (
-                    format!("intent:{}:{label}", label_turn.unwrap_or(turn)),
-                    GroupKind::Intent,
-                    label,
-                    None,
-                    confidence,
-                ),
+                Some((turn, Some(label), Some(LabelSource::Declared), label_turn, confidence)) => {
+                    let declaring_turn = label_turn.unwrap_or(turn);
+                    let self_confidence = confidence_for(&declaring_turn, &label);
+                    (
+                        format!("intent:{declaring_turn}:{label}"),
+                        GroupKind::Intent,
+                        label,
+                        None,
+                        confidence,
+                        self_confidence,
+                    )
+                }
 
                 // A sentence mined out of prose. Still the best description
                 // available, so it is shown — but as a description of a turn,
-                // not as a reason the agent gave.
+                // not as a reason the agent gave. A mined sentence never carries
+                // a self-confidence, so this abstains.
                 Some((turn, Some(label), _, _, confidence)) => (
                     format!("turn:{turn}"),
                     GroupKind::SameTurn,
                     label,
                     None,
                     confidence,
+                    None,
                 ),
 
                 // A turn with no reason at all. The grouping still holds; the
@@ -555,6 +623,7 @@ pub fn group(
                     String::new(),
                     enclosing_symbol(hunk),
                     Confidence::Low,
+                    None,
                 ),
 
                 // 2. Formatting, which is decidable rather than guessed.
@@ -564,6 +633,7 @@ pub fn group(
                     "Whitespace only".to_string(),
                     None,
                     Confidence::High,
+                    None,
                 ),
 
                 // 3. Where it sits, as a last resort.
@@ -584,6 +654,7 @@ pub fn group(
                             symbol.clone(),
                             Some(symbol),
                             Confidence::Low,
+                            None,
                         )
                     }
                     None => (
@@ -592,6 +663,7 @@ pub fn group(
                         format!("Other changes in {}", file_name(&diff.path)),
                         None,
                         Confidence::Low,
+                        None,
                     ),
                 },
             };
@@ -602,10 +674,18 @@ pub fn group(
             // one reason titles the card, several become candidates rather than
             // being dropped to a bare symbol name. Confidence is Low — the
             // reason is stated, not corroborated by matched geometry.
-            let (key, kind, label, symbol, confidence, candidates) =
+            let (key, kind, label, symbol, confidence, candidates, self_confidence) =
                 if matches!(kind, GroupKind::Intent | GroupKind::Formatting) || covering.is_empty()
                 {
-                    (key, kind, label, symbol, confidence, Vec::new())
+                    (
+                        key,
+                        kind,
+                        label,
+                        symbol,
+                        confidence,
+                        Vec::new(),
+                        self_confidence,
+                    )
                 } else if covering.len() == 1 {
                     let (turn_id, reason) = &covering[0];
                     (
@@ -615,8 +695,13 @@ pub fn group(
                         None,
                         Confidence::Low,
                         Vec::new(),
+                        confidence_for(turn_id, reason),
                     )
                 } else {
+                    // Several declared reasons scope this file and none bound
+                    // uniquely. The card abstains from a single title, so it
+                    // abstains from a single confidence too — no one claim owns
+                    // it.
                     let reasons: Vec<String> = covering.iter().map(|(_, r)| r.clone()).collect();
                     (
                         format!("intent-ambiguous:{}", reasons.join("\u{1f}")),
@@ -625,6 +710,7 @@ pub fn group(
                         None,
                         Confidence::Low,
                         reasons,
+                        None,
                     )
                 };
 
@@ -639,6 +725,7 @@ pub fn group(
                 candidates,
                 symbol: symbol.clone(),
                 confidence,
+                self_confidence,
                 files: BTreeMap::new(),
                 needs_title,
                 symbols: BTreeSet::new(),
@@ -653,6 +740,8 @@ pub fn group(
 
             // A card is only as trustworthy as its weakest member.
             bucket.confidence = bucket.confidence.min(confidence);
+            // And keeps the most cautious stated confidence any hunk carried.
+            bucket.self_confidence = more_cautious(bucket.self_confidence, self_confidence);
 
             let entry = bucket
                 .files
@@ -744,6 +833,9 @@ fn collapse_singletons(groups: Vec<IntentGroup>) -> Vec<IntentGroup> {
                     files: group.files,
                     line_count: group.line_count,
                     confidence: Confidence::Low,
+                    // A "several changes" merge of location cards is not a stated
+                    // intent, so it carries no self-confidence.
+                    self_confidence: None,
                     user_authored: false,
                 });
             }
@@ -809,6 +901,9 @@ struct Bucket {
     candidates: Vec<String>,
     symbol: Option<String>,
     confidence: Confidence,
+    /// The agent's stated confidence for this card's declared reason, when it
+    /// gave one. Combined with [`more_cautious`] as spans merge.
+    self_confidence: Option<SelfConfidence>,
     /// path -> (line indices, hunk indices)
     files: BTreeMap<String, (Vec<u32>, Vec<usize>)>,
     /// A same-turn card with no declared reason: `label` is filled in from the
@@ -885,6 +980,7 @@ impl Bucket {
             files,
             line_count,
             confidence: self.confidence,
+            self_confidence: self.self_confidence,
             user_authored,
         }
     }

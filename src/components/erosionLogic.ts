@@ -17,10 +17,12 @@ export const CATEGORY_ORDER: ErosionCategory[] = [
   "ignoredTest",
   "removedNullCheck",
   "removedSafeguard",
+  "schemaRisk",
   "widenedCatch",
   "unsafeCast",
   "leftoverStub",
   "droppedLog",
+  "logDowngrade",
 ];
 
 const CATEGORY_LABEL: Record<ErosionCategory, string> = {
@@ -29,10 +31,12 @@ const CATEGORY_LABEL: Record<ErosionCategory, string> = {
   ignoredTest: "Skipped tests",
   removedNullCheck: "Removed null checks",
   removedSafeguard: "Removed safeguards",
+  schemaRisk: "Backward-incompatible schema changes",
   widenedCatch: "Widened / swallowed catches",
   unsafeCast: "Unsafe casts & panics",
   leftoverStub: "Stubs & TODOs left behind",
   droppedLog: "Dropped log lines",
+  logDowngrade: "Log level lowered",
 };
 
 /** The human heading for a category. */

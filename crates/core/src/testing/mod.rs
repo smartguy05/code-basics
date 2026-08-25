@@ -7,6 +7,8 @@
 //! only means knowing which command to run and which of these formats it
 //! leaves behind.
 
+pub mod changecov;
+pub mod coverage;
 pub mod jest_like;
 pub mod junit;
 pub mod tree;

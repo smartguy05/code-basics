@@ -509,6 +509,17 @@ export interface GroupFile {
   hunks: number[];
 }
 
+/**
+ * How sure the agent said it was that its own change is correct, when it
+ * appended a `[confidence: …]` token to the declared `Intent:` line.
+ *
+ * NOT `Confidence`: that is the matcher's trust that it located the recorded
+ * edit in the diff — a property of the tooling. This is the agent's own stated
+ * belief, offered voluntarily and therefore usually absent. `low` = "please
+ * review this closely".
+ */
+export type SelfConfidence = "low" | "medium" | "high";
+
 /** One card in the Changes tab. */
 export interface IntentGroup {
   id: string;
@@ -528,6 +539,13 @@ export interface IntentGroup {
   lineCount: number;
   /** The weakest confidence of any hunk in the group. */
   confidence: Confidence;
+  /**
+   * The agent's own stated confidence for this card's declared reason
+   * (distinct from `confidence` above — see {@link SelfConfidence}). Present
+   * only when the agent appended a `[confidence: …]` token; absent otherwise,
+   * so the confidence heatmap abstains rather than guessing a level.
+   */
+  selfConfidence?: SelfConfidence;
   /**
    * The label is a note the user wrote (not an agent reason). Present only when
    * true, so it is safe to read as falsy. Distinguishes editing your own note
@@ -575,6 +593,12 @@ export interface Scorecard {
 /** Grouping plus the two coverage failures and the aggregate (`git/coverage.rs`). */
 export interface IntentReview {
   groups: IntentGroup[];
+  /**
+   * The evidenced half of the claim universe — declared intents an accepted
+   * span matches. Same row shape as `unfulfilled`, so one per-claim checklist
+   * renders both; `evidenced.length === scorecard.evidenced`.
+   */
+  evidenced: UnfulfilledClaim[];
   unfulfilled: UnfulfilledClaim[];
   scorecard: Scorecard;
 }
@@ -711,7 +735,9 @@ export type ErosionCategory =
   | "leftoverStub"
   | "removedSafeguard"
   | "droppedLog"
-  | "secret";
+  | "logDowngrade"
+  | "secret"
+  | "schemaRisk";
 
 /** One located weakening the scan found (`erosion/scan.rs`). */
 export interface ErosionFlag {
@@ -736,6 +762,47 @@ export interface ErosionFlag {
  */
 export interface ErosionReport {
   flags: ErosionFlag[];
+  warnings: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Coverage of change (`crates/core/src/testing/changecov.rs`)
+// ---------------------------------------------------------------------------
+
+/** One changed line the test run never executed (`changecov.rs`). */
+export interface UncoveredLine {
+  /** The 1-based new-side source line number. */
+  line: number;
+  /** `DiffLine.index` of that line, the highlight anchor in the diff pane. */
+  index: number;
+}
+
+/** Coverage of the changed lines in one file (`changecov.rs`). */
+export interface FileChangeCoverage {
+  /** The diff (working-copy) path these numbers describe. */
+  path: string;
+  /** The changed lines that were coverable but never executed. */
+  uncovered: UncoveredLine[];
+  /** How many changed lines were executed at least once. */
+  coveredChanged: number;
+  /** How many changed lines were coverable but never executed. */
+  uncoveredChanged: number;
+}
+
+/**
+ * Coverage of every changed line across the diff (`changecov.rs`).
+ *
+ * `changedLines` counts only the changed lines that could be *classified*
+ * (covered + uncovered); a changed line the coverage tool considered
+ * non-executable is abstained on and excluded. `warnings` carries files whose
+ * coverage could not be matched — no match, or an ambiguous one — reported
+ * rather than silently dropped.
+ */
+export interface ChangeCoverage {
+  files: FileChangeCoverage[];
+  changedLines: number;
+  coveredLines: number;
+  uncoveredLines: number;
   warnings: string[];
 }
 

@@ -27,8 +27,12 @@ pub enum ErosionCategory {
     RemovedSafeguard,
     /// A log line that was removed.
     DroppedLog,
+    /// A log statement whose severity was lowered.
+    LogDowngrade,
     /// A hardcoded credential introduced into the diff.
     Secret,
+    /// A destructive, backward-incompatible schema/migration change.
+    SchemaRisk,
 }
 
 /// Which side of the diff a rule inspects.
@@ -186,9 +190,10 @@ fn r(
 /// The rules that ship with the app, per ecosystem.
 ///
 /// Chosen for high signal: each is a move an agent makes to reach green, and a
-/// removed line the reviewer would otherwise skim past. Log *downgrade*
-/// detection (Error → Debug) needs pairing removed and added lines and is left
-/// out of this first set; only removed log lines are flagged.
+/// removed line the reviewer would otherwise skim past. These are the
+/// single-line rules; log *downgrade* detection (Error → Debug on the same
+/// statement) needs to pair a removed and an added line and so lives in
+/// [`super::scan::detect_log_downgrades`] rather than here.
 pub fn builtin_rules() -> Vec<ErosionRule> {
     use ErosionCategory::*;
     use RuleSide::*;
@@ -196,6 +201,7 @@ pub fn builtin_rules() -> Vec<ErosionRule> {
     const CS: &[&str] = &[".cs"];
     const TS: &[&str] = &[".ts", ".tsx", ".js", ".jsx"];
     const RS: &[&str] = &[".rs"];
+    const SQL: &[&str] = &[".sql"];
 
     vec![
         // -- .NET ----------------------------------------------------------
@@ -509,6 +515,73 @@ pub fn builtin_rules() -> Vec<ErosionRule> {
             r#"(?i)\b(password|pwd)=(?:[^$<{%\s;"'])[^;\s"']{7,}"#,
             "A connection-string password was hardcoded.",
             &[],
+            false,
+        ),
+        // -- Destructive schema / migration changes (added side) ----------
+        // Backward-incompatible DDL an agent adds to make a migration "work".
+        // The `regex` crate has no lookahead, so only statements unambiguous on
+        // a single line ship; "nullable column without default" is deferred.
+        r(
+            "cs-migration-drop-column",
+            SchemaRisk,
+            Added,
+            r"migrationBuilder\.DropColumn",
+            "A migration drops a column.",
+            CS,
+            false,
+        ),
+        r(
+            "cs-migration-drop-table",
+            SchemaRisk,
+            Added,
+            r"migrationBuilder\.DropTable",
+            "A migration drops a table.",
+            CS,
+            false,
+        ),
+        r(
+            "cs-migration-rename-column",
+            SchemaRisk,
+            Added,
+            r"migrationBuilder\.RenameColumn",
+            "A migration renames a column (not backward-compatible).",
+            CS,
+            false,
+        ),
+        r(
+            "sql-drop-column",
+            SchemaRisk,
+            Added,
+            r"(?i)\bALTER\s+TABLE\b.*\bDROP\s+COLUMN\b",
+            "A migration drops a column.",
+            SQL,
+            false,
+        ),
+        r(
+            "sql-drop-table",
+            SchemaRisk,
+            Added,
+            r"(?i)\bDROP\s+TABLE\b",
+            "A migration drops a table.",
+            SQL,
+            false,
+        ),
+        r(
+            "sql-not-null",
+            SchemaRisk,
+            Added,
+            r"(?i)\bALTER\s+COLUMN\b.*\bNOT\s+NULL\b",
+            "A column is made NOT NULL (fails on existing null rows).",
+            SQL,
+            false,
+        ),
+        r(
+            "sql-rename",
+            SchemaRisk,
+            Added,
+            r"(?i)\b(RENAME\s+COLUMN|sp_rename)\b",
+            "A rename is not backward-compatible.",
+            SQL,
             false,
         ),
     ]

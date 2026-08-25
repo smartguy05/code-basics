@@ -170,6 +170,42 @@ fn two_workspaces_with_the_same_config_id_keep_independent_results() {
 }
 
 #[test]
+fn coverage_is_recorded_per_root_and_read_from_the_active_workspace() {
+    use cb_core::testing::changecov::ChangeCoverage;
+
+    let state = AppState::default();
+    state.set_workspace(workspace_at("/a")).unwrap();
+    state.set_workspace(workspace_at("/b")).unwrap(); // B now active
+
+    let a_coverage = ChangeCoverage {
+        changed_lines: 3,
+        covered_lines: 2,
+        uncovered_lines: 1,
+        ..Default::default()
+    };
+    // Recorded against A even though B is active — keyed by explicit root.
+    assert!(state.record_coverage(Path::new("/a"), "cfg", a_coverage.clone()));
+
+    // B is active and has none; nothing leaked across.
+    assert!(state.previous_coverage(Some("cfg")).is_none());
+
+    state.set_active(Path::new("/a")).unwrap();
+    assert_eq!(
+        state
+            .previous_coverage(Some("cfg"))
+            .unwrap()
+            .uncovered_lines,
+        1
+    );
+    // The config-agnostic read finds the workspace's last coverage too.
+    assert_eq!(state.previous_coverage(None).unwrap().changed_lines, 3);
+
+    // Recording into a closed workspace is a harmless no-op.
+    state.close(Path::new("/a"));
+    assert!(!state.record_coverage(Path::new("/a"), "cfg", a_coverage));
+}
+
+#[test]
 fn a_per_slot_supervisor_is_a_different_table_per_workspace() {
     let state = AppState::default();
     state.set_workspace(workspace_at("/a")).unwrap();
