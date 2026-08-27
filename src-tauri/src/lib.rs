@@ -23,6 +23,7 @@ mod commands {
     pub mod review;
     pub mod rules;
     pub mod run;
+    pub mod running;
     pub mod secrets;
     pub mod setup;
     pub mod symbols;
@@ -85,6 +86,12 @@ pub fn run() {
         // nothing else would ever kick the build off.
         .setup(|app| {
             use tauri::Manager;
+            // Detect crash-orphans once, before anything is spawned: reload the
+            // previous session's recorded processes, keep the ones still alive
+            // whose identity matches, and rewrite the file to the survivors.
+            app.state::<AppState>()
+                .running
+                .load_orphans(cb_core::running::probe::probe);
             if let Ok(workspace) = app.state::<AppState>().workspace() {
                 commands::symbols::spawn_build(
                     app.handle().clone(),
@@ -222,6 +229,9 @@ pub fn run() {
             commands::terminal::terminal_resize,
             commands::terminal::terminal_close,
             commands::terminal::terminal_list,
+            commands::terminal::terminal_set_label,
+            commands::running::list_running,
+            commands::running::kill_running,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start code-basics");

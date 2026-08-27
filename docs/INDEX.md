@@ -9,7 +9,7 @@ Use this file to locate things fast: every first-party source file with its one-
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `crates/core/Cargo.toml` | 50 |  |
+| `crates/core/Cargo.toml` | 57 |  |
 | `crates/core/build.rs` | 9 |  |
 | `crates/core/src/adapters/cargo.rs` | 254 | The Cargo (Rust) ecosystem adapter — manifest reading only. |
 | `crates/core/src/adapters/cargo_tests.rs` | 437 | Tests for the Cargo adapter. |
@@ -17,7 +17,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/adapters/dotnet_tests.rs` | 1620 | Tests for the .NET adapter. |
 | `crates/core/src/adapters/manifest.rs` | 600 | Declarative adapters: adding an ecosystem without writing Rust. |
 | `crates/core/src/adapters/mod.rs` | 28 | Ecosystem adapters. |
-| `crates/core/src/adapters/msbuild.rs` | 154 | Optional, accurate MSBuild evaluation. |
+| `crates/core/src/adapters/msbuild.rs` | 157 | Optional, accurate MSBuild evaluation. |
 | `crates/core/src/adapters/msbuild_tests.rs` | 213 | Tests for optional MSBuild evaluation. |
 | `crates/core/src/adapters/node.rs` | 422 | The JavaScript / TypeScript ecosystem adapter. |
 | `crates/core/src/adapters/node_tests.rs` | 485 | Tests for the JS/TS adapter. |
@@ -59,7 +59,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/behavioral/replay_tests.rs` | 58 | Socket-free tests for the two decisions replay makes without the network. |
 | `crates/core/src/behavioral/scenario.rs` | 205 | The pure decision seam for serverful HTTP replay. |
 | `crates/core/src/behavioral/scenario_tests.rs` | 204 |  |
-| `crates/core/src/behavioral/worktree.rs` | 326 | An on-demand, isolated checkout of a commit to build and test against. |
+| `crates/core/src/behavioral/worktree.rs` | 329 | An on-demand, isolated checkout of a commit to build and test against. |
 | `crates/core/src/behavioral/worktree_tests.rs` | 135 |  |
 | `crates/core/src/bin/fake_lsp.rs` | 752 | A scripted stand-in for a language server, used only by the transport tests. |
 | `crates/core/src/changelists.rs` | 203 | Change groups: named buckets for the files in a working tree. |
@@ -83,7 +83,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/git/grouping_tests.rs` | 1597 | Tests for collapsing hunks into cards. |
 | `crates/core/src/git/mod.rs` | 34 | Git operations. |
 | `crates/core/src/git/patch.rs` | 487 | Building unified diff patches restricted to a selection of lines. |
-| `crates/core/src/git/repo.rs` | 1790 | Repository reads and mutations. |
+| `crates/core/src/git/repo.rs` | 1794 | Repository reads and mutations. |
 | `crates/core/src/git/why.rs` | 260 | Intent that survives the commit. |
 | `crates/core/src/git/why_tests.rs` | 324 | Tests for the pure durable-why build and resolve logic. |
 | `crates/core/src/importers/mod.rs` | 7 | Importing configurations from other tools. |
@@ -129,7 +129,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/whyhook_tests.rs` | 86 | Tests for the durable-why post-commit hook installer. |
 | `crates/core/src/invocation.rs` | 297 | Turning a run configuration into a command line. |
 | `crates/core/src/invocation_tests.rs` | 455 | Tests for dispatching a configuration to the adapter that owns it. |
-| `crates/core/src/lib.rs` | 44 | Core logic for `code-basics`. |
+| `crates/core/src/lib.rs` | 45 | Core logic for `code-basics`. |
 | `crates/core/src/lsp/client.rs` | 1233 | One language server, from handshake to shutdown, as questions and answers. |
 | `crates/core/src/lsp/client_tests.rs` | 658 | Unit tests for the parts of the client that need no server. |
 | `crates/core/src/lsp/documents.rs` | 370 | What each server has been told about each open document. |
@@ -158,13 +158,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/lsp/uri.rs` | 186 | Paths in, `file:` URIs out, and back again. |
 | `crates/core/src/lsp/uri_tests.rs` | 254 |  |
 | `crates/core/src/model.rs` | 689 | Types shared between the Rust core and the TypeScript frontend. |
-| `crates/core/src/notes.rs` | 115 | The global notes / scratchpad store, `code-basics/notes.json`. |
-| `crates/core/src/notes_tests.rs` | 98 |  |
+| `crates/core/src/notes.rs` | 145 | The global notes / scratchpad store, `code-basics/notes.json`. |
+| `crates/core/src/notes_tests.rs` | 169 |  |
 | `crates/core/src/process/chunker.rs` | 188 | Incremental UTF-8 decoding for streamed process output. |
-| `crates/core/src/process/kill.rs` | 181 | Platform-specific process *tree* termination. |
-| `crates/core/src/process/mod.rs` | 616 | Process supervision: spawn, stream, cancel. |
+| `crates/core/src/process/kill.rs` | 239 | Platform-specific process *tree* termination. |
+| `crates/core/src/process/mod.rs` | 675 | Process supervision: spawn, stream, cancel. |
 | `crates/core/src/process/resolve.rs` | 200 | Windows program-name resolution. |
-| `crates/core/src/pty/mod.rs` | 260 | Interactive pseudo-terminal sessions. |
+| `crates/core/src/pty/mod.rs` | 310 | Interactive pseudo-terminal sessions. |
 | `crates/core/src/pty/model.rs` | 125 | The wire types for an interactive terminal session. |
 | `crates/core/src/pty/shell.rs` | 90 | Pure decisions for the PTY layer: which shell to launch, and clamping the |
 | `crates/core/src/pty/shell_tests.rs` | 80 |  |
@@ -176,6 +176,14 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/review_tests.rs` | 379 | Tests for [`crate::review`] — the pure, agent-aware command-line assembly for |
 | `crates/core/src/rules/mod.rs` | 149 | Business-rule invariants, authored as markdown and injected as review |
 | `crates/core/src/rules/rules_tests.rs` | 138 | Tests for rule-doc parsing and loading. |
+| `crates/core/src/running/classify.rs` | 79 | The pure decision behind orphan detection: given records reloaded from disk |
+| `crates/core/src/running/classify_tests.rs` | 89 |  |
+| `crates/core/src/running/mod.rs` | 59 | The running-process registry behind the Running panel. |
+| `crates/core/src/running/probe.rs` | 30 | The one platform seam of the running registry: ask the OS whether a pid is |
+| `crates/core/src/running/record.rs` | 95 | The record of one process the app has spawned, and the on-disk file format. |
+| `crates/core/src/running/record_tests.rs` | 81 |  |
+| `crates/core/src/running/store.rs` | 227 | The registry itself: a clone-cheap handle over the live process set and the |
+| `crates/core/src/running/store_tests.rs` | 126 |  |
 | `crates/core/src/secrets.rs` | 574 | .NET user secrets: per-project secrets stored *outside* the repository. |
 | `crates/core/src/setup.rs` | 104 | First-open setup: one combined plan that installs the agent hooks a fresh |
 | `crates/core/src/setup_tests.rs` | 197 | Tests for the combined first-open setup plan. The point that matters: the |
@@ -210,11 +218,12 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/lsp_transport.rs` | 935 | The transport against a live process, one test per way a server misbehaves. |
 | `crates/core/tests/pty_roundtrip.rs` | 198 | End-to-end PTY test: prove a real pseudo-terminal round-trips stdin to |
 | `crates/core/tests/reject_markers.rs` | 422 | Rejection end to end: against a real repository, with the real `git`. |
-| `src/App.tsx` | 331 |  |
+| `src/App.tsx` | 406 |  |
+| `src/components/AttachConfirm.tsx` | 63 |  |
 | `src/components/BehavioralPanel.tsx` | 304 |  |
 | `src/components/BranchMenu.tsx` | 386 |  |
 | `src/components/ConfigEditor.tsx` | 313 |  |
-| `src/components/DiffView.tsx` | 895 |  |
+| `src/components/DiffView.tsx` | 965 |  |
 | `src/components/EnvironmentPicker.tsx` | 107 |  |
 | `src/components/ErosionPanel.tsx` | 101 |  |
 | `src/components/ErrorBoundary.tsx` | 65 |  |
@@ -223,27 +232,31 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/IntentPanel.tsx` | 1341 |  |
 | `src/components/LspStatus.tsx` | 125 |  |
 | `src/components/MenuBar.tsx` | 381 |  |
-| `src/components/NotesPanel.tsx` | 330 |  |
+| `src/components/NotesPanel.tsx` | 380 |  |
 | `src/components/ObjectTree.tsx` | 357 |  |
 | `src/components/OutputConsole.tsx` | 426 |  |
+| `src/components/PillColorMenu.tsx` | 84 |  |
 | `src/components/PlanPreview.tsx` | 60 |  |
 | `src/components/ReviewPanel.tsx` | 489 |  |
 | `src/components/RiderImportDialog.tsx` | 135 |  |
-| `src/components/RunConfigMenu.tsx` | 179 |  |
+| `src/components/RunConfigMenu.tsx` | 161 |  |
+| `src/components/RunningPanel.tsx` | 223 |  |
 | `src/components/SearchEverywhere.tsx` | 526 |  |
 | `src/components/SetupPrompt.tsx` | 115 |  |
 | `src/components/Sidebar.tsx` | 50 |  |
 | `src/components/StashPanel.tsx` | 288 |  |
-| `src/components/TerminalPanel.tsx` | 295 |  |
-| `src/components/TerminalView.tsx` | 132 |  |
+| `src/components/TerminalPanel.tsx` | 370 |  |
+| `src/components/TerminalView.tsx` | 156 |  |
 | `src/components/TestTree.tsx` | 125 |  |
-| `src/components/WorkspaceTab.tsx` | 320 |  |
+| `src/components/WorkspaceTab.tsx` | 363 |  |
 | `src/components/behavioralPanelLogic.test.ts` | 255 |  |
 | `src/components/behavioralPanelLogic.ts` | 270 |  |
 | `src/components/claimChecklistLogic.test.ts` | 147 |  |
 | `src/components/claimChecklistLogic.ts` | 106 |  |
 | `src/components/claimVerifyLogic.test.ts` | 247 |  |
 | `src/components/claimVerifyLogic.ts` | 150 |  |
+| `src/components/confidenceLogic.test.ts` | 145 |  |
+| `src/components/confidenceLogic.ts` | 75 |  |
 | `src/components/configLogic.test.ts` | 111 |  |
 | `src/components/configLogic.ts` | 48 |  |
 | `src/components/consoleLogic.test.ts` | 173 |  |
@@ -252,8 +265,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/coverageOfChangeLogic.ts` | 103 |  |
 | `src/components/diffLogic.test.ts` | 501 |  |
 | `src/components/diffLogic.ts` | 401 |  |
-| `src/components/editorSourceLogic.test.ts` | 70 |  |
-| `src/components/editorSourceLogic.ts` | 70 |  |
+| `src/components/editorSourceLogic.test.ts` | 119 |  |
+| `src/components/editorSourceLogic.ts` | 85 |  |
 | `src/components/enhancementsLogic.test.ts` | 118 |  |
 | `src/components/enhancementsLogic.ts` | 100 |  |
 | `src/components/erosionLogic.test.ts` | 78 |  |
@@ -264,8 +277,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/language.ts` | 113 |  |
 | `src/components/lspStatusLogic.test.ts` | 306 |  |
 | `src/components/lspStatusLogic.ts` | 226 |  |
-| `src/components/notesLogic.test.ts` | 138 |  |
-| `src/components/notesLogic.ts` | 118 | Pure decisions for the Notes / scratchpad panel — creating, renaming, |
+| `src/components/notesLogic.test.ts` | 219 |  |
+| `src/components/notesLogic.ts` | 177 | Pure decisions for the Notes / scratchpad panel — creating, renaming, |
 | `src/components/reviewLayoutLogic.test.ts` | 174 |  |
 | `src/components/reviewLayoutLogic.ts` | 172 | Pure decisions for positioning the floating agent panel — the clamp |
 | `src/components/reviewLogic.test.ts` | 182 |  |
@@ -274,35 +287,37 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/reviewStreamLogic.ts` | 145 | Rendering Claude Code's `--output-format stream-json` NDJSON into readable |
 | `src/components/riskLogic.test.ts` | 216 |  |
 | `src/components/riskLogic.ts` | 189 |  |
+| `src/components/runningLogic.test.ts` | 102 |  |
+| `src/components/runningLogic.ts` | 96 | Pure decisions for the Running panel — the per-kind label/icon, the codebase |
 | `src/components/searchLogic.test.ts` | 439 |  |
 | `src/components/searchLogic.ts` | 439 |  |
 | `src/components/setupPromptLogic.test.ts` | 103 |  |
 | `src/components/setupPromptLogic.ts` | 57 | Decision logic for the first-open setup prompt. Pure so it can be unit-tested |
 | `src/components/stashLogic.test.ts` | 33 |  |
 | `src/components/stashLogic.ts` | 21 |  |
-| `src/components/terminalLogic.test.ts` | 71 |  |
-| `src/components/terminalLogic.ts` | 74 | Pure decisions for the floating terminals — naming, cascade staggering, |
+| `src/components/terminalLogic.test.ts` | 181 |  |
+| `src/components/terminalLogic.ts` | 156 | Pure decisions for the floating terminals — naming, cascade staggering, |
 | `src/components/treeLogic.test.ts` | 383 |  |
 | `src/components/treeLogic.ts` | 148 |  |
 | `src/components/usagesExtension.ts` | 469 |  |
 | `src/components/usagesLogic.test.ts` | 1238 |  |
 | `src/components/usagesLogic.ts` | 922 |  |
-| `src/components/workspaceTabsLogic.test.ts` | 98 |  |
-| `src/components/workspaceTabsLogic.ts` | 81 | Pure decisions for the top-level workspace tab strip — adding an open |
+| `src/components/workspaceTabsLogic.test.ts` | 118 |  |
+| `src/components/workspaceTabsLogic.ts` | 99 | Pure decisions for the top-level workspace tab strip — adding an open |
 | `src/editorFontSize.ts` | 52 |  |
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 |  |
-| `src/ipc/api.ts` | 912 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 1710 |  |
+| `src/ipc/api.ts` | 942 | Typed wrappers over the Tauri command surface. |
+| `src/ipc/types.ts` | 1746 |  |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
 | `src/reexportGuards.test.ts` | 23 | / <reference types="vite/client" /> |
 | `src/views/ArchitectureView.tsx` | 677 |  |
-| `src/views/ChangesView.tsx` | 1375 |  |
+| `src/views/ChangesView.tsx` | 1391 |  |
 | `src/views/HistoryView.tsx` | 556 |  |
-| `src/views/InspectView.tsx` | 1058 |  |
-| `src/views/RunView.tsx` | 1490 |  |
+| `src/views/InspectView.tsx` | 1085 |  |
+| `src/views/RunView.tsx` | 1513 |  |
 | `src/views/TestsView.tsx` | 411 |  |
 | `src/views/architecture/DiagramCanvas.tsx` | 760 |  |
 | `src/views/architecture/DiagramEditor.tsx` | 322 |  |
@@ -328,12 +343,12 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/editorNavLogic.ts` | 120 |  |
 | `src/views/historyLogic.test.ts` | 182 |  |
 | `src/views/historyLogic.ts` | 109 |  |
-| `src/views/inspectLogic.test.ts` | 368 |  |
-| `src/views/inspectLogic.ts` | 226 |  |
+| `src/views/inspectLogic.test.ts` | 415 |  |
+| `src/views/inspectLogic.ts` | 267 |  |
 | `src/views/testsLogic.test.ts` | 279 |  |
 | `src/views/testsLogic.ts` | 89 |  |
 | `src-tauri/src/commands/architecture.rs` | 219 | Architecture-diagram commands. |
-| `src-tauri/src/commands/behavioral.rs` | 478 | Behavioral before/after testing — running the same configuration against |
+| `src-tauri/src/commands/behavioral.rs` | 485 | Behavioral before/after testing — running the same configuration against |
 | `src-tauri/src/commands/changelists.rs` | 57 | Change-group commands. |
 | `src-tauri/src/commands/enhancements.rs` | 136 | Instruction-template commands. |
 | `src-tauri/src/commands/erosion.rs` | 32 | Erosion-detector command. |
@@ -344,22 +359,23 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/lsp.rs` | 434 | Asking this workspace's language servers something, and saying what they do. |
 | `src-tauri/src/commands/notes.rs` | 21 | Notes / scratchpad commands. |
 | `src-tauri/src/commands/qgate.rs` | 78 | Commands behind the installable quality-gate Stop hook. |
-| `src-tauri/src/commands/review.rs` | 129 | Launching an in-app adversarial review. |
+| `src-tauri/src/commands/review.rs` | 134 | Launching an in-app adversarial review. |
 | `src-tauri/src/commands/rules.rs` | 22 | Business-rule-doc command. |
-| `src-tauri/src/commands/run.rs` | 422 | Running applications and tests. |
+| `src-tauri/src/commands/run.rs` | 447 | Running applications and tests. |
+| `src-tauri/src/commands/running.rs` | 92 | The Running panel's bridge: list every process the app has running (across |
 | `src-tauri/src/commands/secrets.rs` | 43 | .NET user secrets commands. |
 | `src-tauri/src/commands/setup.rs` | 57 | First-open setup: preview and apply the combined agent-hook install (intent |
 | `src-tauri/src/commands/symbols.rs` | 234 | The command palette's surface: searching the workspace, and asking after |
-| `src-tauri/src/commands/terminal.rs` | 155 | Interactive floating terminals. |
+| `src-tauri/src/commands/terminal.rs` | 183 | Interactive floating terminals. |
 | `src-tauri/src/commands/workspace.rs` | 255 | Workspace and configuration commands. |
-| `src-tauri/src/lib.rs` | 228 | The Tauri shell. |
+| `src-tauri/src/lib.rs` | 238 | The Tauri shell. |
 | `src-tauri/src/main.rs` | 6 | Suppress the extra console window on Windows in release builds. |
-| `src-tauri/src/qgate_run.rs` | 212 | The `quality-gate` mode: deterministic checks when an agent turn ends. |
+| `src-tauri/src/qgate_run.rs` | 216 | The `quality-gate` mode: deterministic checks when an agent turn ends. |
 | `src-tauri/src/recorder.rs` | 136 | The `record-intent` mode, which is what the installed hooks actually run. |
-| `src-tauri/src/state.rs` | 519 | Shared application state. |
+| `src-tauri/src/state.rs` | 546 | Shared application state. |
 | `src-tauri/src/state_tests.rs` | 605 | Tests for the multi-workspace [`AppState`]. |
 | `scripts/build-sidecar.mjs` | 110 |  |
-| `scripts/check-docs.mjs` | 66 |  |
+| `scripts/check-docs.mjs` | 70 |  |
 | `scripts/generate-index.mjs` | 162 |  |
 | `examples/adapters/cargo-nextest.toml` | 34 | Rust tests via cargo-nextest, which can emit JUnit XML. |
 | `examples/adapters/pytest.toml` | 35 | A worked example of a declarative adapter. |
@@ -388,11 +404,12 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **architecture** (`src-tauri/src/commands/architecture.rs`): `arch_project_graph`, `arch_render_graph`, `arch_component_graph`, `arch_render_component_graph`, `arch_list_diagrams`, `arch_read_diagram`, `arch_write_diagram`, `arch_validate`
 - **symbols** (`src-tauri/src/commands/symbols.rs`): `search_everywhere`, `symbol_index_status`, `rebuild_symbol_index`
 - **lsp** (`src-tauri/src/commands/lsp.rs`): `lsp_status`, `lsp_open_document`, `lsp_change_document`, `lsp_close_document`, `lsp_find_usages`, `lsp_goto_definition`, `lsp_declaration_anchors`
-- **terminal** (`src-tauri/src/commands/terminal.rs`): `terminal_open`, `terminal_write`, `terminal_resize`, `terminal_close`, `terminal_list`
+- **terminal** (`src-tauri/src/commands/terminal.rs`): `terminal_open`, `terminal_write`, `terminal_resize`, `terminal_close`, `terminal_list`, `terminal_set_label`
+- **running** (`src-tauri/src/commands/running.rs`): `list_running`, `kill_running`
 
 ## Frontend IPC wrappers (`src/ipc/api.ts`)
 
-`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `readNotes`, `writeNotes`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `terminalOpen`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `errorMessage`
+`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `readNotes`, `writeNotes`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `errorMessage`
 
 ## Public core API (`cb-core`)
 
@@ -471,16 +488,21 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/model.rs`: `Project`, `ProjectKind`, `TestRunner`, `RunKind`, `ConfigSource`, `RunConfig`, `new()`, `ReportSpec`, `ReportFormat`, `CoverageFormat`, `CoverageSpec`, `Invocation`, `TestOutcome`, `TestCase`, `TestSummary`, `from_cases()`, `TestRunResult`, `TestNode`
 - `crates/core/src/notes.rs`: `Note`, `NotesFile`, `notes_path()`, `load()`, `save()`
 - `crates/core/src/process/chunker.rs`: `Utf8Chunker`, `new()`, `push()`, `finish()`, `LineSplitter`, `new()`, `push()`, `finish()`
-- `crates/core/src/process/kill.rs`: `configure_process_group()`, `kill_tree()`, `kill_tree_async()`
-- `crates/core/src/process/mod.rs`: `Stream`, `ProcessEvent`, `Supervisor`, `new()`, `run()`, `cancel()`, `running_ids()`, `pid()`, `running()`, `is_running()`
+- `crates/core/src/process/kill.rs`: `configure_process_group()`, `windows_creation_flags()`, `no_window()`, `kill_tree()`, `kill_tree_async()`
+- `crates/core/src/process/mod.rs`: `Stream`, `ProcessEvent`, `Supervisor`, `new()`, `with_store()`, `run()`, `run_tracked()`, `cancel()`, `running_ids()`, `pid()`, `running()`, `is_running()`
 - `crates/core/src/process/resolve.rs`: `resolve_program()`
-- `crates/core/src/pty/mod.rs`: `PtyManager`, `new()`, `open()`, `write()`, `resize()`, `close()`, `is_open()`, `list()`
+- `crates/core/src/pty/mod.rs`: `PtyManager`, `new()`, `with_store()`, `open()`, `open_tracked()`, `write()`, `resize()`, `close()`, `is_open()`, `list()`
 - `crates/core/src/pty/model.rs`: `PtySpec`, `TerminalEvent`
 - `crates/core/src/pty/shell.rs`: `clamp_size()`, `pick_shell()`, `default_shell()`, `is_session_marker()`
 - `crates/core/src/qgate/install.rs`: `status()`, `status_for()`, `settings_path()`, `install_plan()`, `install_plan_for()`, `uninstall_plan()`, `uninstall_plan_for()`, `merged_into()`
 - `crates/core/src/qgate/mod.rs`: `Gate`, `label()`, `command()`, `gates_for_changes()`, `touched_source()`, `touched_memories()`, `should_remind_memories()`, `erosion_reminder()`, `has_unresolved_rejection()`, `should_skip_for_loop()`, `has_typecheck_script()`, `is_quality_gate_invocation()`, `QGateInvocation`, `parse_qgate_args()`
 - `crates/core/src/review.rs`: `ReviewAgent`, `AgentMode`, `id()`, `from_id()`, `id()`, `label()`, `program()`, `models()`, `default_model()`, `from_id()`, `models_for()`, `codex_models()`, `parse_codex_models()`, `resolve_model()`, `compose_prompt()`, `resolve_prompt_body()`, `agent_args()`, `detect_agents()`
 - `crates/core/src/rules/mod.rs`: `RuleDoc`, `RulesReport`, `rules_dir()`, `parse_rule_doc()`, `load_rules()`
+- `crates/core/src/running/classify.rs`: `ProcInfo`, `OrphanClassification`, `classify_orphans()`, `identity_matches()`
+- `crates/core/src/running/mod.rs`: `RunMeta`, `observe()`
+- `crates/core/src/running/probe.rs`: `probe()`
+- `crates/core/src/running/record.rs`: `RunKind`, `RunningRecord`, `RunningReport`, `RunningFile`
+- `crates/core/src/running/store.rs`: `RunningStore`, `new()`, `load_orphans()`, `record()`, `remove()`, `update_label()`, `resolve_orphan()`, `live()`, `orphans()`, `warnings()`, `load()`, `save()`, `running_path()`
 - `crates/core/src/secrets.rs`: `ProjectSecrets`, `resolve_project_path()`, `secrets_path()`, `user_secrets_id()`, `read()`, `ensure_id()`, `write()`
 - `crates/core/src/setup.rs`: `setup_plan()`
 - `crates/core/src/symbols/cache.rs`: `SymbolCache`, `CachedProject`, `CacheEntry`, `cache_path()`, `load()`, `save()`, `fingerprint()`, `build_cached()`, `rebuild()`

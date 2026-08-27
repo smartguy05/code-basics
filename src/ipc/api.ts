@@ -43,8 +43,10 @@ import type {
   RiderImportPreview,
   RootSpec,
   RulesReport,
+  ProcessKind,
   RunConfig,
   RunDump,
+  RunningReport,
   SearchHit,
   SearchScope,
   StashEntry,
@@ -330,11 +332,19 @@ export function terminalOpen(
   rows: number,
   onEvent: (event: TerminalEvent) => void,
   cwd?: string,
+  label?: string,
 ): Promise<string> {
   const channel = new Channel<TerminalEvent>();
   channel.onmessage = onEvent;
-  return invoke<string>("terminal_open", { cwd, cols, rows, channel });
+  return invoke<string>("terminal_open", { cwd, cols, rows, label, channel });
 }
+
+/**
+ * Update a terminal's label in the Running panel after the user renames it.
+ * `root` is the terminal's cwd (the record key beside the session id).
+ */
+export const terminalSetLabel = (id: string, root: string, label: string) =>
+  invoke<void>("terminal_set_label", { id, root, label });
 
 /** Send keystrokes (or any bytes) to a terminal. */
 export const terminalWrite = (id: string, data: string) =>
@@ -350,6 +360,26 @@ export const terminalClose = (id: string) =>
 
 /** The ids of every open terminal. */
 export const terminalList = () => invoke<string[]>("terminal_list");
+
+// ---------------------------------------------------------------------------
+// Running processes (the Running panel)
+// ---------------------------------------------------------------------------
+
+/** Everything running now across all open codebases, plus crash-orphans. */
+export const listRunning = () => invoke<RunningReport>("list_running");
+
+/**
+ * Kill one process from the Running panel. `orphan` picks the safe path (kill by
+ * pid after an identity re-check) vs. stopping a live process through its owning
+ * subsystem. Resolves whether something was actually terminated.
+ */
+export const killRunning = (entry: {
+  pid: number;
+  kind: ProcessKind;
+  root: string;
+  key: string;
+  orphan: boolean;
+}) => invoke<boolean>("kill_running", entry);
 
 // ---------------------------------------------------------------------------
 // Git

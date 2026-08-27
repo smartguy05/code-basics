@@ -22,12 +22,16 @@ import {
   couldHaveMoved,
   formatBytes,
   formatCaptured,
+  isAttachWarnSuppressed,
   preferApplicationProcess,
   readsAsTargetGone,
   selectorValue,
   setupSnippet,
+  shouldConfirmAttach,
   spliceInto,
+  suppressAttachWarn,
 } from "./inspectLogic";
+import { AttachConfirm } from "../components/AttachConfirm";
 
 /**
  * The Objects tab: pick something to read — a crash dump on disk or a process
@@ -140,6 +144,13 @@ export function InspectView({
   const [graph, setGraph] = useState<InspectGraph | null>(null);
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A live capture waiting on the attach confirmation. Held here so the modal's
+  // Attach button can run exactly what was requested (button or cross-tab).
+  const [pendingAttach, setPendingAttach] = useState<{
+    target: InspectTarget;
+    root: RootSpec;
+    why: string | null;
+  } | null>(null);
 
   const [targetKind, setTargetKind] = useState<TargetKind>("dump");
   const [selectedDump, setSelectedDump] = useState<string | null>(null);
@@ -380,6 +391,26 @@ export function InspectView({
   );
 
   /**
+   * Start a capture, confirming first when it will attach to a running process.
+   *
+   * A live target pauses and roughly doubles the memory of the process it reads,
+   * so the confirmation is the heads-up at the moment the cost is paid — unless
+   * the user has ticked "Don't warn me again". A dump is a file already on disk
+   * and runs straight through. Both entry points (the Capture button and a
+   * cross-tab request) go through here so the gate cannot be bypassed.
+   */
+  const beginCapture = useCallback(
+    (target: InspectTarget, root: RootSpec, why: string | null) => {
+      if (shouldConfirmAttach(target, isAttachWarnSuppressed(localStorage))) {
+        setPendingAttach({ target, root, why });
+        return;
+      }
+      void runCapture(target, root, why);
+    },
+    [runCapture],
+  );
+
+  /**
    * Take the capture another tab asked for.
    *
    * Consumed by object identity and reported back immediately, so a re-render
@@ -416,14 +447,14 @@ export function InspectView({
       setAddress(root.address);
     }
 
-    void runCapture(pendingRequest.target, pendingRequest.root, pendingRequest.reason);
-  }, [pendingRequest, onRequestConsumed, runCapture]);
+    beginCapture(pendingRequest.target, pendingRequest.root, pendingRequest.reason);
+  }, [pendingRequest, onRequestConsumed, beginCapture]);
 
-  async function capture() {
+  function capture() {
     const target = currentTarget();
     const root = currentRoot();
     if (!target || !root || capturing) return;
-    await runCapture(target, root, null);
+    beginCapture(target, root, null);
   }
 
   /**
@@ -902,27 +933,11 @@ export function InspectView({
         </div>
       )}
 
-      {targetKind === "live" && (
-        <div className="warning inspect-notice">
-          <strong>Attaching copies the process&apos;s memory.</strong>
-          <div>
-            Capturing takes a snapshot of the target: expect a brief pause of
-            the order of a second and a memory spike roughly the size of its
-            heap while the copy exists. On a machine that is already short of
-            memory, that is a real cost — it is worth knowing before, not after.
-          </div>
-          <div>
-            <strong>Your application is not stopped.</strong> The suspending
-            attach — which freezes every thread until the capture finishes — is
-            never requested by this app, so a service being inspected keeps
-            serving. The price of that is the one below: it keeps moving while
-            it is read.
-          </div>
-          {/* The launcher caveat is not repeated here: it belongs on the row
-              it qualifies, where the choice is actually made. It comes back
-              over the captured tree, which is a different moment. */}
-        </div>
-      )}
+      {/* The attach cost (a brief pause and a memory spike, and that the app
+          keeps serving) is no longer a permanent banner here: it is a
+          confirmation shown by `AttachConfirm` at the instant a live capture is
+          about to attach, where the warning is relevant and can be dismissed
+          for good. */}
 
       {targetKind === "live" && rootChoice === "exceptions" && (
         <div className="warning inspect-notice">
@@ -1053,6 +1068,18 @@ export function InspectView({
           <OutputConsole ref={consoleRef} />
         </div>
       </div>
+
+      {pendingAttach && (
+        <AttachConfirm
+          onCancel={() => setPendingAttach(null)}
+          onConfirm={(dontWarnAgain) => {
+            if (dontWarnAgain) suppressAttachWarn(localStorage);
+            const { target, root, why } = pendingAttach;
+            setPendingAttach(null);
+            void runCapture(target, root, why);
+          }}
+        />
+      )}
     </div>
   );
 }

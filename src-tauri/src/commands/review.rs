@@ -114,9 +114,14 @@ pub async fn start_review(
 
     // A missing CLI on PATH surfaces to the console as a `Failed` event rather
     // than an error here, which is what the pane already renders.
+    let meta = cb_core::running::RunMeta {
+        root: invocation.cwd.display().to_string(),
+        label: "Adversarial review".into(),
+        kind: cb_core::running::RunKind::Review,
+    };
     state
         .supervisor
-        .run(REVIEW_ID, &invocation, tx)
+        .run_tracked(REVIEW_ID, &invocation, tx, meta)
         .await
         .map(|_| ())
         .map_err(|e| format!("{e:#}"))

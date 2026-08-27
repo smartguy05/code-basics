@@ -6,6 +6,8 @@
  *
  * Enforces the two rules the docs tree lives by:
  *   1. No markdown file in docs/ (or README.md / CLAUDE.md) exceeds 500 lines.
+ *      The generated `docs/INDEX.md` is exempt — it is a machine-written lookup
+ *      table that grows with the codebase and cannot be "split logically".
  *   2. Every relative link in those files resolves to a real file.
  *
  * Exits non-zero listing every violation, so it can run in CI or a hook.
@@ -41,8 +43,10 @@ for (const path of targets) {
   const rel = relative(root, path).replaceAll("\\", "/");
   const text = readFileSync(path, "utf8");
 
+  // The generated index is a lookup table that grows with the source tree and
+  // cannot be hand-split — it is exempt from the line cap (links still checked).
   const lines = text.split("\n").length;
-  if (lines > MAX_LINES) {
+  if (lines > MAX_LINES && rel !== "docs/INDEX.md") {
     problems.push(`${rel}: ${lines} lines (limit ${MAX_LINES}) — split it logically`);
   }
 

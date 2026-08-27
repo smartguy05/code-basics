@@ -5,12 +5,15 @@ import {
   couldHaveMoved,
   formatBytes,
   formatCaptured,
+  isAttachWarnSuppressed,
   preferApplicationProcess,
   readsAsTargetGone,
   rebase,
   selectorValue,
   setupSnippet,
+  shouldConfirmAttach,
   spliceInto,
+  suppressAttachWarn,
 } from "./inspectLogic";
 import type {
   AttachableProcess,
@@ -364,5 +367,49 @@ describe("setupSnippet", () => {
     expect(snippet).toContain("DumpType.WithHeap");
     expect(snippet).toContain("Microsoft.Diagnostics.NETCore.Client");
     expect(snippet).toContain("throw;");
+  });
+});
+
+describe("shouldConfirmAttach", () => {
+  const live: InspectTarget = { kind: "live", pid: 42 };
+  const dump: InspectTarget = { kind: "dump", path: "/x.dmp" };
+
+  it("confirms before a live attach when not suppressed", () => {
+    expect(shouldConfirmAttach(live, false)).toBe(true);
+  });
+
+  it("never confirms for a dump — it is a file already on disk", () => {
+    expect(shouldConfirmAttach(dump, false)).toBe(false);
+    expect(shouldConfirmAttach(dump, true)).toBe(false);
+  });
+
+  it("does not confirm a live attach once the user opted out", () => {
+    expect(shouldConfirmAttach(live, true)).toBe(false);
+  });
+});
+
+describe("attach-warning suppression", () => {
+  it("round-trips through a storage stub", () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    expect(isAttachWarnSuppressed(storage)).toBe(false);
+    suppressAttachWarn(storage);
+    expect(isAttachWarnSuppressed(storage)).toBe(true);
+  });
+
+  it("never throws when storage is unavailable", () => {
+    const boom = {
+      getItem: () => {
+        throw new Error("nope");
+      },
+      setItem: () => {
+        throw new Error("nope");
+      },
+    };
+    expect(isAttachWarnSuppressed(boom)).toBe(false);
+    expect(() => suppressAttachWarn(boom)).not.toThrow();
   });
 });

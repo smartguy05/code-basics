@@ -18,6 +18,13 @@ export interface TerminalDescriptor {
    * *active* workspace has moved on.
    */
   cwd: string;
+  /**
+   * Optional user-chosen background for the minimized pill, so several
+   * terminals can be told apart at a glance. `undefined` (never set, or cleared
+   * back to "Default") leaves the pill its theme colour. In-memory with the
+   * descriptor — terminals do not survive a restart, so neither does the colour.
+   */
+  color?: string;
 }
 
 /**
@@ -29,6 +36,48 @@ export interface TerminalDescriptor {
  */
 export function makeTerminal(seq: number, cwd: string): TerminalDescriptor {
   return { key: `term-${seq}`, title: `Terminal ${seq}`, cwd };
+}
+
+/**
+ * Rename the terminal with `key` in a list. A blank (or whitespace-only) title
+ * is refused — the existing title is kept — so a terminal never renders as an
+ * empty header or an unreadable pill, the same rule `renameNote` follows for
+ * notes. Other terminals are returned untouched.
+ */
+export function renameTerminal(
+  list: TerminalDescriptor[],
+  key: string,
+  title: string,
+): TerminalDescriptor[] {
+  const clean = title.trim();
+  return list.map((t) => (t.key === key && clean !== "" ? { ...t, title: clean } : t));
+}
+
+/**
+ * Set (or clear) the minimized-pill colour of the terminal with `key`. An
+ * `undefined` colour clears it back to the theme default. Other terminals are
+ * returned untouched.
+ */
+export function recolorTerminal(
+  list: TerminalDescriptor[],
+  key: string,
+  color: string | undefined,
+): TerminalDescriptor[] {
+  return list.map((t) => (t.key === key ? { ...t, color } : t));
+}
+
+/** The step, in px, between one minimized pill and the next, stacked upward. */
+const PILL_STEP = 48;
+
+/**
+ * The `bottom` offset, in px, of a minimized terminal pill at position `index`
+ * among the open terminals. The base slot (`bottom: 16`) is reserved for the
+ * global Notes bar, so terminals start one step up and never land on it — the
+ * fix for the Notes/terminal pill overlap. Pills then stack upward so several
+ * minimized terminals do not share a spot either.
+ */
+export function pillBottom(index: number, step: number = PILL_STEP): number {
+  return 16 + (index + 1) * step;
 }
 
 /** The step, in px, each cascaded terminal is offset from the previous. */
@@ -90,17 +139,17 @@ export interface TerminalKeyEvent {
  * Decide whether a key event copies the selection, pastes the clipboard, or is
  * forwarded to the shell untouched.
  *
- * A raw PTY terminal has no copy/paste of its own, and `Ctrl+C` must stay the
- * shell **interrupt**, not a copy — so copy/paste use the usual terminal chords
- * instead: `Ctrl+Shift+C` / `Ctrl+Shift+V`, plus the Windows `Ctrl+Insert` /
- * `Shift+Insert` pair. Everything else passes through. `Ctrl+Insert` only copies
- * when there is a selection, so it does not swallow the key otherwise.
+ * A raw PTY terminal has no copy/paste of its own. `Ctrl+C` must stay the shell
+ * **interrupt**, so copying uses `Ctrl+Shift+C` (or `Ctrl+Insert` with a
+ * selection). Pasting has no such conflict to protect, so both the Windows
+ * standard `Ctrl+V` and the terminal chord `Ctrl+Shift+V` paste (as does
+ * `Shift+Insert`). Everything else passes through.
  */
 export function terminalKeyAction(e: TerminalKeyEvent, hasSelection: boolean): TerminalKeyAction {
   if (e.type !== "keydown") return "passthrough";
   const key = e.key.toLowerCase();
   if (e.ctrlKey && e.shiftKey && key === "c") return "copy";
-  if (e.ctrlKey && e.shiftKey && key === "v") return "paste";
+  if (e.ctrlKey && key === "v") return "paste"; // Ctrl+V and Ctrl+Shift+V
   if (e.ctrlKey && !e.shiftKey && key === "insert") return hasSelection ? "copy" : "passthrough";
   if (e.shiftKey && !e.ctrlKey && key === "insert") return "paste";
   return "passthrough";

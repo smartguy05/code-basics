@@ -47,11 +47,11 @@ use cb_core::lsp::session::LspHandle;
 use cb_core::model::TestRunResult;
 use cb_core::process::Supervisor;
 use cb_core::pty::PtyManager;
+use cb_core::running::RunningStore;
 use cb_core::symbols::index::SymbolIndex;
 use cb_core::testing::changecov::ChangeCoverage;
 use cb_core::workspace::Workspace;
 
-#[derive(Default)]
 pub struct AppState {
     /// Every open workspace, keyed by canonical root (the workspace id).
     workspaces: Mutex<HashMap<PathBuf, Arc<WorkspaceSlot>>>,
@@ -70,6 +70,28 @@ pub struct AppState {
     /// open time, and nothing here is cleared by a tab switch or a rescan. The
     /// frontend scopes terminals to a tab; the backend does not need to.
     pub pty: PtyManager,
+    /// The running-process registry behind the Running panel. One instance,
+    /// injected into every supervisor (global and per-slot) and the PTY manager
+    /// so they all record into it. Global like `pty`, because the panel spans
+    /// every open codebase and orphans are not tied to one.
+    pub running: RunningStore,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        // One registry, shared by every process-spawning handle. `new` does no
+        // I/O and no orphan detection — that is an explicit startup step
+        // (`running.load_orphans`) so constructing an `AppState` (including in
+        // tests) has no side effect.
+        let running = RunningStore::new(cb_core::running::running_path());
+        Self {
+            workspaces: Mutex::new(HashMap::new()),
+            active: Mutex::new(None),
+            supervisor: Supervisor::with_store(running.clone()),
+            pty: PtyManager::with_store(running.clone()),
+            running,
+        }
+    }
 }
 
 /// Everything the app remembers about one open codebase.
@@ -124,11 +146,13 @@ pub struct WorkspaceSlot {
 }
 
 impl WorkspaceSlot {
-    fn new(workspace: Workspace) -> Self {
+    fn new(workspace: Workspace, running: RunningStore) -> Self {
         Self {
             root: workspace.root.clone(),
             workspace: Mutex::new(workspace),
-            supervisor: Supervisor::default(),
+            // Tracked so this codebase's runs/builds appear in the Running panel
+            // and are recoverable as orphans after a crash.
+            supervisor: Supervisor::with_store(running),
             last_test_run: Mutex::new(HashMap::new()),
             last_coverage: Mutex::new(HashMap::new()),
             last_inspect: Mutex::new(None),
@@ -241,7 +265,10 @@ impl AppState {
                     }
                 }
                 None => {
-                    map.insert(root.clone(), Arc::new(WorkspaceSlot::new(workspace)));
+                    map.insert(
+                        root.clone(),
+                        Arc::new(WorkspaceSlot::new(workspace, self.running.clone())),
+                    );
                 }
             }
         }

@@ -16,6 +16,15 @@ export const NOTES_LAYOUT_KEY = "cb.notes.layout";
 /** The localStorage key remembering which note tab was last active. */
 export const NOTES_ACTIVE_KEY = "code-basics.notes.activeId";
 
+/**
+ * The localStorage key remembering the minimized Notes bar's colour. There is
+ * one Notes bar (not one per note), so this is a single value — unlike a
+ * terminal's colour, which lives on its descriptor. Persisted because the Notes
+ * panel, unlike a terminal, is long-lived and expected to reopen as the user
+ * left it.
+ */
+export const NOTES_COLOR_KEY = "cb.notes.pillColor";
+
 /** The fallback title for a note whose title is blank. */
 export const UNTITLED = "Untitled";
 
@@ -136,6 +145,32 @@ export function loadActiveId(storage: Pick<Storage, "getItem">): string | undefi
 export function saveActiveId(storage: Pick<Storage, "setItem">, id: string): void {
   try {
     storage.setItem(NOTES_ACTIVE_KEY, id);
+  } catch {
+    // Persistence is a convenience, not a requirement.
+  }
+}
+
+/**
+ * Read the remembered Notes-bar colour, or `undefined` for the theme default.
+ * Never throws (storage may be absent). An empty stored value reads as "no
+ * colour" so clearing back to default round-trips.
+ */
+export function loadPillColor(storage: Pick<Storage, "getItem">): string | undefined {
+  try {
+    return storage.getItem(NOTES_COLOR_KEY) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Remember the Notes-bar colour, or clear it when `undefined` (back to the
+ * theme default). Never throws.
+ */
+export function savePillColor(storage: Pick<Storage, "setItem" | "removeItem">, color: string | undefined): void {
+  try {
+    if (color) storage.setItem(NOTES_COLOR_KEY, color);
+    else storage.removeItem(NOTES_COLOR_KEY);
   } catch {
     // Persistence is a convenience, not a requirement.
   }

@@ -161,12 +161,15 @@ impl Drop for BaselineWorktree {
 
 /// `git -C <repo_root> worktree add --detach <dir> <oid>`.
 fn worktree_add(repo_root: &Path, dir: &Path, oid: &str) -> Result<()> {
-    let output = Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(repo_root)
         .args(["worktree", "add", "--detach"])
         .arg(dir)
-        .arg(oid)
+        .arg(oid);
+    #[cfg(windows)]
+    crate::process::no_window(&mut cmd);
+    let output = cmd
         .output()
         .context("failed to run `git worktree add` (is git on PATH?)")?;
     if !output.status.success() {
@@ -269,22 +272,22 @@ pub fn teardown(repo_root: &Path, dir: &Path) -> Vec<String> {
 
 /// `git worktree remove --force <dir>`; true on success.
 fn worktree_remove(repo_root: &Path, dir: &Path) -> bool {
-    Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(repo_root)
         .args(["worktree", "remove", "--force"])
-        .arg(dir)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .arg(dir);
+    #[cfg(windows)]
+    crate::process::no_window(&mut cmd);
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 fn run_prune(repo_root: &Path) {
-    let _ = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(["worktree", "prune"])
-        .output();
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_root).args(["worktree", "prune"]);
+    #[cfg(windows)]
+    crate::process::no_window(&mut cmd);
+    let _ = cmd.output();
 }
 
 /// Remove every baseline checkout whose directory name is not `keep_oid`.

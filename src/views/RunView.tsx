@@ -7,7 +7,7 @@ import { FileTree } from "../components/FileTree";
 import { LspStatusIndicator } from "../components/LspStatus";
 import { RiderImportDialog } from "../components/RiderImportDialog";
 import { RunConfigMenu } from "../components/RunConfigMenu";
-import { secretsFile, type OpenEditorFile } from "../components/editorSourceLogic";
+import { secretsFile, secretsProjects, type OpenEditorFile } from "../components/editorSourceLogic";
 import { Sidebar } from "../components/Sidebar";
 import {
   EnvironmentPicker,
@@ -134,7 +134,6 @@ export function RunView({
   onSelectConsumed,
   onNavigate,
   active,
-  foreground = true,
 }: {
   workspace: Workspace;
   onWorkspaceChange: (workspace: Workspace) => void;
@@ -146,13 +145,6 @@ export function RunView({
    * time they return here, with no visible cause.
    */
   active: boolean;
-  /**
-   * Whether this Run view's *workspace* is the foreground tab (regardless of
-   * which inner tab is showing). Gates the titlebar config dropdown's portal, so
-   * only the foreground codebase's dropdown occupies the single slot. Defaults
-   * true for the single-workspace callers.
-   */
-  foreground?: boolean;
   /** A file the search palette chose; see `OpenFileRequest` in `App.tsx`. */
   pendingOpen?: OpenFileRequest | null;
   onOpenConsumed?: () => void;
@@ -233,6 +225,7 @@ export function RunView({
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<RunConfig | null>(null);
   const [importing, setImporting] = useState(false);
+  const [secretsOpen, setSecretsOpen] = useState(false);
   const [environments, setEnvironments] = useState<EnvironmentState>(() =>
     loadEnvironments(workspace.root),
   );
@@ -727,9 +720,11 @@ export function RunView({
    */
   const selectedUnreadable = unreadableTarget(selected);
 
-  /** Secrets only exist for .NET, and only when a project file is targeted. */
-  const canEditSecrets = (config: RunConfig | null) =>
-    config?.ecosystem === "dotnet" && !!config.project;
+  // Every .NET project in the workspace can have user secrets, not just the one
+  // behind the selected run config — a folder with several projects must be able
+  // to reach any of their secrets (see `secretsProjects`).
+  const secretProjs = secretsProjects(workspace.projects);
+  const onlySecretProj = secretProjs.length === 1 ? (secretProjs[0] ?? null) : null;
 
   // Processes outlive a view switch, so reconcile on mount rather than
   // assuming nothing is running.
@@ -1011,36 +1006,6 @@ export function RunView({
 
   return (
     <>
-      {/* Lives in the titlebar (portal), next to the branch widget. */}
-      <RunConfigMenu
-        configs={appConfigs}
-        selectedId={selectedId}
-        favorites={favorites}
-        dotClass={dotClass}
-        canMove={(config, delta) => neighborId(config, delta) !== null}
-        groupLabel={solutionOf}
-        active={foreground}
-        onSelect={(config) => {
-          setSelectedId(config.id);
-          // Selecting something that has a console tab focuses that tab.
-          if (sessions.some((s) => s.id === config.id)) {
-            setActiveSession(config.id);
-          }
-        }}
-        onToggleFavorite={(config) => void toggleFavorite(config)}
-        onMove={(config, delta) => void move(config, delta)}
-        onNew={() =>
-          setEditing({
-            id: `custom:${Date.now()}`,
-            name: "New configuration",
-            kind: "app",
-            ecosystem: "dotnet",
-            source: "userFile",
-          })
-        }
-        onImport={() => setImporting(true)}
-      />
-
       <Sidebar>
         {/* Above the tree, not below it: the tree is as long as the repository
             and this would never be seen under it. Rows here are text, not
@@ -1137,20 +1102,78 @@ export function RunView({
           <button onClick={() => selected && setEditing(selected)} disabled={!selected}>
             Edit
           </button>
-          <button
-            onClick={() => selected?.project && openSecrets(selected.project)}
-            disabled={!canEditSecrets(selected)}
-            title={
-              canEditSecrets(selected)
-                ? "Edit this project's .NET user secrets"
-                : "User secrets are available for .NET configurations with a project"
-            }
-          >
-            Secrets…
-          </button>
+          {onlySecretProj ? (
+            <button
+              onClick={() => openSecrets(onlySecretProj.manifestPath)}
+              title={`Edit ${onlySecretProj.name}'s .NET user secrets`}
+            >
+              Secrets…
+            </button>
+          ) : secretProjs.length > 1 ? (
+            <div className="dropdown">
+              <button
+                onClick={() => setSecretsOpen((was) => !was)}
+                title="Choose a .NET project to edit its user secrets"
+              >
+                Secrets… ▾
+              </button>
+              {secretsOpen && (
+                <>
+                  <div className="dropdown-backdrop" onClick={() => setSecretsOpen(false)} />
+                  <div className="dropdown-menu" style={{ minWidth: 220 }}>
+                    {secretProjs.map((project) => (
+                      <div
+                        key={project.id}
+                        className="dropdown-item"
+                        onClick={() => {
+                          openSecrets(project.manifestPath);
+                          setSecretsOpen(false);
+                        }}
+                      >
+                        {project.name}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <button disabled title="User secrets are available for .NET projects">
+              Secrets…
+            </button>
+          )}
           {selected?.ecosystem === "dotnet" && (
             <EnvironmentPicker state={environments} onChange={saveEnvironments} />
           )}
+          {/* The run-configuration picker sits just right of the environment
+              dropdown, so what you run and what you run it in are together. */}
+          <RunConfigMenu
+            configs={appConfigs}
+            selectedId={selectedId}
+            favorites={favorites}
+            dotClass={dotClass}
+            canMove={(config, delta) => neighborId(config, delta) !== null}
+            groupLabel={solutionOf}
+            onSelect={(config) => {
+              setSelectedId(config.id);
+              // Selecting something that has a console tab focuses that tab.
+              if (sessions.some((s) => s.id === config.id)) {
+                setActiveSession(config.id);
+              }
+            }}
+            onToggleFavorite={(config) => void toggleFavorite(config)}
+            onMove={(config, delta) => void move(config, delta)}
+            onNew={() =>
+              setEditing({
+                id: `custom:${Date.now()}`,
+                name: "New configuration",
+                kind: "app",
+                ecosystem: "dotnet",
+                source: "userFile",
+              })
+            }
+            onImport={() => setImporting(true)}
+          />
 
           <span style={{ flex: 1 }} />
           {/* Silent unless a server is starting, missing or dead. The key is

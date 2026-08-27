@@ -11,7 +11,8 @@ import {
   type PanelLayout,
   type PanelSize,
 } from "./reviewLayoutLogic";
-import { cascadeShift, outputNeedsAttention, terminalLayoutKey } from "./terminalLogic";
+import { cascadeShift, outputNeedsAttention, pillBottom, terminalLayoutKey } from "./terminalLogic";
+import { PillColorMenu } from "./PillColorMenu";
 
 /**
  * One floating, interactive terminal.
@@ -30,8 +31,11 @@ export function TerminalPanel({
   title,
   cwd,
   index,
+  color,
   onClose,
   onAttentionChange,
+  onRename,
+  onRecolor,
 }: {
   title: string;
   /**
@@ -42,6 +46,8 @@ export function TerminalPanel({
   cwd: string;
   /** Position among the currently open terminals, for the cascade offset. */
   index: number;
+  /** User-chosen minimized-pill background, or undefined for the theme default. */
+  color?: string;
   onClose: () => void;
   /**
    * Report this terminal's attention flag upward so its (possibly hidden)
@@ -49,6 +55,10 @@ export function TerminalPanel({
    * `false` when the terminal closes.
    */
   onAttentionChange?: (attention: boolean) => void;
+  /** Commit a new title (the host applies the blank-title guard). */
+  onRename?: (title: string) => void;
+  /** Set/clear the minimized-pill colour. */
+  onRecolor?: (color: string | undefined) => void;
 }) {
   const viewRef = useRef<TerminalViewHandle>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -80,6 +90,8 @@ export function TerminalPanel({
   const [attention, setAttention] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exited, setExited] = useState(false);
+  // Non-null while the header title is being edited inline (double-click).
+  const [editing, setEditing] = useState(false);
 
   minimizedRef.current = minimized;
 
@@ -110,6 +122,7 @@ export function TerminalPanel({
           handleEvent(event);
         },
         cwd,
+        title,
       )
       .then((id) => {
         if (!alive) {
@@ -213,6 +226,18 @@ export function TerminalPanel({
     onClose();
   };
 
+  // Commit a rename: update the local descriptor (host applies the blank guard)
+  // and, when the title is non-blank, keep the backend running-registry record in
+  // step so the Running panel shows the new title.
+  const commitRename = (value: string) => {
+    onRename?.(value);
+    const id = sessionRef.current;
+    if (id && value.trim() !== "") {
+      void api.terminalSetLabel(id, cwd, value.trim()).catch(() => {});
+    }
+    setEditing(false);
+  };
+
   // Drag by the header. Identical to ReviewPanel: a press that never moves is a
   // click, so the minimize/close buttons still work; the clamp is pure.
   const onHeaderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -220,6 +245,11 @@ export function TerminalPanel({
     if ((e.target as HTMLElement).closest("button")) return;
     const panel = panelRef.current;
     if (!panel) return;
+
+    // Clicking the title bar (to focus or to drag) puts the caret in the
+    // terminal, so you can type straight away — the header is not xterm, so a
+    // click here would otherwise leave focus wherever it was.
+    viewRef.current?.focus();
 
     const rect = panel.getBoundingClientRect();
     const grabX = e.clientX - rect.left;
@@ -262,9 +292,11 @@ export function TerminalPanel({
           className={`review-pill${attention ? " attention" : ""}`}
           onClick={restore}
           title={attention ? "The terminal needs your attention" : "Restore the terminal"}
-          // Stack pills upward so several minimized terminals don't land on the
-          // same spot (the CSS anchors every pill bottom-right by default).
-          style={{ bottom: 16 + index * 48 }}
+          // Stack pills upward, starting one slot above the base (which is
+          // reserved for the global Notes bar) so they never overlap it or each
+          // other. The custom colour tints the pill; while it flashes for
+          // attention the flash keyframes take over the background (transient).
+          style={{ bottom: pillBottom(index), ...(color && !attention ? { background: color } : {}) }}
         >
           <span>
             {title} — {attention ? "needs attention" : status}
@@ -289,11 +321,36 @@ export function TerminalPanel({
           className={`review-header${attention ? " attention" : ""}`}
           onPointerDown={onHeaderPointerDown}
         >
-          <strong>{title}</strong>
+          {editing ? (
+            <input
+              className="terminal-title-edit"
+              autoFocus
+              defaultValue={title}
+              onBlur={(e) => commitRename(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  commitRename((e.target as HTMLInputElement).value);
+                } else if (e.key === "Escape") {
+                  setEditing(false);
+                }
+              }}
+            />
+          ) : (
+            <strong
+              onDoubleClick={() => onRename && setEditing(true)}
+              title={onRename ? "Double-click to rename" : undefined}
+              style={onRename ? { cursor: "text" } : undefined}
+            >
+              {title}
+            </strong>
+          )}
           <span className="faint" style={{ fontSize: 12 }}>
             {status}
           </span>
           <span style={{ flex: 1 }} />
+          {onRecolor && (
+            <PillColorMenu color={color} onPick={onRecolor} title="Set the minimized pill colour" />
+          )}
           <button onClick={() => setMinimized(true)} title="Minimize (keeps running)">
             —
           </button>

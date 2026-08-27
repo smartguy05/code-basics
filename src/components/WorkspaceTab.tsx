@@ -11,7 +11,12 @@ import { SetupPrompt } from "./SetupPrompt";
 import { shouldPrompt, setDismissed } from "./setupPromptLogic";
 import { TerminalPanel } from "./TerminalPanel";
 import { TestsView } from "../views/TestsView";
-import { makeTerminal, type TerminalDescriptor } from "./terminalLogic";
+import {
+  makeTerminal,
+  recolorTerminal,
+  renameTerminal,
+  type TerminalDescriptor,
+} from "./terminalLogic";
 import { sendToAgentTitle } from "./notesLogic";
 import * as api from "../ipc/api";
 import type { AgentMode } from "../ipc/api";
@@ -60,11 +65,13 @@ export interface WorkspaceTabHandle {
  *
  * Everything here is this workspace's own: the inner Run/Tests/… selection, the
  * agent and before/after panels, the palette, the setup prompt, and this
- * workspace's terminals (each bound to `workspace.root` as its cwd). The Notes
- * panel and the editor font size are global and stay in `App`; the titlebar's
- * per-workspace *display* (name, branch, config dropdown) is bound to the active
- * tab there, and its per-workspace *actions* come back to the foreground tab
- * through {@link WorkspaceTabHandle}.
+ * workspace's terminals (each bound to `workspace.root` as its cwd), and the run
+ * configuration dropdown (in the Run view's own toolbar, beside the environment
+ * picker). The Notes panel and the editor font size are global and stay in
+ * `App`; the titlebar's per-workspace *display* (the branch widget) and the
+ * bottom status bar's (folder name and path) are bound to the active tab there,
+ * and its per-workspace *actions* come back to the foreground tab through
+ * {@link WorkspaceTabHandle}.
  */
 export function WorkspaceTab({
   workspace,
@@ -147,6 +154,10 @@ export function WorkspaceTab({
   };
   const closeTerminal = (key: string) =>
     setTerminals((open) => open.filter((t) => t.key !== key));
+  const renameTerminalTo = (key: string, title: string) =>
+    setTerminals((open) => renameTerminal(open, key, title));
+  const recolorTerminalTo = (key: string, color: string | undefined) =>
+    setTerminals((open) => recolorTerminal(open, key, color));
 
   const openRunAgent = (promptId: string) =>
     setAgentPanel({
@@ -258,7 +269,6 @@ export function WorkspaceTab({
           onSelectConsumed={() => setSelectRequest(null)}
           onNavigate={requestOpenFile}
           active={active && tab === "run"}
-          foreground={active}
         />
       </div>
       <div className="body" hidden={tab !== "tests"}>
@@ -341,8 +351,11 @@ export function WorkspaceTab({
           title={t.title}
           cwd={t.cwd}
           index={index}
+          color={t.color}
           onClose={() => closeTerminal(t.key)}
           onAttentionChange={(wants) => setTerminalAttention(t.key, wants)}
+          onRename={(title) => renameTerminalTo(t.key, title)}
+          onRecolor={(color) => recolorTerminalTo(t.key, color)}
         />
       ))}
     </div>

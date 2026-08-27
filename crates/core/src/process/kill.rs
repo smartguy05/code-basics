@@ -29,14 +29,48 @@ pub fn configure_process_group(cmd: &mut tokio::process::Command) {
 
     #[cfg(windows)]
     {
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+        cmd.creation_flags(windows_creation_flags());
     }
 
     #[cfg(not(any(unix, windows)))]
     {
         let _ = cmd;
     }
+}
+
+/// Windows process-creation flag: run the child without allocating a console
+/// window. The Tauri shell is a GUI process with no console of its own, so a
+/// console-subsystem child — `dotnet`, a `.cmd`/`.bat` package-manager shim run
+/// via `cmd.exe`, `git`, `taskkill` — makes Windows allocate a **visible**
+/// console window for it. Without this flag, running a project pops a queue of
+/// terminal windows; with it, the same output still streams to the in-app
+/// console over the captured pipes.
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Windows process-creation flag: give the child its own process group, so a
+/// console Ctrl+C aimed at the app is not shared with it.
+pub const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+/// The creation flags for a supervised child that must be both windowless and
+/// killable as a group: [`CREATE_NO_WINDOW`] | [`CREATE_NEW_PROCESS_GROUP`].
+/// Defined once so the two flags never drift apart at a spawn site, and defined
+/// on every platform (it is pure arithmetic) so the value is unit-testable
+/// without a Windows host.
+pub fn windows_creation_flags() -> u32 {
+    CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+}
+
+/// Suppress the console window for a raw [`std::process::Command`] on Windows.
+///
+/// For the auxiliary console tools this crate (and the quality-gate runner)
+/// shell out to — `taskkill`, `git`, the `dotnet` SDK evaluation — which must
+/// **not** join a supervised child's process group ([`configure_process_group`]
+/// is the only thing that arranges that) but should still never flash a console
+/// window. A no-op off Windows.
+#[cfg(windows)]
+pub fn no_window(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
 /// Terminate `pid` and every process descended from it.
@@ -93,13 +127,12 @@ pub fn kill_tree(pid: u32) -> bool {
     {
         // `taskkill /T` walks the child tree; `/F` makes it unconditional.
         // Shelling out avoids hand-rolling Job Object lifetime management.
-        std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
+        let mut cmd = std::process::Command::new("taskkill");
+        cmd.args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+            .stderr(std::process::Stdio::null());
+        no_window(&mut cmd);
+        cmd.status().map(|s| s.success()).unwrap_or(false)
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -148,6 +181,31 @@ mod tests {
     /// channel until an async releaser (which can only run if the worker is free)
     /// wakes it. Inline, the worker parks, the releaser never runs, and the 5s
     /// timeout trips; offloaded to the blocking pool, both halves complete.
+    #[test]
+    fn windows_creation_flags_are_windowless_and_a_new_group() {
+        // The supervised-child flags must carry both bits: no console window
+        // (so running a project does not pop a terminal) and a new process
+        // group (so tree-kill works). 0x0800_0000 | 0x0000_0200 == 0x0800_0200.
+        assert_eq!(windows_creation_flags(), 0x0800_0200);
+        assert_eq!(
+            windows_creation_flags() & CREATE_NO_WINDOW,
+            CREATE_NO_WINDOW
+        );
+        assert_eq!(
+            windows_creation_flags() & CREATE_NEW_PROCESS_GROUP,
+            CREATE_NEW_PROCESS_GROUP
+        );
+    }
+
+    #[test]
+    fn the_auxiliary_no_window_flag_suppresses_the_console_only() {
+        // The raw-command helper suppresses the window but must NOT set the
+        // process-group bit — taskkill/git/dotnet must not join a supervised
+        // child's group.
+        assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);
+        assert_eq!(CREATE_NO_WINDOW & CREATE_NEW_PROCESS_GROUP, 0);
+    }
+
     #[tokio::test]
     async fn an_offloaded_kill_does_not_stall_the_current_thread_runtime() {
         let started = Arc::new(AtomicBool::new(false));

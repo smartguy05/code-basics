@@ -126,10 +126,6 @@ textarea:focus {
   flex: 0 0 auto;
 }
 
-.titlebar .workspace-name {
-  font-weight: 600;
-}
-
 .titlebar .spacer {
   flex: 1;
 }
@@ -147,15 +143,38 @@ textarea:focus {
   flex: 0 0 auto;
 }
 
-/* The run-configuration dropdown portaled into the titlebar (RunConfigMenu). */
-#run-config-slot .dropdown > button {
+/* The run-configuration dropdown in the Run toolbar (RunConfigMenu). */
+.run-config-menu > button {
   display: flex;
   align-items: center;
   gap: 6px;
   max-width: 320px;
 }
 
-#run-config-slot .config-name {
+.run-config-menu .config-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Bottom status bar: the active codebase's folder name and path. */
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 12px;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+  font-size: 11px;
+  min-height: 22px;
+}
+
+.statusbar .workspace-name {
+  font-weight: 600;
+}
+
+.statusbar-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1213,6 +1232,65 @@ textarea:focus {
   height: 100%;
   background: var(--bg-inset);
   padding: 4px 6px;
+}
+
+/* Inline title edit in a terminal header (double-click the title). Sized to sit
+   in the header row without shifting it. */
+.terminal-title-edit {
+  font: inherit;
+  font-weight: 700;
+  padding: 1px 4px;
+  min-width: 8ch;
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+
+/* Pill colour swatch popover (terminal pills + the Notes bar). Reuses the
+   .dropdown/.dropdown-menu chrome; only the swatch grid is bespoke. */
+.pill-color-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.pill-color-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.pill-color-swatches {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 8px;
+  min-width: unset;
+}
+
+.pill-color-swatch {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+}
+
+.pill-color-swatch.selected {
+  outline: 2px solid var(--accent, #6ea8fe);
+  outline-offset: 1px;
+}
+
+.pill-color-swatch.default {
+  background: var(--bg-inset);
+  color: var(--text-faint);
 }
 
 /* Notes / scratchpad panel ------------------------------------------------ */
@@ -2904,4 +2982,104 @@ textarea:focus {
   line-height: 1.45;
   color: var(--text);
   background: var(--bg-raised);
+}
+
+/* Running panel ----------------------------------------------------------- */
+
+/* Reuses the .review-panel base (float, drag, resize). Open/close only — it
+   never minimizes to a pill, so it does not contend for the bottom-right slots
+   the Notes bar and terminal pills partition. */
+.running-panel {
+  width: min(560px, 52vw);
+  height: min(460px, 60vh);
+}
+
+/* The live-count badge on the titlebar Running button. */
+.running-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent, #6ea8fe);
+  color: #fff;
+  font-size: 11px;
+}
+
+.running-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px;
+}
+
+.running-empty {
+  color: var(--text-faint);
+  padding: 16px;
+  text-align: center;
+}
+
+.running-section {
+  margin-bottom: 12px;
+}
+
+.running-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  margin: 6px 0;
+}
+
+.running-note {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+
+.running-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 4px;
+}
+
+.running-row:hover {
+  background: var(--bg-raised);
+}
+
+.running-row.orphan {
+  border-left: 2px solid #ffb020;
+}
+
+.running-icon {
+  width: 16px;
+  text-align: center;
+}
+
+.running-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.running-meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.running-kill {
+  font-size: 11px;
+}
+
+.running-warning {
+  font-size: 11px;
+  color: #ffb020;
+  margin: 4px 0;
 }

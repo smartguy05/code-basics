@@ -3,6 +3,9 @@ import {
   cascadeShift,
   makeTerminal,
   outputNeedsAttention,
+  pillBottom,
+  recolorTerminal,
+  renameTerminal,
   terminalKeyAction,
   terminalLayoutKey,
 } from "./terminalLogic";
@@ -19,6 +22,60 @@ describe("makeTerminal", () => {
 
   it("gives distinct keys to distinct sequence numbers", () => {
     expect(makeTerminal(2, "/ws").key).not.toBe(makeTerminal(3, "/ws").key);
+  });
+});
+
+describe("renameTerminal", () => {
+  const list = [makeTerminal(1, "/ws"), makeTerminal(2, "/ws")];
+  const titleOf = (l: ReturnType<typeof renameTerminal>, key: string) =>
+    l.find((t) => t.key === key)?.title;
+
+  it("renames the matching terminal and leaves the rest untouched", () => {
+    const next = renameTerminal(list, "term-1", "Server");
+    expect(titleOf(next, "term-1")).toBe("Server");
+    expect(titleOf(next, "term-2")).toBe("Terminal 2");
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(titleOf(renameTerminal(list, "term-2", "  Logs  "), "term-2")).toBe("Logs");
+  });
+
+  it("rejects a blank title, keeping the existing one", () => {
+    expect(titleOf(renameTerminal(list, "term-1", "   "), "term-1")).toBe("Terminal 1");
+    expect(titleOf(renameTerminal(list, "term-1", ""), "term-1")).toBe("Terminal 1");
+  });
+
+  it("is a no-op for an unknown key", () => {
+    expect(renameTerminal(list, "term-9", "X")).toEqual(list);
+  });
+});
+
+describe("recolorTerminal", () => {
+  const list = [makeTerminal(1, "/ws"), makeTerminal(2, "/ws")];
+  const colorOf = (l: ReturnType<typeof recolorTerminal>, key: string) =>
+    l.find((t) => t.key === key)?.color;
+
+  it("sets the colour of the matching terminal only", () => {
+    const next = recolorTerminal(list, "term-2", "#7a4b00");
+    expect(colorOf(next, "term-2")).toBe("#7a4b00");
+    expect(colorOf(next, "term-1")).toBeUndefined();
+  });
+
+  it("clears the colour back to the theme default with undefined", () => {
+    const colored = recolorTerminal(list, "term-1", "#123456");
+    expect(colorOf(recolorTerminal(colored, "term-1", undefined), "term-1")).toBeUndefined();
+  });
+});
+
+describe("pillBottom", () => {
+  it("reserves the base slot (bottom:16) for the Notes bar", () => {
+    // The first terminal pill sits one step above 16, never on it.
+    expect(pillBottom(0)).toBe(64);
+  });
+
+  it("stacks each subsequent pill one step higher", () => {
+    expect(pillBottom(1)).toBe(112);
+    expect(pillBottom(2)).toBe(160);
   });
 });
 
@@ -79,7 +136,10 @@ describe("terminalKeyAction", () => {
     expect(terminalKeyAction(keydown({ ctrlKey: true, shiftKey: true, key: "c" }), false)).toBe("copy");
   });
 
-  it("pastes on Ctrl+Shift+V", () => {
+  it("pastes on Ctrl+V and Ctrl+Shift+V", () => {
+    // Plain Ctrl+V is the Windows-standard paste; Ctrl+Shift+V is the terminal
+    // chord. Both paste — unlike Ctrl+C, paste has no interrupt to protect.
+    expect(terminalKeyAction(keydown({ ctrlKey: true, key: "v" }), false)).toBe("paste");
     expect(terminalKeyAction(keydown({ ctrlKey: true, shiftKey: true, key: "v" }), false)).toBe("paste");
   });
 
