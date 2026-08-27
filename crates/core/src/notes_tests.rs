@@ -54,6 +54,77 @@ fn save_then_load_round_trips() {
 }
 
 #[test]
+fn save_leaves_no_temp_file_behind() {
+    // The write goes through a sibling temp file then an atomic rename; a
+    // successful save must not leave that temp file lying around.
+    let path = scratch("no-temp");
+    let file = NotesFile {
+        version: 1,
+        notes: vec![note("n1", "Scratch", "hello")],
+    };
+    save(&path, &file).unwrap();
+    let dir = path.parent().unwrap();
+    let leftovers: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "notes.json")
+        .collect();
+    assert!(leftovers.is_empty(), "unexpected files: {leftovers:?}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn overwriting_nonempty_notes_with_empty_backs_up_the_previous_content() {
+    // A corrupt-load-then-clobber cascade could erase everything; before an
+    // empty file replaces a non-empty one, the previous content is preserved.
+    let path = scratch("empty-guard");
+    let full = NotesFile {
+        version: 1,
+        notes: vec![note("n1", "Keep", "important")],
+    };
+    save(&path, &full).unwrap();
+
+    // Now save an empty file over it.
+    save(&path, &NotesFile::default()).unwrap();
+    assert!(
+        load(&path).notes.is_empty(),
+        "the empty save must still apply"
+    );
+
+    // The prior non-empty content is recoverable from the backup.
+    let bak = path.with_file_name("notes.json.bak");
+    assert!(bak.exists(), "expected a .bak of the previous content");
+    assert_eq!(load(&bak), full);
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn overwriting_with_more_notes_does_not_create_a_backup() {
+    // The guard fires only for an empty-over-non-empty replace; an ordinary edit
+    // must not litter a .bak on every keystroke.
+    let path = scratch("no-bak");
+    save(
+        &path,
+        &NotesFile {
+            version: 1,
+            notes: vec![note("n1", "One", "a")],
+        },
+    )
+    .unwrap();
+    save(
+        &path,
+        &NotesFile {
+            version: 1,
+            notes: vec![note("n1", "One", "a"), note("n2", "Two", "b")],
+        },
+    )
+    .unwrap();
+    assert!(!path.with_file_name("notes.json.bak").exists());
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
 fn save_creates_the_parent_directory() {
     let dir = std::env::temp_dir().join("cb-notes-mkdir/nested/deeper");
     let _ = fs::remove_dir_all(std::env::temp_dir().join("cb-notes-mkdir"));

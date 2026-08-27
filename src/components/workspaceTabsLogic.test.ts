@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addOpenWorkspace,
   closeOpenWorkspace,
+  shouldFlashWorkspaceTab,
   tabLabels,
 } from "./workspaceTabsLogic";
 import type { Workspace } from "../ipc/types";
@@ -94,5 +95,24 @@ describe("tabLabels", () => {
 
   it("leaves a single workspace's name untouched", () => {
     expect(tabLabels([ws("/x/api", "api")])).toEqual(["api"]);
+  });
+});
+
+describe("shouldFlashWorkspaceTab", () => {
+  it("flashes a background tab whose terminal wants attention", () => {
+    expect(shouldFlashWorkspaceTab("/a", "/b", true)).toBe(true);
+  });
+
+  it("never flashes the active tab, even with attention pending", () => {
+    // The active codebase's terminals are on screen; its own pill flashes there.
+    expect(shouldFlashWorkspaceTab("/a", "/a", true)).toBe(false);
+  });
+
+  it("does not flash a tab with no attention", () => {
+    expect(shouldFlashWorkspaceTab("/a", "/b", false)).toBe(false);
+  });
+
+  it("flashes a background tab when nothing is active (defensive)", () => {
+    expect(shouldFlashWorkspaceTab("/a", null, true)).toBe(true);
   });
 });

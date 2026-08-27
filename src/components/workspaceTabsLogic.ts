@@ -53,6 +53,24 @@ export function closeOpenWorkspace(
   return { list, activeRoot: next?.root ?? null };
 }
 
+/**
+ * Whether a workspace tab should flash to signal that one of its terminals
+ * wants attention.
+ *
+ * Only a **background** tab flashes: the active codebase's terminals are on
+ * screen and their own minimized pill already flashes there, so re-flashing the
+ * active tab would be noise. Switching to a flashing tab makes it active and the
+ * flash stops on its own — the display is purely derived from these three
+ * inputs, so there is no separate "clear" step to keep in sync.
+ */
+export function shouldFlashWorkspaceTab(
+  root: string,
+  activeRoot: string | null,
+  hasAttention: boolean,
+): boolean {
+  return hasAttention && root !== activeRoot;
+}
+
 /** Split a root path into its non-empty segments, tolerating either separator. */
 function segments(root: string): string[] {
   return root.split(/[\\/]/).filter(Boolean);

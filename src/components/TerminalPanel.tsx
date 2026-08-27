@@ -31,6 +31,7 @@ export function TerminalPanel({
   cwd,
   index,
   onClose,
+  onAttentionChange,
 }: {
   title: string;
   /**
@@ -42,6 +43,12 @@ export function TerminalPanel({
   /** Position among the currently open terminals, for the cascade offset. */
   index: number;
   onClose: () => void;
+  /**
+   * Report this terminal's attention flag upward so its (possibly hidden)
+   * workspace tab can flash. Fired whenever the flag changes, and cleared to
+   * `false` when the terminal closes.
+   */
+  onAttentionChange?: (attention: boolean) => void;
 }) {
   const viewRef = useRef<TerminalViewHandle>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -75,6 +82,18 @@ export function TerminalPanel({
   const [exited, setExited] = useState(false);
 
   minimizedRef.current = minimized;
+
+  // Report the attention flag up so this terminal's workspace tab can flash
+  // even while the whole tab (and this pill) is hidden in the background.
+  useEffect(() => {
+    onAttentionChange?.(attention);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attention]);
+  // Closing the terminal clears its contribution to the tab's flash.
+  useEffect(() => {
+    return () => onAttentionChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Open the PTY once, and stream its output straight into the view. The
   // effect runs after the child TerminalView has mounted (child effects run
@@ -126,14 +145,13 @@ export function TerminalPanel({
             : `\r\n\x1b[${event.success ? 32 : 31}m[terminal exited: ${event.code}]\x1b[0m\r\n`;
         viewRef.current?.write(note);
         setExited(true);
-        // The exit is worth noticing if the pane is tucked away.
-        if (minimizedRef.current) setAttention(true);
+        // Exit/failure update the status line but do not flash: only the bell
+        // (handled in the output case) counts as the terminal asking for you.
         break;
       }
       case "failed":
         viewRef.current?.write(`\r\n\x1b[31m${event.message}\x1b[0m\r\n`);
         setError(event.message);
-        if (minimizedRef.current) setAttention(true);
         break;
     }
   }

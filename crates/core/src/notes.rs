@@ -100,14 +100,44 @@ pub fn load(path: &Path) -> NotesFile {
     serde_json::from_str(&text).unwrap_or_default()
 }
 
+/// A sibling of `path` with `suffix` appended to its file name
+/// (`notes.json` + `.tmp` → `notes.json.tmp`).
+fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(suffix);
+    path.with_file_name(name)
+}
+
 /// Write the notes to `path`, creating the parent directory if absent.
+///
+/// The write is **atomic and crash-safe**: the JSON is written to a sibling
+/// `.tmp` file and then renamed over the target, so a crash mid-write can never
+/// leave a truncated file — which, given the tolerant [`load`], would otherwise
+/// read back as an empty scratchpad and then be clobbered on the next save.
+/// `fs::rename` replaces the destination atomically on both Windows and POSIX.
+///
+/// As a second guard against that same cascade, replacing a **non-empty** file
+/// with an **empty** one first copies the previous content to a sibling `.bak`.
+/// A deliberate "delete all" still applies, but the old notes stay recoverable.
 pub fn save(path: &Path, notes: &NotesFile) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
+
+    if notes.notes.is_empty() && !load(path).notes.is_empty() {
+        // Best effort: a failed backup must not block the save itself.
+        let _ = std::fs::copy(path, sibling(path, ".bak"));
+    }
+
     let json = serde_json::to_string_pretty(notes).context("failed to serialise notes")?;
-    std::fs::write(path, format!("{json}\n")).with_context(|| format!("writing {}", path.display()))
+    let tmp = sibling(path, ".tmp");
+    std::fs::write(&tmp, format!("{json}\n"))
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ import type { Note } from "../ipc/types";
 import {
   addNote,
   deleteNote,
+  flushDelay,
   loadActiveId,
   makeNote,
   nextActiveAfterDelete,
@@ -134,5 +135,32 @@ describe("active-id persistence", () => {
     };
     expect(loadActiveId(boom)).toBeUndefined();
     expect(() => saveActiveId(boom, "x")).not.toThrow();
+  });
+});
+
+describe("flushDelay", () => {
+  const DEBOUNCE = 400;
+  const MAX_WAIT = 1500;
+
+  it("waits the full debounce when the pending write is young", () => {
+    // First keystroke of a burst: nothing is overdue, so debounce normally.
+    expect(flushDelay(1000, 1000, DEBOUNCE, MAX_WAIT)).toBe(DEBOUNCE);
+    expect(flushDelay(1000, 1200, DEBOUNCE, MAX_WAIT)).toBe(DEBOUNCE);
+  });
+
+  it("flushes immediately once the pending write exceeds the max wait", () => {
+    // Continuous typing past the cap must not defer the write forever.
+    expect(flushDelay(1000, 1000 + MAX_WAIT, DEBOUNCE, MAX_WAIT)).toBe(0);
+    expect(flushDelay(1000, 5000, DEBOUNCE, MAX_WAIT)).toBe(0);
+  });
+
+  it("caps the debounce so the write never lands after the max wait", () => {
+    // 200 ms into the window: a full 400 ms debounce would overshoot 1500 ms
+    // only near the end — here it clamps to the remaining budget.
+    expect(flushDelay(1000, 1000 + (MAX_WAIT - 200), DEBOUNCE, MAX_WAIT)).toBe(200);
+  });
+
+  it("never returns a negative delay", () => {
+    expect(flushDelay(1000, 10_000, DEBOUNCE, MAX_WAIT)).toBeGreaterThanOrEqual(0);
   });
 });
