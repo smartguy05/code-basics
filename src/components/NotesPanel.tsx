@@ -13,6 +13,7 @@ import {
 import {
   addNote,
   deleteNote,
+  flushDelay,
   loadActiveId,
   nextActiveAfterDelete,
   NOTES_LAYOUT_KEY,
@@ -24,6 +25,15 @@ import {
 
 /** How long after the last keystroke the notes are written to disk. */
 const AUTOSAVE_MS = 400;
+
+/**
+ * The longest a change may sit unsaved in memory. The trailing debounce alone
+ * would defer the write forever while the user types continuously; this cap
+ * forces a flush so a crash loses at most this much. Combined with the atomic,
+ * never-truncating write on the Rust side, notes survive a crash without any
+ * explicit save.
+ */
+const AUTOSAVE_MAX_WAIT_MS = 1500;
 
 /** Next sequence number for {@link addNote}: one past the highest `note-N` id. */
 function nextSeq(notes: Note[]): number {
@@ -65,6 +75,9 @@ export function NotesPanel({
 
   const seqRef = useRef(1);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // When the oldest still-unsaved change was made, so the debounce can be capped
+  // (see AUTOSAVE_MAX_WAIT_MS). Null when nothing is pending.
+  const pendingSince = useRef<number | null>(null);
   // The latest notes, so the unmount flush writes what is on screen without
   // re-subscribing the effect.
   const latestRef = useRef<Note[]>([]);
@@ -106,6 +119,26 @@ export function NotesPanel({
     };
   }, []);
 
+  // Flush a pending write when the window tears down (close, reload) — the
+  // React unmount cleanup above only runs on a graceful panel close, and misses
+  // the app quitting with the panel still open. Best effort: fire-and-forget,
+  // the timing of a teardown does not let us await it.
+  useEffect(() => {
+    const flush = () => {
+      if (!saveTimer.current) return; // nothing pending
+      clearTimeout(saveTimer.current);
+      saveTimer.current = undefined;
+      pendingSince.current = null;
+      void api.writeNotes({ version: 1, notes: latestRef.current }).catch(() => {});
+    };
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("beforeunload", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("beforeunload", flush);
+    };
+  }, []);
+
   // Persist the size the user drags the grip to (see ReviewPanel for the gate
   // reasoning). Shared key, so the panel reopens at its last size.
   useEffect(() => {
@@ -136,9 +169,13 @@ export function NotesPanel({
 
   const scheduleSave = (next: Note[]) => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (pendingSince.current === null) pendingSince.current = Date.now();
+    const delay = flushDelay(pendingSince.current, Date.now(), AUTOSAVE_MS, AUTOSAVE_MAX_WAIT_MS);
     saveTimer.current = setTimeout(() => {
+      saveTimer.current = undefined;
+      pendingSince.current = null;
       void api.writeNotes({ version: 1, notes: next }).catch(() => {});
-    }, AUTOSAVE_MS);
+    }, delay);
   };
 
   // Every note mutation goes through here: update the UI and schedule a write.

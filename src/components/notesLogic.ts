@@ -99,6 +99,30 @@ export function sendToAgentTitle(note: Note): string {
   return `Note: ${note.title}`;
 }
 
+/**
+ * How long to wait before flushing a pending notes write, in ms.
+ *
+ * Normally the trailing `debounceMs` after the last keystroke — but a
+ * trailing-only debounce, reset on every keystroke, would defer the write
+ * indefinitely while the user types continuously, so a crash could lose an
+ * unbounded amount of text. This caps the wait: once a pending write has been
+ * outstanding `maxWaitMs`, it flushes now (delay `0`), and near that cap the
+ * debounce is clamped so the write never lands later than the budget allows.
+ *
+ * `pendingSinceMs` is when the oldest unsaved change was made; `nowMs` is the
+ * current time (both injected, never read here, so the result is testable).
+ */
+export function flushDelay(
+  pendingSinceMs: number,
+  nowMs: number,
+  debounceMs: number,
+  maxWaitMs: number,
+): number {
+  const remaining = maxWaitMs - (nowMs - pendingSinceMs);
+  if (remaining <= 0) return 0;
+  return Math.min(debounceMs, remaining);
+}
+
 /** Read the remembered active-note id. Never throws (storage may be absent). */
 export function loadActiveId(storage: Pick<Storage, "getItem">): string | undefined {
   try {

@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { terminalKeyAction } from "./terminalLogic";
 
 /** Imperative surface the hosting panel drives. */
 export interface TerminalViewHandle {
@@ -85,6 +86,29 @@ export const TerminalView = forwardRef<
     // alone on purpose — in an interactive shell it is an interrupt (`\x03`),
     // not a copy, and xterm forwards it here as such.
     const dataSub = term.onData((data) => onDataRef.current(data));
+
+    // Copy/paste. A raw PTY terminal has none of its own, and Ctrl+C must stay
+    // the interrupt, so the usual terminal chords do it instead (see
+    // `terminalKeyAction`). Returning false stops xterm forwarding the chord to
+    // the shell; the clipboard calls are best-effort.
+    term.attachCustomKeyEventHandler((event) => {
+      const action = terminalKeyAction(event, term.hasSelection());
+      if (action === "copy") {
+        const selection = term.getSelection();
+        if (selection) void navigator.clipboard?.writeText(selection).catch(() => {});
+        return false;
+      }
+      if (action === "paste") {
+        void navigator.clipboard
+          ?.readText()
+          .then((text) => {
+            if (text) onDataRef.current(text);
+          })
+          .catch(() => {});
+        return false;
+      }
+      return true;
+    });
 
     termRef.current = term;
     fitRef.current = fit;

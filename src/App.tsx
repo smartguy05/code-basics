@@ -4,7 +4,12 @@ import { BranchMenu } from "./components/BranchMenu";
 import { MenuBar } from "./components/MenuBar";
 import { NotesPanel } from "./components/NotesPanel";
 import { WorkspaceTab, type WorkspaceTabHandle } from "./components/WorkspaceTab";
-import { addOpenWorkspace, closeOpenWorkspace, tabLabels } from "./components/workspaceTabsLogic";
+import {
+  addOpenWorkspace,
+  closeOpenWorkspace,
+  shouldFlashWorkspaceTab,
+  tabLabels,
+} from "./components/workspaceTabsLogic";
 import * as api from "./ipc/api";
 import { applyEditorFontSize, loadEditorFontSize } from "./editorFontSize";
 import { DEFAULT_EDITOR_FONT_SIZE, recogniseFontSizeShortcut, stepFontSize } from "./editorFontSizeLogic";
@@ -63,6 +68,9 @@ export function App() {
   const [recents, setRecents] = useState<string[]>(() => loadRecents(localStorage));
   const [loading, setLoading] = useState(true);
   const [notesOpen, setNotesOpen] = useState(false);
+  // Per-codebase terminal-attention flag, so a background tab can flash to show
+  // which project a minimized terminal's bell is coming from.
+  const [attentionByRoot, setAttentionByRoot] = useState<Record<string, boolean>>({});
 
   const activeWorkspace = openWorkspaces.find((w) => w.root === activeRoot) ?? null;
 
@@ -168,6 +176,7 @@ export function App() {
     }
     setOpenWorkspaces(next.list);
     setActiveRoot(next.activeRoot);
+    setAttentionByRoot(({ [root]: _closed, ...rest }) => rest);
   }
 
   /** Rescan the active workspace (re-detect projects/configs), keeping it live. */
@@ -281,7 +290,14 @@ export function App() {
       {/* The open-codebases tab strip, above each workspace's own inner tabs. */}
       <div className="tabs ws-tabs">
         {openWorkspaces.map((w, i) => (
-          <div key={w.root} className={`ws-tab ${w.root === activeRoot ? "active" : ""}`}>
+          <div
+            key={w.root}
+            className={`ws-tab ${w.root === activeRoot ? "active" : ""}${
+              shouldFlashWorkspaceTab(w.root, activeRoot, attentionByRoot[w.root] ?? false)
+                ? " attention"
+                : ""
+            }`}
+          >
             <button
               className="ws-tab-label"
               onClick={() => void activateWorkspace(w.root)}
@@ -315,6 +331,9 @@ export function App() {
           active={w.root === activeRoot}
           onWorkspaceChange={onWorkspaceChange}
           onRegister={registerTab}
+          onAttentionChange={(root, has) =>
+            setAttentionByRoot((prev) => ({ ...prev, [root]: has }))
+          }
         />
       ))}
 

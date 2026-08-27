@@ -61,14 +61,47 @@ export function terminalLayoutKey(root: string): string {
 /**
  * Whether a chunk of terminal output should raise the minimized panel's
  * attention flash. Only while minimized (a visible terminal already shows its
- * output), and only for output that actually contains something — an empty
- * string, which the stream can carry, is not a reason to flash.
+ * output), and only for the bell character (`\x07`) — a program ringing the
+ * bell is asking for attention by definition.
  *
- * The bell character (`\x07`) always counts: a program ringing the bell is
- * asking for attention by definition, even if that is all it sent.
+ * Ordinary output does **not** flash: a running terminal (a build, a TUI,
+ * `claude`) streams output constantly, so flashing on any of it would pulse the
+ * pill the whole time it runs and mean nothing. The bell is the one in-band
+ * signal that the terminal actually wants the user.
  */
 export function outputNeedsAttention(minimized: boolean, text: string): boolean {
   if (!minimized) return false;
-  if (text.includes(String.fromCharCode(7))) return true; // the bell
-  return text.length > 0;
+  return text.includes(String.fromCharCode(7)); // the bell — the only ask
+}
+
+/** What a key event should do in the terminal, once copy/paste is accounted for. */
+export type TerminalKeyAction = "copy" | "paste" | "passthrough";
+
+/** The parts of a keyboard event this decision reads — kept minimal so it is
+ * testable without a real `KeyboardEvent`. */
+export interface TerminalKeyEvent {
+  type: string;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  key: string;
+}
+
+/**
+ * Decide whether a key event copies the selection, pastes the clipboard, or is
+ * forwarded to the shell untouched.
+ *
+ * A raw PTY terminal has no copy/paste of its own, and `Ctrl+C` must stay the
+ * shell **interrupt**, not a copy — so copy/paste use the usual terminal chords
+ * instead: `Ctrl+Shift+C` / `Ctrl+Shift+V`, plus the Windows `Ctrl+Insert` /
+ * `Shift+Insert` pair. Everything else passes through. `Ctrl+Insert` only copies
+ * when there is a selection, so it does not swallow the key otherwise.
+ */
+export function terminalKeyAction(e: TerminalKeyEvent, hasSelection: boolean): TerminalKeyAction {
+  if (e.type !== "keydown") return "passthrough";
+  const key = e.key.toLowerCase();
+  if (e.ctrlKey && e.shiftKey && key === "c") return "copy";
+  if (e.ctrlKey && e.shiftKey && key === "v") return "paste";
+  if (e.ctrlKey && !e.shiftKey && key === "insert") return hasSelection ? "copy" : "passthrough";
+  if (e.shiftKey && !e.ctrlKey && key === "insert") return "paste";
+  return "passthrough";
 }

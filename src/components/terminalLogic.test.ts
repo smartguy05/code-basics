@@ -3,6 +3,7 @@ import {
   cascadeShift,
   makeTerminal,
   outputNeedsAttention,
+  terminalKeyAction,
   terminalLayoutKey,
 } from "./terminalLogic";
 
@@ -45,8 +46,10 @@ describe("outputNeedsAttention", () => {
     expect(outputNeedsAttention(false, String.fromCharCode(7))).toBe(false);
   });
 
-  it("flashes for real output while minimized", () => {
-    expect(outputNeedsAttention(true, "build finished")).toBe(true);
+  it("does not flash for ordinary output while minimized", () => {
+    // A running terminal streams output constantly; that is not the terminal
+    // asking for the user — only the bell is. Plain output must stay calm.
+    expect(outputNeedsAttention(true, "build finished")).toBe(false);
   });
 
   it("does not flash for an empty chunk while minimized", () => {
@@ -54,8 +57,55 @@ describe("outputNeedsAttention", () => {
     expect(outputNeedsAttention(true, "")).toBe(false);
   });
 
-  it("flashes on the bell even if that is all that was sent", () => {
+  it("flashes on the bell, even embedded in other output", () => {
     expect(outputNeedsAttention(true, String.fromCharCode(7))).toBe(true);
+    expect(outputNeedsAttention(true, `done${String.fromCharCode(7)}`)).toBe(true);
+  });
+});
+
+describe("terminalKeyAction", () => {
+  const keydown = (over: Partial<Record<string, unknown>>) => ({
+    type: "keydown",
+    ctrlKey: false,
+    shiftKey: false,
+    metaKey: false,
+    key: "",
+    ...over,
+  });
+
+  it("copies on Ctrl+Shift+C", () => {
+    expect(terminalKeyAction(keydown({ ctrlKey: true, shiftKey: true, key: "C" }), true)).toBe("copy");
+    // The chord copies regardless of case reported by the platform.
+    expect(terminalKeyAction(keydown({ ctrlKey: true, shiftKey: true, key: "c" }), false)).toBe("copy");
+  });
+
+  it("pastes on Ctrl+Shift+V", () => {
+    expect(terminalKeyAction(keydown({ ctrlKey: true, shiftKey: true, key: "v" }), false)).toBe("paste");
+  });
+
+  it("leaves plain Ctrl+C as the shell interrupt (passthrough)", () => {
+    // The whole point: Ctrl+C must still interrupt, not copy.
+    expect(terminalKeyAction(keydown({ ctrlKey: true, key: "c" }), true)).toBe("passthrough");
+  });
+
+  it("copies on Ctrl+Insert only when there is a selection", () => {
+    expect(terminalKeyAction(keydown({ ctrlKey: true, key: "Insert" }), true)).toBe("copy");
+    expect(terminalKeyAction(keydown({ ctrlKey: true, key: "Insert" }), false)).toBe("passthrough");
+  });
+
+  it("pastes on Shift+Insert", () => {
+    expect(terminalKeyAction(keydown({ shiftKey: true, key: "Insert" }), false)).toBe("paste");
+  });
+
+  it("passes ordinary keystrokes through untouched", () => {
+    expect(terminalKeyAction(keydown({ key: "a" }), false)).toBe("passthrough");
+    expect(terminalKeyAction(keydown({ ctrlKey: true, key: "l" }), false)).toBe("passthrough");
+  });
+
+  it("only acts on keydown, never keyup/keypress", () => {
+    expect(terminalKeyAction(keydown({ type: "keyup", ctrlKey: true, shiftKey: true, key: "c" }), true)).toBe(
+      "passthrough",
+    );
   });
 });
 

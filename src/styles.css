@@ -219,6 +219,27 @@ textarea:focus {
   border-bottom-color: var(--accent);
   background: var(--bg-raised);
 }
+/* A background codebase whose minimized terminal rang the bell: flash the tab
+   so the user sees which project is asking. Uses the same amber as the panel
+   flash but without the pill's drop shadow, which would look wrong in the strip.
+   The active accent border is left intact underneath. */
+.ws-tab.attention {
+  animation: ws-tab-flash 0.9s ease-in-out infinite;
+}
+@keyframes ws-tab-flash {
+  0%,
+  100% {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+  50% {
+    background: #7a4b00;
+    box-shadow: inset 0 0 0 1px #ffb020;
+  }
+}
+.ws-tab.attention .ws-tab-label {
+  color: var(--text);
+}
 .ws-tab-label {
   background: transparent;
   border: none;

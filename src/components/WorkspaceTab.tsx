@@ -71,6 +71,7 @@ export function WorkspaceTab({
   active,
   onWorkspaceChange,
   onRegister,
+  onAttentionChange,
 }: {
   workspace: Workspace;
   /** Whether this is the foreground tab. Drives `hidden` and gates listeners. */
@@ -79,6 +80,11 @@ export function WorkspaceTab({
   onWorkspaceChange: (workspace: Workspace) => void;
   /** Register (or, with `null`, unregister) this tab's action handle with `App`. */
   onRegister: (root: string, handle: WorkspaceTabHandle | null) => void;
+  /**
+   * Report whether any of this codebase's terminals wants attention, so `App`
+   * can flash this tab in the top strip when it is not the foreground one.
+   */
+  onAttentionChange: (root: string, hasAttention: boolean) => void;
 }) {
   const [tab, setTab] = useState<Tab>("run");
   const [showSetup, setShowSetup] = useState(false);
@@ -106,6 +112,29 @@ export function WorkspaceTab({
 
   const [terminals, setTerminals] = useState<TerminalDescriptor[]>([]);
   const terminalSeq = useRef(0);
+
+  // Which of this codebase's terminals currently want attention (bell while
+  // minimized). Aggregated so `App` flashes the tab while any of them does.
+  const [attentionKeys, setAttentionKeys] = useState<Set<string>>(() => new Set());
+  const setTerminalAttention = (key: string, wants: boolean) =>
+    setAttentionKeys((prev) => {
+      if (prev.has(key) === wants) return prev; // no change, keep the reference
+      const next = new Set(prev);
+      if (wants) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+
+  const hasAttention = attentionKeys.size > 0;
+  // Push the aggregate up; clear it when this tab unmounts (codebase closed).
+  useEffect(() => {
+    onAttentionChange(workspace.root, hasAttention);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasAttention, workspace.root]);
+  useEffect(() => {
+    return () => onAttentionChange(workspace.root, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function nextToken() {
     requestToken.current += 1;
@@ -313,6 +342,7 @@ export function WorkspaceTab({
           cwd={t.cwd}
           index={index}
           onClose={() => closeTerminal(t.key)}
+          onAttentionChange={(wants) => setTerminalAttention(t.key, wants)}
         />
       ))}
     </div>
