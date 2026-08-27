@@ -5,11 +5,13 @@ import {
   deleteNote,
   flushDelay,
   loadActiveId,
+  loadPillColor,
   makeNote,
   nextActiveAfterDelete,
   renameNote,
   resolveActiveId,
   saveActiveId,
+  savePillColor,
   sendToAgentTitle,
   updateBody,
   UNTITLED,
@@ -135,6 +137,57 @@ describe("active-id persistence", () => {
     };
     expect(loadActiveId(boom)).toBeUndefined();
     expect(() => saveActiveId(boom, "x")).not.toThrow();
+  });
+});
+
+describe("pill-color persistence", () => {
+  const makeStore = () => {
+    const store = new Map<string, string>();
+    return {
+      store,
+      storage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+      },
+    };
+  };
+
+  it("round-trips a colour through a storage stub", () => {
+    const { storage } = makeStore();
+    expect(loadPillColor(storage)).toBeUndefined();
+    savePillColor(storage, "#7a4b00");
+    expect(loadPillColor(storage)).toBe("#7a4b00");
+  });
+
+  it("clears back to the default when saved undefined", () => {
+    const { storage } = makeStore();
+    savePillColor(storage, "#123456");
+    savePillColor(storage, undefined);
+    expect(loadPillColor(storage)).toBeUndefined();
+  });
+
+  it("reads an empty stored value as no colour", () => {
+    const { store, storage } = makeStore();
+    store.set("cb.notes.pillColor", "");
+    expect(loadPillColor(storage)).toBeUndefined();
+  });
+
+  it("never throws when storage is unavailable", () => {
+    const boom = {
+      getItem: () => {
+        throw new Error("nope");
+      },
+      setItem: () => {
+        throw new Error("nope");
+      },
+      removeItem: () => {
+        throw new Error("nope");
+      },
+    };
+    expect(loadPillColor(boom)).toBeUndefined();
+    expect(() => savePillColor(boom, "#fff")).not.toThrow();
+    expect(() => savePillColor(boom, undefined)).not.toThrow();
   });
 });
 

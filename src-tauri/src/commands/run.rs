@@ -69,7 +69,16 @@ pub async fn start_run(
     forward(rx, channel);
 
     slot.supervisor
-        .run(&config_id, &invocation, tx)
+        .run_tracked(
+            &config_id,
+            &invocation,
+            tx,
+            cb_core::running::RunMeta {
+                root: slot.root.display().to_string(),
+                label: config.name.clone(),
+                kind: cb_core::running::RunKind::Run,
+            },
+        )
         .await
         .map(|_| ())
         .map_err(|e| format!("{e:#}"))
@@ -108,12 +117,19 @@ async fn start_compound(
         forward(rx, channel.clone());
 
         let supervisor = slot.supervisor.clone();
+        let meta = cb_core::running::RunMeta {
+            root: slot.root.display().to_string(),
+            label: member.name.clone(),
+            kind: cb_core::running::RunKind::Run,
+        };
+        let member_id = member.id.clone();
+        let member_name = member.name.clone();
         handles.push(tokio::spawn(async move {
             supervisor
-                .run(&member.id, &invocation, tx)
+                .run_tracked(&member_id, &invocation, tx, meta)
                 .await
                 .map(|_| ())
-                .map_err(|e| format!("{}: {e:#}", member.name))
+                .map_err(|e| format!("{member_name}: {e:#}"))
         }));
     }
 
@@ -167,7 +183,16 @@ pub async fn build_project(
     forward(rx, channel);
 
     slot.supervisor
-        .run(&format!("{config_id}:build"), &invocation, tx)
+        .run_tracked(
+            &format!("{config_id}:build"),
+            &invocation,
+            tx,
+            cb_core::running::RunMeta {
+                root: slot.root.display().to_string(),
+                label: format!("{} (build)", config.name),
+                kind: cb_core::running::RunKind::Build,
+            },
+        )
         .await
         .map(|_| ())
         .map_err(|e| format!("{e:#}"))

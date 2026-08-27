@@ -11,6 +11,8 @@
  * editor branches its IO — and whether it talks to a language server at all — on
  * the variant.
  */
+import type { Project } from "../ipc/types";
+
 export type EditorSource =
   | { kind: "workspace"; path: string }
   | { kind: "secrets"; project: string };
@@ -46,6 +48,19 @@ export function workspaceFile(path: string): OpenEditorFile {
 /** A project's user secrets, opened as a `secrets.json` tab. */
 export function secretsFile(project: string): OpenEditorFile {
   return { id: `secrets:${project}`, name: "secrets.json", source: { kind: "secrets", project } };
+}
+
+/**
+ * The .NET projects whose user secrets can be opened, in scan order.
+ *
+ * Secrets are a .NET concept, and an unreadable project's manifest never parsed
+ * — there is nothing to attach a `<UserSecretsId>` to — so those are excluded.
+ * This is what the Run toolbar's Secrets picker lists: **every** .NET project in
+ * the workspace, not just the one behind the selected run configuration, so a
+ * folder with several projects can reach any of their secrets.
+ */
+export function secretsProjects(projects: Project[]): Project[] {
+  return projects.filter((p) => p.ecosystem === "dotnet" && !p.unreadable);
 }
 
 /**

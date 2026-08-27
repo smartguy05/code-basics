@@ -15,13 +15,16 @@ import {
   deleteNote,
   flushDelay,
   loadActiveId,
+  loadPillColor,
   nextActiveAfterDelete,
   NOTES_LAYOUT_KEY,
   renameNote,
   resolveActiveId,
   saveActiveId,
+  savePillColor,
   updateBody,
 } from "./notesLogic";
+import { PillColorMenu } from "./PillColorMenu";
 
 /** How long after the last keystroke the notes are written to disk. */
 const AUTOSAVE_MS = 400;
@@ -72,6 +75,14 @@ export function NotesPanel({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [minimized, setMinimized] = useState(false);
+  // The minimized-bar colour, persisted (the Notes panel is long-lived, unlike
+  // an ephemeral terminal). Undefined is the theme default.
+  const [pillColor, setPillColor] = useState<string | undefined>(() => loadPillColor(localStorage));
+
+  const recolor = (color: string | undefined) => {
+    setPillColor(color);
+    savePillColor(localStorage, color);
+  };
 
   const seqRef = useRef(1);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -261,6 +272,7 @@ export function NotesPanel({
           className="review-pill notes-pill"
           onClick={() => setMinimized(false)}
           title="Restore notes"
+          style={pillColor ? { background: pillColor } : undefined}
         >
           <span>Notes</span>
         </button>
@@ -278,6 +290,7 @@ export function NotesPanel({
         <div className="review-header" onPointerDown={onHeaderPointerDown}>
           <strong>Notes</strong>
           <span style={{ flex: 1 }} />
+          <PillColorMenu color={pillColor} onPick={recolor} title="Set the minimized bar colour" />
           <button onClick={() => setMinimized(true)} title="Minimize (keeps your notes)">
             —
           </button>

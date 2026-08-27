@@ -1,13 +1,11 @@
-import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useState } from "react";
 import type { RunConfig } from "../ipc/types";
 
 /**
- * The titlebar's run-configuration dropdown, next to the branch widget.
- *
- * Rendered by the Run view (which owns the selection, status and process
- * state) but displayed in the titlebar via a portal into `#run-config-slot`,
- * so the state survives tab switches without being lifted out of RunView.
+ * The run-configuration dropdown, shown in the Run view's toolbar beside the
+ * environment picker. It lives in the toolbar (not the titlebar) so the config
+ * you pick sits next to the environment you run it in; the Run view owns the
+ * selection, status and process state it renders from.
  */
 export function RunConfigMenu({
   configs,
@@ -16,7 +14,6 @@ export function RunConfigMenu({
   dotClass,
   canMove,
   groupLabel,
-  active,
   onSelect,
   onToggleFavorite,
   onMove,
@@ -24,12 +21,6 @@ export function RunConfigMenu({
   onImport,
 }: {
   configs: RunConfig[];
-  /**
-   * Whether this Run view's workspace is the foreground tab. Only the active
-   * tab's menu portals into the single `#run-config-slot`, so several open
-   * codebases do not stack their dropdowns in one titlebar.
-   */
-  active: boolean;
   selectedId: string | null;
   favorites: Set<string>;
   /** Status-dot class for a config: grey idle, yellow busy, green up, red failed. */
@@ -51,19 +42,11 @@ export function RunConfigMenu({
   onImport: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [slot, setSlot] = useState<HTMLElement | null>(null);
-
-  // The slot is rendered by App in the same tree; it exists by effect time.
-  useEffect(() => {
-    setSlot(document.getElementById("run-config-slot"));
-  }, []);
-
-  if (!slot || !active) return null;
 
   const selected = configs.find((c) => c.id === selectedId) ?? null;
 
-  return createPortal(
-    <div className="dropdown">
+  return (
+    <div className="dropdown run-config-menu">
       <button
         onClick={() => setOpen((was) => !was)}
         title="Run configurations — select, reorder, create, import"
@@ -173,7 +156,6 @@ export function RunConfigMenu({
           </div>
         </>
       )}
-    </div>,
-    slot,
+    </div>
   );
 }

@@ -51,6 +51,9 @@ pub async fn terminal_open(
     cwd: Option<String>,
     cols: u16,
     rows: u16,
+    // The terminal's initial title, shown in the Running panel and recorded for
+    // orphan recovery. A rename later calls `terminal_set_label`.
+    label: Option<String>,
     channel: Channel<TerminalEvent>,
 ) -> Result<String, String> {
     // A terminal does not require an open workspace (a bare shell is useful on
@@ -74,11 +77,36 @@ pub async fn terminal_open(
     let (tx, rx) = mpsc::channel(512);
     forward(rx, channel);
 
+    // The record's root is the terminal's cwd — the workspace root for a
+    // workspace terminal, so it groups with that codebase's runs in the panel.
+    let meta = cb_core::running::RunMeta {
+        root: spec.cwd.display().to_string(),
+        label: label
+            .filter(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| "Terminal".into()),
+        kind: cb_core::running::RunKind::Terminal,
+    };
+
     state
         .pty
-        .open(&id, spec, tx)
+        .open_tracked(&id, spec, tx, meta)
         .map_err(|e| format!("{e:#}"))?;
     Ok(id)
+}
+
+/// Update a terminal's label in the running-process registry after the user
+/// renames it, so the Running panel shows the new title. `root` is the
+/// terminal's cwd (the record key alongside the session id). A no-op if the
+/// terminal is not tracked (already gone).
+#[tauri::command]
+pub async fn terminal_set_label(
+    state: State<'_, AppState>,
+    id: String,
+    root: String,
+    label: String,
+) -> Result<(), String> {
+    state.running.update_label(&root, &id, &label);
+    Ok(())
 }
 
 /// Send keystrokes to a terminal.

@@ -3,6 +3,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { BranchMenu } from "./components/BranchMenu";
 import { MenuBar } from "./components/MenuBar";
 import { NotesPanel } from "./components/NotesPanel";
+import { RunningPanel } from "./components/RunningPanel";
+import { liveCount } from "./components/runningLogic";
 import { WorkspaceTab, type WorkspaceTabHandle } from "./components/WorkspaceTab";
 import {
   addOpenWorkspace,
@@ -14,7 +16,7 @@ import * as api from "./ipc/api";
 import { applyEditorFontSize, loadEditorFontSize } from "./editorFontSize";
 import { DEFAULT_EDITOR_FONT_SIZE, recogniseFontSizeShortcut, stepFontSize } from "./editorFontSizeLogic";
 import { loadRecents, rememberRecent } from "./recentsLogic";
-import type { InspectTarget, RootSpec, Workspace } from "./ipc/types";
+import type { InspectTarget, RootSpec, RunningReport, Workspace } from "./ipc/types";
 
 /**
  * A jump into the Objects tab raised from somewhere else in a workspace tab.
@@ -68,6 +70,11 @@ export function App() {
   const [recents, setRecents] = useState<string[]>(() => loadRecents(localStorage));
   const [loading, setLoading] = useState(true);
   const [notesOpen, setNotesOpen] = useState(false);
+  // The Running panel and the report it renders. The report is polled here (not
+  // in the panel) so the titlebar badge stays live even while the panel is
+  // closed; `list_running` is a cheap in-memory read.
+  const [runningOpen, setRunningOpen] = useState(false);
+  const [runningReport, setRunningReport] = useState<RunningReport | null>(null);
   // Per-codebase terminal-attention flag, so a background tab can flash to show
   // which project a minimized terminal's bell is coming from.
   const [attentionByRoot, setAttentionByRoot] = useState<Record<string, boolean>>({});
@@ -90,6 +97,31 @@ export function App() {
   const onWorkspaceChange = useCallback((ws: Workspace) => {
     setOpenWorkspaces((list) => list.map((w) => (w.root === ws.root ? ws : w)));
   }, []);
+
+  /** Re-read the running set (for the badge and the panel). */
+  const refreshRunning = useCallback(() => {
+    api.listRunning().then(setRunningReport).catch(() => {});
+  }, []);
+
+  /** Kill one process from the panel, then refresh. A refusal (a reused pid) is
+   *  surfaced as the app error banner. */
+  const killRunningEntry = useCallback(
+    (req: Parameters<typeof api.killRunning>[0]) => {
+      api
+        .killRunning(req)
+        .catch((e) => setError(api.errorMessage(e)))
+        .finally(refreshRunning);
+    },
+    [refreshRunning],
+  );
+
+  // Poll the running set on a steady cadence so the titlebar badge stays live
+  // even while the panel is closed; `list_running` is a cheap in-memory read.
+  useEffect(() => {
+    refreshRunning();
+    const timer = setInterval(refreshRunning, 2000);
+    return () => clearInterval(timer);
+  }, [refreshRunning]);
 
   /**
    * The editor font size: restored on start and driven by Ctrl+= / Ctrl+- /
@@ -251,18 +283,9 @@ export function App() {
         />
 
         {activeWorkspace && (
-          <>
-            <span className="workspace-name">{activeWorkspace.name}</span>
-            <span className="faint mono" style={{ fontSize: 11 }}>
-              {activeWorkspace.root}
-            </span>
-            {/* Keyed by the active root, so switching codebases re-reads branches. */}
-            <BranchMenu key={activeRoot ?? ""} />
-          </>
+          /* Keyed by the active root, so switching codebases re-reads branches. */
+          <BranchMenu key={activeRoot ?? ""} />
         )}
-
-        {/* The foreground Run view portals its configuration dropdown here. */}
-        <div id="run-config-slot" />
 
         <div className="spacer" />
 
@@ -274,6 +297,15 @@ export function App() {
         )}
         <button onClick={() => setNotesOpen(true)} title="Open the notes / scratchpad panel">
           Notes
+        </button>
+        <button
+          onClick={() => setRunningOpen(true)}
+          title="Show everything the app is running (and possible orphans)"
+        >
+          Running
+          {liveCount(runningReport) > 0 && (
+            <span className="running-badge">{liveCount(runningReport)}</span>
+          )}
         </button>
         <button
           onClick={() => activeHandle()?.openTerminal()}
@@ -345,6 +377,30 @@ export function App() {
           onSendToAgent={(note) => activeHandle()?.openNoteInAgent(note)}
         />
       )}
+
+      {/* The global Running panel — everything the app is running across all open
+          codebases, plus crash-orphan candidates. One instance, open/close only. */}
+      {runningOpen && (
+        <RunningPanel
+          report={runningReport}
+          onKill={killRunningEntry}
+          onRefresh={refreshRunning}
+          onClose={() => setRunningOpen(false)}
+        />
+      )}
+
+      {/* Bottom status bar: the active codebase's folder name and full path,
+          moved here from the titlebar. */}
+      <div className="statusbar">
+        {activeWorkspace && (
+          <>
+            <span className="workspace-name">{activeWorkspace.name}</span>
+            <span className="faint mono statusbar-path" title={activeWorkspace.root}>
+              {activeWorkspace.root}
+            </span>
+          </>
+        )}
+      </div>
     </div>
   );
 }

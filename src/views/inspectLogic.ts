@@ -3,7 +3,48 @@ import type {
   Attribution,
   InspectGraph,
   InspectNode,
+  InspectTarget,
 } from "../ipc/types";
+
+/**
+ * localStorage key under which "Don't warn me again" for the live-attach cost
+ * is remembered. Machine-global, not per-workspace: the cost of attaching (a
+ * pause and a memory spike) is a property of the machine, not the repository —
+ * the same reasoning that makes it a single flag rather than one per root.
+ */
+export const ATTACH_WARN_KEY = "cb.inspect.attachWarn.suppressed";
+
+/**
+ * Whether to confirm before a capture actually attaches.
+ *
+ * Only a **live** target attaches to a running process, so only a live target
+ * carries the pause-and-memory-spike cost the confirmation exists to flag — a
+ * dump is a file already on disk and never prompts. Once the user has ticked
+ * "Don't warn me again", `suppressed` is true and even a live capture proceeds
+ * straight through, so the warning is a one-time heads-up rather than a nag.
+ */
+export function shouldConfirmAttach(target: InspectTarget, suppressed: boolean): boolean {
+  return target.kind === "live" && !suppressed;
+}
+
+/** Has the user chosen "Don't warn me again" for the live-attach cost? */
+export function isAttachWarnSuppressed(storage: Pick<Storage, "getItem">): boolean {
+  try {
+    return storage.getItem(ATTACH_WARN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Remember "Don't warn me again" for the live-attach cost. Never throws. */
+export function suppressAttachWarn(storage: Pick<Storage, "setItem">): void {
+  try {
+    storage.setItem(ATTACH_WARN_KEY, "1");
+  } catch {
+    // A storage that refuses writes just means we warn again next time — no
+    // worse than before, and not worth surfacing.
+  }
+}
 
 /**
  * The order the processes of one configuration are *displayed* in — never a

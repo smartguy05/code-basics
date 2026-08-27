@@ -2,11 +2,28 @@ import { describe, expect, it } from "vitest";
 import {
   EMPTY_SECRETS,
   secretsFile,
+  secretsProjects,
   sourceEnablesLsp,
   sourceLanguageHint,
   workspaceFile,
   type EditorSource,
 } from "./editorSourceLogic";
+import type { Project } from "../ipc/types";
+
+/** A minimal Project stub — only the fields secretsProjects reads matter. */
+function proj(over: Partial<Project> & Pick<Project, "id" | "ecosystem">): Project {
+  return {
+    name: over.id,
+    manifestPath: `${over.id}.csproj`,
+    dir: ".",
+    kind: "library",
+    frameworks: [],
+    configurations: [],
+    isTestProject: false,
+    testRunner: null,
+    ...over,
+  } as Project;
+}
 
 describe("workspaceFile", () => {
   it("uses the path as identity and the base name as the label", () => {
@@ -60,6 +77,38 @@ describe("sourceLanguageHint", () => {
   it("is a .json name for secrets, so the tab gets JSON highlighting", () => {
     const source: EditorSource = { kind: "secrets", project: "a.csproj" };
     expect(sourceLanguageHint(source)).toBe("secrets.json");
+  });
+});
+
+describe("secretsProjects", () => {
+  it("returns every readable .NET project, so a picker can list them all", () => {
+    const projects = [
+      proj({ id: "Api", ecosystem: "dotnet" }),
+      proj({ id: "Worker", ecosystem: "dotnet" }),
+      proj({ id: "web", ecosystem: "node" }),
+    ];
+    expect(secretsProjects(projects).map((p) => p.id)).toEqual(["Api", "Worker"]);
+  });
+
+  it("excludes non-.NET projects", () => {
+    const projects = [proj({ id: "web", ecosystem: "node" }), proj({ id: "cli", ecosystem: "cargo" })];
+    expect(secretsProjects(projects)).toEqual([]);
+  });
+
+  it("excludes an unreadable .NET project (its manifest never parsed)", () => {
+    const projects = [
+      proj({ id: "Ok", ecosystem: "dotnet" }),
+      proj({ id: "Broken", ecosystem: "dotnet", unreadable: "could not parse" }),
+    ];
+    expect(secretsProjects(projects).map((p) => p.id)).toEqual(["Ok"]);
+  });
+
+  it("preserves scan order", () => {
+    const projects = [
+      proj({ id: "B", ecosystem: "dotnet" }),
+      proj({ id: "A", ecosystem: "dotnet" }),
+    ];
+    expect(secretsProjects(projects).map((p) => p.id)).toEqual(["B", "A"]);
   });
 });
 

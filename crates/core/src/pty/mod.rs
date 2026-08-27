@@ -51,11 +51,23 @@ struct PtySession {
 #[derive(Clone, Default)]
 pub struct PtyManager {
     sessions: Arc<Mutex<HashMap<String, PtySession>>>,
+    /// The running-process registry, when terminals should feed the Running
+    /// panel and crash-orphan file. `None` for the plain manager the pty tests
+    /// use, which records nothing.
+    store: Option<crate::running::RunningStore>,
 }
 
 impl PtyManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A manager that records its terminals into `store` (see [`PtyManager::open_tracked`]).
+    pub fn with_store(store: crate::running::RunningStore) -> Self {
+        Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            store: Some(store),
+        }
     }
 
     /// Open a terminal running `spec` and stream its output to `events`.
@@ -70,6 +82,31 @@ impl PtyManager {
     /// waits on the child and reports the exit. Both send over `events` with
     /// `blocking_send`, which is legal off the async runtime.
     pub fn open(&self, id: &str, spec: PtySpec, events: mpsc::Sender<TerminalEvent>) -> Result<()> {
+        self.open_inner(id, spec, events, None)
+    }
+
+    /// As [`PtyManager::open`], but also record the terminal in the running-process
+    /// registry (if this manager has one) so it shows in the Running panel and is
+    /// recoverable as an orphan after a crash. `meta` carries the workspace root
+    /// and the initial title; a later rename is reflected with
+    /// [`crate::running::RunningStore::update_label`].
+    pub fn open_tracked(
+        &self,
+        id: &str,
+        spec: PtySpec,
+        events: mpsc::Sender<TerminalEvent>,
+        meta: crate::running::RunMeta,
+    ) -> Result<()> {
+        self.open_inner(id, spec, events, Some(meta))
+    }
+
+    fn open_inner(
+        &self,
+        id: &str,
+        spec: PtySpec,
+        events: mpsc::Sender<TerminalEvent>,
+        meta: Option<crate::running::RunMeta>,
+    ) -> Result<()> {
         let (cols, rows) = shell::clamp_size(spec.cols, spec.rows);
 
         let pty_system = native_pty_system();
@@ -135,6 +172,12 @@ impl PtyManager {
             },
         );
 
+        // Record in the running-process registry, if tracked. Only with a pid —
+        // a pid-less terminal cannot be found, killed or identity-checked later.
+        if let (Some(store), Some(meta), Some(pid)) = (&self.store, &meta, pid) {
+            store.record(crate::running::observe(pid, id, meta.clone(), &spec.shell));
+        }
+
         // Reader: raw bytes → decoded chunks → Output events, to EOF.
         let out_events = events.clone();
         std::thread::spawn(move || pump_reader(reader, out_events));
@@ -144,6 +187,10 @@ impl PtyManager {
         // `std::sync::Mutex` is why this needs no runtime handle.
         let sessions = Arc::clone(&self.sessions);
         let id = id.to_string();
+        // Move the registry handle + root into the waiter so the reap also
+        // deregisters the terminal from the Running panel and orphan file.
+        let store = self.store.clone();
+        let root = meta.map(|m| m.root);
         std::thread::spawn(move || {
             let event = match child.wait() {
                 Ok(status) => TerminalEvent::Exited {
@@ -157,6 +204,9 @@ impl PtyManager {
             // Remove before announcing, so a client acting on the exit sees the
             // session already gone.
             sessions.lock().unwrap().remove(&id);
+            if let (Some(store), Some(root)) = (&store, &root) {
+                store.remove(root, &id);
+            }
             let _ = events.blocking_send(event);
         });
 

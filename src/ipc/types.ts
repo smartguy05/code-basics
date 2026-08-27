@@ -228,6 +228,42 @@ export type TerminalEvent =
   | { type: "failed"; message: string };
 
 // ---------------------------------------------------------------------------
+// Running processes (the Running panel)
+// ---------------------------------------------------------------------------
+
+/**
+ * What kind of process a running record describes. Mirrors the Rust
+ * `running::RunKind`, pinned by `crates/core/src/running/record.rs`. Named
+ * `ProcessKind` here because `RunKind` ("app" | "test") is already taken by the
+ * run-configuration kind above.
+ */
+export type ProcessKind = "run" | "build" | "terminal" | "review" | "behavioral";
+
+/**
+ * One process the app has running (or an orphan candidate). Mirrors the Rust
+ * `RunningRecord`. `key` is the handle the app addresses a live process by (the
+ * supervisor config id, or the PTY session id); `root` is the workspace it
+ * belongs to; `program` + `startedAtMs` are the identity used to guard against
+ * killing a reused pid.
+ */
+export interface RunningRecord {
+  pid: number;
+  kind: ProcessKind;
+  label: string;
+  root: string;
+  key: string;
+  program: string;
+  startedAtMs: number;
+}
+
+/** What `list_running` returns. Mirrors the Rust `RunningReport`. */
+export interface RunningReport {
+  live: RunningRecord[];
+  orphans: RunningRecord[];
+  warnings: string[];
+}
+
+// ---------------------------------------------------------------------------
 // Git
 // ---------------------------------------------------------------------------
 

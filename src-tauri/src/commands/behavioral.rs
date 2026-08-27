@@ -157,7 +157,14 @@ async fn run_http_side(
     let run_handle = {
         let sup = state.supervisor.clone();
         let run_id = id.clone();
-        tokio::spawn(async move { sup.run(&run_id, &invocation, tx).await })
+        // Tracked so a behavioral server that is left running (or orphaned by a
+        // crash mid-replay) shows in the Running panel and can be killed there.
+        let meta = cb_core::running::RunMeta {
+            root: invocation.cwd.display().to_string(),
+            label: format!("Behavioral: {}", config.name),
+            kind: cb_core::running::RunKind::Behavioral,
+        };
+        tokio::spawn(async move { sup.run_tracked(&run_id, &invocation, tx, meta).await })
     };
 
     // reqwest::blocking must not run on the async executor.

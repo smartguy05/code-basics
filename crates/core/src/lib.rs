@@ -27,6 +27,7 @@ pub mod pty;
 pub mod qgate;
 pub mod review;
 pub mod rules;
+pub mod running;
 pub mod secrets;
 pub mod setup;
 pub mod symbols;

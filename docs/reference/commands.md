@@ -99,11 +99,21 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `terminal_open` | `cwd: String?`, `cols: u16`, `rows: u16`, `channel: Channel<TerminalEvent>` | `String` (session id) | Opens a shell (`default_shell`: `pwsh`→`powershell`→`cmd` on Windows, `$SHELL`→`bash`→`sh` on Unix) in `cwd` (defaults to the open workspace, else home). One merged output stream — no stdout/stderr split, no `started` banner |
+| `terminal_open` | `cwd: String?`, `cols: u16`, `rows: u16`, `label: String?`, `channel: Channel<TerminalEvent>` | `String` (session id) | Opens a shell (`default_shell`: `pwsh`→`powershell`→`cmd` on Windows, `$SHELL`→`bash`→`sh` on Unix) in `cwd` (defaults to the open workspace, else home). One merged output stream — no stdout/stderr split, no `started` banner. `label` is the initial title recorded for the Running panel |
 | `terminal_write` | `id: String`, `data: String` | `()` | Sends keystrokes (Enter is `\r`). Errors if the session is gone |
 | `terminal_resize` | `id: String`, `cols: u16`, `rows: u16` | `()` | Resizes the PTY; a no-op if the session is gone |
 | `terminal_close` | `id: String` | `bool` | Kills the process **tree** (so a shell's `claude`/`node` children die too); `false` if nothing was open |
 | `terminal_list` | – | `String[]` | Ids of every open terminal |
+| `terminal_set_label` | `id: String`, `root: String`, `label: String` | `()` | Updates a terminal's title in the running-process registry after a rename, so the Running panel shows it |
+
+## Running processes
+
+The Running panel: what the app has running now (across every open codebase) plus crash-orphan candidates from a previous session.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `list_running` | – | `RunningReport` | `{ live, orphans, warnings }` — the live set (runs, builds, terminals, review, behavioral), orphan candidates from a previous session, and any PID-reuse warnings. A cheap in-memory read |
+| `kill_running` | `pid: u32`, `kind: RunKind`, `root: String`, `key: String`, `orphan: bool` | `bool` | Routes the kill: a live run/build cancels via its codebase supervisor, a terminal closes via the PTY manager, review/behavioral via the global supervisor; an orphan is killed by pid **only after** an identity re-check (name + start time), refusing a reused pid |
 
 ## Git
 

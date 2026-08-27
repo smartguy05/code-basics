@@ -151,7 +151,11 @@ fn changed_paths(root: &Path) -> Vec<String> {
         &["ls-files", "--others", "--exclude-standard"],
     ];
     for args in runs {
-        if let Ok(output) = Command::new("git").args(args).current_dir(root).output() {
+        let mut cmd = Command::new("git");
+        cmd.args(args).current_dir(root);
+        #[cfg(windows)]
+        cb_core::process::no_window(&mut cmd);
+        if let Ok(output) = cmd.output() {
             if output.status.success() {
                 for line in String::from_utf8_lossy(&output.stdout).lines() {
                     let path = line.trim();
@@ -198,11 +202,11 @@ fn erosion_reminder(root: &Path) -> Option<String> {
 /// guess.
 fn failing_output(gate: Gate, root: &Path) -> Option<String> {
     let (program, args) = gate.command();
-    let output = Command::new(resolve_program(program))
-        .args(&args)
-        .current_dir(root)
-        .output()
-        .ok()?;
+    let mut cmd = Command::new(resolve_program(program));
+    cmd.args(&args).current_dir(root);
+    #[cfg(windows)]
+    cb_core::process::no_window(&mut cmd);
+    let output = cmd.output().ok()?;
     if output.status.success() {
         return None;
     }

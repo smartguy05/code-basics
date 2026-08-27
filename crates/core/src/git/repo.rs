@@ -668,12 +668,16 @@ impl Repo {
             StageTarget::WorkingTree => {}
         }
 
-        let mut child = Command::new("git")
-            .args(&args)
+        let mut cmd = Command::new("git");
+        cmd.args(&args)
             .current_dir(&self.workdir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        // No console window on Windows for the one raw git spawn.
+        #[cfg(windows)]
+        crate::process::no_window(&mut cmd);
+        let mut child = cmd
             .spawn()
             .context("failed to run `git apply` — is git installed and on PATH?")?;
 

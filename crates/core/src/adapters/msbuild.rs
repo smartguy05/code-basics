@@ -138,11 +138,14 @@ pub fn apply(project: &mut ProjectFile, evaluated: &BTreeMap<String, String>) {
 /// Never propagates an error: a workspace that opts into evaluation but has no
 /// SDK installed should still open, just with shallow-scanned projects.
 pub fn evaluate(project: &Path) -> Option<BTreeMap<String, String>> {
-    let output = Command::new("dotnet")
-        .args(command_args(project))
-        .current_dir(project.parent()?)
-        .output()
-        .ok()?;
+    let mut cmd = Command::new("dotnet");
+    cmd.args(command_args(project))
+        .current_dir(project.parent()?);
+    // No console window on Windows: this runs on workspace open, and a flash of
+    // a terminal for a background SDK query is pure noise.
+    #[cfg(windows)]
+    crate::process::no_window(&mut cmd);
+    let output = cmd.output().ok()?;
 
     if !output.status.success() {
         return None;

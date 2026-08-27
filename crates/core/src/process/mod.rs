@@ -10,6 +10,12 @@ mod kill;
 mod resolve;
 
 pub use chunker::{LineSplitter, Utf8Chunker};
+/// The windowless-spawn helper for raw [`std::process::Command`] sites (the ones
+/// that must not join a supervised child's process group): `taskkill`, `git`,
+/// the `dotnet` SDK evaluation, and the quality-gate runners. A no-op off
+/// Windows. See [`kill::no_window`].
+#[cfg(windows)]
+pub use kill::no_window;
 /// Re-exported as a **pair**, because using either alone is a bug.
 ///
 /// [`kill_tree`]'s Unix body signals a process *group*, which only reaches
@@ -97,11 +103,23 @@ struct Running {
 #[derive(Clone, Default)]
 pub struct Supervisor {
     running: Arc<Mutex<HashMap<String, Running>>>,
+    /// The running-process registry, when this supervisor should feed the
+    /// Running panel and crash-orphan file. `None` for the plain [`Supervisor`]
+    /// the process tests use, which record nothing.
+    store: Option<crate::running::RunningStore>,
 }
 
 impl Supervisor {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A supervisor that records its runs into `store` (see [`Supervisor::run_tracked`]).
+    pub fn with_store(store: crate::running::RunningStore) -> Self {
+        Self {
+            running: Arc::new(Mutex::new(HashMap::new())),
+            store: Some(store),
+        }
     }
 
     /// Run `invocation` to completion, streaming events to `events`.
@@ -116,6 +134,31 @@ impl Supervisor {
         id: &str,
         invocation: &Invocation,
         events: mpsc::Sender<ProcessEvent>,
+    ) -> Result<Option<i32>> {
+        self.run_inner(id, invocation, events, None).await
+    }
+
+    /// As [`Supervisor::run`], but also record the process in the running-process
+    /// registry (if this supervisor has one) for the Running panel and the
+    /// crash-orphan file. The record is added the instant the pid is known and
+    /// removed the instant the process is reaped, so the registry's live set is
+    /// always this map's live set.
+    pub async fn run_tracked(
+        &self,
+        id: &str,
+        invocation: &Invocation,
+        events: mpsc::Sender<ProcessEvent>,
+        meta: crate::running::RunMeta,
+    ) -> Result<Option<i32>> {
+        self.run_inner(id, invocation, events, Some(meta)).await
+    }
+
+    async fn run_inner(
+        &self,
+        id: &str,
+        invocation: &Invocation,
+        events: mpsc::Sender<ProcessEvent>,
+        meta: Option<crate::running::RunMeta>,
     ) -> Result<Option<i32>> {
         let started = Instant::now();
 
@@ -180,6 +223,17 @@ impl Supervisor {
             },
         );
 
+        // Record in the running-process registry, if tracked. Only with a pid —
+        // a pid-less spawn cannot be found, killed or identity-checked later.
+        if let (Some(store), Some(meta), Some(pid)) = (&self.store, &meta, pid) {
+            store.record(crate::running::observe(
+                pid,
+                id,
+                meta.clone(),
+                &invocation.program,
+            ));
+        }
+
         let _ = events
             .send(ProcessEvent::Started {
                 pid,
@@ -203,6 +257,11 @@ impl Supervisor {
         let _ = err_task.await;
 
         self.running.lock().await.remove(id);
+        // Deregister from the running-process registry on the same reap, so the
+        // panel and the crash-orphan file stop showing it the moment it ends.
+        if let (Some(store), Some(meta)) = (&self.store, &meta) {
+            store.remove(&meta.root, id);
+        }
 
         let cancelled = cancel.load(std::sync::atomic::Ordering::SeqCst);
         let duration_ms = started.elapsed().as_millis() as u64;
