@@ -8,7 +8,7 @@ import {
   indentWithTab,
   toggleComment,
 } from "@codemirror/commands";
-import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
+import { gotoLine, highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { editorColors, languageFor } from "./language";
 import {
   EMPTY_SECRETS,
@@ -698,6 +698,10 @@ export function FileEditor({
           // CodeMirror is reached). A no-op on a language without comment tokens,
           // e.g. JSON.
           { key: "Mod-/", run: toggleComment, preventDefault: true },
+          // Ctrl+G jumps to a line, as in Rider. `searchKeymap` already binds
+          // `gotoLine` to Alt-g; this adds the familiar chord ahead of it, with
+          // `preventDefault` so the WebView cannot claim Ctrl+G first.
+          { key: "Mod-g", run: gotoLine, preventDefault: true },
           ...searchKeymap,
           indentWithTab,
           ...defaultKeymap,

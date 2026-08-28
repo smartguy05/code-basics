@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
+import { gotoLine, highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { editorColors, languageFor } from "../../components/language";
 import { lineToPos } from "../../components/searchLogic";
 import { diagramBody, inDocumentFrame } from "./frontMatterLogic";
@@ -189,6 +189,8 @@ export function DiagramEditor({
       highlightSelectionMatches(),
       keymap.of([
         { key: "Mod-s", run: save },
+        // Ctrl+G jumps to a line, as in Rider (searchKeymap binds it to Alt-g).
+        { key: "Mod-g", run: gotoLine, preventDefault: true },
         ...searchKeymap,
         indentWithTab,
         ...defaultKeymap,

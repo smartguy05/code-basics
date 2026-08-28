@@ -17,7 +17,7 @@ import {
   type DecorationSet,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
+import { gotoLine, highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { Change, MergeView, presentableDiff, unifiedMergeView } from "@codemirror/merge";
 import { editorColors, languageFor } from "./language";
 import {
@@ -426,6 +426,8 @@ export function DiffView({
             return true;
           },
         },
+        // Ctrl+G jumps to a line, as in Rider (searchKeymap binds it to Alt-g).
+        { key: "Mod-g", run: gotoLine, preventDefault: true },
         ...searchKeymap,
         ...defaultKeymap,
         ...historyKeymap,
@@ -486,7 +488,7 @@ export function DiffView({
               EditorView.editable.of(false),
               search({ top: true }),
               highlightSelectionMatches(),
-              keymap.of(searchKeymap),
+              keymap.of([{ key: "Mod-g", run: gotoLine, preventDefault: true }, ...searchKeymap]),
               ...languageFor(path),
               ...editorColors,
             ],
