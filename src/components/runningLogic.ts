@@ -18,6 +18,8 @@ export function kindIcon(kind: ProcessKind): string {
       return "🔍";
     case "behavioral":
       return "⇄";
+    case "external":
+      return "⚡";
   }
 }
 
@@ -34,7 +36,22 @@ export function kindLabel(kind: ProcessKind): string {
       return "Review";
     case "behavioral":
       return "Behavioral";
+    case "external":
+      return "App";
   }
+}
+
+/**
+ * Whether the panel can show this process's output.
+ *
+ * Only a launched app can: its console lives in the shared output panel, which
+ * the Running panel focuses by key. A configuration run's console belongs to the
+ * Run tab of its codebase, a terminal *is* its own window, and a review or
+ * behavioral run has its own panel — offering the action for those would give
+ * the user a button that does nothing.
+ */
+export function hasOutput(record: RunningRecord): boolean {
+  return record.kind === "external";
 }
 
 /**

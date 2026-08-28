@@ -17,6 +17,7 @@ mod commands {
     pub mod git;
     pub mod inspect;
     pub mod intents;
+    pub mod launcher;
     pub mod lsp;
     pub mod notes;
     pub mod qgate;
@@ -125,6 +126,11 @@ pub fn run() {
             commands::enhancements::agent_runs,
             commands::enhancements::mark_agent_run,
             commands::enhancements::save_note_as_instruction,
+            commands::launcher::list_launchables,
+            commands::launcher::launch_command,
+            commands::launcher::stop_command,
+            commands::launcher::save_launchable,
+            commands::launcher::delete_launchable,
             commands::notes::read_notes,
             commands::notes::write_notes,
             commands::files::fs_list_dir,

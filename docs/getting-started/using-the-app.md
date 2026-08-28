@@ -16,7 +16,7 @@ Directories never scanned: `.git`, `node_modules`, `bin`, `obj`, `target`, `dist
 
 You can open more than one codebase at once. Each opens as a tab in the strip above the six view tabs: click a tab to bring that codebase to the front, **×** to close it, and **+** (or **Open…**) to add another. Opening a folder that is already open simply brings it forward and rescans it. When two open codebases share a folder name, each colliding tab is prefixed with the parent directory that tells them apart (`one/api`, `two/api`). The active codebase's name and full path show in the status bar along the bottom.
 
-Every codebase is fully independent — its own Run/Tests/Changes/History/Architecture/Objects, its own run configurations, terminals, and language server. A codebase you switch away from is **hidden, not closed**: its running apps and tests keep running, its terminals keep streaming, and its language server stays loaded, so switching back is instant and nothing is interrupted. A background codebase whose minimized terminal rings the bell **flashes its tab**, so you can see which one wants you (see [Terminals](#terminals)).
+Every codebase is fully independent — its own Run/Tests/Changes/History/Architecture/Objects, its own run configurations, terminals, and language server. A codebase you switch away from is **hidden, not closed**: its running apps and tests keep running, its terminals keep streaming, and its language server stays loaded, so switching back is instant and nothing is interrupted. A background codebase tells you what happened in it by **outlining and pulsing its tab**: red for a build that failed, amber for a minimized terminal ringing the bell, green for a build that succeeded, and two green pulses (then nothing) for a minimized terminal that simply finished. The first three stay until you click the tab; the last expires on its own, because "it finished" is worth a glance and not an outline that would still be there tomorrow. When two things happen at once the louder one wins — a terminal finishing never turns a broken build's tab green. The tab you are already looking at never flashes.
 
 A few things are shared across every open codebase rather than kept per-codebase: the [Notes](#notes) scratchpad (one global panel), the editor text size, and the global chrome that follows whichever codebase is in front — the branch widget and the bottom status bar. The run-configuration dropdown, by contrast, lives in each codebase's own Run toolbar.
 
@@ -57,11 +57,13 @@ Detected runners: VSTest and Microsoft.Testing.Platform for .NET, Vitest and Jes
 
 Application launches: .NET executable projects (including `launchSettings.json` profiles) and `package.json` scripts. Rust crates are detected too — a `Cargo.toml` becomes a project, classified as an executable or a library — but detection is all it is: no `cargo run` or `cargo test` configuration is offered, deliberately, since that would add entries to this tab and the Tests tab for every Rust repository. To run Rust, drop in the `cargo-nextest` [declarative adapter](../guides/adding-an-ecosystem.md); it supplies configurations for the same directory rather than being shadowed by the built-in detection. Configurations are picked from the dropdown in the Run toolbar, beside the **Env** picker — its status dot is grey when idle, yellow while building/starting, green once the app is up, red on failure. Output streams to a console as it is produced, including bare-`\r` progress redraws. Each run (and each build action) gets its own console tab labeled with the configuration name, so running several projects at once keeps their output separate; closing a tab does not stop its process.
 
-The sidebar is a directory tree of the workspace, filtered like the project scan (no `node_modules`, `bin`, `obj`, …) but with no depth limit — each directory is listed the first time it is expanded. Clicking a file opens it in an editor pane above the console (syntax highlighting per extension, tabs per open file). **Ctrl+S** saves and **Ctrl+/** toggles line comments for the file's language; unsaved files show a ● on their tab, and closing such a tab discards the changes. The divider between editor and console drags to resize, and the split persists.
+The sidebar is a directory tree of the workspace, filtered like the project scan (no `node_modules`, `bin`, `obj`, …) but with no depth limit — each directory is listed the first time it is expanded. Clicking a file opens it in an editor pane above the console (syntax highlighting per extension, tabs per open file). **Ctrl+S** saves, **Ctrl+/** toggles line comments for the file's language, and **Ctrl+G** jumps to a line (as in Rider — **Ctrl+F** finds within the file); unsaved files show a ● on their tab, and closing such a tab discards the changes. The divider between editor and console drags to resize, and the split persists.
 
 The file tabs behave like a browser's. **The back and forward mouse buttons step through the files you have been looking at** — open one file, then another, and *back* returns you to the first; this includes jumps made by [middle-clicking a symbol](#finding-where-a-method-is-used) to go to its definition, so *back* brings you home from a jump into another file. This works while the Run tab is on screen. **Pin a tab** with the 📌 that appears on it (hover a tab, or it stays lit once pinned): pinned tabs move to a separate row above the rest and stay put, so a file you keep returning to is not lost among the others. Middle-click still closes a tab, pinned or not.
 
 The console **collapses out of the way** while you are reading code: the ▾ beside its tabs folds it down to that strip, and the ▸ brings it back. Collapsed it is still a tab strip, not a hidden panel, so there is always something to click. Nothing stops: a running process keeps running, its output keeps accumulating, and the scrollback is all there when you expand it again. Both the collapsed state and the divider position are remembered **per workspace** — how much room the terminal deserves is a property of what you are doing in a given repository, so a service you run and watch and a library you only read do not fight over one setting.
+
+Closing the **last open file expands the console again**, and the remembered state is updated to match. With no editor above it this pane is the entire view, so the ▾ is not offered there — which used to mean that collapsing it and then closing your files left the output hidden with nothing left to click, and remembered that way for next time.
 
 #### Finding where a method is used
 
@@ -93,7 +95,7 @@ Configurations can be created, edited (arguments, environment, working directory
 
 The dropdown's list can be arranged to taste: the ☆ on each row stars it as a favourite (favourites sort first), and ↑/↓ move a row within its group. Both are saved to `config.json`. **+ New configuration…** and **Import from Rider…** live at the bottom of the same menu.
 
-For .NET configurations the toolbar has 🔨 build / ⟳ rebuild / 🧹 clean buttons, and an **Env** dropdown that sets `ASPNETCORE_ENVIRONMENT` for the run (default `Development`). Options are managed inside the dropdown itself — a free-text row adds one, the × beside an option removes it, and "(config default)" passes the configuration through untouched. The list is per-workspace and personal (localStorage), not written to `config.json`.
+For .NET configurations the toolbar has 🔨 build / ⟳ rebuild / 🧹 clean buttons. A build that **succeeds** closes its own output tab — there is nothing in it to read, and the green dot beside the configuration says the same thing in a pixel — while one that **fails** keeps its tab, because the errors are the entire reason it ran. Either way, if the codebase is not the one on screen its tab outlines green or red until you click it. There is also an **Env** dropdown that sets `ASPNETCORE_ENVIRONMENT` for the run (default `Development`). Options are managed inside the dropdown itself — a free-text row adds one, the × beside an option removes it, and "(config default)" passes the configuration through untouched. The list is per-workspace and personal (localStorage), not written to `config.json`.
 
 For .NET configurations, **Secrets…** opens a project's [user secrets](../reference/configuration.md#net-user-secrets) as an ordinary editor tab (`secrets.json`, with JSON highlighting and Ctrl+S to save) — the Rider way — rather than a modal. When the workspace has **more than one** .NET project, **Secrets…** is a dropdown so you can pick which project's secrets to open (every .NET project in the workspace, not only the selected configuration's); with a single .NET project it opens directly. It is the same store `dotnet user-secrets` and Rider manage, kept under your user profile rather than in the repository. Saving for a project without a `<UserSecretsId>` adds one to the `.csproj` first; opening the tab changes nothing until you save.
 
@@ -160,7 +162,45 @@ Crash-dump capture is opt-in per workspace and off by default, because a dump is
 
 Not one of the six views but available over all of them: the **+ Terminal** button in the titlebar opens a floating, interactive terminal window. It runs your shell (PowerShell on Windows, `$SHELL` on macOS/Linux) as a real pseudo-terminal, so it is a genuine interactive session — you can launch Claude Code, run a build, tail a log, anything — and type into it, arrow keys and prompts and all. It starts in the open workspace's directory.
 
-Each terminal floats over the app like the agent panel: drag it by its header, resize it from the corner, or **minimize** it to a small pill. Minimized terminals keep running, and the pill **flashes** when a hidden session rings the terminal **bell** (`\x07`) — the signal a program uses to ask for you, so Claude Code waiting on input flashes but ordinary streaming output does not. When that terminal belongs to a codebase other than the one on screen, its **workspace tab flashes** too, so you can tell which project wants you. Open as many as you like — they cascade so they do not stack exactly — and they survive switching between the tabs. **Copy and paste** use the usual terminal chords: `Ctrl+Shift+C` (or `Ctrl+Insert`) copies the selection, and `Ctrl+V` / `Ctrl+Shift+V` / `Shift+Insert` paste — `Ctrl+C` stays the shell interrupt. Closing a terminal ends its whole process tree, so a shell that launched `claude` (and its `node` child) is cleaned up with it.
+Each terminal floats over the app like the agent panel: drag it by its header, resize it from the corner, or **minimize** it to a small pill. Minimized terminals keep running, and the pill **flashes** when a hidden session rings the terminal **bell** (`\x07`) — the signal a program uses to ask for you, so Claude Code waiting on input flashes but ordinary streaming output does not. When that terminal belongs to a codebase other than the one on screen, its **workspace tab** pulses amber too, so you can tell which project wants you — and a minimized terminal that simply *finishes* pulses that tab green twice, which is enough to notice and not enough to nag. Open as many as you like — they cascade so they do not stack exactly — and they survive switching between the tabs. **Copy and paste** use the usual terminal chords: `Ctrl+Shift+C` (or `Ctrl+Insert`) copies the selection, and `Ctrl+V` / `Ctrl+Shift+V` / `Shift+Insert` paste — `Ctrl+C` stays the shell interrupt. Closing a terminal ends its whole process tree, so a shell that launched `claude` (and its `node` child) is cleaned up with it.
+
+## Running other apps
+
+Sometimes what you need is not a project configuration but just another program: a local Redis, `docker compose up`,
+a Python script, ngrok. The **Launch** button in the titlebar opens a small overlay with one box: type a command
+line, press **Enter**, and it runs.
+
+Running a command is also what remembers it — there is no separate form for adding entries. The overlay lists
+what you have run before, **This codebase** first (commands whose working directory is inside the open project),
+then **All commands**. Type to filter, use ↑/↓ and Enter to pick one, or click ▶. Each row offers **★** to pin it
+to the top, **✎** to give it a friendly name, and **✕** to forget it. Unpinned commands age out after thirty;
+pinned ones never do. The list is stored **globally** — `%APPDATA%\code-basics\launchers.json` on Windows
+(`$XDG_CONFIG_HOME`/`~/.config` elsewhere; `CB_LAUNCHERS_PATH` overrides it) — so your usual tools are there in
+every project.
+
+Two things to know about what gets run:
+
+- The **working directory** defaults to the open codebase and is editable in the overlay.
+- **Shell syntax needs the shell.** A command line using `|`, `>`, `<`, `&&` or `;` only means what it looks like
+  when a shell interprets it, so tick **run through shell** (it is ticked for you when the command looks like it
+  needs it). Without it, such a command is refused rather than run with `|` handed to the program as an ordinary
+  argument — which would appear to work while doing something else.
+
+Launched apps run in the background with no window of their own, and their output goes to the **Apps** panel: one
+floating panel with a tab per app. Each tab has the same console as the Run tab (Ctrl+F search, copy-all, copy
+diagnostics), a **Stop** button while it is running, and it **stays after the app exits**, showing the exit code,
+until you close it. Closing a tab whose app is still running asks first.
+
+A **severity picker** in the toolbar narrows the tab you are looking at to *All levels*, *Info+*, *Warn+* or
+*Errors*, hiding everything quieter. It is set **per tab**, because two services running at once are usually
+being watched for two different reasons. A line is ranked by the level marker the program wrote — `fail:`,
+`warn:`, `error CS1234:` and the rest — and only a line carrying no marker at all falls back to the stream it
+came from, where `stderr` counts as an error. Indented lines **inherit** the line above them, so filtering to
+*Errors* keeps a stack trace with the failure that produced it rather than tearing the two apart.
+
+Everything launched this way also appears in the titlebar **Running** panel with its pid and age,
+where **View** jumps to its output tab and **Kill** stops it. A launched app is **not** tied to the codebase you
+started it from: switch or close that tab and it keeps running.
 
 ## Notes
 

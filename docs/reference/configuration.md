@@ -170,9 +170,28 @@ What a scan generates per project, before anything saved is layered on:
 
 A multi-targeted project (`<TargetFrameworks>`) multiplies the above by framework, since `dotnet run` and `dotnet test` refuse to guess between them. A single-targeted project omits `-f` entirely.
 
+## User-global stores (outside any repository)
+
+Three things the app persists are a property of **you**, not of a workspace, so they live under the user
+config directory instead of `.code-basics/` — which also means there is no gitignore entry to keep in step
+and nothing of yours is shared with the team by accident. The base is `%APPDATA%` on Windows, then
+`$XDG_CONFIG_HOME`, then `~/.config`:
+
+| Path | What | Override |
+|------|------|----------|
+| `code-basics/notes.json` | The [Notes](../getting-started/using-the-app.md#notes) scratchpad: a schema `version` plus ordered notes. Written atomically (temp + rename, `.bak` before an empty overwrite) so notes survive a crash | `CB_NOTES_PATH` (whole path) |
+| `code-basics/launchers.json` | The [app launcher's](../getting-started/using-the-app.md#running-other-apps) remembered commands — each with the `cwd` it ran in, plus your pin and rename. Unpinned entries cap at 30, oldest first; pinned ones never age out. Same atomic write | `CB_LAUNCHERS_PATH` (whole path) |
+| `code-basics/instructions/`, `code-basics/prompts/` | The [Enhancements](../guides/instruction-enhancements.md) library of `.md` templates, seeded from the bundled defaults without overwriting your edits | `CB_INSTRUCTIONS_PATH`, `CB_PROMPTS_PATH` |
+| `code-basics/running.json` | Which processes the app had running, so one that outlived a crash can be found and killed on the next launch (the Running panel's "possible orphans") | `CB_RUNNING_PATH` |
+
+A missing or corrupt file in any of these reads as **empty**, never as an error: none of them is important
+enough to stop a panel opening.
+
 ## .NET user secrets
 
 Secrets are deliberately **not** part of `config.json` (which is checked in). The Run tab's **Secrets…** button opens the standard .NET user-secrets store as an ordinary editor tab: the project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere), which the .NET configuration system reads at runtime. Saving secrets for a project without an id adds one to the `.csproj`, exactly like `dotnet user-secrets init`. Core logic: `crates/core/src/secrets.rs`.
+
+Saving validates against the same JSON dialect .NET's configuration loader accepts, rather than strict JSON — `//` and `/* */` comments, trailing commas, and a leading UTF-8 byte-order mark all pass, because `dotnet user-secrets` and Rider write files containing them and rejecting your own tooling's output would be worse than a late failure. A file that really is malformed is refused with the line number **and the offending line quoted**, since the invisible causes (that byte-order mark, most of all) are otherwise indistinguishable from whatever else is unusual in the file.
 
 ## `RunConfig` fields
 

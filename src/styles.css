@@ -238,12 +238,43 @@ textarea:focus {
   border-bottom-color: var(--accent);
   background: var(--bg-raised);
 }
-/* A background codebase whose minimized terminal rang the bell: flash the tab
-   so the user sees which project is asking. Uses the same amber as the panel
-   flash but without the pill's drop shadow, which would look wrong in the strip.
-   The active accent border is left intact underneath. */
-.ws-tab.attention {
+/* A background codebase with something to say: outline the tab in the colour of
+   what happened and pulse it, so the user sees which project is asking and
+   roughly why before switching to it. The active accent border is left intact
+   underneath, and there is no drop shadow — the pill's would look wrong in a
+   strip.
+
+   One animation for all four states, with the colours as custom properties, so
+   there is a single cadence to keep in step rather than four keyframe blocks
+   that can drift apart. The steady outline lives outside the animation: at the
+   0% frame the keyframe paints a transparent one, so an outline that only
+   existed there would blink out rather than pulse. `signal-done` deliberately
+   has no steady outline — it is the one signal that expires by itself. */
+.ws-tab.signal {
   animation: ws-tab-flash 0.9s ease-in-out infinite;
+  box-shadow: inset 0 0 0 1px var(--sig-edge);
+}
+.ws-tab.signal-error {
+  --sig-bg: #5a1e22;
+  --sig-edge: var(--fail);
+}
+/* The original bell amber, unchanged. */
+.ws-tab.signal-attn {
+  --sig-bg: #7a4b00;
+  --sig-edge: #ffb020;
+}
+.ws-tab.signal-success {
+  --sig-bg: #1e4a2e;
+  --sig-edge: var(--pass);
+}
+/* A terminal finished: worth a glance, not worth an outline that would still be
+   there tomorrow. Two pulses and gone — `App` drops the class shortly after the
+   animation ends, so this only has to stop painting. */
+.ws-tab.signal-done {
+  --sig-bg: #1e4a2e;
+  --sig-edge: var(--pass);
+  box-shadow: none;
+  animation-iteration-count: 2;
 }
 @keyframes ws-tab-flash {
   0%,
@@ -252,11 +283,11 @@ textarea:focus {
     box-shadow: inset 0 0 0 1px transparent;
   }
   50% {
-    background: #7a4b00;
-    box-shadow: inset 0 0 0 1px #ffb020;
+    background: var(--sig-bg);
+    box-shadow: inset 0 0 0 1px var(--sig-edge);
   }
 }
-.ws-tab.attention .ws-tab-label {
+.ws-tab.signal .ws-tab-label {
   color: var(--text);
 }
 .ws-tab-label {
@@ -1208,6 +1239,37 @@ textarea:focus {
 
 .console .xterm {
   height: 100%;
+}
+
+/* Give every xterm viewport a classic, layout-taking scrollbar.
+
+   WebView2's default is an *overlay* bar: it paints over the content and takes
+   no width. `FitAddon` sizes the terminal from the viewport's client width, so
+   with an overlay bar it measures a scrollbar width of zero and lays `.xterm-
+   screen` — a later, positioned sibling — right across the strip the bar is
+   drawn in. The result is a scrollbar you can see and cannot grab, because
+   every press on it lands on the screen element and starts a text selection.
+
+   Asking for a real scrollbar takes the width back out of the layout, which
+   both moves the screen out from under the thumb and gives the thumb a hit
+   target worth aiming at. Global, because the same viewport is in the Run
+   output, Tests, Review, Behavioral, the Apps panel and every floating
+   terminal. */
+.xterm .xterm-viewport {
+  scrollbar-width: auto;
+}
+.xterm .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+.xterm .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+.xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+}
+.xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
 }
 
 /* Floating interactive terminals ----------------------------------------- */
@@ -3097,4 +3159,219 @@ textarea:focus {
   font-size: 11px;
   color: #ffb020;
   margin: 4px 0;
+}
+
+/* App launcher ------------------------------------------------------------ */
+
+/* The picker overlay. Not a tab: what it runs belongs to no project, which is
+   why it cannot be a run configuration (see `cb_core::launcher`). */
+.launcher-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+}
+
+.launcher {
+  width: min(680px, 92vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel, var(--bg-raised));
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.launcher-input-row,
+.launcher-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.launcher-input {
+  flex: 1;
+  font-family: var(--mono, monospace);
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+.launcher-cwd {
+  flex: 1;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  padding: 4px 6px;
+}
+
+.launcher-shell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.launcher-error {
+  font-size: 11px;
+  color: #ff6b6b;
+}
+
+.launcher-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.launcher-section {
+  margin-bottom: 10px;
+}
+
+.launcher-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  margin: 6px 0;
+}
+
+.launcher-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.launcher-row.selected,
+.launcher-row:hover {
+  background: var(--bg-raised);
+}
+
+.launcher-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+}
+
+.launcher-meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.launcher-run,
+.launcher-icon {
+  font-size: 11px;
+  padding: 1px 5px;
+}
+
+.launcher-icon.on {
+  color: #ffd166;
+}
+
+.launcher-empty {
+  color: var(--text-faint);
+  padding: 14px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.running-view {
+  font-size: 11px;
+}
+
+/* Launched-app output ----------------------------------------------------- */
+
+/* One shared panel with a tab per launched app, on the .review-panel base. */
+.app-output-panel {
+  width: min(760px, 66vw);
+  height: min(520px, 66vh);
+}
+
+.app-output-tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 4px 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-output-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px 4px 0 0;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.app-output-tab.active {
+  background: var(--bg-raised);
+  border-color: var(--border);
+}
+
+.app-output-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.app-output-dot.running {
+  background: #4ec9b0;
+}
+
+.app-output-dot.failed {
+  background: #ff6b6b;
+}
+
+.app-output-close {
+  font-size: 10px;
+  padding: 0 3px;
+}
+
+.app-output-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-output-meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A terminal-hosting pane must not scroll: a scrollbar fights xterm's fit
+   addon (the same rule the floating terminals follow). */
+.app-output-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.app-output-console {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }

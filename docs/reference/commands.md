@@ -106,14 +106,30 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `terminal_list` | – | `String[]` | Ids of every open terminal |
 | `terminal_set_label` | `id: String`, `root: String`, `label: String` | `()` | Updates a terminal's title in the running-process registry after a rename, so the Running panel shows it |
 
+## The app launcher
+
+`src-tauri/src/commands/launcher.rs` — arbitrary command lines the user runs beside the detected
+configurations. The store (`launcher::launchers_path`) is **user-global**, `<config>/code-basics/launchers.json`
+beside `notes.json` (`CB_LAUNCHERS_PATH` overrides), so the three store commands take no workspace.
+A launched app runs in the **global** supervisor and is recorded as `RunKind::External`, so closing
+the codebase it was started from does not stop it.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `list_launchables` | – | `LauncherGroups` | `{ thisCodebase, global }` — remembered commands, the open codebase's first (grouped by each entry's `cwd`); pinned first, then most recently run |
+| `launch_command` | `command: String`, `cwd: String?`, `shell: bool`, `label: String?`, `key: String?`, `channel: Channel<ProcessEvent>` | `LaunchedApp` | Splits the command line (`launcher::program_and_args`) and spawns it headless; resolves as soon as it is running, not at exit. An unquoted `\|`, `>`, `<`, `&` or `;` is **refused** unless `shell` is set — a bare argv would pass it to the program as an argument. `cwd` defaults to the open workspace, else home. `key` is normally supplied by the frontend so its console has a destination before this returns; a blank one is minted. Recorded into the recents only once it resolves to a real command |
+| `stop_command` | `key: String` | `bool` | Cancels a launched app through the global supervisor; the output tab and its exit line stay |
+| `save_launchable` | `id: String`, `label: String?`, `pinned: bool?` | `LauncherFile` | Rename (a blank name clears the rename) and/or pin. Pinned entries are exempt from the 30-entry recents cap |
+| `delete_launchable` | `id: String` | `LauncherFile` | Forgets one remembered command |
+
 ## Running processes
 
 The Running panel: what the app has running now (across every open codebase) plus crash-orphan candidates from a previous session.
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `list_running` | – | `RunningReport` | `{ live, orphans, warnings }` — the live set (runs, builds, terminals, review, behavioral), orphan candidates from a previous session, and any PID-reuse warnings. A cheap in-memory read |
-| `kill_running` | `pid: u32`, `kind: RunKind`, `root: String`, `key: String`, `orphan: bool` | `bool` | Routes the kill: a live run/build cancels via its codebase supervisor, a terminal closes via the PTY manager, review/behavioral via the global supervisor; an orphan is killed by pid **only after** an identity re-check (name + start time), refusing a reused pid |
+| `list_running` | – | `RunningReport` | `{ live, orphans, warnings }` — the live set (runs, builds, terminals, review, behavioral, launched apps), orphan candidates from a previous session, and any PID-reuse warnings. A cheap in-memory read |
+| `kill_running` | `pid: u32`, `kind: RunKind`, `root: String`, `key: String`, `orphan: bool` | `bool` | Routes the kill: a live run/build cancels via its codebase supervisor, a terminal closes via the PTY manager, review/behavioral/external via the global supervisor; an orphan is killed by pid **only after** an identity re-check (name + start time), refusing a reused pid |
 
 ## Git
 

@@ -19,6 +19,8 @@ Deliberately thin. Every decision lives in [`cb-core`](core-crate.md); what rema
 | `src/commands/inspect.rs` | Object-inspection commands; resolves the bundled sidecar directory |
 | `src/commands/terminal.rs` | Floating-terminal commands over `cb_core::pty` (open/write/resize/close/list) |
 | `src/commands/notes.rs` | Global notes / scratchpad commands over `cb_core::notes` (read/write); no `AppState` |
+| `src/commands/running.rs` | The Running panel: every live process plus crash-orphan candidates, and a kill routed by kind |
+| `src/commands/launcher.rs` | [App-launcher](../getting-started/using-the-app.md#running-other-apps) commands over `cb_core::launcher` (list / launch / stop, pin / rename / forget); the store commands take no `AppState` |
 | `src/recorder.rs` | The one non-window entry point: `record-intent`, re-invoked by an agent hook |
 
 The complete command list with parameters is in the [command reference](../reference/commands.md); it must stay in sync with the `generate_handler!` block in `lib.rs`.
@@ -37,6 +39,12 @@ pub struct AppState {
 ```
 
 The workspace survives a window reload because it lives here, not in the frontend. `last_test_run` is what lets `run_tests(only_failed: true)` know which test names to filter to. `last_inspect` is one slot rather than a map: there is nothing to key a capture by, and a capture is a copy of somebody's process memory — holding several would be holding more of it than anything needs, which is also why `inspect_clear` genuinely drops it. `pty` is a clone-cheap handle like `supervisor`, holding the open [terminal](../getting-started/using-the-app.md#terminals) sessions keyed by id; unlike the caches it is **not** per-workspace, so `set_workspace` does not clear it — a terminal is not tied to the open root.
+
+Note which supervisor a spawn goes to, because it decides what a codebase switch stops. Configuration runs and
+builds use the **per-workspace** `WorkspaceSlot::supervisor`, so closing that codebase can stop them. The
+review agent, behavioral runs and **launched apps** use the app-level `supervisor` above, recorded as
+`RunKind::External`: an app the user started themselves is not owned by whichever tab was in front, so closing
+that tab must not kill it. `commands/running.rs` routes a kill the same way it was spawned.
 
 ## `invocation::build`
 

@@ -18,6 +18,7 @@ import {
   type TerminalDescriptor,
 } from "./terminalLogic";
 import { sendToAgentTitle } from "./notesLogic";
+import type { TabSignal } from "./workspaceTabsLogic";
 import * as api from "../ipc/api";
 import type { AgentMode } from "../ipc/api";
 import type { BehavioralReport, Note, Workspace } from "../ipc/types";
@@ -79,6 +80,7 @@ export function WorkspaceTab({
   onWorkspaceChange,
   onRegister,
   onAttentionChange,
+  onSignal,
 }: {
   workspace: Workspace;
   /** Whether this is the foreground tab. Drives `hidden` and gates listeners. */
@@ -92,6 +94,18 @@ export function WorkspaceTab({
    * can flash this tab in the top strip when it is not the foreground one.
    */
   onAttentionChange: (root: string, hasAttention: boolean) => void;
+  /**
+   * Report a one-shot event worth showing on this codebase's tab while it is in
+   * the background: a build that succeeded or failed, or a minimized terminal
+   * that finished.
+   *
+   * Separate from {@link onAttentionChange} because the two have different
+   * lifetimes. Attention is *state* — a terminal is asking for you until it is
+   * restored — so it is pushed up as a boolean that can go back down. These are
+   * *events*: nothing about the codebase is still true afterwards, so `App`
+   * latches them and the user clears them by looking.
+   */
+  onSignal: (root: string, signal: TabSignal) => void;
 }) {
   const [tab, setTab] = useState<Tab>("run");
   const [showSetup, setShowSetup] = useState(false);
@@ -268,6 +282,7 @@ export function WorkspaceTab({
           pendingSelect={selectRequest}
           onSelectConsumed={() => setSelectRequest(null)}
           onNavigate={requestOpenFile}
+          onBuildResult={(ok) => onSignal(workspace.root, ok ? "success" : "error")}
           active={active && tab === "run"}
         />
       </div>
@@ -354,6 +369,7 @@ export function WorkspaceTab({
           color={t.color}
           onClose={() => closeTerminal(t.key)}
           onAttentionChange={(wants) => setTerminalAttention(t.key, wants)}
+          onCompleted={() => onSignal(workspace.root, "done")}
           onRename={(title) => renameTerminalTo(t.key, title)}
           onRecolor={(color) => recolorTerminalTo(t.key, color)}
         />

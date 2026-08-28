@@ -237,7 +237,13 @@ export type TerminalEvent =
  * `ProcessKind` here because `RunKind` ("app" | "test") is already taken by the
  * run-configuration kind above.
  */
-export type ProcessKind = "run" | "build" | "terminal" | "review" | "behavioral";
+export type ProcessKind =
+  | "run"
+  | "build"
+  | "terminal"
+  | "review"
+  | "behavioral"
+  | "external";
 
 /**
  * One process the app has running (or an orphan candidate). Mirrors the Rust
@@ -507,6 +513,55 @@ export interface NotesFile {
   version: number;
   /** The notes, in the order the panel shows their tabs. */
   notes: Note[];
+}
+
+/**
+ * One remembered command line from the app launcher (`launcher::Launchable`).
+ * Keys pinned by `launchable_serialises_with_camel_case_keys` in
+ * `crates/core/src/launcher/model_tests.rs`. `label` is deliberately nullable
+ * rather than optional: "never renamed" is a state the picker reads.
+ */
+export interface Launchable {
+  id: string;
+  /** The command line exactly as the user typed it. */
+  command: string;
+  /** Where it runs. Part of a recent's identity, and the grouping key. */
+  cwd: string;
+  env: Record<string, string>;
+  /** The user's rename, or null to show the command itself. */
+  label: string | null;
+  /** Run through the default shell (needed for `|`, `>`, `&&`). */
+  shell: boolean;
+  /** Pinned entries sort first and are never evicted by the recents cap. */
+  pinned: boolean;
+  /** When it last ran, ms since the Unix epoch. */
+  lastRunMs: number;
+  runCount: number;
+}
+
+/** The whole launchers file (`launcher::LauncherFile`). */
+export interface LauncherFile {
+  version: number;
+  entries: Launchable[];
+}
+
+/**
+ * What the launcher picker renders (`launcher::LauncherGroups`): the open
+ * codebase's commands, then everything else the user has run anywhere.
+ */
+export interface LauncherGroups {
+  thisCodebase: Launchable[];
+  global: Launchable[];
+}
+
+/** What a launch hands back (`commands::launcher::LaunchedApp`). */
+export interface LaunchedApp {
+  /** The supervisor key: what stops it, and what the Running panel kills. */
+  key: string;
+  /** The recents entry id, for pin/rename/delete. */
+  id: string;
+  label: string;
+  cwd: string;
 }
 
 /** An installed review agent (`commands::review::ReviewAgentInfo`). */

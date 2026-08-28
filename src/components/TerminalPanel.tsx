@@ -34,6 +34,7 @@ export function TerminalPanel({
   color,
   onClose,
   onAttentionChange,
+  onCompleted,
   onRename,
   onRecolor,
 }: {
@@ -55,6 +56,17 @@ export function TerminalPanel({
    * `false` when the terminal closes.
    */
   onAttentionChange?: (attention: boolean) => void;
+  /**
+   * Report that this terminal's process finished **while minimized**, so its
+   * workspace tab can say so in the background.
+   *
+   * Minimized only, for the same reason the bell is: a terminal you are looking
+   * at has already told you it finished, in words, on its own last line. And
+   * unlike the bell this is a one-shot — "it finished" is a fact about a moment,
+   * not a state the terminal is in, so there is nothing to clear and the tab
+   * signal it raises expires on its own.
+   */
+  onCompleted?: () => void;
   /** Commit a new title (the host applies the blank-title guard). */
   onRename?: (title: string) => void;
   /** Set/clear the minimized-pill colour. */
@@ -158,8 +170,12 @@ export function TerminalPanel({
             : `\r\n\x1b[${event.success ? 32 : 31}m[terminal exited: ${event.code}]\x1b[0m\r\n`;
         viewRef.current?.write(note);
         setExited(true);
-        // Exit/failure update the status line but do not flash: only the bell
-        // (handled in the output case) counts as the terminal asking for you.
+        // Exit does not flash *this* panel: only the bell (handled in the output
+        // case) counts as the terminal asking for you, and a finished terminal
+        // is not asking for anything. It is still worth saying one floor up,
+        // where a whole codebase is out of sight — hence the one-shot upward
+        // report, which the tab renders as a signal that expires by itself.
+        if (minimizedRef.current) onCompleted?.();
         break;
       }
       case "failed":

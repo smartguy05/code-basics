@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RunningRecord, RunningReport } from "../ipc/types";
 import {
   formatAge,
+  hasOutput,
   isEmpty,
   killRequest,
   kindIcon,
@@ -25,11 +26,25 @@ function rec(over: Partial<RunningRecord> = {}): RunningRecord {
 
 describe("kindIcon / kindLabel", () => {
   it("gives every kind a distinct icon and a human label", () => {
-    const kinds = ["run", "build", "terminal", "review", "behavioral"] as const;
+    const kinds = ["run", "build", "terminal", "review", "behavioral", "external"] as const;
     const icons = kinds.map(kindIcon);
     expect(new Set(icons).size).toBe(kinds.length);
     expect(kindLabel("behavioral")).toBe("Behavioral");
     expect(kindLabel("terminal")).toBe("Terminal");
+    expect(kindLabel("external")).toBe("App");
+  });
+});
+
+describe("hasOutput", () => {
+  it("offers View output only for a launched app", () => {
+    // A configuration run's output is in its Run-tab console and a terminal is
+    // its own window; only a launched app has a tab in the output panel that the
+    // panel can focus, and claiming otherwise would give a button that does
+    // nothing.
+    expect(hasOutput(rec({ kind: "external" }))).toBe(true);
+    for (const kind of ["run", "build", "terminal", "review", "behavioral"] as const) {
+      expect(hasOutput(rec({ kind })), kind).toBe(false);
+    }
   });
 });
 

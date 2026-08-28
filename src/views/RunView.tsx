@@ -19,6 +19,9 @@ import {
   loadSplit,
   saveCollapsed,
   saveSplit,
+  isBuildSession,
+  shouldCloseBuildSession,
+  shouldForceExpand,
 } from "./consolePanelLogic";
 import {
   navBack,
@@ -134,6 +137,7 @@ export function RunView({
   pendingSelect,
   onSelectConsumed,
   onNavigate,
+  onBuildResult,
   active,
 }: {
   workspace: Workspace;
@@ -165,6 +169,12 @@ export function RunView({
   /** A configuration the search palette chose. Selected, never started. */
   pendingSelect?: SelectConfigRequest | null;
   onSelectConsumed?: () => void;
+  /**
+   * Report how a build, rebuild or clean ended, so a backgrounded codebase can
+   * say so on its tab. Only the `exited` event knows this — `runBuild`'s
+   * `finally` sees a failed build resolve exactly like a successful one.
+   */
+  onBuildResult?: (success: boolean) => void;
 }) {
   const appConfigs = workspace.configs.filter((c) => c.kind === "app");
 
@@ -233,6 +243,8 @@ export function RunView({
   const [building, setBuilding] = useState(false);
   const [sessions, setSessions] = useState<ConsoleSession[]>([]);
   const [activeSession, setActiveSession] = useState<string | null>(null);
+  /** A session a finished build asked to close; see the `exited` case. */
+  const [pendingClose, setPendingClose] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
 
   // What the Inspect affordances need, per session, plus whether the inspector
@@ -656,6 +668,16 @@ export function RunView({
           const info = inspectInfoRef.current[id];
           void findDump(id, info?.startedAt ?? nowSeconds(), info?.pid);
         }
+        if (isBuildSession(id) && !cancelled) onBuildResult?.(success);
+        // A build that worked has nothing to read: its tab would hold a wall of
+        // "Build succeeded" that the sidebar dot already says in one pixel. The
+        // status is kept so that dot survives its tab.
+        //
+        // Handed to an effect rather than closed here: this callback was
+        // captured when the build *started*, so its `sessions` is whatever the
+        // list was then — closing against it would silently drop any session
+        // opened while the build ran.
+        if (shouldCloseBuildSession(id, success, cancelled)) setPendingClose(id);
         break;
       }
       case "failed":
@@ -701,22 +723,53 @@ export function RunView({
     writeInspect({ ...inspectInfoRef.current, [id]: { startedAt: nowSeconds() } });
   }
 
-  function closeSession(id: string) {
+  /**
+   * Drop a console session.
+   *
+   * `keepStatus` exists for the one caller that is not the user closing a tab:
+   * a build that succeeded takes its own tab away, and the sidebar's build dot
+   * reads `statuses[`${config.id}:build`]`. Discarding the status there would
+   * make a successful build the only outcome that leaves no trace at all.
+   */
+  function closeSession(id: string, options?: { keepStatus?: boolean }) {
     const remaining = sessions.filter((s) => s.id !== id);
     setSessions(remaining);
     consoleRefs.current.delete(id);
     pendingEvents.current.delete(id);
     appUpSeen.current.delete(id);
-    setStatuses((previous) => {
-      const { [id]: _, ...rest } = previous;
-      return rest;
-    });
+    if (!options?.keepStatus) {
+      setStatuses((previous) => {
+        const { [id]: _, ...rest } = previous;
+        return rest;
+      });
+    }
     const { [id]: _discarded, ...remainingInspect } = inspectInfoRef.current;
     writeInspect(remainingInspect);
     if (activeSession === id) {
       setActiveSession(remaining[remaining.length - 1]?.id ?? null);
     }
   }
+
+  // Close the session a finished build asked to close, on a fresh render where
+  // `sessions` is current. See the `exited` case for why it cannot close itself.
+  useEffect(() => {
+    if (pendingClose === null) return;
+    closeSession(pendingClose, { keepStatus: true });
+    setPendingClose(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingClose]);
+
+  // With no file open, this pane is the whole view and the collapse control is
+  // not rendered — so a panel collapsed before the last file was closed would be
+  // hidden with nothing left to unhide it, and the flag is persisted, so a
+  // restart would land in the same place. Refuse to be in that state, and write
+  // the repair through, or the next open re-enters it.
+  useEffect(() => {
+    if (!shouldForceExpand(openFiles.length, consoleCollapsed)) return;
+    setConsoleCollapsed(false);
+    saveCollapsed(localStorage, workspace.root, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openFiles.length, consoleCollapsed, workspace.root]);
   const selected = appConfigs.find((c) => c.id === selectedId) ?? null;
   const favorites = new Set(workspace.favorites);
 

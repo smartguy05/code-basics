@@ -208,7 +208,43 @@ Workspace file access for the Run tab's directory tree and editor. `list_dir` li
 
 ## `secrets`
 
-.NET user secrets, the way `dotnet user-secrets` and Rider manage them: a project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere) — secrets never touch the workspace. `read` returns id/path/content; `write` validates against the same JSON dialect .NET's configuration loader accepts (comments and trailing commas included) and adds a `<UserSecretsId>` to the project file first when missing, like `dotnet user-secrets init`.
+.NET user secrets, the way `dotnet user-secrets` and Rider manage them: a project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere) — secrets never touch the workspace. `read` returns id/path/content; `write` validates against the same JSON dialect .NET's configuration loader accepts and adds a `<UserSecretsId>` to the project file first when missing, like `dotnet user-secrets init`.
+
+`strip_jsonc` is what defines that dialect: `//` and `/* */` comments and trailing commas become spaces (never disappear, so a position serde reports still points at the right place in what the user wrote), and a leading **UTF-8 byte-order mark** is tolerated. The mark is not a detail — .NET's reader skips it, `serde_json` refuses it, and `dotnet user-secrets` and Rider both write one, so a file this app never created is quite likely to start with something invisible that makes it unsaveable. Only a *leading* mark is stripped: one mid-file is a real error and one inside a string is data the user typed. Rejecting the comments and marks your own .NET tooling writes would be worse than a late failure, which is why the dialect is matched rather than narrowed. When a file really is malformed, `jsonc_error` reports the line number **and quotes the line**, because the invisible causes are otherwise indistinguishable from whatever else is unusual in the file.
+
+## `launcher`
+
+The [app launcher](../getting-started/using-the-app.md#running-other-apps): arbitrary command lines the user
+wants to run beside the detected configurations, and the memory of what they have run.
+
+This exists **next to** `config`/`invocation`, not inside them. A `RunConfig` has no program of its own —
+every path resolves one through an ecosystem adapter, and an adapter only speaks for a project it detected —
+so a local Redis, a Python script or `docker compose up` could only be given a `RunConfig` by inventing a
+fake ecosystem or letting a free-form program into the model everything holds. A launchable is instead its
+own small thing that resolves *directly* into an `Invocation`, which `process::Supervisor` already runs
+headlessly and tracks in the Running panel (as the `RunKind::External` kind).
+
+The store is **user-global, not per-workspace**: `store::launchers_path()` resolves
+`code-basics/launchers.json` beside `notes.json` (`CB_LAUNCHERS_PATH` overrides the whole path), with the
+same tolerant `load` (a missing or corrupt file is an empty store, never an error) and the same atomic
+crash-safe `save` (temp + rename, `.bak` before an empty overwrite). "The commands I run" is a property of
+the person, not of a repository, and writing them into a checked-in `.code-basics/config.json` would share
+one developer's local shortcuts with their whole team. Each entry records the `cwd` it ran in, which is what
+lets `recents::group` show the open codebase's commands first without a second per-repository store.
+
+`parse` is the abstain rule at its sharpest, because this is the one place free text the user typed becomes
+a process and every plausible-but-wrong reading is silent. Only `"` groups and only `\"` escapes (a Windows
+path is full of backslashes that are not escapes); an empty line and an unbalanced quote are **errors that
+name the problem**; and an unquoted shell metacharacter (`|`, `>`, `<`, `&`, `;`) is **refused with the fix**
+rather than run as a bare argv, where `echo hi | findstr hi` would "work" while printing `hi | findstr hi`.
+Nothing here interprets those characters — a `shell` flag hands the whole line to `pty::default_shell()`
+with `/C` or `-c` and lets the shell mean what it means.
+
+`recents` is the whole policy, pure so the clock is an argument: identity is `(command, cwd)`, a re-run
+updates its entry (bumping the clock and count, adopting the `shell` flag that actually ran) while
+preserving the two things only the user sets — the pin and the rename — and unpinned entries are capped at
+30, oldest first. **Pinned entries are never evicted**: a cap that could drop one would make pinning a
+suggestion rather than a promise.
 
 ## `notes`
 

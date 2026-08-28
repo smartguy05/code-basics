@@ -19,6 +19,7 @@ pub mod importers;
 pub mod inspect;
 pub mod intents;
 pub mod invocation;
+pub mod launcher;
 pub mod lsp;
 pub mod model;
 pub mod notes;

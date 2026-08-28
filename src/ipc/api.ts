@@ -26,6 +26,9 @@ import type {
   InstallPlan,
   InstallScope,
   IntentReview,
+  LaunchedApp,
+  LauncherFile,
+  LauncherGroups,
   LaunchProfile,
   LineIntent,
   LspStatus,
@@ -360,6 +363,61 @@ export const terminalClose = (id: string) =>
 
 /** The ids of every open terminal. */
 export const terminalList = () => invoke<string[]>("terminal_list");
+
+// ---------------------------------------------------------------------------
+// The app launcher
+// ---------------------------------------------------------------------------
+
+/**
+ * The remembered command lines, grouped for the picker: the open codebase's
+ * first, then everything the user has run anywhere.
+ */
+export const listLaunchables = () =>
+  invoke<LauncherGroups>("list_launchables");
+
+/**
+ * Run a command line, streaming its output to `onEvent`.
+ *
+ * Unlike {@link startRun} this resolves as soon as the process is spawned — not
+ * when it exits — because a launched app is typically long-lived and the picker
+ * closes immediately. Watch `onEvent` for the exit. `cwd` defaults to the open
+ * workspace; `shell` hands the whole line to the default shell, which is
+ * required for anything using `|`, `>` or `&&` (an unquoted metacharacter is
+ * otherwise refused rather than passed through as an argument).
+ */
+export function launchCommand(
+  spec: {
+    command: string;
+    cwd?: string;
+    shell: boolean;
+    label?: string;
+    /**
+     * The key to address this launch by. Minted by the caller (not the backend)
+     * because output starts arriving the moment the process spawns — before this
+     * promise resolves — so the console needs its destination up front.
+     */
+    key: string;
+  },
+  onEvent: (event: ProcessEvent) => void,
+): Promise<LaunchedApp> {
+  const channel = new Channel<ProcessEvent>();
+  channel.onmessage = onEvent;
+  return invoke<LaunchedApp>("launch_command", { ...spec, channel });
+}
+
+/** Stop a launched app by the key {@link launchCommand} returned. */
+export const stopCommand = (key: string) =>
+  invoke<boolean>("stop_command", { key });
+
+/** Pin/unpin or rename a remembered command; resolves to the updated file. */
+export const saveLaunchable = (
+  id: string,
+  changes: { label?: string; pinned?: boolean },
+) => invoke<LauncherFile>("save_launchable", { id, ...changes });
+
+/** Forget a remembered command; resolves to the updated file. */
+export const deleteLaunchable = (id: string) =>
+  invoke<LauncherFile>("delete_launchable", { id });
 
 // ---------------------------------------------------------------------------
 // Running processes (the Running panel)

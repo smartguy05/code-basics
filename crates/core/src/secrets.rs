@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -173,11 +173,23 @@ fn insert_secrets_id(xml: &str, id: &str) -> Option<String> {
     Some(format!("{}{}{}", &xml[..end], insert, &xml[end..]))
 }
 
-/// Reduce the JSON dialect .NET's configuration loader accepts — `//` and
-/// `/* */` comments plus trailing commas — to strict JSON, for validation.
-/// Comments become spaces rather than disappearing, so error positions still
-/// roughly line up with the original text.
+/// A UTF-8 byte-order mark, which .NET's JSON reader skips and `serde_json`
+/// refuses. `dotnet user-secrets` and Rider both write one, so a `secrets.json`
+/// this app never created is quite likely to start with it.
+const BOM: &str = "\u{feff}";
+
+/// Reduce the JSON dialect .NET's configuration loader accepts — a leading
+/// byte-order mark, `//` and `/* */` comments, and trailing commas — to strict
+/// JSON, for validation. Comments become spaces rather than disappearing, so
+/// error positions still roughly line up with the original text.
 fn strip_jsonc(text: &str) -> String {
+    // The mark becomes spaces for the same reason a comment does: so a position
+    // serde reports still points at the right place in what the user wrote.
+    let text = match text.strip_prefix(BOM) {
+        Some(rest) => format!("{}{rest}", " ".repeat(BOM.len())),
+        None => text.to_string(),
+    };
+    let text = text.as_str();
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -263,6 +275,42 @@ fn strip_jsonc(text: &str) -> String {
     String::from_utf8(out).expect("stripping only replaces ASCII bytes with ASCII")
 }
 
+/// Turn a `serde_json` failure over stripped text into a message that names the
+/// line and shows it.
+///
+/// serde's own message ends in "at line L column C", which is true of the
+/// *stripped* text — but stripping only ever replaces bytes with spaces, never
+/// moves them, so the line number is the user's line number too. Quoting that
+/// line is what turns "secrets are not valid JSON" from a dead end into
+/// something the person reading it can act on; the original report of this bug
+/// blamed the comments in the file, and the real cause was a byte-order mark
+/// nothing on screen could show.
+fn jsonc_error(original: &str, error: &serde_json::Error) -> anyhow::Error {
+    /// Long enough for a connection string, short enough not to wrap an error
+    /// banner into a wall.
+    const MAX_QUOTED: usize = 200;
+
+    let line = error.line();
+    let quoted = original
+        .lines()
+        .nth(line.saturating_sub(1))
+        .map(str::trim_end)
+        .filter(|text| !text.is_empty());
+
+    match quoted {
+        // A position of 0 means serde could not place the failure at all.
+        Some(text) if line > 0 => {
+            let shown: String = if text.chars().count() > MAX_QUOTED {
+                format!("{}…", text.chars().take(MAX_QUOTED).collect::<String>())
+            } else {
+                text.to_string()
+            };
+            anyhow!("secrets are not valid JSON: {error}\n  line {line}: {shown}")
+        }
+        _ => anyhow!("secrets are not valid JSON: {error}"),
+    }
+}
+
 /// Save a project's secrets, adding a `<UserSecretsId>` to the project first
 /// when it has none.
 pub fn write(project_path: &Path, content: &str) -> Result<ProjectSecrets> {
@@ -271,7 +319,7 @@ pub fn write(project_path: &Path, content: &str) -> Result<ProjectSecrets> {
     // catching real syntax errors here beats a failure at application
     // startup, and rejecting the comments Rider writes would be worse.
     let parsed: serde_json::Value =
-        serde_json::from_str(&strip_jsonc(content)).context("secrets are not valid JSON")?;
+        serde_json::from_str(&strip_jsonc(content)).map_err(|e| jsonc_error(content, &e))?;
     if !parsed.is_object() {
         bail!("secrets must be a JSON object of key/value pairs");
     }
@@ -433,6 +481,88 @@ mod tests {
         assert_eq!(value.as_object().unwrap().len(), 2);
     }
 
+    /// Every shape .NET's configuration loader accepts that a person actually
+    /// writes into a `secrets.json`, checked one at a time so a failure names
+    /// the shape rather than "something in this file".
+    ///
+    /// .NET reads this file with `JsonDocumentOptions { CommentHandling = Skip,
+    /// AllowTrailingCommas = true }`, and both `dotnet user-secrets` and Rider
+    /// write files this module then has to accept back.
+    #[test]
+    fn the_dialect_dotnet_accepts_round_trips_shape_by_shape() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "line comment on its own line",
+                "{\n  // note\n  \"a\": \"1\"\n}",
+            ),
+            (
+                "line comment at end of line",
+                "{\n  \"a\": \"1\" // note\n}",
+            ),
+            (
+                "line comment as the last line, no trailing newline",
+                "{\n  \"a\": \"1\"\n}\n// note",
+            ),
+            (
+                "line comment before the opening brace",
+                "// note\n{ \"a\": \"1\" }",
+            ),
+            ("block comment inline", "{ /* note */ \"a\": \"1\" }"),
+            (
+                "block comment spanning lines",
+                "{\n  /* one\n     two */\n  \"a\": \"1\"\n}",
+            ),
+            ("empty block comment", "{ /**/ \"a\": \"1\" }"),
+            (
+                "block comment ending in a double star",
+                "{ /* note **/ \"a\": \"1\" }",
+            ),
+            (
+                "comment containing a quote",
+                "{\n  // do not say \"prod\"\n  \"a\": \"1\"\n}",
+            ),
+            (
+                "comment containing a brace",
+                "{\n  // } not the end\n  \"a\": \"1\"\n}",
+            ),
+            ("trailing comma", "{ \"a\": \"1\", }"),
+            (
+                "trailing comma then a line comment",
+                "{\n  \"a\": \"1\", // note\n}",
+            ),
+            (
+                "trailing comma then a block comment",
+                "{ \"a\": \"1\", /* note */ }",
+            ),
+            ("CRLF line endings", "{\r\n  // note\r\n  \"a\": \"1\"\r\n}"),
+            (
+                "nested object with comments",
+                "{\n  \"a\": {\n    // note\n    \"b\": \"1\"\n  }\n}",
+            ),
+            (
+                "non-ASCII inside a comment",
+                "{\n  // caf\u{e9} \u{2014} note\n  \"a\": \"1\"\n}",
+            ),
+            ("non-ASCII inside a value", "{ \"a\": \"caf\u{e9}\" }"),
+            ("UTF-8 BOM", "\u{feff}{\n  // note\n  \"a\": \"1\"\n}"),
+        ];
+
+        let mut failures = Vec::new();
+        for (name, text) in cases {
+            let stripped = strip_jsonc(text);
+            match serde_json::from_str::<serde_json::Value>(&stripped) {
+                Ok(value) if value.is_object() => {}
+                Ok(_) => failures.push(format!("{name}: parsed, but not into an object")),
+                Err(e) => failures.push(format!("{name}: {e}")),
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "shapes .NET accepts but this does not:\n{}",
+            failures.join("\n")
+        );
+    }
+
     #[test]
     fn comment_markers_inside_strings_are_left_alone() {
         let jsonc = r#"{ "url": "https://example.com/a", "note": "a // b /* c */" }"#;
@@ -440,6 +570,47 @@ mod tests {
 
         assert_eq!(value["url"], "https://example.com/a");
         assert_eq!(value["note"], "a // b /* c */");
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_tolerated_the_way_dotnet_tolerates_it() {
+        // The bug this was reported as: "secrets.json with comments will not
+        // save". The comments were never the problem — every comment shape
+        // already round-tripped. The file simply began with a mark that
+        // `dotnet user-secrets` had written and nothing on screen could show.
+        let jsonc = "\u{feff}{\n  // Local database\n  \"a\": \"1\",\n}";
+        let value: serde_json::Value = serde_json::from_str(&strip_jsonc(jsonc)).unwrap();
+
+        assert_eq!(value["a"], "1");
+    }
+
+    #[test]
+    fn only_a_leading_mark_is_stripped() {
+        // Anywhere else it is an ordinary character, and a stray one mid-file is
+        // a real error that must stay one.
+        assert!(serde_json::from_str::<serde_json::Value>(&strip_jsonc("{\u{feff}}")).is_err());
+        // Inside a string it is data the user typed, and must survive.
+        let value: serde_json::Value =
+            serde_json::from_str(&strip_jsonc("{ \"a\": \"x\u{feff}y\" }")).unwrap();
+        assert_eq!(value["a"], "x\u{feff}y");
+    }
+
+    #[test]
+    fn a_write_that_fails_validation_names_and_quotes_the_line() {
+        let (_dir, path) = project_with(WITH_ID);
+        let broken = "{\n  \"a\": \"1\"\n  \"b\": oops\n}";
+        let message = format!("{:#}", write(&path, broken).unwrap_err());
+
+        assert!(message.contains("line 3"), "{message}");
+        assert!(message.contains("\"b\": oops"), "{message}");
+    }
+
+    #[test]
+    fn a_failure_message_survives_a_line_it_cannot_quote() {
+        let (_dir, path) = project_with(WITH_ID);
+        // Nothing to quote: the failure is at the empty end of the input.
+        let message = format!("{:#}", write(&path, "").unwrap_err());
+        assert!(message.contains("secrets are not valid JSON"), "{message}");
     }
 
     #[test]
