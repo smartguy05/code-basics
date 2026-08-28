@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { OutputConsole, type ConsoleHandle } from "./OutputConsole";
 import * as api from "../ipc/api";
-import type { BehavioralReport, ProcessEvent } from "../ipc/types";
-import { behavioralScoreLine, deltaLine } from "./behavioralPanelLogic";
+import type { BehavioralDelta, BehavioralReport, ProcessEvent } from "../ipc/types";
+import {
+  behavioralScoreLine,
+  deltaConfidenceNote,
+  deltaDetail,
+  deltaLine,
+  testCaseRows,
+  unattributedReason,
+  type DetailRow,
+} from "./behavioralPanelLogic";
 import { behavioralReportToPromptContext } from "./claimVerifyLogic";
 import {
   clampPanelPosition,
@@ -71,6 +79,10 @@ export function BehavioralPanel({
   const [report, setReport] = useState<BehavioralReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [minimized, setMinimized] = useState(false);
+  // Console while it runs, evidence once there is any. The console pane stays
+  // mounted either way — unmounting it would throw away the only record of what
+  // the two runs actually printed.
+  const [tab, setTab] = useState<"console" | "evidence">("console");
   // The run ended while the window was minimized: flash the pill so a result
   // that arrived off-screen still gets noticed.
   const [attention, setAttention] = useState(false);
@@ -96,6 +108,9 @@ export function BehavioralPanel({
         if (!alive) return;
         setReport(result);
         setPhase("done");
+        // The 21 seconds were spent to produce the evidence — show it. The
+        // console is one click away, and a restore lands here too.
+        setTab("evidence");
         onReport(result);
         if (verify) onVerify(behavioralReportToPromptContext(result));
         // A result that landed while minimized needs a nudge; a visible window
@@ -212,17 +227,94 @@ export function BehavioralPanel({
 
         {error && <div className="warning">{error}</div>}
 
-        <div className="review-console">
+        <div className="behavioral-tabs" role="tablist">
+          <button
+            role="tab"
+            aria-selected={tab === "console"}
+            className={tab === "console" ? "active" : ""}
+            onClick={() => setTab("console")}
+          >
+            Console
+          </button>
+          <button
+            role="tab"
+            aria-selected={tab === "evidence"}
+            className={tab === "evidence" ? "active" : ""}
+            disabled={!report}
+            title={report ? "The assembled before/after evidence" : "Available when the run finishes"}
+            onClick={() => setTab("evidence")}
+          >
+            Evidence
+            {report && report.scorecard.deltas > 0 && (
+              <span className="behavioral-tab-count">{report.scorecard.deltas}</span>
+            )}
+          </button>
+        </div>
+
+        {/* Both panes are always mounted; only one is shown. */}
+        <div className="review-console" hidden={tab !== "console"}>
           <OutputConsole ref={consoleRef} />
         </div>
 
-        {report && <BehavioralReportView report={report} verify={verify} />}
+        {report && tab === "evidence" && <BehavioralReportView report={report} verify={verify} />}
       </div>
     </>
   );
 }
 
-/** The assembled report, laid out in full below the console. */
+/** How many deltas a report may hold before its rows start folded. */
+const AUTO_EXPAND_LIMIT = 3;
+
+/** One delta: the summary row, always visible, with its evidence under it. */
+function DeltaRow({
+  delta,
+  reason,
+  defaultOpen,
+}: {
+  delta: BehavioralDelta;
+  /** Why it was pinned to no card, for the unattributed list only. */
+  reason?: string;
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const line = deltaLine(delta);
+  const confidence = deltaConfidenceNote(delta);
+  const detail = deltaDetail(delta);
+
+  return (
+    <div className="behavioral-delta-row">
+      <button
+        className={`behavioral-delta ${line.tone}`}
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        title={open ? "Hide the evidence" : "Show the evidence"}
+      >
+        <span className="behavioral-caret" aria-hidden>
+          {open ? "▾" : "▸"}
+        </span>
+        <span>{line.text}</span>
+        {confidence && <span className="behavioral-confidence">{confidence}</span>}
+      </button>
+      {reason && <div className="behavioral-reason">not attributed: {reason}</div>}
+      {open && <DetailRows rows={detail} />}
+    </div>
+  );
+}
+
+/** The evidence lines themselves — a diff where there is one, notes elsewhere. */
+function DetailRows({ rows }: { rows: DetailRow[] }) {
+  return (
+    <div className="behavioral-detail-block">
+      {rows.map((row, i) => (
+        <div key={`${row.kind}:${i}:${row.text}`} className={`behavioral-detail ${row.kind} ${row.tone}`}>
+          {row.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The assembled report, laid out in full in the Evidence tab. */
 function BehavioralReportView({
   report,
   verify,
@@ -235,15 +327,26 @@ function BehavioralReportView({
     report.unattributed.length === 0 &&
     report.warnings.length === 0;
 
+  // A short report opens itself: folding away the only delta a run found is
+  // exactly the "console: 2 added, 2 removed and nothing else" this view exists
+  // to stop. A long one starts folded so the list stays scannable.
+  const totalDeltas =
+    report.unattributed.length +
+    report.attributions.reduce((n, card) => n + card.deltas.length, 0);
+  const autoOpen = totalDeltas <= AUTO_EXPAND_LIMIT;
+
   return (
     <div className="behavioral-report">
       <div className="behavioral-report-score">{behavioralScoreLine(report.scorecard)}</div>
 
       {report.tests && (
-        <div className="behavioral-report-line">
-          Tests: before {report.tests.summaryBefore.passed} passed /{" "}
-          {report.tests.summaryBefore.failed} failed → after {report.tests.summaryAfter.passed}{" "}
-          passed / {report.tests.summaryAfter.failed} failed
+        <div className="behavioral-report-section">
+          <div className="behavioral-report-line">
+            Tests: before {report.tests.summaryBefore.passed} passed /{" "}
+            {report.tests.summaryBefore.failed} failed → after {report.tests.summaryAfter.passed}{" "}
+            passed / {report.tests.summaryAfter.failed} failed
+          </div>
+          <DetailRows rows={testCaseRows(report.tests)} />
         </div>
       )}
 
@@ -255,14 +358,9 @@ function BehavioralReportView({
               <div className="faint" style={{ fontSize: 11 }}>
                 card {card.groupId} · {card.confidence} confidence
               </div>
-              {card.deltas.map((delta, i) => {
-                const line = deltaLine(delta);
-                return (
-                  <div key={`${line.text}:${i}`} className={`behavioral-delta ${line.tone}`}>
-                    {line.text}
-                  </div>
-                );
-              })}
+              {card.deltas.map((delta, i) => (
+                <DeltaRow key={`${card.groupId}:${i}`} delta={delta} defaultOpen={autoOpen} />
+              ))}
             </div>
           ))}
         </div>
@@ -271,14 +369,14 @@ function BehavioralReportView({
       {report.unattributed.length > 0 && (
         <div className="behavioral-report-section">
           <div className="behavioral-report-heading">Unattributed differences</div>
-          {report.unattributed.map((delta, i) => {
-            const line = deltaLine(delta);
-            return (
-              <div key={`${line.text}:${i}`} className={`behavioral-delta ${line.tone}`}>
-                {line.text}
-              </div>
-            );
-          })}
+          {report.unattributed.map((delta, i) => (
+            <DeltaRow
+              key={`unattributed:${i}`}
+              delta={delta}
+              reason={unattributedReason(delta)}
+              defaultOpen={autoOpen}
+            />
+          ))}
         </div>
       )}
 

@@ -1,10 +1,12 @@
 import type {
   BehavioralDelta,
   BehavioralScorecard,
+  BodyDelta,
   CardBehavior,
   CaseTransition,
   FileChange,
   RunConfig,
+  TestDelta,
 } from "../ipc/types";
 
 /**
@@ -267,4 +269,183 @@ export function deltaLine(delta: BehavioralDelta): DeltaLine {
     text: `console: ${delta.addedLines.length} added, ${delta.removedLines.length} removed`,
     tone: "neutral",
   };
+}
+
+/**
+ * How many lines of one side of one delta are shown before the rest is folded
+ * into a `+N more` row.
+ *
+ * A cap that silently truncated would be the very bug this evidence exists to
+ * avoid, so the withheld count is always stated — the same habit as the
+ * inspector's `Elided`.
+ */
+export const EVIDENCE_LINE_CAP = 20;
+
+/**
+ * One line of the evidence *under* a delta's summary row.
+ *
+ * `kind` is what the line is, not how it looks: `added`/`removed` are the two
+ * sides of a text diff (rendered monospace and coloured), `note` is everything
+ * that describes the comparison rather than being part of it — the masking
+ * note, the `+N more` remainder, a status or header change.
+ */
+export interface DetailRow {
+  text: string;
+  tone: Tone;
+  kind: "added" | "removed" | "note";
+}
+
+/** `null` renders as `absent`: a side that was not there is a fact, not a blank. */
+function orAbsent(value: string | null | undefined): string {
+  return value ?? "absent";
+}
+
+/**
+ * The `-`/`+` rows for one pair of line lists, capped per side.
+ *
+ * Removals come first so a row reads the way a diff does. Each side is capped
+ * independently, and a single trailing `+N more` states the total withheld
+ * across both, because the reader cares how much they are not seeing, not which
+ * half it came from.
+ */
+function diffRows(removed: string[], added: string[]): DetailRow[] {
+  const rows: DetailRow[] = [];
+  for (const line of removed.slice(0, EVIDENCE_LINE_CAP)) {
+    rows.push({ text: `- ${line}`, tone: "neutral", kind: "removed" });
+  }
+  for (const line of added.slice(0, EVIDENCE_LINE_CAP)) {
+    rows.push({ text: `+ ${line}`, tone: "neutral", kind: "added" });
+  }
+  const withheld =
+    Math.max(0, removed.length - EVIDENCE_LINE_CAP) +
+    Math.max(0, added.length - EVIDENCE_LINE_CAP);
+  if (withheld > 0) {
+    rows.push({ text: `+${withheld} more`, tone: "neutral", kind: "note" });
+  }
+  return rows;
+}
+
+/** The masking note for a body diff, only when masking actually happened. */
+function bodyRows(body: BodyDelta): DetailRow[] {
+  const rows = diffRows(body.removedLines, body.addedLines);
+  if (body.normalized) {
+    rows.push({
+      text: "timestamps and ids were masked before comparing",
+      tone: "neutral",
+      kind: "note",
+    });
+  }
+  return rows;
+}
+
+/**
+ * The evidence behind one delta — the lines, headers and outcomes the summary
+ * row only counted.
+ *
+ * Every field the backend carries is rendered here; nothing is dropped, because
+ * dropping it is what made a finished run read as "console: 2 added, 2 removed"
+ * and nothing else. A delta with no recorded detail says so rather than
+ * rendering an empty list, so an expanded row is never blank.
+ */
+export function deltaDetail(delta: BehavioralDelta): DetailRow[] {
+  if (delta.kind === "console") {
+    const rows = diffRows(delta.removedLines, delta.addedLines);
+    if (delta.normalized) {
+      rows.push({
+        text: "timestamps, ids, durations and both run roots were masked before comparing",
+        tone: "neutral",
+        kind: "note",
+      });
+    }
+    return rows;
+  }
+
+  if (delta.kind === "http") {
+    const rows: DetailRow[] = [];
+    if (delta.status) {
+      const [before, after] = delta.status;
+      rows.push({
+        text: `status ${before} → ${after}`,
+        tone: httpStatusTone(before, after),
+        kind: "note",
+      });
+    }
+    for (const header of delta.headerChanges) {
+      rows.push({
+        text: `${header.name}: ${orAbsent(header.before)} → ${orAbsent(header.after)}`,
+        tone: "neutral",
+        kind: "note",
+      });
+    }
+    if (delta.body) rows.push(...bodyRows(delta.body));
+    if (rows.length === 0) {
+      rows.push({
+        text: "the response differed, but no status, header or body detail was recorded",
+        tone: "neutral",
+        kind: "note",
+      });
+    }
+    return rows;
+  }
+
+  return [
+    {
+      text: `${orAbsent(delta.base)} → ${orAbsent(delta.work)}`,
+      tone: transitionTone(delta.transition),
+      kind: "note",
+    },
+  ];
+}
+
+/**
+ * How much the run trusts one delta, or `null` when the delta carries no
+ * confidence of its own.
+ *
+ * A test delta genuinely has none — its confidence is assigned during
+ * attribution (capped at medium, a single run per side), so printing one here
+ * would invent a number the backend never produced.
+ */
+export function deltaConfidenceNote(delta: BehavioralDelta): string | null {
+  if (delta.kind === "test") return null;
+  return `${delta.confidence} confidence`;
+}
+
+/**
+ * Why one delta was pinned to no intent card.
+ *
+ * "0 attributed" reads as a failure when it is usually a *rule*: HTTP and test
+ * deltas can never attribute (`behavioral/attribute.rs::candidate_paths` returns
+ * no candidate files for HTTP by design, and `compare.rs` leaves every case's
+ * `files_hint` empty), and a console delta attributes only when its changed
+ * lines name the files of exactly one card. The console wording is deliberately
+ * true of both the zero-owner and the ambiguous case, since the two are not
+ * distinguishable from the report alone.
+ */
+export function unattributedReason(delta: BehavioralDelta): string {
+  if (delta.kind === "test") {
+    return "a test case is not mapped to a source file, so a test delta is never pinned to a card";
+  }
+  if (delta.kind === "http") {
+    return "an .http request's handler is not derivable, so HTTP deltas are never pinned to a card";
+  }
+  return "no single intent card's files were named in these lines";
+}
+
+/**
+ * The test cases whose outcome actually moved, under the pass/fail summary line.
+ *
+ * `TestDelta.cases` already omits `Unchanged`, so this is exactly what changed —
+ * and an empty list is stated rather than rendered as an empty section, because
+ * "186 passed → 186 passed" with nothing beneath it leaves the reader unsure
+ * whether the rows are missing or there were none.
+ */
+export function testCaseRows(delta: TestDelta): DetailRow[] {
+  if (delta.cases.length === 0) {
+    return [{ text: "no test case changed outcome", tone: "neutral", kind: "note" }];
+  }
+  return delta.cases.map((c) => ({
+    text: `${c.transition}: ${c.fullName} (${orAbsent(c.base)} → ${orAbsent(c.work)})`,
+    tone: transitionTone(c.transition),
+    kind: "note" as const,
+  }));
 }

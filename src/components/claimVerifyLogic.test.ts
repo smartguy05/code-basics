@@ -158,6 +158,71 @@ describe("behavioralReportToPromptContext", () => {
     expect(text).toContain("response changed");
   });
 
+  it("hands the agent the actual console lines, not just their counts", () => {
+    const report: BehavioralReport = {
+      tests: null,
+      console: null,
+      http: [],
+      attributions: [],
+      unattributed: [consoleDelta()],
+      scorecard: { ...zeroScore, deltas: 1, unattributedDeltas: 1 },
+      warnings: [],
+    };
+    const text = behavioralReportToPromptContext(report);
+    // The counts stay — they are the summary — but the evidence is now there too.
+    expect(text).toContain("console: 2 added, 1 removed");
+    expect(text).toContain("- - x");
+    expect(text).toContain("+ + a");
+    expect(text).toContain("+ + b");
+    expect(text).toMatch(/masked before comparing/);
+  });
+
+  it("says why an unattributed delta was pinned to no card", () => {
+    const report: BehavioralReport = {
+      tests: null,
+      console: null,
+      http: [],
+      attributions: [],
+      unattributed: [httpDelta()],
+      scorecard: { ...zeroScore, deltas: 1, unattributedDeltas: 1 },
+      warnings: [],
+    };
+    expect(behavioralReportToPromptContext(report)).toMatch(
+      /handler is not derivable/,
+    );
+  });
+
+  it("carries the http header and body detail the summary line drops", () => {
+    const report: BehavioralReport = {
+      tests: null,
+      console: null,
+      http: [],
+      attributions: [
+        {
+          groupId: "c",
+          deltas: [
+            {
+              kind: "http",
+              name: "GET /orders",
+              status: null,
+              headerChanges: [{ name: "x-total", before: "3", after: "4" }],
+              body: { addedLines: ["4"], removedLines: ["3"], normalized: false },
+              confidence: "medium",
+            },
+          ],
+          confidence: "medium",
+        },
+      ],
+      unattributed: [],
+      scorecard: zeroScore,
+      warnings: [],
+    };
+    const text = behavioralReportToPromptContext(report);
+    expect(text).toContain("x-total: 3 → 4");
+    expect(text).toContain("- 3");
+    expect(text).toContain("+ 4");
+  });
+
   it("notes a card that carries no deltas", () => {
     const report: BehavioralReport = {
       tests: null,

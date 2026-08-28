@@ -233,7 +233,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/App.tsx` | 674 |  |
 | `src/components/AppOutputPanel.tsx` | 237 |  |
 | `src/components/AttachConfirm.tsx` | 63 |  |
-| `src/components/BehavioralPanel.tsx` | 304 |  |
+| `src/components/BehavioralPanel.tsx` | 402 |  |
 | `src/components/BranchMenu.tsx` | 386 |  |
 | `src/components/ConfigEditor.tsx` | 313 |  |
 | `src/components/DiffView.tsx` | 967 |  |
@@ -265,12 +265,12 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/WorkspaceTab.tsx` | 399 |  |
 | `src/components/appOutputLogic.test.ts` | 193 |  |
 | `src/components/appOutputLogic.ts` | 168 | Pure decisions for the launched-apps output panel — the tab list, which tab |
-| `src/components/behavioralPanelLogic.test.ts` | 255 |  |
-| `src/components/behavioralPanelLogic.ts` | 270 |  |
+| `src/components/behavioralPanelLogic.test.ts` | 425 |  |
+| `src/components/behavioralPanelLogic.ts` | 451 |  |
 | `src/components/claimChecklistLogic.test.ts` | 147 |  |
 | `src/components/claimChecklistLogic.ts` | 106 |  |
-| `src/components/claimVerifyLogic.test.ts` | 247 |  |
-| `src/components/claimVerifyLogic.ts` | 150 |  |
+| `src/components/claimVerifyLogic.test.ts` | 312 |  |
+| `src/components/claimVerifyLogic.ts` | 177 |  |
 | `src/components/confidenceLogic.test.ts` | 145 |  |
 | `src/components/confidenceLogic.ts` | 75 |  |
 | `src/components/configLogic.test.ts` | 111 |  |

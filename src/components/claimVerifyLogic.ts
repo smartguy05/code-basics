@@ -4,7 +4,12 @@ import type {
   RulesReport,
   RunConfig,
 } from "../ipc/types";
-import { behavioralScoreLine, pickBehavioralConfig } from "./behavioralPanelLogic";
+import {
+  behavioralScoreLine,
+  deltaDetail,
+  pickBehavioralConfig,
+  unattributedReason,
+} from "./behavioralPanelLogic";
 
 /**
  * Decisions behind the "Verify claims" and "Verify rules" review actions.
@@ -16,11 +21,12 @@ import { behavioralScoreLine, pickBehavioralConfig } from "./behavioralPanelLogi
  */
 
 /**
- * A one-line, plain-text description of one behavioral delta, for the evidence
- * block. Deliberately terse and stable — it is read by an agent, not rendered,
- * so it carries no tone or markup, only the fact.
+ * The summary line for one behavioral delta — what it is, in one line.
+ *
+ * Deliberately terse and stable: it is read by an agent, not rendered, so it
+ * carries no tone or markup, only the fact.
  */
-function describeDelta(delta: BehavioralDelta): string {
+function summariseDelta(delta: BehavioralDelta): string {
   if (delta.kind === "test") {
     const from = delta.base ?? "absent";
     const to = delta.work ?? "absent";
@@ -33,6 +39,24 @@ function describeDelta(delta: BehavioralDelta): string {
     return `http ${delta.name}: ${status}`;
   }
   return `console: ${delta.addedLines.length} added, ${delta.removedLines.length} removed`;
+}
+
+/**
+ * One delta as the summary line plus the evidence beneath it, indented under
+ * `indent`.
+ *
+ * The detail rows come from {@link deltaDetail} — the same rows the panel
+ * renders — so the agent and the reader can never be looking at different
+ * evidence. A test delta's only detail is its outcome pair, which the summary
+ * line already states, so it is not repeated.
+ */
+function describeDelta(delta: BehavioralDelta, indent: string): string[] {
+  const lines = [`${indent}- ${summariseDelta(delta)}`];
+  if (delta.kind === "test") return lines;
+  for (const row of deltaDetail(delta)) {
+    lines.push(`${indent}    ${row.text}`);
+  }
+  return lines;
 }
 
 /**
@@ -73,14 +97,17 @@ export function behavioralReportToPromptContext(report: BehavioralReport): strin
       if (card.deltas.length === 0) {
         lines.push("  - (no deltas)");
       } else {
-        for (const delta of card.deltas) lines.push(`  - ${describeDelta(delta)}`);
+        for (const delta of card.deltas) lines.push(...describeDelta(delta, "  "));
       }
     }
   }
 
   if (report.unattributed.length > 0) {
     lines.push("", "Unattributed deltas (pinned to no card):");
-    for (const delta of report.unattributed) lines.push(`- ${describeDelta(delta)}`);
+    for (const delta of report.unattributed) {
+      lines.push(...describeDelta(delta, ""));
+      lines.push(`    why: ${unattributedReason(delta)}`);
+    }
   }
 
   if (report.warnings.length > 0) {

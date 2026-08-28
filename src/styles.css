@@ -787,15 +787,97 @@ textarea:focus {
    BehavioralPanel. Scrolls on its own so a long report never pushes the console
    off-screen. */
 .behavioral-report {
-  border-top: 1px solid var(--border);
+  /* The Evidence tab pane: it owns the panel body, so it flexes to fill rather
+     than living in a capped strip under the console. */
+  flex: 1;
+  min-height: 0;
+  border-top: 1px solid var(--border-strong);
   padding: 8px 10px;
   overflow: auto;
-  max-height: 40%;
   display: flex;
   flex-direction: column;
   gap: 6px;
   font-size: 12px;
 }
+
+/* Console / Evidence. Both panes stay mounted; only one is shown. */
+.behavioral-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px 0;
+  border-top: 1px solid var(--border-strong);
+}
+.behavioral-tabs button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.behavioral-tabs button:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+.behavioral-tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.behavioral-tab-count {
+  margin-left: 5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+/* One delta: a click-to-expand summary row with its evidence beneath. */
+.behavioral-delta-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.behavioral-delta-row > button.behavioral-delta {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.behavioral-caret {
+  flex: none;
+  width: 1em;
+  color: var(--text-faint);
+}
+.behavioral-confidence {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.behavioral-reason {
+  color: var(--text-faint);
+  font-size: 11px;
+  padding-left: calc(1em + 5px);
+}
+.behavioral-detail-block {
+  display: flex;
+  flex-direction: column;
+  padding-left: calc(1em + 5px);
+  overflow-x: auto;
+}
+.behavioral-detail {
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  color: var(--text-dim);
+}
+.behavioral-detail.added { color: var(--pass); }
+.behavioral-detail.removed { color: var(--fail); }
+.behavioral-detail.note { color: var(--text-faint); }
+.behavioral-detail.note.positive { color: var(--pass); }
+.behavioral-detail.note.warning { color: var(--fail); }
 .behavioral-report-score {
   font-weight: 600;
 }
