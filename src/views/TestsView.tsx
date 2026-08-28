@@ -14,6 +14,7 @@ import type {
   Workspace,
 } from "../ipc/types";
 import { applyLiveOutcomes, classifyLine } from "./testsLogic";
+import { runningConfigIdsOfKind } from "./runControlLogic";
 
 const OUTCOME_FILTERS: TestOutcome[] = ["passed", "failed", "skipped", "other"];
 
@@ -176,8 +177,12 @@ export function TestsView({
     }
   }
 
+  // Stop every running test configuration, not just the selected one — a test
+  // run can also be started from the Run tab or the search palette. The live
+  // ids come from the supervisor, so this is authoritative.
   async function cancel() {
-    if (selectedConfig) await api.cancelRun(selectedConfig);
+    const ids = runningConfigIdsOfKind(workspace.configs, await api.runningIds(), "test");
+    await Promise.all(ids.map((id) => api.cancelRun(id)));
   }
 
   const failedCount = outcome?.result.summary.failed ?? 0;
@@ -230,8 +235,8 @@ export function TestsView({
         >
           Re-run failed{failedCount > 0 ? ` (${failedCount})` : ""}
         </button>
-        <button onClick={cancel} disabled={!running}>
-          Stop
+        <button onClick={cancel} disabled={!running} title="Stop all running tests">
+          Stop Tests
         </button>
         <button
           onClick={() => consoleRef.current?.clear()}

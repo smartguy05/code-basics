@@ -64,6 +64,19 @@ describe("summariseLspStatus", () => {
     ).toBeNull();
   });
 
+  it("marks the summary restartable only when a server has failed", () => {
+    const failed = summariseLspStatus(
+      status(server({ id: "csharp", language: "C#", state: "failed" })),
+    );
+    expect(failed?.restartable).toBe(true);
+
+    // A server that is merely still loading is not a candidate for restart.
+    const loading = summariseLspStatus(
+      status(server({ id: "csharp", language: "C#", state: "loading" })),
+    );
+    expect(loading?.restartable).toBe(false);
+  });
+
   it("speaks up about a ready server whose answers may be incomplete", () => {
     // The observed failure: Roslyn promoted at the 90 s ceiling. Every count in
     // the file said it might be low, and the titlebar showed nothing at all —

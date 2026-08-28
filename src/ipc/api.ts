@@ -873,6 +873,9 @@ export const archValidate = (source: string) =>
  */
 export const lspStatus = () => invoke<LspStatus>("lsp_status");
 
+/** Tear down this workspace's language-server session and start a fresh one. */
+export const lspRestart = () => invoke<LspStatus>("lsp_restart");
+
 /**
  * Tell the servers the editor now holds `text` for `path`.
  *

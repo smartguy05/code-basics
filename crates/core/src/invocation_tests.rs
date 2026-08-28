@@ -453,3 +453,79 @@ fn re_running_failures_when_everything_passed_is_refused() {
         "there are no failed tests from a previous run of this configuration to re-run"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Build solution (one build per project)
+// ---------------------------------------------------------------------------
+
+use crate::adapters::dotnet::BuildAction;
+
+/// A classic `.sln` referencing the given `(name, relative csproj path)` pairs.
+fn sln_referencing(entries: &[(&str, &str)]) -> String {
+    let mut out = String::from(
+        "Microsoft Visual Studio Solution File, Format Version 12.00\n# Visual Studio Version 17\n",
+    );
+    for (i, (name, path)) in entries.iter().enumerate() {
+        // Paths are written with `\`, as a real solution does; the parser
+        // normalises them to `/`.
+        let backslashed = path.replace('/', "\\");
+        out.push_str(&format!(
+            "Project(\"{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}\") = \"{name}\", \"{backslashed}\", \"{{0000000{i}-0000-0000-0000-000000000000}}\"\nEndProject\n"
+        ));
+    }
+    out
+}
+
+#[test]
+fn plan_solution_build_emits_one_dotnet_build_per_resolved_project() {
+    let sln = sln_referencing(&[("App", "App/App.csproj"), ("Lib", "Lib/Lib.csproj")]);
+    let (_dir, ws) = workspace_with(&[
+        ("App/App.csproj", EXE_CSPROJ),
+        ("Lib/Lib.csproj", EXE_CSPROJ),
+        ("Sln.sln", &sln),
+    ]);
+    assert_eq!(
+        ws.solutions.len(),
+        1,
+        "the solution should have been scanned"
+    );
+
+    let (steps, warnings) = plan_solution_build(&ws, &ws.solutions[0], BuildAction::Build);
+
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    assert_eq!(steps.len(), 2, "one build step per resolved project");
+    for step in &steps {
+        assert_eq!(step.invocation.program, "dotnet");
+        assert_eq!(
+            step.invocation.args.first().map(String::as_str),
+            Some("build")
+        );
+        assert!(
+            step.invocation.args.iter().any(|a| a.ends_with(".csproj")),
+            "each step targets a project file; args were {:?}",
+            step.invocation.args
+        );
+    }
+    let names: Vec<&str> = steps.iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        names.contains(&"App") && names.contains(&"Lib"),
+        "names: {names:?}"
+    );
+}
+
+#[test]
+fn plan_solution_build_warns_about_a_member_the_scan_did_not_find() {
+    // The solution references a project that is not on disk: it cannot be built,
+    // and must be reported rather than silently dropped.
+    let sln = sln_referencing(&[("App", "App/App.csproj"), ("Ghost", "Ghost/Ghost.csproj")]);
+    let (_dir, ws) = workspace_with(&[("App/App.csproj", EXE_CSPROJ), ("Sln.sln", &sln)]);
+
+    let (steps, warnings) = plan_solution_build(&ws, &ws.solutions[0], BuildAction::Build);
+
+    assert_eq!(steps.len(), 1, "only the project that exists is built");
+    assert_eq!(steps[0].name, "App");
+    assert!(
+        warnings.iter().any(|w| w.contains("Ghost")),
+        "the missing member should be reported: {warnings:?}"
+    );
+}

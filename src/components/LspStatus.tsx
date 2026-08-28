@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import * as api from "../ipc/api";
-import { lspPollDelay, summariseLspStatus } from "./lspStatusLogic";
+import { LSP_RESTART_CAVEAT, lspPollDelay, summariseLspStatus } from "./lspStatusLogic";
 import type { LspStatus } from "../ipc/types";
 
 /**
@@ -22,6 +22,20 @@ import type { LspStatus } from "../ipc/types";
 export function LspStatusIndicator({ pollKey }: { pollKey: string }) {
   const [status, setStatus] = useState<LspStatus | null>(null);
   const [open, setOpen] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+
+  const restart = async () => {
+    setRestarting(true);
+    try {
+      // The command returns the fresh session's status; the poll loop then
+      // follows it from starting → loading → ready.
+      setStatus(await api.lspRestart());
+    } catch {
+      // A failed restart leaves the old status in place; nothing better to show.
+    } finally {
+      setRestarting(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -117,6 +131,22 @@ export function LspStatusIndicator({ pollKey }: { pollKey: string }) {
                 )}
               </div>
             ))}
+
+            {/* One action for the whole session: restart recovers a server that
+                crashed, and the caveat says what it cannot fix. */}
+            {summary.restartable && (
+              <div
+                className="dropdown-item"
+                style={{ display: "block", cursor: "default", whiteSpace: "normal" }}
+              >
+                <button disabled={restarting} onClick={() => void restart()}>
+                  {restarting ? "Restarting…" : "Restart language server"}
+                </button>
+                <div className="muted" style={{ marginTop: 4 }}>
+                  {LSP_RESTART_CAVEAT}
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}

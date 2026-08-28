@@ -31,6 +31,7 @@ import {
   type NavHistory,
 } from "./editorNavLogic";
 import { preferApplicationProcess } from "./inspectLogic";
+import { runningConfigIdsOfKind } from "./runControlLogic";
 import type { InspectRequest, OpenFileRequest, SelectConfigRequest } from "../App";
 import type {
   AttachableProcess,
@@ -600,6 +601,16 @@ export function RunView({
   /** Sessions whose "application is up" line has already prompted one re-read. */
   const appUpSeen = useRef(new Set<string>());
 
+  /**
+   * Per-config run generation. Restart starts a new run under the same id
+   * while the previous one is still settling; the backend cancels the old
+   * process, but the old run's `startRun` promise still resolves and would
+   * otherwise clear the "running" indicator out from under the replacement.
+   * A run only clears its own bookkeeping while it is still the current
+   * generation for its id.
+   */
+  const runGenRef = useRef(new Map<string, number>());
+
   function registerConsole(id: string, handle: ConsoleHandle | null) {
     if (!handle) {
       consoleRefs.current.delete(id);
@@ -789,6 +800,14 @@ export function RunView({
     setError(null);
     setSelectedId(config.id);
     openSession(config.id, config.name);
+
+    // Claim this id's current generation. A later restart bumps it; the
+    // backend then cancels our process, and the guard below stops our stale
+    // completion from clobbering the replacement's state.
+    const gen = (runGenRef.current.get(config.id) ?? 0) + 1;
+    runGenRef.current.set(config.id, gen);
+    const current = () => runGenRef.current.get(config.id) === gen;
+
     setRunning((previous) => new Set(previous).add(config.id));
 
     // The picker only applies to .NET, and "" means run the config as-is.
@@ -800,19 +819,31 @@ export function RunView({
     try {
       await api.startRun(config.id, (event) => handleEvent(config.id, event), env);
     } catch (e) {
-      setError(api.errorMessage(e));
-      setStatus(config.id, "fail");
+      if (current()) {
+        setError(api.errorMessage(e));
+        setStatus(config.id, "fail");
+      }
     } finally {
-      setRunning((previous) => {
-        const next = new Set(previous);
-        next.delete(config.id);
-        return next;
-      });
+      if (current()) {
+        setRunning((previous) => {
+          const next = new Set(previous);
+          next.delete(config.id);
+          return next;
+        });
+      }
     }
   }
 
   async function stop(config: RunConfig) {
     await api.cancelRun(config.id);
+  }
+
+  // Stop every running application (RunKind "app"), leaving tests and builds
+  // alone. Reads the live ids from the supervisor so it is authoritative rather
+  // than trusting this view's own bookkeeping.
+  async function stopAllRuns() {
+    const ids = runningConfigIdsOfKind(workspace.configs, await api.runningIds(), "app");
+    await Promise.all(ids.map((id) => api.cancelRun(id)));
   }
 
   async function save(config: RunConfig) {
@@ -1053,6 +1084,13 @@ export function RunView({
             disabled={!selected || !running.has(selected.id)}
           >
             Stop
+          </button>
+          <button
+            onClick={() => void stopAllRuns()}
+            disabled={runningConfigIdsOfKind(workspace.configs, [...running], "app").length === 0}
+            title="Stop every running application (leaves tests and builds running)"
+          >
+            Stop All
           </button>
           <button
             onClick={() => selected && start(selected)}

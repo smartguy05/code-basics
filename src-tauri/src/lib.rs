@@ -218,6 +218,7 @@ pub fn run() {
             commands::symbols::symbol_index_status,
             commands::symbols::rebuild_symbol_index,
             commands::lsp::lsp_status,
+            commands::lsp::lsp_restart,
             commands::lsp::lsp_open_document,
             commands::lsp::lsp_change_document,
             commands::lsp::lsp_close_document,
@@ -233,6 +234,21 @@ pub fn run() {
             commands::running::list_running,
             commands::running::kill_running,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to start code-basics");
+        .build(tauri::generate_context!())
+        .expect("failed to start code-basics")
+        .run(|app_handle, event| {
+            // When the app is quitting (last window closed, or an explicit
+            // exit), tree-kill everything it started so nothing is orphaned.
+            // Every spawning handle — per-workspace supervisors, the global
+            // supervisor and the PTY manager — records into the one shared
+            // registry, so its live set is the complete set of live pids.
+            // A true crash (panic = abort) cannot run this; that case stays
+            // covered by the next-launch orphan detection in `.setup`.
+            if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                for record in app_handle.state::<AppState>().running.live() {
+                    cb_core::process::kill_tree(record.pid);
+                }
+            }
+        });
 }

@@ -189,6 +189,31 @@ fn status_for(session: Result<LspHandle, String>) -> LspStatus {
     }
 }
 
+/// Tear down this workspace's language-server session and start a fresh one.
+///
+/// The Restart action behind the status dropdown. It helps the one failure mode
+/// a restart can help — a server that ran and then crashed (a second death
+/// inside the restart window latches [`cb_core::lsp::model::Availability::Failed`])
+/// — by resetting the session so the next request spawns the process again and
+/// replays the open documents. It cannot fix a server that never started (a
+/// missing binary, a failed handshake) or a `.code-basics/config.json`
+/// misconfiguration; those re-run identically, which the dropdown says.
+///
+/// The slot is emptied before the restart because [`AppState::record_lsp_session`]
+/// refuses to publish over a live session; the old handle is torn down rather
+/// than dropped, because a dropped handle would orphan its server process tree.
+/// Never an error, for the same reason [`lsp_status`] is not: the status surface
+/// is where the result is read.
+#[tauri::command]
+pub async fn lsp_restart(state: State<'_, AppState>) -> Result<LspStatus, String> {
+    if let Ok(slot) = state.active_slot() {
+        if let Some(handle) = slot.take_lsp() {
+            handle.request_teardown();
+        }
+    }
+    Ok(status_for(ensure_session(&state)))
+}
+
 /// The editor opened a document, or replaced its contents wholesale.
 ///
 /// Enqueued and not confirmed: a `didOpen` has no reply to wait for, and the

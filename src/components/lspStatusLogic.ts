@@ -104,7 +104,18 @@ export interface LspStatusSummary {
   title: string;
   /** Worst first; ready servers are absent. Never empty. */
   lines: LspServerLine[];
+  /**
+   * Whether offering to restart the session is worth it: true when a server has
+   * failed. A restart recovers a server that ran and then crashed; it re-runs
+   * identically for a server that never started (missing binary, failed
+   * handshake) or a bad configuration — hence {@link LSP_RESTART_CAVEAT}.
+   */
+  restartable: boolean;
 }
+
+/** What a restart can and cannot fix, shown beside the Restart action. */
+export const LSP_RESTART_CAVEAT =
+  "Restart recovers a server that crashed. It won't fix a missing server binary or a bad configuration — see the detail above.";
 
 /**
  * What is worth saying about the servers right now, or `null` for nothing.
@@ -159,6 +170,7 @@ export function summariseLspStatus(status: LspStatus | null): LspStatusSummary |
       )
       .join("\n"),
     lines,
+    restartable: lines.some((line) => line.state === "failed"),
   };
 }
 
