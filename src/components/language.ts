@@ -88,6 +88,12 @@ export function languageFor(path: string): Extension[] {
     case "scss":
       return [css()];
     case "html":
+    // ASP.NET razor / cshtml views: HTML markup with C# interleaved in
+    // `@code` / `@{ … }` blocks. No razor mode ships with CodeMirror, so the
+    // HTML mode is the close-enough approximation — it highlights the markup
+    // and leaves the C# as plain text (the same trade cpp makes for C#).
+    case "razor":
+    case "cshtml":
       return [html()];
     case "py":
       return [python()];

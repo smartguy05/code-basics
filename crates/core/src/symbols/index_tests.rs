@@ -108,6 +108,53 @@ fn a_file_with_no_parsable_extension_is_listed_but_yields_no_symbols() {
 }
 
 #[test]
+fn a_razor_component_indexes_the_csharp_in_its_code_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    // A typical Blazor component: routable markup up top, C# in an `@code`
+    // block. The markup and directives carry no declaring keyword and must
+    // abstain; the C# member is a real symbol worth jumping to.
+    write(
+        root,
+        "src/App/Pages/Counter.razor",
+        concat!(
+            "@page \"/counter\"\n",
+            "@inject IState State\n",
+            "<h1>Counter</h1>\n",
+            "<button @onclick=\"IncrementCount\">Click</button>\n",
+            "@code {\n",
+            "    private int currentCount = 0;\n",
+            "    private void IncrementCount() { currentCount++; }\n",
+            "}\n",
+        ),
+    );
+
+    let index = build(root, &[project(root, "App", "src/App")]);
+
+    assert!(
+        files(&index).contains(&"src/App/Pages/Counter.razor".to_string()),
+        "go-to-file must see it: {:?}",
+        files(&index)
+    );
+    let found = names(&index);
+    assert!(
+        found.contains(&"IncrementCount"),
+        "the @code method must be searchable: {found:?}"
+    );
+    assert!(
+        found.contains(&"currentCount"),
+        "the @code field must be searchable: {found:?}"
+    );
+    // The `@page` / `@inject` directives and the markup declare nothing.
+    assert!(
+        !found
+            .iter()
+            .any(|n| n.contains('<') || *n == "page" || *n == "inject"),
+        "razor markup and directives must not fabricate symbols: {found:?}"
+    );
+}
+
+#[test]
 fn an_oversized_file_is_listed_but_yields_no_symbols() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

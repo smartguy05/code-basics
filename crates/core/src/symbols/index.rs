@@ -186,9 +186,18 @@ const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 /// costs a wasted read per VB file and nothing else, which is the cheaper half
 /// of the trade: dropping it would mean silently re-adding it the day VB gets
 /// rules, while leaving it means only the rules have to be written.
+///
+/// `razor` and `cshtml` are the ASP.NET view formats: HTML markup interleaved
+/// with C# in `@code` / `@functions` blocks and `@{ … }` expressions. They are
+/// listed because that embedded C# is real, jump-worthy source, and the C#
+/// rules in `declarations` scan it line by line and extract it. The surrounding
+/// markup and the `@page` / `@inject` / `@using` directives carry no lowercase
+/// declaring keyword, so — exactly like a `.vb` line — they abstain rather than
+/// fabricate a symbol, which is why listing the extension adds signal and not
+/// noise.
 const PARSABLE_EXTENSIONS: &[&str] = &[
     "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "cs", "fs", "vb", "py", "go", "java", "kt", "rb",
-    "php", "c", "h", "cpp", "hpp", "swift", "scala", "sql",
+    "php", "c", "h", "cpp", "hpp", "swift", "scala", "sql", "razor", "cshtml",
 ];
 
 /// The caps a build runs under.
