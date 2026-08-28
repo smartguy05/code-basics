@@ -155,7 +155,20 @@ pub async fn git_commit(
     // than reported as a failed commit.
     record_why(&root, &repo, &oid);
 
+    // Strictly after `record_why`: the note is built from the very records this
+    // retires, so pruning first would leave every durable-why note empty.
+    retire_absorbed(&root, &repo);
+
     Ok(oid)
+}
+
+/// Retire the intents this commit absorbed, so a reason that is now history
+/// stops labelling later work. Best-effort for the same reason the note is: the
+/// commit has already succeeded.
+fn retire_absorbed(root: &Path, repo: &Repo) {
+    if let Err(e) = cb_core::intents::retire::run_if_head_moved(repo, root) {
+        eprintln!("intent prune skipped: {e:#}");
+    }
 }
 
 /// Build the content-keyed intent for a just-made commit and write it to its

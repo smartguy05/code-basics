@@ -42,6 +42,7 @@ import type {
   ProviderId,
   ProviderStatus,
   RejectSummary,
+  RetireSummary,
   ReviewAgentInfo,
   RiderImportPreview,
   RootSpec,
@@ -653,6 +654,20 @@ export const disableIntentCapture = (provider: ProviderId, scope: InstallScope) 
 /** Read what the agents already recorded, with no setup. Returns the total. */
 export const importIntentHistory = () =>
   invoke<number>("import_intent_history");
+
+/**
+ * How much recorded history a prune would retire, changing nothing. The dry run
+ * shown before the archive action is confirmed.
+ */
+export const intentPrunePreview = () => invoke<RetireSummary>("intent_prune_preview");
+
+/**
+ * Archive every intent this workspace's HEAD has already absorbed. The only way
+ * to clear a backlog recorded before pruning existed: the automatic prune needs
+ * a baseline to notice HEAD moving against, so it never touches what was there
+ * already. Retired records are archived and tombstoned, never destroyed.
+ */
+export const pruneIntentHistory = () => invoke<RetireSummary>("prune_intent_history");
 
 export const clearIntentHistory = () => invoke<void>("clear_intent_history");
 

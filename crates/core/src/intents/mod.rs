@@ -51,6 +51,7 @@ pub mod hook;
 pub mod patchfmt;
 pub mod providers;
 pub mod reject;
+pub mod retire;
 pub mod user;
 pub mod whyhook;
 
@@ -553,10 +554,20 @@ fn append_line<T: Serialize>(path: &Path, value: &T, root: &Path) -> Result<()> 
 }
 
 /// The next unused sequence number for a workspace.
+///
+/// The high-water mark from [`retire`] is taken into account, not just the file:
+/// retiring records lowers the maximum still on disk, and handing the number out
+/// again would collide with a survivor and break the "later edits win" rule
+/// [`crate::git::attribution`] depends on.
 pub fn next_seq(root: &Path) -> u64 {
-    read_jsonl::<IntentRecord>(&edits_path(root))
+    let in_file = read_jsonl::<IntentRecord>(&edits_path(root))
         .map(|records| records.iter().map(|r| r.seq).max().map_or(0, |m| m + 1))
-        .unwrap_or(0)
+        .unwrap_or(0);
+    // Zero means nothing has ever been retired, not "sequence 0 is taken" — a
+    // workspace that has recorded nothing must still start at 0.
+    let high = retire::load_state(root).high_seq;
+    let retired = if high == 0 { 0 } else { high.saturating_add(1) };
+    in_file.max(retired)
 }
 
 /// Lift a batch of imported records above the numbering a workspace already
@@ -585,7 +596,12 @@ pub fn rebase_seqs(records: &mut [IntentRecord], base: u64) -> u64 {
 }
 
 /// Forget everything recorded for a workspace.
+///
+/// The retirement bookkeeping goes too: tombstones left behind would make a
+/// clear-then-import silently return nothing, and a stale high-water mark would
+/// keep numbering edits above records that no longer exist.
 pub fn clear(root: &Path) -> Result<()> {
+    retire::clear(root)?;
     for path in [edits_path(root), labels_path(root), prompts_path(root)] {
         if path.exists() {
             std::fs::remove_file(&path)

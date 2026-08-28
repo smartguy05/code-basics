@@ -31,8 +31,10 @@ export function TerminalPanel({
   title,
   cwd,
   index,
+  stackOffset,
   color,
   onClose,
+  onRaise,
   onAttentionChange,
   onCompleted,
   onRename,
@@ -47,9 +49,18 @@ export function TerminalPanel({
   cwd: string;
   /** Position among the currently open terminals, for the cascade offset. */
   index: number;
+  /**
+   * This terminal's step within the terminal stacking band — how far in front of
+   * the other terminals it sits. Separate from `index` on purpose: `index` is
+   * positional (it places the pill and the cascade) and this is temporal (it
+   * records what was clicked last). See `terminalLogic.stackOffset`.
+   */
+  stackOffset: number;
   /** User-chosen minimized-pill background, or undefined for the theme default. */
   color?: string;
   onClose: () => void;
+  /** Bring this terminal in front of the others. Idempotent when already top. */
+  onRaise?: () => void;
   /**
    * Report this terminal's attention flag upward so its (possibly hidden)
    * workspace tab can flash. Fired whenever the flag changes, and cleared to
@@ -227,6 +238,9 @@ export function TerminalPanel({
   // Restoring the panel acknowledges the flash, and re-fits the terminal to the
   // size it now has.
   const restore = () => {
+    // Restoring is an explicit "I want this one now". The pill is a sibling of
+    // the panel, so the panel's own pointer handler never sees this click.
+    onRaise?.();
     setMinimized(false);
     setAttention(false);
     // The fit must wait for the panel to become visible again this frame.
@@ -324,7 +338,14 @@ export function TerminalPanel({
         className="review-panel terminal-panel"
         hidden={minimized}
         ref={panelRef}
+        // Capture phase, on the root rather than the header, so clicking into the
+        // terminal *body* raises it too — and so this runs before the header's
+        // drag handler and before xterm sees the press. It deliberately neither
+        // preventDefaults nor stops propagation, which is what leaves xterm's
+        // text selection, the drag, and the header buttons untouched.
+        onPointerDownCapture={() => onRaise?.()}
         style={{
+          ...({ "--cb-stack": stackOffset } as React.CSSProperties),
           ...(pos
             ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" }
             : shift

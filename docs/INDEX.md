@@ -108,7 +108,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/hook.rs` | 837 | Turning a hook payload into a record. |
 | `crates/core/src/intents/hook_tests.rs` | 1388 | Tests for ingesting hook payloads. Included by `hook.rs` under `#[cfg(test)]`. |
 | `crates/core/src/intents/intents_tests.rs` | 962 | Tests for recorded agent intent. Included by `mod.rs` under `#[cfg(test)]`. |
-| `crates/core/src/intents/mod.rs` | 600 | What a coding agent said it was doing, and where it wrote it down. |
+| `crates/core/src/intents/mod.rs` | 616 | What a coding agent said it was doing, and where it wrote it down. |
 | `crates/core/src/intents/patchfmt.rs` | 224 | Reading Codex's patch format. |
 | `crates/core/src/intents/patchfmt_tests.rs` | 223 | Tests for Codex patch parsing. Included by `patchfmt.rs` under `#[cfg(test)]`. |
 | `crates/core/src/intents/providers/claude_code.rs` | 700 | Claude Code: hooks in `settings.json`, history in per-project transcripts. |
@@ -123,6 +123,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/providers/settings_merge.rs` | 158 | Generic marker-based merging of hook entries into a `settings.json`-shaped |
 | `crates/core/src/intents/reject.rs` | 572 | Rejecting a change: undoing it and leaving the reason where it was. |
 | `crates/core/src/intents/reject_tests.rs` | 483 | Tests for rejecting a change — the marker comment left where code was. |
+| `crates/core/src/intents/retire.rs` | 777 | Retiring the intents a commit has absorbed. |
+| `crates/core/src/intents/retire_tests.rs` | 262 | Tests for retiring intents a commit has absorbed. Included by `retire.rs` |
 | `crates/core/src/intents/user.rs` | 250 | User-authored intents: a note the user writes on a card when no agent hook |
 | `crates/core/src/intents/user_tests.rs` | 193 |  |
 | `crates/core/src/intents/whyhook.rs` | 166 | The `post-commit` hook that persists durable intent for external commits. |
@@ -221,6 +223,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/durable_why.rs` | 202 | End-to-end tests for durable intent: writing a git note at commit and |
 | `crates/core/tests/git_operations.rs` | 1085 | End-to-end git tests against real repositories on disk. |
 | `crates/core/tests/intent_attribution.rs` | 281 | Attribution measured against a real repository, rather than a fixture. |
+| `crates/core/tests/intent_retirement.rs` | 372 | End-to-end tests for retiring intents a commit has absorbed. |
 | `crates/core/tests/lsp_client.rs` | 1325 | One language server, from handshake to shutdown, against `cb-fake-lsp`. |
 | `crates/core/tests/lsp_oracle.rs` | 838 | The answers a **real** language server gives, for the languages this machine |
 | `crates/core/tests/lsp_session.rs` | 962 | Every language server for one workspace, behind one actor, against `cb-fake-lsp`. |
@@ -239,7 +242,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/ErrorBoundary.tsx` | 65 |  |
 | `src/components/FileEditor.tsx` | 1036 |  |
 | `src/components/FileTree.tsx` | 118 |  |
-| `src/components/IntentPanel.tsx` | 1341 |  |
+| `src/components/IntentPanel.tsx` | 1376 |  |
 | `src/components/LauncherPicker.tsx` | 248 |  |
 | `src/components/LspStatus.tsx` | 155 |  |
 | `src/components/MenuBar.tsx` | 381 |  |
@@ -256,10 +259,10 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/SetupPrompt.tsx` | 115 |  |
 | `src/components/Sidebar.tsx` | 50 |  |
 | `src/components/StashPanel.tsx` | 288 |  |
-| `src/components/TerminalPanel.tsx` | 386 |  |
+| `src/components/TerminalPanel.tsx` | 407 |  |
 | `src/components/TerminalView.tsx` | 156 |  |
 | `src/components/TestTree.tsx` | 125 |  |
-| `src/components/WorkspaceTab.tsx` | 379 |  |
+| `src/components/WorkspaceTab.tsx` | 399 |  |
 | `src/components/appOutputLogic.test.ts` | 193 |  |
 | `src/components/appOutputLogic.ts` | 168 | Pure decisions for the launched-apps output panel — the tab list, which tab |
 | `src/components/behavioralPanelLogic.test.ts` | 255 |  |
@@ -284,8 +287,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/enhancementsLogic.ts` | 100 | Pure decisions behind the Enhancements menu, kept out of the rendering shell |
 | `src/components/erosionLogic.test.ts` | 78 |  |
 | `src/components/erosionLogic.ts` | 69 |  |
-| `src/components/intentPanelLogic.test.ts` | 540 |  |
-| `src/components/intentPanelLogic.ts` | 458 |  |
+| `src/components/intentPanelLogic.test.ts` | 575 |  |
+| `src/components/intentPanelLogic.ts` | 489 |  |
 | `src/components/language.test.ts` | 122 |  |
 | `src/components/language.ts` | 119 |  |
 | `src/components/launcherLogic.test.ts` | 171 |  |
@@ -310,8 +313,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/setupPromptLogic.ts` | 62 | Decision logic for the first-open setup prompt. Pure so it can be unit-tested |
 | `src/components/stashLogic.test.ts` | 33 |  |
 | `src/components/stashLogic.ts` | 21 |  |
-| `src/components/terminalLogic.test.ts` | 181 |  |
-| `src/components/terminalLogic.ts` | 156 | Pure decisions for the floating terminals — naming, cascade staggering, |
+| `src/components/terminalLogic.test.ts` | 279 |  |
+| `src/components/terminalLogic.ts` | 227 | Pure decisions for the floating terminals — naming, cascade staggering, |
 | `src/components/treeLogic.test.ts` | 383 |  |
 | `src/components/treeLogic.ts` | 148 |  |
 | `src/components/usagesExtension.ts` | 469 | The CodeMirror half of Find Usages / Go To Definition: decorations, a widget, |
@@ -322,14 +325,14 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/editorFontSize.ts` | 52 | Applying the editor font size, and telling live editors it moved. |
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 | The one font size every CodeMirror editor in the app reads. |
-| `src/ipc/api.ts` | 1003 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 1801 | TypeScript mirrors of the `cb-core` model types. |
+| `src/ipc/api.ts` | 1018 | Typed wrappers over the Tauri command surface. |
+| `src/ipc/types.ts` | 1818 | TypeScript mirrors of the `cb-core` model types. |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
 | `src/reexportGuards.test.ts` | 23 | / <reference types="vite/client" /> |
 | `src/views/ArchitectureView.tsx` | 677 |  |
-| `src/views/ChangesView.tsx` | 1487 |  |
+| `src/views/ChangesView.tsx` | 1510 |  |
 | `src/views/HistoryView.tsx` | 556 |  |
 | `src/views/InspectView.tsx` | 1085 |  |
 | `src/views/RunView.tsx` | 1604 |  |
@@ -372,9 +375,9 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/enhancements.rs` | 136 | Instruction-template commands. |
 | `src-tauri/src/commands/erosion.rs` | 32 | Erosion-detector command. |
 | `src-tauri/src/commands/files.rs` | 245 | Workspace file commands, for the Run tab's directory tree and file editor. |
-| `src-tauri/src/commands/git.rs` | 362 | Git commands. |
+| `src-tauri/src/commands/git.rs` | 375 | Git commands. |
 | `src-tauri/src/commands/inspect.rs` | 352 | Object-inspection commands. |
-| `src-tauri/src/commands/intents.rs` | 435 | Agent-intent commands. |
+| `src-tauri/src/commands/intents.rs` | 471 | Agent-intent commands. |
 | `src-tauri/src/commands/launcher.rs` | 367 | The app launcher's bridge: run an arbitrary command line, and manage the |
 | `src-tauri/src/commands/lsp.rs` | 459 | Asking this workspace's language servers something, and saying what they do. |
 | `src-tauri/src/commands/notes.rs` | 21 | Notes / scratchpad commands. |
@@ -388,10 +391,10 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/symbols.rs` | 234 | The command palette's surface: searching the workspace, and asking after |
 | `src-tauri/src/commands/terminal.rs` | 183 | Interactive floating terminals. |
 | `src-tauri/src/commands/workspace.rs` | 255 | Workspace and configuration commands. |
-| `src-tauri/src/lib.rs` | 260 | The Tauri shell. |
+| `src-tauri/src/lib.rs` | 262 | The Tauri shell. |
 | `src-tauri/src/main.rs` | 6 | Suppress the extra console window on Windows in release builds. |
 | `src-tauri/src/qgate_run.rs` | 216 | The `quality-gate` mode: deterministic checks when an agent turn ends. |
-| `src-tauri/src/recorder.rs` | 136 | The `record-intent` mode, which is what the installed hooks actually run. |
+| `src-tauri/src/recorder.rs` | 139 | The `record-intent` mode, which is what the installed hooks actually run. |
 | `src-tauri/src/state.rs` | 546 | Shared application state. |
 | `src-tauri/src/state_tests.rs` | 605 | Tests for the multi-workspace [`AppState`]. |
 | `scripts/build-sidecar.mjs` | 110 | Publish the object-inspector sidecar into the Tauri bundle. |
@@ -415,7 +418,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **review** (`src-tauri/src/commands/review.rs`): `start_review`, `cancel_review`, `review_agents`
 - **git** (`src-tauri/src/commands/git.rs`): `git_status`, `git_file_diff`, `git_file_contents`, `git_write_file`, `git_stage_file`, `git_unstage_file`, `git_stage_lines`, `git_unstage_lines`, `git_revert_lines`, `git_discard_file`, `git_commit`, `git_branches`, `git_create_branch`, `git_checkout_branch`, `git_checkout_remote_branch`, `git_delete_branch`, `git_merge_branch`, `git_abort_merge`, `git_history`, `git_commit_diff`, `git_commit_file_contents`, `git_commit_file_why`, `git_stash_save`, `git_stash_list`, `git_stash_pop`, `git_stash_apply`, `git_stash_drop`, `git_stash_clear`, `git_network`
 - **changelists** (`src-tauri/src/commands/changelists.rs`): `git_changelists`, `git_create_changelist`, `git_delete_changelist`, `git_rename_changelist`, `git_assign_to_changelist`
-- **intents** (`src-tauri/src/commands/intents.rs`): `intent_groups`, `stage_intent_group`, `revert_intent_group`, `reject_intent_group`, `intent_capture_status`, `intent_install_plan`, `enable_intent_capture`, `intent_uninstall_plan`, `disable_intent_capture`, `import_intent_history`, `clear_intent_history`, `set_card_intent`, `clear_card_intent`
+- **intents** (`src-tauri/src/commands/intents.rs`): `intent_groups`, `stage_intent_group`, `revert_intent_group`, `reject_intent_group`, `intent_capture_status`, `intent_install_plan`, `enable_intent_capture`, `intent_uninstall_plan`, `disable_intent_capture`, `import_intent_history`, `intent_prune_preview`, `prune_intent_history`, `clear_intent_history`, `set_card_intent`, `clear_card_intent`
 - **qgate** (`src-tauri/src/commands/qgate.rs`): `quality_gate_status`, `quality_gate_install_plan`, `install_quality_gate`, `quality_gate_uninstall_plan`, `uninstall_quality_gate`
 - **setup** (`src-tauri/src/commands/setup.rs`): `setup_install_plan`, `install_setup`
 - **behavioral** (`src-tauri/src/commands/behavioral.rs`): `behavioral_diff`, `behavioral_clear`
@@ -430,7 +433,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 
 ## Frontend IPC wrappers (`src/ipc/api.ts`)
 
-`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `readNotes`, `writeNotes`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listLaunchables`, `launchCommand`, `stopCommand`, `saveLaunchable`, `deleteLaunchable`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspRestart`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `errorMessage`
+`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `readNotes`, `writeNotes`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listLaunchables`, `launchCommand`, `stopCommand`, `saveLaunchable`, `deleteLaunchable`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `intentPrunePreview`, `pruneIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspRestart`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `errorMessage`
 
 ## Public core API (`cb-core`)
 
@@ -490,6 +493,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/intents/providers/mod.rs`: `InstallScope`, `ProviderStatus`, `absent()`, `PlannedWrite`, `InstallPlan`, `SessionFile`, `HistoryMined`, `apply_plan()`, `apply_writes()`, `all()`, `statuses()`, `history()`, `uninstall_plan()`, `guard_write()`, `whyhook_write()`, `home_dir()`
 - `crates/core/src/intents/providers/settings_merge.rs`: `contains_marker()`, `is_installed()`, `merged_text()`, `merged_into_text()`, `plan_removal()`
 - `crates/core/src/intents/reject.rs`: `CommentSyntax`, `comment_syntax()`, `comment_prefix()`, `sanitise_reason()`, `marker_block_for()`, `is_marker_line()`, `anchors()`, `insert_markers()`, `iso_date()`, `FileRejection`, `RejectSummary`, `record()`, `reject_file()`
+- `crates/core/src/intents/retire.rs`: `archive_path()`, `label_archive_path()`, `tombstone_path()`, `state_path()`, `FileSnapshot`, `KeepReason`, `Verdict`, `RetirePlan`, `Tombstone`, `ArchivedRecord`, `PruneState`, `RetireSummary`, `content_key()`, `verdict()`, `plan()`, `tombstones_for()`, `reject_tombstoned()`, `load_state()`, `load_tombstones()`, `snapshot()`, `run_if_head_moved()`, `preview()`, `run_now()`, `clear()`
 - `crates/core/src/intents/user.rs`: `UserEdit`, `UserIntent`, `turn_id()`, `is_empty()`, `overlaps()`, `upsert()`, `remove_overlapping()`, `next_id()`, `to_intents()`, `merge_into()`, `user_intents_path()`, `load()`, `save()`
 - `crates/core/src/intents/whyhook.rs`: `block()`, `hook_path()`, `plan_for()`, `planned_write()`, `is_installed()`, `ensure_executable()`, `plan_removal()`
 - `crates/core/src/invocation.rs`: `build()`, `build_coverage()`, `rerun_filter()`, `plan_compound()`, `SolutionBuildStep`, `plan_solution_build()`

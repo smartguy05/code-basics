@@ -154,3 +154,74 @@ export function terminalKeyAction(e: TerminalKeyEvent, hasSelection: boolean): T
   if (e.shiftKey && !e.ctrlKey && key === "insert") return "paste";
   return "passthrough";
 }
+
+// --- Which terminal is in front -------------------------------------------
+
+/**
+ * How many raise steps the stylesheet reserves for the terminal band.
+ *
+ * Pinned by a test against `--z-panel-stack-span` in `styles.css`, which is the
+ * only other place this number appears: CSS owns the band bases and this owns
+ * the ordinal within them, so no z-index integer is ever written in TypeScript.
+ * The clamp lives here because it is a decision, and decisions are tested.
+ */
+export const TERMINAL_STACK_SPAN = 100;
+
+/**
+ * Bring one terminal to the front of the stacking order.
+ *
+ * The order is a list of terminal keys, bottom-most first, kept **separately**
+ * from the `terminals` array. That separation is the point: the array index
+ * drives `pillBottom` and `cascadeShift`, which are positional identity, while
+ * this is temporal recency. Reordering the array to raise a panel would
+ * teleport its minimized pill to another slot and shift every un-dragged panel
+ * diagonally, so the two facts never share a representation.
+ *
+ * Returns the **same array** when the key is already top, so the caller's
+ * `setState` bails out and clicking the front terminal — much the commonest
+ * case — costs no render at all.
+ */
+export function raiseTerminal(order: string[], key: string): string[] {
+  if (order.length > 0 && order[order.length - 1] === key) return order;
+  return [...order.filter((k) => k !== key), key];
+}
+
+/**
+ * Reconcile the stacking order against the terminals that are actually open:
+ * drop closed keys, append newly opened ones (so a fresh terminal starts on
+ * top), and otherwise **leave the order alone**.
+ *
+ * Never reordering to match `open` is the contract that keeps stacking
+ * independent of the array order. Returns the same array when nothing changed,
+ * which is what stops the effect that calls it from looping.
+ *
+ * Deliberately not persisted across restarts: terminals do not survive one, and
+ * keys are `term-${seq}` from a counter that restarts at 1 each session, so a
+ * remembered order would either match nothing or silently apply a previous
+ * session's stacking to unrelated terminals.
+ */
+export function syncStackOrder(order: string[], open: string[]): string[] {
+  const live = new Set(open);
+  const kept = order.filter((k) => live.has(k));
+  const known = new Set(kept);
+  const added = open.filter((k) => !known.has(k));
+
+  if (added.length === 0 && kept.length === order.length) return order;
+  return [...kept, ...added];
+}
+
+/**
+ * The raise step a terminal renders at: 0 for the bottom of the stack, rising
+ * to the top. Clamped into `TERMINAL_STACK_SPAN` so a very long-lived session
+ * can never climb a terminal out of its band and over the Notes panel; the
+ * clamp collapses the *bottom* of an absurd stack, never the top.
+ *
+ * A key the order has not seen yet — a terminal rendered in the commit before
+ * the reconciling effect runs — sits at the bottom rather than yielding `NaN`.
+ */
+export function stackOffset(order: string[], key: string): number {
+  const index = order.indexOf(key);
+  if (index < 0) return 0;
+  const excess = Math.max(0, order.length - TERMINAL_STACK_SPAN);
+  return Math.max(0, index - excess);
+}

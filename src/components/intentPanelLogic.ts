@@ -404,6 +404,37 @@ export function importFeedback(total: number): string {
   return `Imported ${total} recorded intent${total === 1 ? "" : "s"}.`;
 }
 
+/** The counts a prune reports, mirroring `RetireSummary` (`intents/retire.rs`). */
+export interface PruneCounts {
+  recordsRetired: number;
+  labelsRetired: number;
+  keptRecords: number;
+}
+
+/**
+ * What to offer before archiving absorbed intents, or `null` when there is
+ * nothing to archive.
+ *
+ * Phrased as a question because the action is confirmed: the records are moved
+ * to an archive rather than deleted, and saying so is what makes confirming it
+ * reasonable.
+ */
+export function prunePrompt(counts: PruneCounts): string | null {
+  if (counts.recordsRetired === 0) return null;
+  const records = `${counts.recordsRetired} recorded edit${counts.recordsRetired === 1 ? "" : "s"}`;
+  const kept = `${counts.keptRecords} still explain${counts.keptRecords === 1 ? "s" : ""} uncommitted work`;
+  return `Archive ${records} already committed? They move to an archive file, not the bin — ${kept}.`;
+}
+
+/** What to say after a prune has run. */
+export function pruneFeedback(counts: PruneCounts): string {
+  if (counts.recordsRetired === 0) {
+    return "Nothing to archive — every recorded intent still explains uncommitted work.";
+  }
+  const records = `${counts.recordsRetired} recorded edit${counts.recordsRetired === 1 ? "" : "s"}`;
+  return `Archived ${records}. They are in .code-basics/intents/edits-archive.jsonl if you need them.`;
+}
+
 /**
  * Can this comparison mode be rejected in?
  *

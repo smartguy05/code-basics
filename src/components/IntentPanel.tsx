@@ -11,6 +11,9 @@ import {
   importFeedback,
   intentDataHint,
   intentEditPlan,
+  type PruneCounts,
+  pruneFeedback,
+  prunePrompt,
   rejectFeedback,
   rejectReasonError,
   scopeCreep,
@@ -269,6 +272,12 @@ export interface IntentPanelProps {
   onDisable: (provider: ProviderId, scope: InstallScope) => Promise<void>;
   /** Resolves with how many records the import found, so the panel can say so. */
   onImportHistory: () => Promise<number>;
+  /**
+   * Preview, then (on confirm) archive every intent HEAD has already absorbed.
+   * Two steps because retirement is not undoable from here.
+   */
+  onPreviewPrune: () => Promise<PruneCounts>;
+  onPrune: () => Promise<PruneCounts>;
   /** Write (or overwrite) the user's own intent for a card. */
   onSetIntent: (group: IntentGroup, label: string) => void;
   /** Remove the user's note from a card. */
@@ -315,6 +324,8 @@ export function IntentPanel({
   onEnable,
   onDisable,
   onImportHistory,
+  onPreviewPrune,
+  onPrune,
   onSetIntent,
   onClearIntent,
   behavioral,
@@ -400,6 +411,19 @@ export function IntentPanel({
     setFeedback(importFeedback(total));
   };
 
+  const runPrune = async () => {
+    setFeedback(null);
+    const preview = await onPreviewPrune();
+    const prompt = prunePrompt(preview);
+    // Nothing absorbed: say so rather than opening a confirm over an empty action.
+    if (!prompt) {
+      setFeedback(pruneFeedback(preview));
+      return;
+    }
+    if (!window.confirm(prompt)) return;
+    setFeedback(pruneFeedback(await onPrune()));
+  };
+
   const runReject = async (group: IntentGroup, reason: string, file?: GroupFile) => {
     setFeedback(null);
     const summary = await onReject(group, reason, file);
@@ -428,6 +452,7 @@ export function IntentPanel({
             onEnable={onEnable}
             onDisable={onDisable}
             onImportHistory={runImport}
+            onPrune={runPrune}
           />
           <QualityGateSetup providers={providers} busy={busy} />
         </>
@@ -989,12 +1014,14 @@ function CaptureSetup({
   onEnable,
   onDisable,
   onImportHistory,
+  onPrune,
 }: {
   providers: ProviderStatus[];
   busy: boolean;
   onEnable: (provider: ProviderId, scope: InstallScope) => Promise<void>;
   onDisable: (provider: ProviderId, scope: InstallScope) => Promise<void>;
   onImportHistory: () => Promise<void>;
+  onPrune: () => Promise<void>;
 }) {
   // A pending preview is either an install or an uninstall; the confirm applies
   // whichever kind was previewed. An empty uninstall plan (nothing to remove)
@@ -1122,6 +1149,14 @@ function CaptureSetup({
         title="Read what the agents already recorded — no setup, works on changes already in your tree"
       >
         Import past sessions{totalSessions > 0 ? ` (${totalSessions})` : ""}
+      </button>
+
+      <button
+        disabled={busy}
+        onClick={() => void onPrune()}
+        title="Move intents your commits have already absorbed into an archive file, so an old reason stops labelling new work. Nothing is deleted."
+      >
+        Archive absorbed intents…
       </button>
 
       {error && <div className="error" style={{ fontSize: 11 }}>{error}</div>}

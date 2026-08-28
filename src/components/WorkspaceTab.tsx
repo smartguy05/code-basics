@@ -13,8 +13,11 @@ import { TerminalPanel } from "./TerminalPanel";
 import { TestsView } from "../views/TestsView";
 import {
   makeTerminal,
+  raiseTerminal,
   recolorTerminal,
   renameTerminal,
+  stackOffset,
+  syncStackOrder,
   type TerminalDescriptor,
 } from "./terminalLogic";
 import { sendToAgentTitle } from "./notesLogic";
@@ -133,6 +136,21 @@ export function WorkspaceTab({
 
   const [terminals, setTerminals] = useState<TerminalDescriptor[]>([]);
   const terminalSeq = useRef(0);
+
+  // Which terminal is in front, bottom-most key first. Kept *beside* `terminals`
+  // rather than by reordering it: the array index places each pill and cascade
+  // offset, so raising by reordering would teleport pills and shift un-dragged
+  // panels. One reconciling effect keeps this in step with what is open, so it
+  // cannot drift the way separate edits in `openTerminal`/`closeTerminal` could.
+  const [stackOrder, setStackOrder] = useState<string[]>([]);
+  useEffect(() => {
+    setStackOrder((order) =>
+      syncStackOrder(
+        order,
+        terminals.map((t) => t.key),
+      ),
+    );
+  }, [terminals]);
 
   // Which of this codebase's terminals currently want attention (bell while
   // minimized). Aggregated so `App` flashes the tab while any of them does.
@@ -366,8 +384,10 @@ export function WorkspaceTab({
           title={t.title}
           cwd={t.cwd}
           index={index}
+          stackOffset={stackOffset(stackOrder, t.key)}
           color={t.color}
           onClose={() => closeTerminal(t.key)}
+          onRaise={() => setStackOrder((order) => raiseTerminal(order, t.key))}
           onAttentionChange={(wants) => setTerminalAttention(t.key, wants)}
           onCompleted={() => onSignal(workspace.root, "done")}
           onRename={(title) => renameTerminalTo(t.key, title)}

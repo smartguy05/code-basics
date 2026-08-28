@@ -20,8 +20,9 @@ use cb_core::git::grouping::{self, GroupFile};
 use cb_core::git::{ComparisonMode, Repo};
 use cb_core::intents::providers::{self, InstallPlan, InstallScope, ProviderStatus};
 use cb_core::intents::reject::{self, RejectSummary};
+use cb_core::intents::retire::RetireSummary;
 use cb_core::intents::user::{self, UserEdit, UserIntent};
-use cb_core::intents::{self, guard, whyhook, LoadOptions, ProviderId};
+use cb_core::intents::{self, guard, retire, whyhook, LoadOptions, ProviderId};
 use tauri::State;
 
 use crate::state::AppState;
@@ -45,6 +46,13 @@ pub async fn intent_groups(
     let (root, repo) = open(&state)?;
 
     let diffs = repo.diff_all(mode).map_err(|e| format!("{e:#}"))?;
+
+    // Catch a commit the app did not make — one typed in a floating terminal, an
+    // amend, a rebase — before reading, so a reason that is now history does not
+    // title this tree. A no-op (one ref read) whenever HEAD has not moved.
+    if let Err(e) = retire::run_if_head_moved(&repo, &root) {
+        eprintln!("intent prune skipped: {e:#}");
+    }
 
     // Records made on another branch describe code that is not in this tree.
     let branch = repo.status().ok().and_then(|s| s.branch);
@@ -303,6 +311,12 @@ pub async fn import_intent_history(state: State<'_, AppState>) -> Result<usize, 
     let root = state.workspace_root()?;
     let mut mined = providers::history(&root);
 
+    // Anything already retired must not come back: the miners re-read the agents'
+    // own unbounded session archives, so without this a prune is undone by one
+    // click. Before `rebase_seqs`, so a rejected record consumes no sequence
+    // number.
+    retire::reject_tombstoned(&mut mined.records, &retire::load_tombstones(&root));
+
     intents::rebase_seqs(&mut mined.records, intents::next_seq(&root));
     for record in &mined.records {
         intents::append_edit(&root, record).map_err(|e| format!("{e:#}"))?;
@@ -317,6 +331,28 @@ pub async fn import_intent_history(state: State<'_, AppState>) -> Result<usize, 
     Ok(intents::load(&root, &LoadOptions::default())
         .map(|i| i.records.len())
         .unwrap_or(0))
+}
+
+/// How much of the recorded history a prune would retire, changing nothing.
+///
+/// The dry run behind the "Archive absorbed intents" action: retirement is
+/// irreversible from the UI's point of view, so the counts are shown first.
+#[tauri::command]
+pub async fn intent_prune_preview(state: State<'_, AppState>) -> Result<RetireSummary, String> {
+    let (root, repo) = open(&state)?;
+    retire::preview(&repo, &root).map_err(|e| format!("{e:#}"))
+}
+
+/// Retire every intent this workspace's HEAD has already absorbed.
+///
+/// The confirmed half of [`intent_prune_preview`], and the only way to clear a
+/// backlog recorded before pruning existed — the automatic prune needs a
+/// baseline to notice HEAD moving against, so it never touches what was already
+/// there. Retired records are archived and tombstoned, never destroyed.
+#[tauri::command]
+pub async fn prune_intent_history(state: State<'_, AppState>) -> Result<RetireSummary, String> {
+    let (root, repo) = open(&state)?;
+    retire::run_now(&repo, &root).map_err(|e| format!("{e:#}"))
 }
 
 /// Forget everything recorded for this workspace.

@@ -4,8 +4,12 @@ import {
   makeTerminal,
   outputNeedsAttention,
   pillBottom,
+  raiseTerminal,
   recolorTerminal,
   renameTerminal,
+  stackOffset,
+  syncStackOrder,
+  TERMINAL_STACK_SPAN,
   terminalKeyAction,
   terminalLayoutKey,
 } from "./terminalLogic";
@@ -177,5 +181,99 @@ describe("terminalLayoutKey", () => {
 
   it("is distinct from the agent panel's key so their layouts do not collide", () => {
     expect(terminalLayoutKey("/a")).not.toBe("cb.agentPanel.layout");
+  });
+});
+
+describe("raiseTerminal", () => {
+  it("moves a key to the top, keeping the others in their order", () => {
+    expect(raiseTerminal(["a", "b", "c"], "b")).toEqual(["a", "c", "b"]);
+  });
+
+  it("appends a key it has never seen, so an unreconciled terminal still raises", () => {
+    expect(raiseTerminal(["a"], "z")).toEqual(["a", "z"]);
+  });
+
+  it("returns the same array when the key is already top", () => {
+    // Load-bearing, not cosmetic: identity is what lets `setStackOrder` bail out,
+    // so clicking the front terminal — the common case — re-renders nothing.
+    const order = ["a", "b"];
+    expect(raiseTerminal(order, "b")).toBe(order);
+  });
+
+  it("raising into an empty order yields just that key", () => {
+    expect(raiseTerminal([], "a")).toEqual(["a"]);
+  });
+});
+
+describe("syncStackOrder", () => {
+  it("appends newly opened keys, so a fresh terminal starts on top", () => {
+    expect(syncStackOrder(["a"], ["a", "b"])).toEqual(["a", "b"]);
+  });
+
+  it("drops keys that are no longer open", () => {
+    expect(syncStackOrder(["a", "b", "c"], ["c", "a"])).toEqual(["a", "c"]);
+  });
+
+  it("never reorders to match the open list", () => {
+    // This *is* the index-decoupling contract: the `terminals` array order drives
+    // `pillBottom` and `cascadeShift`, and must never dictate stacking.
+    const order = ["b", "a"];
+    expect(syncStackOrder(order, ["a", "b"])).toBe(order);
+  });
+
+  it("returns the same array when nothing changed, so the reconciling effect cannot loop", () => {
+    const order = ["a", "b"];
+    expect(syncStackOrder(order, ["a", "b"])).toBe(order);
+  });
+
+  it("handles the top closing while a new one opens in the same commit", () => {
+    expect(syncStackOrder(["a", "b"], ["a", "c"])).toEqual(["a", "c"]);
+  });
+
+  it("an empty open list yields an empty order", () => {
+    expect(syncStackOrder(["a", "b"], [])).toEqual([]);
+  });
+});
+
+describe("stackOffset", () => {
+  it("numbers the order from the bottom, so the last key is the top", () => {
+    expect(stackOffset(["a", "b", "c"], "a")).toBe(0);
+    expect(stackOffset(["a", "b", "c"], "c")).toBe(2);
+  });
+
+  it("returns 0 for a key not in the order, never NaN", () => {
+    // A terminal rendered in the commit before the reconciling effect runs must
+    // still render somewhere.
+    expect(stackOffset(["a"], "z")).toBe(0);
+  });
+
+  it("never exceeds the band the stylesheet reserves", () => {
+    const keys = Array.from({ length: TERMINAL_STACK_SPAN + 5 }, (_, i) => `t${i}`);
+    for (const key of keys) {
+      const offset = stackOffset(keys, key);
+      expect(offset).toBeGreaterThanOrEqual(0);
+      expect(offset).toBeLessThanOrEqual(TERMINAL_STACK_SPAN - 1);
+    }
+    // `at(-1)` rather than an index: `noUncheckedIndexedAccess` widens an index
+    // read to `string | undefined`, and the top key is what the assertion is about.
+    expect(stackOffset(keys, keys.at(-1) ?? "")).toBe(TERMINAL_STACK_SPAN - 1);
+  });
+
+  it("stays non-decreasing along the order even while clamped", () => {
+    const keys = Array.from({ length: TERMINAL_STACK_SPAN + 5 }, (_, i) => `t${i}`);
+    // Walked with `for...of` rather than by index: `noUncheckedIndexedAccess`
+    // would widen an indexed read to `number | undefined`.
+    let previous = 0;
+    for (const offset of keys.map((k) => stackOffset(keys, k))) {
+      expect(offset).toBeGreaterThanOrEqual(previous);
+      previous = offset;
+    }
+  });
+
+  it("pins the span against the stylesheet's --z-panel-stack-span", () => {
+    // Deliberate drift alarm: styles.css reserves this many steps for the
+    // terminal band. Changing one without the other silently lets a terminal
+    // climb into the Notes band.
+    expect(TERMINAL_STACK_SPAN).toBe(100);
   });
 });

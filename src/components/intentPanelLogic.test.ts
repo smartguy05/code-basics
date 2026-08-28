@@ -9,6 +9,8 @@ import {
   isAmbiguousIntent,
   groupStagedState,
   importFeedback,
+  pruneFeedback,
+  prunePrompt,
   intentDataHint,
   rejectFeedback,
   rejectReasonError,
@@ -536,5 +538,38 @@ describe("intentEditPlan", () => {
       expect(plan.initial, kind).toBe("");
       expect(plan.hasUserNote, kind).toBe(false);
     }
+  });
+});
+
+describe("prunePrompt", () => {
+  it("offers nothing when nothing has been absorbed", () => {
+    expect(prunePrompt({ recordsRetired: 0, labelsRetired: 0, keptRecords: 12 })).toBeNull();
+  });
+
+  it("says how many go, that they are archived rather than deleted, and what stays", () => {
+    const prompt = prunePrompt({ recordsRetired: 3, labelsRetired: 1, keptRecords: 2 });
+    expect(prompt).toContain("3 recorded edits");
+    expect(prompt).toContain("not the bin");
+    expect(prompt).toContain("2 still explain");
+  });
+
+  it("uses the singular for one record", () => {
+    expect(prunePrompt({ recordsRetired: 1, labelsRetired: 0, keptRecords: 1 })).toContain(
+      "1 recorded edit ",
+    );
+  });
+});
+
+describe("pruneFeedback", () => {
+  it("says plainly when there was nothing to archive", () => {
+    expect(pruneFeedback({ recordsRetired: 0, labelsRetired: 0, keptRecords: 4 })).toContain(
+      "Nothing to archive",
+    );
+  });
+
+  it("names where the archived records went, so they can be recovered", () => {
+    const text = pruneFeedback({ recordsRetired: 5, labelsRetired: 2, keptRecords: 0 });
+    expect(text).toContain("Archived 5 recorded edits");
+    expect(text).toContain("edits-archive.jsonl");
   });
 });

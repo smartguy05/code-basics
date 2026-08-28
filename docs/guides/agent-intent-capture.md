@@ -179,6 +179,31 @@ It matches the token *followed by a date*, not the bare token, so a file that me
 
 `.code-basics/intents/` — `edits.jsonl` (what changed) and `labels.jsonl` (why). Gitignored automatically: this is a log of one person's session, and large. Remove it any time; nothing else depends on it.
 
+## Retiring what a commit has absorbed
+
+A record carries no timestamp and no commit, and matching is by **content**, so
+without pruning a reason recorded weeks ago keeps re-titling cards every time its
+text reappears. Once your commits account for every line a record claims, that
+record has done its job and is retired: moved to `edits-archive.jsonl`, its
+identity written to `tombstones.jsonl` so importing past sessions cannot bring it
+back. Nothing is deleted, and rewriting the live file is also what stops
+`edits.jsonl` growing without bound.
+
+Absorption is judged against `HEAD` alone, and has to be **total**. That is what
+makes line-level partial staging safe: commit half a card and the rest is still
+missing from HEAD, so the record survives whole and keeps titling the hunks you
+left behind. It retires at the next commit. The working tree gets no vote,
+deliberately — the symptom being fixed is committed text reappearing as an
+addition, so a "still in the diff" test would keep precisely the records that
+need retiring.
+
+It runs whenever HEAD is seen to have moved, which covers a commit typed in a
+floating terminal, an amend, and a rebase as well as a commit made in the app. It
+needs a baseline to notice movement against, so it never prunes on the first look
+at a workspace — use **Archive absorbed intents…** in the capture setup pane to
+clear a backlog recorded before any of this existed. It previews the counts
+first.
+
 ## When it will not label something
 
 Stated honestly, because the UI shows these as unexplained rather than pretending:

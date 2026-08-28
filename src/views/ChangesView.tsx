@@ -45,6 +45,7 @@ import type {
   ProviderId,
   ProviderStatus,
   RejectSummary,
+  RetireSummary,
   RunConfig,
   Scorecard,
   UnfulfilledClaim,
@@ -652,6 +653,26 @@ export function ChangesView({
   };
 
   /**
+   * Preview the archive, and run it. Two calls rather than one so the panel can
+   * confirm with real counts: retirement moves records out of the live store,
+   * and the user should see how many before agreeing to it.
+   */
+  const previewPrune = () => api.intentPrunePreview();
+  const prune = async () => {
+    let summary: RetireSummary = {
+      recordsRetired: 0,
+      labelsRetired: 0,
+      keptRecords: 0,
+      pruned: false,
+    };
+    await withBusy(async () => {
+      summary = await api.pruneIntentHistory();
+      await refreshAll();
+    });
+    return summary;
+  };
+
+  /**
    * Both before/after actions run in the floating {@link BehavioralPanel} at the
    * app level (so the run survives a tab switch and its report is shown in full,
    * not condensed into this sidebar). These only pick the config and open the
@@ -1116,6 +1137,8 @@ export function ChangesView({
               onEnable={enableCapture}
               onDisable={disableCapture}
               onImportHistory={importHistory}
+              onPreviewPrune={previewPrune}
+              onPrune={prune}
               onSetIntent={setCardIntent}
               onClearIntent={clearCardIntent}
               behavioral={behavioral}

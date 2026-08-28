@@ -694,6 +694,23 @@ export interface IntentReview {
   scorecard: Scorecard;
 }
 
+/**
+ * What a prune of absorbed intents did, or would do (`intents/retire.rs`).
+ *
+ * Keys pinned by `serialisation_shape_pins_the_wire_keys` in
+ * `crates/core/src/intents/retire_tests.rs`. Counts only, deliberately: a keep
+ * is an abstention, not a finding, so the reasons stay in Rust.
+ */
+export interface RetireSummary {
+  recordsRetired: number;
+  labelsRetired: number;
+  keptRecords: number;
+  /** The HEAD the prune ran against, when the repository had one. */
+  head?: string;
+  /** False for a preview, and whenever there was nothing to do. */
+  pruned: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Behavioral before/after testing (`behavioral/`) — the runtime counterpart to
 // the static intent Scorecard above.

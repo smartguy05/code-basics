@@ -35,6 +35,19 @@
      the first paint, before that runs. */
   --editor-font-size: 12.5px;
 
+  /* Stacking bands for the floating panels. Every panel shares the
+     `.review-panel` base, so without bands their order is whatever the DOM
+     happens to be. A terminal raises within its own band on click; Notes sits
+     permanently above every terminal, and the launcher's backdrop above that.
+     `--z-panel-stack-span` is the number of raise steps the terminal band
+     holds — pinned by `TERMINAL_STACK_SPAN` in `components/terminalLogic.ts`,
+     the only other place the number appears. 60 + 1 + 99 < 200, so a terminal
+     can never climb into the Notes band. */
+  --z-panel: 60;
+  --z-panel-stack-span: 100;
+  --z-notes: 200;
+  --z-overlay: 300;
+
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
   --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
@@ -1094,7 +1107,7 @@ textarea:focus {
   position: fixed;
   right: 16px;
   bottom: 16px;
-  z-index: 60;
+  z-index: var(--z-panel);
   display: flex;
   flex-direction: column;
   width: min(720px, 60vw);
@@ -1127,7 +1140,7 @@ textarea:focus {
   position: fixed;
   right: 16px;
   bottom: 16px;
-  z-index: 60;
+  z-index: var(--z-panel);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1279,6 +1292,13 @@ textarea:focus {
 .terminal-panel {
   width: min(760px, 64vw);
   height: min(520px, 66vh);
+  /* Clicking a terminal raises it over the other terminals. `--cb-stack` is set
+     inline per panel from `terminalLogic.stackOffset`; the `+ 1` lifts the whole
+     terminal band clear of the base band. The panel's own `transform` (set when
+     it has never been dragged) makes a stacking context for its *descendants*
+     only — all the panels are siblings in the root context, so it is inert
+     here. */
+  z-index: calc(var(--z-panel) + 1 + var(--cb-stack, 0));
 }
 
 /* xterm fights a scrollbar, so the terminal pane is strictly overflow:hidden,
@@ -1362,11 +1382,14 @@ textarea:focus {
 .notes-panel {
   width: min(560px, 48vw);
   height: min(520px, 66vh);
+  /* Above every terminal, always: a raised terminal must never cover Notes. */
+  z-index: var(--z-notes);
 }
 
 /* Minimized: a thin labeled bar pinned to the right, not a rounded pill — the
    requested "collapse to a thin bar with a label that expands back". */
 .notes-pill {
+  z-index: var(--z-notes);
   border-radius: 6px;
   padding: 6px 14px;
   font-size: 12px;
@@ -3168,7 +3191,9 @@ textarea:focus {
 .launcher-overlay {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  /* Above the terminal band, or a raised terminal would float over this
+     overlay's own dim backdrop. */
+  z-index: var(--z-overlay);
   background: rgba(0, 0, 0, 0.35);
   display: flex;
   align-items: flex-start;
