@@ -1448,6 +1448,21 @@ textarea:focus {
   text-align: left;
 }
 
+/* Folder rows in the Files tree layout: a twisty, the folder name, and a count
+   of everything beneath it. The name reads left-to-right (a folder label, not a
+   path to be truncated from the front). */
+.file-list .folder-row .twisty {
+  width: 14px;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.file-list .folder-row .path {
+  direction: ltr;
+  color: var(--text-dim);
+}
+
 /* The diff pane: code, a change-marker strip down the right edge, and a
    horizontal scrollbar across the bottom that drives both panes at once. */
 .diff-frame {

@@ -7,6 +7,7 @@ import {
   onlyHunks,
 } from "../components/diffLogic";
 import { buildSections, sortFilesByRisk, statusLetter, type FileSection } from "./changesLogic";
+import { buildFileTree, flattenFileTree } from "./folderTreeLogic";
 import { fileRisk, hunkRisk, type RiskIndex } from "../components/riskLogic";
 import { confidenceForFile } from "../components/confidenceLogic";
 import { Sidebar } from "../components/Sidebar";
@@ -63,6 +64,7 @@ const EMPTY_SCORECARD: Scorecard = {
   unattributedLines: 0,
 };
 const GROUPING_KEY = "code-basics.changesGrouping";
+const FILES_LAYOUT_KEY = "code-basics.filesLayout";
 const COLLAPSE_KEY = "code-basics.diffCollapseUnchanged";
 const WHITESPACE_KEY = "code-basics.diffIgnoreWhitespace";
 
@@ -83,6 +85,13 @@ function loadGrouping(): Grouping {
   return stored === "intent" || stored === "stashes" || stored === "erosion"
     ? stored
     : "files";
+}
+
+/** How the Files view lays out its list: a flat path list, or a folder tree. */
+type FilesLayout = "flat" | "tree";
+
+function loadFilesLayout(): FilesLayout {
+  return localStorage.getItem(FILES_LAYOUT_KEY) === "tree" ? "tree" : "flat";
 }
 
 function loadDiffLayout(): DiffLayout {
@@ -154,6 +163,14 @@ export function ChangesView({
   );
   /** Sections the user folded away, by section key. */
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  /** Flat path list vs. a collapsible folder tree, in the Files view. */
+  const [filesLayout, setFilesLayout] = useState<FilesLayout>(loadFilesLayout);
+  /**
+   * Folders the user folded away in the tree layout, keyed by
+   * `${section.key}:${folderPath}` so the same folder can be open in one
+   * section and closed in another. In-memory, like the section `collapsed`.
+   */
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
   /**
    * Name being typed for a new group. `null` means the input is hidden;
    * `pendingPath` is a file to drop into it as soon as it exists, so "New
@@ -787,6 +804,20 @@ export function ChangesView({
     });
   }
 
+  function changeFilesLayout(next: FilesLayout) {
+    setFilesLayout(next);
+    localStorage.setItem(FILES_LAYOUT_KEY, next);
+  }
+
+  function toggleFolder(key: string) {
+    setCollapsedFolders((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
   /** Opening a file directly is not opening a card; drop any card selection. */
   function openFile(path: string) {
     setSelectedPath(path);
@@ -803,7 +834,17 @@ export function ChangesView({
     setHighlight([flag.index]);
   }
 
-  function renderFileRow(change: FileChange, section: FileSection) {
+  /**
+   * A file row. In the flat layout it shows the full path; in the tree layout
+   * `tree` carries the leaf name and nesting depth so the row indents under its
+   * folder and shows only the filename. Selection, risk emphasis and the
+   * right-click menu are identical either way.
+   */
+  function renderFileRow(
+    change: FileChange,
+    section: FileSection,
+    tree?: { depth: number; label: string },
+  ) {
     const { letter, className } = statusLetter(change, section.side);
     // Emphasis for a file the risk signals elevated; abstains (no class) for an
     // ordinary one. Same signals as the sort above.
@@ -814,6 +855,7 @@ export function ChangesView({
         className={`row ${change.path === selectedPath ? "selected" : ""}${
           risk ? ` risk-${risk.level}` : ""
         }`}
+        style={tree ? { paddingLeft: 6 + (tree.depth + 1) * 14 } : undefined}
         onClick={() => openFile(change.path)}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -823,9 +865,35 @@ export function ChangesView({
         title={`${change.path} — right-click to stage or group`}
       >
         <span className={`status ${className}`}>{letter}</span>
-        <span className="path">{change.path}</span>
+        <span className="path">{tree ? tree.label : change.path}</span>
       </button>
     );
+  }
+
+  /** The files of one section as a collapsible folder tree. */
+  function renderSectionTree(section: FileSection) {
+    const rows = flattenFileTree(buildFileTree(section.files), (folderPath) =>
+      collapsedFolders.has(`${section.key}:${folderPath}`),
+    );
+    return rows.map((row) => {
+      if (row.kind === "file") {
+        return renderFileRow(row.change, section, { depth: row.depth, label: row.label });
+      }
+      const key = `${section.key}:${row.path}`;
+      return (
+        <button
+          key={`folder:${key}`}
+          className="row folder-row"
+          style={{ paddingLeft: 6 + row.depth * 14 }}
+          onClick={() => toggleFolder(key)}
+          title={row.path}
+        >
+          <span className="twisty">{row.collapsed ? "▸" : "▾"}</span>
+          <span className="path">{row.label}</span>
+          <span className="badge">{row.fileCount}</span>
+        </button>
+      );
+    });
   }
 
   const groupingToggle = (
@@ -1000,6 +1068,31 @@ export function ChangesView({
 
         {groupingToggle}
 
+        {grouping === "files" && files.length > 0 && (
+          <div
+            className="group-label"
+            style={{ display: "flex", alignItems: "center", gap: 4 }}
+          >
+            <span style={{ flex: 1 }}>Layout</span>
+            <div className="segmented">
+              <button
+                className={filesLayout === "flat" ? "active" : ""}
+                onClick={() => changeFilesLayout("flat")}
+                title="List every changed file by its full path"
+              >
+                List
+              </button>
+              <button
+                className={filesLayout === "tree" ? "active" : ""}
+                onClick={() => changeFilesLayout("tree")}
+                title="Group the changed files into a collapsible folder tree"
+              >
+                Tree
+              </button>
+            </div>
+          </div>
+        )}
+
         {grouping === "intent" && (
           <>
             <IntentPanel
@@ -1075,7 +1168,10 @@ export function ChangesView({
                 )}
               </div>
 
-              {!isCollapsed && section.files.map((change) => renderFileRow(change, section))}
+              {!isCollapsed &&
+                (filesLayout === "tree"
+                  ? renderSectionTree(section)
+                  : section.files.map((change) => renderFileRow(change, section)))}
 
               {!isCollapsed && section.files.length === 0 && section.keepWhenEmpty && (
                 <div className="muted" style={{ padding: "4px 8px 4px 22px", fontSize: 12 }}>
