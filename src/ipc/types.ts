@@ -1816,3 +1816,91 @@ export interface ServerStatus {
   /** What the user could do about it, when there is something. */
   hint: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Debugging (`cb_core::dap::model`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a debug session is.
+ *
+ * **Six variants, and they must never be collapsed into one.** Each licenses
+ * something different: only `paused` licenses a call stack, only `running`
+ * licenses a pause button, `notInstalled` is the only one the user can act on
+ * and the only one carrying what was looked for, and `exited` carries a code
+ * that `notRunning` has no business inventing.
+ *
+ * Mirrors the Rust enum by hand; the key-pinning tests in
+ * `crates/core/src/dap/model.rs` are what stop the two drifting.
+ */
+export type DebugState =
+  | { kind: "notRunning" }
+  /**
+   * No adapter was found. Never silently degraded into an ordinary run — a
+   * Debug button that quietly does not debug is worse than one that says why.
+   */
+  | { kind: "notInstalled"; lookedFor: string[]; hint: string }
+  | { kind: "starting" }
+  | { kind: "running" }
+  /**
+   * `threadId` is null when the adapter said every thread stopped without
+   * naming one — a real answer, and not the same as thread 0 stopping.
+   */
+  | {
+      kind: "paused";
+      reason: string;
+      threadId: number | null;
+      description: string | null;
+    }
+  /** `code` null means the adapter reported no code, not that it exited 0. */
+  | { kind: "exited"; code: number | null }
+  | { kind: "failed"; detail: string };
+
+/** One frame of a call stack. */
+export interface DebugStackFrame {
+  /** The adapter's id, needed to ask for this frame's scopes. */
+  id: number;
+  name: string;
+  /**
+   * Null for a frame with no source — framework, generated or native code.
+   * Real and common, and not an empty string the UI should try to open.
+   */
+  path: string | null;
+  /** 1-based. */
+  line: number | null;
+  column: number | null;
+  /** The adapter marked it as not the user's own code. Shown, not hidden. */
+  subtle: boolean;
+}
+
+/** One named value in a scope. */
+export interface DebugVariable {
+  name: string;
+  value: string;
+  typeName: string | null;
+  /** Non-zero means expandable, and is the handle a `variables` request needs. */
+  variablesReference: number;
+}
+
+/** One of a frame's scopes — Locals, Arguments, Globals, … */
+export interface DebugScope {
+  name: string;
+  variablesReference: number;
+  /** The adapter warned that reading it is slow; leave it collapsed. */
+  expensive: boolean;
+}
+
+export interface DebugThread {
+  id: number;
+  name: string;
+}
+
+/** The whole of a debug session's visible state. */
+export interface DebugStatus {
+  state: DebugState;
+  configId: string | null;
+  /** Empty unless paused. */
+  threads: DebugThread[];
+  /** The stopped thread's frames. Empty unless paused. */
+  stack: DebugStackFrame[];
+}

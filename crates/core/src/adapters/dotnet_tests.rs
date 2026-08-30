@@ -1165,8 +1165,15 @@ fn executables_get_a_configuration_per_launch_profile() {
     assert!(configs
         .iter()
         .any(|c| c.launch_profile.as_deref() == Some("https")));
-    // Plus the plain Debug/Release pair.
-    assert!(configs.iter().any(|c| c.launch_profile.is_none()));
+    // Plus exactly one plain entry, with no profile — the build configuration
+    // is chosen in the toolbar rather than fanned out into more of these.
+    assert_eq!(
+        configs
+            .iter()
+            .filter(|c| c.launch_profile.is_none())
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -1222,9 +1229,11 @@ fn framework_is_pinned_only_when_a_project_multi_targets() {
 }
 
 #[test]
-fn custom_build_configurations_become_run_configurations() {
-    // `<Configurations>Debug;Release;Staging</Configurations>` is the only way
-    // a non-default configuration is visible without evaluating MSBuild.
+fn build_configurations_do_not_each_become_a_run_configuration() {
+    // `<Configurations>Debug;Release;Staging</Configurations>` used to produce
+    // three entries for one project. Which configuration to build is a property
+    // of a launch, not a different thing to launch, so it is chosen in the Run
+    // toolbar instead and the list holds the project once.
     let configs = configs_for_project(
         "app",
         "App",
@@ -1235,11 +1244,54 @@ fn custom_build_configurations_become_run_configurations() {
         &[],
     );
 
-    let names: Vec<&str> = configs
-        .iter()
-        .filter_map(|c| c.build_configuration.as_deref())
-        .collect();
-    assert_eq!(names, vec!["Debug", "Release", "Staging"]);
+    assert_eq!(configs.len(), 1, "one project, one entry");
+    assert_eq!(configs[0].build_configuration.as_deref(), Some("Debug"));
+    assert_eq!(configs[0].name, "App", "no build flag in the label");
+    assert_eq!(
+        configs[0].id, "app:run:debug",
+        "the id existing favourites reference"
+    );
+}
+
+#[test]
+fn a_project_without_a_debug_configuration_defaults_to_the_first_it_declares() {
+    // `debug_configuration` picks Debug when it is offered and otherwise the
+    // first declared. Whatever it picks has to be both the default and the id,
+    // or a favourite would name a configuration that is never produced.
+    let configs = configs_for_project(
+        "app",
+        "App",
+        Path::new("src/App/App.csproj"),
+        ProjectKind::Executable,
+        &["net8.0".into()],
+        &["Staging".into(), "Release".into()],
+        &[],
+    );
+
+    assert_eq!(configs.len(), 1);
+    assert_eq!(configs[0].build_configuration.as_deref(), Some("Staging"));
+    assert_eq!(configs[0].id, "app:run:staging");
+}
+
+#[test]
+fn a_multi_targeted_executable_still_gets_one_entry_per_framework() {
+    // Collapsing the build configurations must not collapse the frameworks:
+    // `dotnet run` refuses to guess between them, so each is a real choice.
+    let configs = configs_for_project(
+        "app",
+        "App",
+        Path::new("src/App/App.csproj"),
+        ProjectKind::Executable,
+        &["net8.0".into(), "net9.0".into()],
+        &["Debug".into(), "Release".into()],
+        &[],
+    );
+
+    assert_eq!(configs.len(), 2);
+    let ids: Vec<&str> = configs.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, vec!["app:run:debug:net8-0", "app:run:debug:net9-0"]);
+    let names: Vec<&str> = configs.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["App (net8.0)", "App (net9.0)"]);
 }
 
 #[test]

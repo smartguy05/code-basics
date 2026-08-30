@@ -137,6 +137,157 @@ pub fn next_id(list: &[UserIntent]) -> (String, u64) {
     (format!("u{seq}"), seq)
 }
 
+/// What a "move these changes into that card" asks for.
+///
+/// Assembled by the caller, which is the only layer that can see the cards:
+/// grouping ids are recomputed from the diff on every refresh, so they are not
+/// durable handles and nothing here accepts one. The caller resolves them to
+/// content and hands over the result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoveRequest {
+    /// The note to move into, when the destination card already has one — its
+    /// bare id, as [`note_id_of_group`] recovers it. `None` creates a note.
+    pub existing_id: Option<String>,
+    /// The destination card's title. What a new note is called, and what an
+    /// existing one is renamed to (which is a no-op when it has not changed).
+    pub label: String,
+    /// The destination card's *own* current lines.
+    ///
+    /// Load-bearing when the destination is not already a user note. Moving a
+    /// hunk into an agent's card while leaving that card's own hunks attributed
+    /// to the agent would produce **two** cards with the same title — the
+    /// agent's, keyed `intent:{turn}:{label}`, and the moved lines',
+    /// keyed `intent:usernote:{id}:{label}` — which is not a move, it is a
+    /// duplicate. Taking the destination's lines over with it is what makes the
+    /// two ends of the move land in one card.
+    pub destination_edits: Vec<UserEdit>,
+    /// The lines being moved in.
+    pub moving: Vec<UserEdit>,
+}
+
+/// The note id inside a grouping key, if that key names a user note.
+///
+/// Grouping writes `intent:{turn}:{label}` and a user note's turn is
+/// `usernote:{id}`, so the key reads `intent:usernote:{id}:{label}`. Ids are
+/// colon-free by construction ([`next_id`] produces `u{n}`), which is what makes
+/// the segment after the prefix unambiguous — a label may contain anything.
+pub fn note_id_of_group(group_id: &str) -> Option<&str> {
+    let rest = group_id.strip_prefix("intent:usernote:")?;
+    let id = rest.split(':').next()?;
+    (!id.is_empty()).then_some(id)
+}
+
+/// Add `incoming` to `edits`, merging into the entry for the same file and
+/// never repeating a line that is already recorded there.
+fn merge_edit(edits: &mut Vec<UserEdit>, incoming: UserEdit) {
+    let Some(existing) = edits
+        .iter_mut()
+        .find(|e| normalise_path(&e.path) == normalise_path(&incoming.path))
+    else {
+        edits.push(incoming);
+        return;
+    };
+    for line in incoming.old_lines {
+        if !existing.old_lines.contains(&line) {
+            existing.old_lines.push(line);
+        }
+    }
+    for line in incoming.new_lines {
+        if !existing.new_lines.contains(&line) {
+            existing.new_lines.push(line);
+        }
+    }
+}
+
+/// Take `moving`'s lines out of every note in `list`.
+///
+/// This is the half [`upsert`] cannot do. `upsert` drops an overlapping note
+/// **whole**, which is right when a note is being replaced by another covering
+/// the same change, and wrong when only part of it is being moved away: the
+/// lines staying behind would lose their note along with the ones that left.
+///
+/// A note left holding nothing is removed — an empty note binds to nothing and
+/// would title no card.
+fn remove_lines(list: &mut Vec<UserIntent>, moving: &[UserEdit]) {
+    for note in list.iter_mut() {
+        for edit in note.edits.iter_mut() {
+            for gone in moving {
+                if normalise_path(&gone.path) != normalise_path(&edit.path) {
+                    continue;
+                }
+                edit.old_lines.retain(|l| !gone.old_lines.contains(l));
+                edit.new_lines.retain(|l| !gone.new_lines.contains(l));
+            }
+        }
+        note.edits.retain(|e| !e.is_empty());
+    }
+    list.retain(|note| !note.edits.is_empty());
+}
+
+/// Move a selection of changed lines into another card.
+///
+/// The order matters and is the whole subtlety:
+///
+/// 1. The lines being moved are taken out of **every** note that holds them,
+///    including the destination's own (it is rebuilt below, so removing them
+///    here cannot lose anything).
+/// 2. The destination note is rebuilt from its own lines plus the moved ones.
+/// 3. It is given the highest sequence number, so [`merge_into`]'s rebase keeps
+///    it above every other note as well as every agent record. Without this a
+///    line moved *out* of one user note and into another could still be won by
+///    the note it just left.
+///
+/// Fails rather than storing something that binds to nothing: a selection with
+/// no changed lines, an unnamed new card, or a destination that has since gone.
+pub fn move_edits(list: &mut Vec<UserIntent>, request: MoveRequest) -> Result<()> {
+    let moving: Vec<UserEdit> = request
+        .moving
+        .into_iter()
+        .filter(|e| !e.is_empty())
+        .collect();
+    if moving.is_empty() {
+        anyhow::bail!("that selection has no changed lines to move");
+    }
+
+    let label = request.label.trim().to_string();
+    if label.is_empty() {
+        anyhow::bail!("a card needs a name");
+    }
+
+    let id = match &request.existing_id {
+        Some(id) => {
+            if !list.iter().any(|u| &u.id == id) {
+                anyhow::bail!("that card is no longer one you can move into");
+            }
+            id.clone()
+        }
+        None => next_id(list).0,
+    };
+
+    remove_lines(list, &moving);
+    // Whatever survived of the destination is replaced by the rebuilt note.
+    list.retain(|u| u.id != id);
+
+    let mut edits = Vec::new();
+    for edit in request
+        .destination_edits
+        .into_iter()
+        .chain(moving)
+        .filter(|e| !e.is_empty())
+    {
+        merge_edit(&mut edits, edit);
+    }
+
+    let seq = list.iter().map(|u| u.seq).max().map_or(0, |m| m + 1);
+    list.push(UserIntent {
+        id,
+        seq,
+        label,
+        edits,
+    });
+    Ok(())
+}
+
 /// Convert notes to the records and labels the rest of the pipeline consumes.
 ///
 /// Each edit becomes one [`IntentRecord`]; each note contributes one declared

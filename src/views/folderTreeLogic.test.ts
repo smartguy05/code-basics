@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildFileTree, flattenFileTree } from "./folderTreeLogic";
+import {
+  buildFileTree,
+  decodeCollapsedFolders,
+  defaultFilesLayout,
+  encodeCollapsedFolders,
+  flattenFileTree,
+} from "./folderTreeLogic";
 import type { FileChange } from "../ipc/types";
 
 /** A minimal changed file; only `path` matters to the tree. */
@@ -88,5 +94,55 @@ describe("flattenFileTree", () => {
     expect(labels).toEqual(["[src]", "README.md"]);
     const src = rows.find((r) => r.kind === "folder" && r.label === "src");
     expect(src?.kind === "folder" && src.collapsed).toBe(true);
+  });
+});
+
+describe("defaultFilesLayout", () => {
+  it("defaults to the tree when nothing has been stored", () => {
+    expect(defaultFilesLayout(null)).toBe("tree");
+  });
+
+  it("honours an explicit flat choice", () => {
+    expect(defaultFilesLayout("flat")).toBe("flat");
+  });
+
+  it("honours an explicit tree choice", () => {
+    expect(defaultFilesLayout("tree")).toBe("tree");
+  });
+
+  it("treats an unrecognisable value as no choice at all", () => {
+    expect(defaultFilesLayout("")).toBe("tree");
+    expect(defaultFilesLayout("Tree")).toBe("tree");
+    expect(defaultFilesLayout("{}")).toBe("tree");
+  });
+});
+
+describe("collapsed folder persistence", () => {
+  it("round-trips a set of folder keys", () => {
+    const collapsed = new Set(["Unstaged:src", "Staged:src/views"]);
+    expect(decodeCollapsedFolders(encodeCollapsedFolders(collapsed))).toEqual(collapsed);
+  });
+
+  it("writes the same string for the same set regardless of insertion order", () => {
+    const a = encodeCollapsedFolders(new Set(["b", "a"]));
+    const b = encodeCollapsedFolders(new Set(["a", "b"]));
+    expect(a).toBe(b);
+  });
+
+  it("round-trips the empty set", () => {
+    expect(decodeCollapsedFolders(encodeCollapsedFolders(new Set()))).toEqual(new Set());
+  });
+
+  it("reads nothing stored as nothing folded away", () => {
+    expect(decodeCollapsedFolders(null)).toEqual(new Set());
+  });
+
+  it("reads a corrupt value as nothing folded away rather than throwing", () => {
+    expect(decodeCollapsedFolders("not json")).toEqual(new Set());
+    expect(decodeCollapsedFolders('{"a":1}')).toEqual(new Set());
+  });
+
+  it("drops non-string entries rather than trusting the file", () => {
+    expect(decodeCollapsedFolders('["a", 1, null, "b"]')).toEqual(new Set(["a", "b"]));
   });
 });

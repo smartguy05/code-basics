@@ -37,6 +37,11 @@ pub async fn start_run(
     // Environment variables layered over the configuration's own for this
     // run only — the UI's environment picker (e.g. ASPNETCORE_ENVIRONMENT).
     env: Option<std::collections::BTreeMap<String, String>>,
+    // Debug / Release / whatever the project declares, for this run only —
+    // the Run toolbar's build-configuration picker. Detection no longer emits
+    // a separate configuration per build configuration, so this is how the
+    // choice is made; `None` keeps the configuration's own default.
+    build_configuration: Option<String>,
 ) -> Result<(), String> {
     let slot = state.active_slot()?;
     let workspace = slot.workspace();
@@ -54,6 +59,12 @@ pub async fn start_run(
     // (like the missing-launch-profile warning) see the effective environment.
     let mut config = config.clone();
     config.env.extend(env.into_iter().flatten());
+    // Only an override that names something is applied. An empty string is
+    // not "the default" — it is a picker that has lost its value — and passing
+    // it through would put a bare `-c` on the command line.
+    if let Some(configuration) = build_configuration.filter(|c| !c.trim().is_empty()) {
+        config.build_configuration = Some(configuration);
+    }
 
     let invocation = invocation::build(&workspace, &config, None)?;
 
@@ -160,6 +171,10 @@ pub async fn build_project(
     config_id: String,
     action: cb_core::adapters::dotnet::BuildAction,
     channel: Channel<ProcessEvent>,
+    // The toolbar's build-configuration choice, so Build and Rebuild produce
+    // the binaries the next Run will actually start. Without this the button
+    // beside the picker would quietly build something else.
+    build_configuration: Option<String>,
 ) -> Result<(), String> {
     let slot = state.active_slot()?;
     let workspace = slot.workspace();
@@ -175,6 +190,12 @@ pub async fn build_project(
             config.name, config.ecosystem
         ));
     }
+
+    let mut config = config.clone();
+    if let Some(configuration) = build_configuration.filter(|c| !c.trim().is_empty()) {
+        config.build_configuration = Some(configuration);
+    }
+    let config = &config;
 
     let invocation =
         cb_core::adapters::dotnet::build_action_invocation(config, action, &workspace.root);

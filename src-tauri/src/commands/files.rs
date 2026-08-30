@@ -43,6 +43,89 @@ pub async fn fs_write_file(
     Ok(())
 }
 
+/// Create an empty file, and any parent directories it needs.
+///
+/// Refuses to overwrite an existing path — see `cb_core::files::create_file`.
+#[tauri::command]
+pub async fn fs_create_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let root = state.workspace_root()?;
+    let relative = PathBuf::from(&path);
+    files::create_file(&root, &relative).map_err(|e| format!("{e:#}"))?;
+    reindex_saved_file(&state, &root.join(&relative));
+    Ok(())
+}
+
+/// Create a directory, and any parent directories it needs.
+///
+/// Nothing is re-indexed: an empty directory declares nothing, and the index
+/// keys files, not folders.
+#[tauri::command]
+pub async fn fs_create_dir(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let root = state.workspace_root()?;
+    files::create_dir(&root, &PathBuf::from(path)).map_err(|e| format!("{e:#}"))
+}
+
+/// Rename or move a file or directory within the workspace.
+///
+/// The index is corrected in both directions: the old key is dropped and the
+/// new one indexed. A renamed *directory* is not walked — its descendants keep
+/// their old keys until the next rescan, which `unindex_moved_path` explains.
+#[tauri::command]
+pub async fn fs_rename(state: State<'_, AppState>, from: String, to: String) -> Result<(), String> {
+    let root = state.workspace_root()?;
+    let (from, to) = (PathBuf::from(from), PathBuf::from(to));
+    files::rename(&root, &from, &to).map_err(|e| format!("{e:#}"))?;
+    unindex_moved_path(&state, &root.join(&from));
+    reindex_saved_file(&state, &root.join(&to));
+    Ok(())
+}
+
+/// Delete a file, or a directory and everything under it.
+#[tauri::command]
+pub async fn fs_delete(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let root = state.workspace_root()?;
+    let relative = PathBuf::from(&path);
+    files::delete(&root, &relative).map_err(|e| format!("{e:#}"))?;
+    unindex_moved_path(&state, &root.join(&relative));
+    Ok(())
+}
+
+/// Drop a path that has just been deleted or moved away from the index.
+///
+/// The mirror of [`reindex_saved_file`], and absolute for the same reason: the
+/// caller states where the file was, and `relative_to_root` re-keys it under
+/// whatever root is open now.
+///
+/// # The directory case, stated rather than hidden
+///
+/// Deleting or renaming a *directory* removes every file under it, and this
+/// drops only the key that names the directory itself — which the index never
+/// held, so it is a no-op. The descendants keep their entries until the next
+/// rescan or rebuild, and the palette will offer paths that no longer resolve.
+///
+/// That is a smaller wrong answer than the alternative it was weighed against.
+/// Walking the deleted subtree is impossible — it is already gone — so the only
+/// way to catch the descendants is a prefix sweep of the index, and a prefix
+/// over `files` is exactly the operation that cannot distinguish `src/app` from
+/// `src/apple`. Getting that wrong silently unindexes a directory the user
+/// still has. A stale entry is visible the moment it is clicked and is
+/// self-correcting; a wrongly swept one is invisible.
+///
+/// Failure is silent for the same reason it is in [`reindex_saved_file`]: the
+/// deletion happened, and reporting it as failed because a palette entry
+/// lingered would be a false report of the thing the user cares about.
+fn unindex_moved_path(state: &AppState, absolute: &Path) {
+    let Ok(workspace) = state.workspace() else {
+        return;
+    };
+    let Some(relative) = index::relative_to_root(&workspace.root, absolute) else {
+        return;
+    };
+    state.update_symbols(&workspace.root, |current| {
+        index::remove_file(current, &relative)
+    });
+}
+
 /// Re-index the one file that was just written, named by its absolute path.
 ///
 /// Shared with `git_write_file` rather than copied into it. The Changes tab

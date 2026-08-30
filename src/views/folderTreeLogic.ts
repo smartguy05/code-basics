@@ -96,3 +96,48 @@ export function flattenFileTree(
   walk(root, 0);
   return rows;
 }
+
+/** How the Files view lays out its list: a flat path list, or a folder tree. */
+export type FilesLayout = "flat" | "tree";
+
+/**
+ * Which layout the Files view opens in, given whatever `localStorage` held.
+ *
+ * The tree is the default: a flat list of full paths is only easier to read
+ * when there are very few changes, and a workspace with very few changes reads
+ * fine either way. An explicit stored `"flat"` is honoured — the toggle is a
+ * choice the user made, not a preference to be overridden — but an absent or
+ * unrecognisable value means the user has never chosen, so they get the tree.
+ */
+export function defaultFilesLayout(stored: string | null): FilesLayout {
+  return stored === "flat" ? "flat" : "tree";
+}
+
+/**
+ * Serialise the set of folded-away folder keys for `localStorage`.
+ *
+ * Sorted so an unchanged set produces an unchanged string, which keeps the
+ * write idempotent and makes the stored value diffable by eye.
+ */
+export function encodeCollapsedFolders(collapsed: Set<string>): string {
+  return JSON.stringify([...collapsed].sort());
+}
+
+/**
+ * Read back what `encodeCollapsedFolders` wrote.
+ *
+ * A missing, malformed or wrongly-shaped value yields an empty set rather than
+ * an error: a corrupt preference must never stop the Changes tab drawing, and
+ * "nothing is folded away" is the honest fallback — every folder open shows
+ * the user everything, where a wrong guess would hide changes from them.
+ */
+export function decodeCollapsedFolders(raw: string | null): Set<string> {
+  if (raw === null) return new Set();
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((entry): entry is string => typeof entry === "string"));
+  } catch {
+    return new Set();
+  }
+}

@@ -11,6 +11,7 @@ pub mod architecture;
 pub mod behavioral;
 pub mod changelists;
 pub mod config;
+pub mod dap;
 pub mod enhancements;
 pub mod erosion;
 pub mod files;

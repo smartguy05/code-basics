@@ -153,6 +153,22 @@ export const fsReadFile = (path: string) =>
 export const fsWriteFile = (path: string, content: string) =>
   invoke<void>("fs_write_file", { path, content });
 
+/** Create an empty file, and any parent directories it needs. Never overwrites. */
+export const fsCreateFile = (path: string) =>
+  invoke<void>("fs_create_file", { path });
+
+/** Create a directory, and any parent directories it needs. */
+export const fsCreateDir = (path: string) =>
+  invoke<void>("fs_create_dir", { path });
+
+/** Rename or move a file or directory. Refuses an occupied destination. */
+export const fsRename = (from: string, to: string) =>
+  invoke<void>("fs_rename", { from, to });
+
+/** Delete a file, or a directory and everything under it. Permanent. */
+export const fsDelete = (path: string) =>
+  invoke<void>("fs_delete", { path });
+
 // ---------------------------------------------------------------------------
 // Enhancements (instruction templates for CLAUDE.md / AGENTS.md)
 // ---------------------------------------------------------------------------
@@ -209,10 +225,15 @@ export function startRun(
   onEvent: (event: ProcessEvent) => void,
   /** Environment variables layered over the config's own, for this run only. */
   env?: Record<string, string>,
+  /**
+   * Debug / Release / whatever the project declares, for this run only. Omit
+   * to keep the configuration's own default.
+   */
+  buildConfiguration?: string,
 ): Promise<void> {
   const channel = new Channel<ProcessEvent>();
   channel.onmessage = onEvent;
-  return invoke<void>("start_run", { configId, channel, env });
+  return invoke<void>("start_run", { configId, channel, env, buildConfiguration });
 }
 
 /** Build / rebuild / clean the project behind a .NET configuration. */
@@ -220,10 +241,12 @@ export function buildProject(
   configId: string,
   action: BuildAction,
   onEvent: (event: ProcessEvent) => void,
+  /** The toolbar's build configuration, so a build matches the next run. */
+  buildConfiguration?: string,
 ): Promise<void> {
   const channel = new Channel<ProcessEvent>();
   channel.onmessage = onEvent;
-  return invoke<void>("build_project", { configId, action, channel });
+  return invoke<void>("build_project", { configId, action, channel, buildConfiguration });
 }
 
 export const cancelRun = (configId: string) =>
@@ -682,6 +705,27 @@ export const setCardIntent = (group: string, label: string, mode: ComparisonMode
 /** Remove the user's note from one card. Returns whether one was found. */
 export const clearCardIntent = (group: string, mode: ComparisonMode) =>
   invoke<boolean>("clear_card_intent", { group, mode });
+
+/** Where a move is going: an existing card, or a new one with this name. */
+export interface MoveDestination {
+  group?: string;
+  label?: string;
+}
+
+/**
+ * Move some of a card's changes into another card, or into a new one.
+ *
+ * `paths` narrows the move to those of the card's files; an empty array moves
+ * the whole card. Stored like a hand-written note — as the moved lines'
+ * *content* — so it rebinds when the lines shift and outranks any agent reason
+ * on them.
+ */
+export const moveCardEdits = (
+  group: string,
+  paths: string[],
+  destination: MoveDestination,
+  mode: ComparisonMode,
+) => invoke<void>("move_card_edits", { group, paths, destination, mode });
 
 // ---------------------------------------------------------------------------
 // Quality-gate Stop hook (`qgate/`) — installed the same way the intent hooks

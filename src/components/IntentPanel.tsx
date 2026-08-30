@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "../ipc/api";
 import { PlanPreview } from "./PlanPreview";
+import { ContextMenu } from "./ContextMenu";
 import {
+  canMove,
   canRejectInMode,
   cardCandidates,
   cardHeadline,
@@ -11,6 +13,8 @@ import {
   importFeedback,
   intentDataHint,
   intentEditPlan,
+  moveDescription,
+  moveTargets,
   type PruneCounts,
   pruneFeedback,
   prunePrompt,
@@ -283,6 +287,16 @@ export interface IntentPanelProps {
   /** Remove the user's note from a card. */
   onClearIntent: (group: IntentGroup) => void;
   /**
+   * Move some of a card's changes elsewhere. `paths` empty means the whole
+   * card; `destination.group` names an existing card, `destination.label` a new
+   * one.
+   */
+  onMoveEdits: (
+    group: IntentGroup,
+    paths: string[],
+    destination: { group?: string; label?: string },
+  ) => void;
+  /**
    * The runtime before/after comparison, when one has been run. Its
    * per-card attributions badge the matching cards; its unattributed deltas
    * appear only in the overall section, never pinned to a card.
@@ -328,6 +342,7 @@ export function IntentPanel({
   onPrune,
   onSetIntent,
   onClearIntent,
+  onMoveEdits,
   behavioral,
   erosionFlags,
   coverage,
@@ -402,6 +417,8 @@ export function IntentPanel({
       onReject={(group, reason, file) => void runReject(group, reason, file)}
       onSetIntent={onSetIntent}
       onClearIntent={onClearIntent}
+      onMoveEdits={onMoveEdits}
+      allGroups={groups}
     />
   );
 
@@ -676,6 +693,8 @@ function GroupCard({
   onReject,
   onSetIntent,
   onClearIntent,
+  onMoveEdits,
+  allGroups,
 }: {
   group: IntentGroup;
   behavior: CardBehavior | null;
@@ -696,6 +715,18 @@ function GroupCard({
   onReject: (group: IntentGroup, reason: string, file?: GroupFile) => void;
   onSetIntent: (group: IntentGroup, label: string) => void;
   onClearIntent: (group: IntentGroup) => void;
+  /**
+   * Move some of a card's changes elsewhere. `paths` empty means the whole
+   * card; `destination.group` names an existing card, `destination.label` a new
+   * one.
+   */
+  onMoveEdits: (
+    group: IntentGroup,
+    paths: string[],
+    destination: { group?: string; label?: string },
+  ) => void;
+  /** Every card on screen, so the move menu can list the other ones. */
+  allGroups: IntentGroup[];
 }) {
   const hunks = group.files.reduce((total, file) => total + file.hunks.length, 0);
 
@@ -706,6 +737,24 @@ function GroupCard({
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState("");
   const [confirming, setConfirming] = useState(false);
+
+  /**
+   * The move menu: where it sits, and which of the card's files it acts on.
+   * `paths` empty means the whole card, which is what right-clicking the card
+   * itself asks for.
+   */
+  const [moveMenu, setMoveMenu] = useState<{ x: number; y: number; paths: string[] } | null>(
+    null,
+  );
+  /** The name box shown after "New card…"; `null` while it is hidden. */
+  const [newCard, setNewCard] = useState<{ paths: string[]; name: string } | null>(null);
+
+  function openMoveMenu(event: React.MouseEvent, paths: string[]) {
+    if (!canMove(group)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setMoveMenu({ x: event.clientX, y: event.clientY, paths });
+  }
 
   const openEdit = () => {
     setLabel(plan.initial);
@@ -762,7 +811,9 @@ function GroupCard({
     <div
       className={`intent-card ${selected ? "selected" : ""}`}
       onClick={() => onSelect(group)}
-      title={cardTitle(group, KIND_TITLE[group.kind])}
+      onContextMenu={(e) => openMoveMenu(e, [])}
+      title={`${cardTitle(group, KIND_TITLE[group.kind])}
+Right-click to move these changes into another card`}
     >
       <div className="headline">
         <span className={`kind ${group.kind}`}>{KIND_LABEL[group.kind]}</span>
@@ -804,6 +855,7 @@ function GroupCard({
                   e.stopPropagation();
                   onSelectFile(group, file);
                 }}
+                onContextMenu={(e) => openMoveMenu(e, [file.path])}
                 // The full path titles the whole row: the name is truncated
                 // with an ellipsis, and a nested title on the inner span is not
                 // reliably shown over the row's own title.
@@ -995,6 +1047,87 @@ function GroupCard({
             </div>
           )}
         </>
+      )}
+
+      {newCard && (
+        <div className="intent-edit-prompt" onClick={(e) => e.stopPropagation()}>
+          <label style={{ fontSize: 11 }}>
+            Name the new card for{" "}
+            {newCard.paths.length === 0 ? (
+              "these changes"
+            ) : (
+              <code>{newCard.paths.join(", ")}</code>
+            )}
+          </label>
+          <input
+            autoFocus
+            value={newCard.name}
+            placeholder="what these changes are for"
+            onChange={(e) => setNewCard({ ...newCard, name: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && newCard.name.trim()) {
+                onMoveEdits(group, newCard.paths, { label: newCard.name.trim() });
+                setNewCard(null);
+              } else if (e.key === "Escape") {
+                setNewCard(null);
+              }
+            }}
+          />
+          <div className="actions">
+            <button
+              disabled={busy || !newCard.name.trim()}
+              onClick={() => {
+                onMoveEdits(group, newCard.paths, { label: newCard.name.trim() });
+                setNewCard(null);
+              }}
+            >
+              Move
+            </button>
+            <button disabled={busy} onClick={() => setNewCard(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {moveMenu && (
+        <ContextMenu x={moveMenu.x} y={moveMenu.y} onClose={() => setMoveMenu(null)}>
+          <div className="dropdown-section">
+            {moveMenu.paths.length === 0
+              ? "Move this whole card to"
+              : `Move ${moveMenu.paths.join(", ")} to`}
+          </div>
+          {moveTargets(allGroups, group.id).map((target) => (
+            <div
+              key={target.id}
+              className="dropdown-item"
+              title={moveDescription(
+                moveMenu.paths,
+                target,
+                allGroups.find((g) => g.id === target.id)?.userAuthored ?? false,
+              )}
+              onClick={() => {
+                const paths = moveMenu.paths;
+                setMoveMenu(null);
+                onMoveEdits(group, paths, { group: target.id });
+              }}
+            >
+              {target.label}
+            </div>
+          ))}
+          <div className="dropdown-separator" />
+          <div
+            className="dropdown-item"
+            title={moveDescription(moveMenu.paths, null, false)}
+            onClick={() => {
+              const paths = moveMenu.paths;
+              setMoveMenu(null);
+              setNewCard({ paths, name: "" });
+            }}
+          >
+            New card…
+          </div>
+        </ContextMenu>
       )}
     </div>
   );

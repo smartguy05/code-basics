@@ -442,6 +442,152 @@ pub async fn set_card_intent(
     user::save(&root, &list).map_err(|e| format!("{e:#}"))
 }
 
+/// Where a move is going: an existing card, or a new one.
+///
+/// Exactly one of the two is meaningful. `group` names a card the user picked
+/// out of the menu; `label` names a card that does not exist yet. `group` wins
+/// when both arrive, because a picked card is a stronger statement than a typed
+/// name.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveDestination {
+    /// The destination card's grouping id.
+    pub group: Option<String>,
+    /// The name for a new card.
+    pub label: Option<String>,
+}
+
+/// One card's changed-line content, optionally narrowed to some of its files.
+///
+/// An empty `paths` means the whole card — the "move this card into that one"
+/// gesture — rather than nothing, because a menu that offered to move zero
+/// files would be a menu item that does nothing.
+fn edits_of(
+    diffs: &[cb_core::git::FileDiff],
+    group: &cb_core::git::grouping::IntentGroup,
+    paths: &[String],
+) -> Vec<UserEdit> {
+    let mut edits = Vec::new();
+    for file in &group.files {
+        if !paths.is_empty() && !paths.iter().any(|p| p == &file.path) {
+            continue;
+        }
+        let Some(diff) = diffs.iter().find(|d| d.path == file.path) else {
+            continue;
+        };
+        let (old_lines, new_lines) = grouping::changed_content(diff, &selected(file));
+        if old_lines.is_empty() && new_lines.is_empty() {
+            continue;
+        }
+        edits.push(UserEdit {
+            path: file.path.clone(),
+            old_lines,
+            new_lines,
+        });
+    }
+    edits
+}
+
+/// Turn a move the user asked for into the request `user::move_edits` takes.
+///
+/// This is the one place the ephemeral grouping ids are resolved to durable
+/// content, and it is a free function rather than part of the command body so
+/// it can be tested — a `#[tauri::command]` takes `State`, which no test in this
+/// crate can construct.
+///
+/// Three refusals worth stating, all of which would otherwise be stored as a
+/// note that binds to nothing:
+///
+/// * a source card that is no longer in the working tree,
+/// * a destination card that is no longer in the working tree,
+/// * a move into the card the selection already sits in, which is a no-op
+///   dressed up as an edit — it would rewrite the card as a user note and
+///   silently discard whatever agent reason titled it.
+fn move_request(
+    diffs: &[cb_core::git::FileDiff],
+    groups: &[cb_core::git::grouping::IntentGroup],
+    source_id: &str,
+    paths: &[String],
+    destination: &MoveDestination,
+) -> Result<user::MoveRequest, String> {
+    let source = groups
+        .iter()
+        .find(|g| g.id == source_id)
+        .ok_or_else(|| "that group is no longer in the working tree".to_string())?;
+
+    let moving = edits_of(diffs, source, paths);
+    if moving.is_empty() {
+        return Err("that selection has no changed lines to move".into());
+    }
+
+    match destination.group.as_deref() {
+        Some(target_id) => {
+            if target_id == source_id {
+                return Err("those changes are already in that card".into());
+            }
+            let target = groups
+                .iter()
+                .find(|g| g.id == target_id)
+                .ok_or_else(|| "that card is no longer in the working tree".to_string())?;
+
+            Ok(user::MoveRequest {
+                // An existing *user note* is moved into; any other card becomes
+                // one, taking its own lines with it so the move lands in a
+                // single card rather than producing two with the same title.
+                existing_id: user::note_id_of_group(target_id).map(str::to_string),
+                label: target.label.clone(),
+                destination_edits: edits_of(diffs, target, &[]),
+                moving,
+            })
+        }
+        None => {
+            let label = destination.label.clone().unwrap_or_default();
+            if label.trim().is_empty() {
+                return Err("a new card needs a name".into());
+            }
+            Ok(user::MoveRequest {
+                existing_id: None,
+                label,
+                destination_edits: Vec::new(),
+                moving,
+            })
+        }
+    }
+}
+
+/// Move some of a card's changes into another card, or into a new one.
+///
+/// The override is stored the same way a hand-written note is: as the moved
+/// lines' *content* plus a label, in `user-intents.json`. So it rebinds by
+/// content when the lines shift, and it outranks any agent reason on those
+/// lines because `user::merge_into` rebases user records above every agent one.
+///
+/// `paths` narrows the move to some of the card's files; empty moves the whole
+/// card. Line-level selection is expressed the same way everything else here
+/// is — by content — so no line numbers cross this boundary.
+#[tauri::command]
+pub async fn move_card_edits(
+    state: State<'_, AppState>,
+    group: String,
+    paths: Vec<String>,
+    destination: MoveDestination,
+    mode: ComparisonMode,
+) -> Result<(), String> {
+    let (root, repo) = open(&state)?;
+
+    let diffs = repo.diff_all(mode).map_err(|e| format!("{e:#}"))?;
+    let branch = repo.status().ok().and_then(|s| s.branch);
+    let intents = intents::load(&root, &LoadOptions { branch }).map_err(|e| format!("{e:#}"))?;
+    let attributions = attribution::attribute(&diffs, &intents, Options::default());
+    let groups = grouping::group(&diffs, &attributions, &intents);
+
+    let request = move_request(&diffs, &groups, &group, &paths, &destination)?;
+
+    let mut list = user::load(&root).map_err(|e| format!("{e:#}"))?;
+    user::move_edits(&mut list, request).map_err(|e| format!("{e:#}"))?;
+    user::save(&root, &list).map_err(|e| format!("{e:#}"))
+}
+
 /// Remove the user's note from one card, restoring whatever reason (agent or
 /// inferred) or location title it had before. Returns whether a note was found.
 #[tauri::command]
@@ -468,4 +614,219 @@ pub async fn clear_card_intent(
         user::save(&root, &list).map_err(|e| format!("{e:#}"))?;
     }
     Ok(removed)
+}
+
+#[cfg(test)]
+mod move_tests {
+    use super::*;
+
+    use cb_core::git::attribution::Confidence;
+    use cb_core::git::grouping::{GroupKind, IntentGroup};
+    use cb_core::git::patch::{DiffLine, FileDiff, Hunk, LineOrigin};
+
+    /// One added line, at `index`, in a one-hunk diff of `path`.
+    fn diff(path: &str, lines: &[(u32, &str)]) -> FileDiff {
+        FileDiff {
+            path: path.to_string(),
+            old_path: None,
+            is_binary: false,
+            hunks: vec![Hunk {
+                old_start: 1,
+                old_lines: 0,
+                new_start: 1,
+                new_lines: lines.len() as u32,
+                header: String::new(),
+                lines: lines
+                    .iter()
+                    .map(|(index, content)| DiffLine {
+                        index: *index,
+                        origin: LineOrigin::Addition,
+                        content: (*content).to_string(),
+                        old_lineno: None,
+                        new_lineno: Some(*index + 1),
+                        no_newline: false,
+                    })
+                    .collect(),
+            }],
+        }
+    }
+
+    fn group(id: &str, label: &str, files: &[(&str, &[u32])]) -> IntentGroup {
+        IntentGroup {
+            id: id.to_string(),
+            kind: GroupKind::Intent,
+            label: label.to_string(),
+            candidates: Vec::new(),
+            symbol: None,
+            files: files
+                .iter()
+                .map(|(path, indices)| GroupFile {
+                    path: (*path).to_string(),
+                    line_indices: indices.to_vec(),
+                    hunks: vec![0],
+                })
+                .collect(),
+            line_count: 1,
+            confidence: Confidence::High,
+            self_confidence: None,
+            user_authored: false,
+        }
+    }
+
+    fn to_new(label: &str) -> MoveDestination {
+        MoveDestination {
+            group: None,
+            label: Some(label.to_string()),
+        }
+    }
+
+    fn to_card(id: &str) -> MoveDestination {
+        MoveDestination {
+            group: Some(id.to_string()),
+            label: None,
+        }
+    }
+
+    #[test]
+    fn a_move_into_a_new_card_carries_only_the_selected_content() {
+        let diffs = vec![diff("a.rs", &[(0, "first"), (1, "second")])];
+        let groups = vec![group("src", "source", &[("a.rs", &[0, 1])])];
+
+        let request = move_request(&diffs, &groups, "src", &[], &to_new("fresh")).unwrap();
+
+        assert_eq!(request.existing_id, None);
+        assert_eq!(request.label, "fresh");
+        assert!(request.destination_edits.is_empty());
+        assert_eq!(request.moving.len(), 1);
+        assert_eq!(request.moving[0].new_lines, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn naming_files_narrows_the_move_to_them() {
+        let diffs = vec![diff("a.rs", &[(0, "a")]), diff("b.rs", &[(0, "b")])];
+        let groups = vec![group("src", "source", &[("a.rs", &[0]), ("b.rs", &[0])])];
+
+        let request =
+            move_request(&diffs, &groups, "src", &["b.rs".into()], &to_new("fresh")).unwrap();
+
+        let paths: Vec<&str> = request.moving.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["b.rs"]);
+    }
+
+    #[test]
+    fn naming_no_files_moves_the_whole_card() {
+        let diffs = vec![diff("a.rs", &[(0, "a")]), diff("b.rs", &[(0, "b")])];
+        let groups = vec![group("src", "source", &[("a.rs", &[0]), ("b.rs", &[0])])];
+
+        let request = move_request(&diffs, &groups, "src", &[], &to_new("fresh")).unwrap();
+
+        assert_eq!(request.moving.len(), 2, "empty means all, not none");
+    }
+
+    #[test]
+    fn moving_into_an_ordinary_card_takes_that_cards_own_lines_with_it() {
+        // Otherwise the destination's hunks stay attributed to the agent and the
+        // moved ones become a second card with the same title.
+        let diffs = vec![
+            diff("a.rs", &[(0, "moved")]),
+            diff("b.rs", &[(0, "already there")]),
+        ];
+        let groups = vec![
+            group("intent:turn1:source", "source", &[("a.rs", &[0])]),
+            group("intent:turn2:dest", "dest", &[("b.rs", &[0])]),
+        ];
+
+        let request = move_request(
+            &diffs,
+            &groups,
+            "intent:turn1:source",
+            &[],
+            &to_card("intent:turn2:dest"),
+        )
+        .unwrap();
+
+        assert_eq!(request.existing_id, None, "an agent card has no note yet");
+        assert_eq!(request.label, "dest", "the destination keeps its title");
+        assert_eq!(request.destination_edits.len(), 1);
+        assert_eq!(request.destination_edits[0].path, "b.rs");
+    }
+
+    #[test]
+    fn moving_into_a_card_that_is_already_a_user_note_reuses_that_note() {
+        let diffs = vec![diff("a.rs", &[(0, "moved")]), diff("b.rs", &[(0, "there")])];
+        let groups = vec![
+            group("intent:turn1:source", "source", &[("a.rs", &[0])]),
+            group("intent:usernote:u4:mine", "mine", &[("b.rs", &[0])]),
+        ];
+
+        let request = move_request(
+            &diffs,
+            &groups,
+            "intent:turn1:source",
+            &[],
+            &to_card("intent:usernote:u4:mine"),
+        )
+        .unwrap();
+
+        assert_eq!(request.existing_id.as_deref(), Some("u4"));
+    }
+
+    #[test]
+    fn a_source_card_that_has_gone_is_refused() {
+        let diffs = vec![diff("a.rs", &[(0, "a")])];
+        let groups = vec![group("src", "source", &[("a.rs", &[0])])];
+
+        let error = move_request(&diffs, &groups, "vanished", &[], &to_new("fresh")).unwrap_err();
+        assert!(error.contains("no longer"), "{error}");
+    }
+
+    #[test]
+    fn a_destination_card_that_has_gone_is_refused() {
+        let diffs = vec![diff("a.rs", &[(0, "a")])];
+        let groups = vec![group("src", "source", &[("a.rs", &[0])])];
+
+        let error = move_request(&diffs, &groups, "src", &[], &to_card("vanished")).unwrap_err();
+        assert!(error.contains("no longer"), "{error}");
+    }
+
+    #[test]
+    fn moving_a_card_into_itself_is_refused_rather_than_rewritten() {
+        // It reads as a no-op but would replace whatever titled the card with a
+        // user note carrying the same words — silently discarding an agent's
+        // recorded reason.
+        let diffs = vec![diff("a.rs", &[(0, "a")])];
+        let groups = vec![group("src", "source", &[("a.rs", &[0])])];
+
+        let error = move_request(&diffs, &groups, "src", &[], &to_card("src")).unwrap_err();
+        assert!(error.contains("already in"), "{error}");
+    }
+
+    #[test]
+    fn a_selection_whose_files_have_no_diff_is_refused() {
+        let diffs = vec![diff("a.rs", &[(0, "a")])];
+        let groups = vec![group("src", "source", &[("gone.rs", &[0])])];
+
+        let error = move_request(&diffs, &groups, "src", &[], &to_new("fresh")).unwrap_err();
+        assert!(error.contains("no changed lines"), "{error}");
+    }
+
+    #[test]
+    fn a_new_card_with_no_name_is_refused() {
+        let diffs = vec![diff("a.rs", &[(0, "a")])];
+        let groups = vec![group("src", "source", &[("a.rs", &[0])])];
+
+        for destination in [
+            MoveDestination {
+                group: None,
+                label: None,
+            },
+            MoveDestination {
+                group: None,
+                label: Some("   ".into()),
+            },
+        ] {
+            let error = move_request(&diffs, &groups, "src", &[], &destination).unwrap_err();
+            assert!(error.contains("needs a name"), "{error}");
+        }
+    }
 }

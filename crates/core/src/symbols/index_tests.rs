@@ -883,3 +883,54 @@ fn a_path_the_walk_would_never_have_produced_changes_nothing() {
     assert_eq!(names(&index), ["alpha", "beta"]);
     assert_eq!(files(&index), ["a.rs", "b.rs"]);
 }
+
+// ---------------------------------------------------------------------------
+// remove_file
+// ---------------------------------------------------------------------------
+
+#[test]
+fn removing_a_file_drops_its_symbols_and_its_own_entry() {
+    let mut index = small_index();
+
+    remove_file(&mut index, Path::new("a.rs"));
+
+    assert_eq!(names(&index), ["beta"]);
+    assert_eq!(files(&index), ["b.rs"]);
+}
+
+#[test]
+fn removing_a_file_leaves_every_other_file_alone() {
+    let mut index = small_index();
+
+    remove_file(&mut index, Path::new("b.rs"));
+
+    assert_eq!(names(&index), ["alpha"]);
+    assert_eq!(files(&index), ["a.rs"]);
+}
+
+#[test]
+fn removing_a_file_the_index_never_held_changes_nothing() {
+    let mut index = small_index();
+
+    remove_file(&mut index, Path::new("never/indexed.rs"));
+
+    assert_eq!(names(&index), ["alpha", "beta"]);
+    assert_eq!(files(&index), ["a.rs", "b.rs"]);
+}
+
+#[test]
+fn removing_a_file_accepts_the_other_separator() {
+    // The Run tab's tree hands back Windows-spelled paths; the index keys on
+    // the normalised form, so the two must not miss each other.
+    let mut index = SymbolIndex {
+        root: PathBuf::from("/w"),
+        files: vec![PathBuf::from("src/a.rs")],
+        symbols: vec![symbol("alpha", "src/a.rs", 1)],
+        truncated: false,
+    };
+
+    remove_file(&mut index, Path::new("src\\a.rs"));
+
+    assert!(index.symbols.is_empty());
+    assert!(index.files.is_empty());
+}

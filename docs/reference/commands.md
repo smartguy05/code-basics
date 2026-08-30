@@ -33,6 +33,10 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `fs_list_dir` | `path: String` | `DirEntry[]` | One directory per call (the tree expands lazily); directories first, sorted case-insensitively, `SKIP_DIRS` (`node_modules`, `bin`, `obj`, …) hidden |
 | `fs_read_file` | `path: String` | `String` | UTF-8 text only; binary or >5 MB files are a clear error |
 | `fs_write_file` | `path: String`, `content: String` | `()` | Saves the file editor's contents (Ctrl+S) |
+| `fs_create_file` | `path: String` | `()` | Create an empty file and any parent directories it needs. Refuses to overwrite an existing path, and refuses an empty name (which would name the workspace root) |
+| `fs_create_dir` | `path: String` | `()` | Create a directory and any parents it needs. Refuses an existing path |
+| `fs_rename` | `from: String`, `to: String` | `()` | Rename or move within the workspace. Both sides are resolved against the root, and an occupied destination is refused rather than replaced |
+| `fs_delete` | `path: String` | `()` | Delete a file, or a directory and everything under it. Permanent — no recycle bin. Refuses the workspace root |
 
 ## Enhancements (instructions + prompts)
 
@@ -76,8 +80,8 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `start_run` | `config_id: String`, `channel: Channel<ProcessEvent>`, `env: Map?` | `()` | Streams output; resolves on exit. `env` is layered over the config's own for this run only (the Run tab's environment picker) |
-| `build_project` | `config_id: String`, `action: "build" \| "rebuild" \| "clean"`, `channel: Channel<ProcessEvent>` | `()` | .NET only; runs `dotnet build` / `build --no-incremental` / `clean`, registered as `<config_id>:build` |
+| `start_run` | `config_id: String`, `channel: Channel<ProcessEvent>`, `env: Map?`, `build_configuration: String?` | `()` | Streams output; resolves on exit. `env` is layered over the config's own for this run only (the Run tab's environment picker), and `build_configuration` overrides `Debug`/`Release` the same way (the toolbar's picker). An empty string is ignored rather than emitting a bare `-c` |
+| `build_project` | `config_id: String`, `action: "build" \| "rebuild" \| "clean"`, `channel: Channel<ProcessEvent>`, `build_configuration: String?` | `()` | .NET only; runs `dotnet build` / `build --no-incremental` / `clean`, registered as `<config_id>:build`. Takes the same override as `start_run` so a build produces the binaries the next run will start |
 | `cancel_run` | `config_id: String`, `root?: String` | `bool` | Kills the process **tree**. `root` targets a specific (possibly background) workspace; defaults to the active one |
 | `running_ids` | `root?: String` | `String[]` | Config ids currently running in `root`'s workspace, or the active one |
 | `run_tests` | `config_id: String`, `only_failed: bool`, `channel: Channel<ProcessEvent>` | `TestRunOutcome` | Streams output, then parses the report; `only_failed` filters to the previous run's failures |
@@ -193,6 +197,7 @@ The Running panel: what the app has running now (across every open codebase) plu
 | `clear_intent_history` | – | `()` | Forget everything recorded for this workspace (agent history only; user notes survive). Also drops the archive, tombstones and prune state, so a clear-then-import starts genuinely clean |
 | `set_card_intent` | `group: String, label: String, mode: ComparisonMode` | `()` | Write (or overwrite) the user's own intent for one card. Stored as the card's changed-line content plus the label, so it rebinds by content on the next refresh and titles the card — winning over any agent reason on those lines. Re-annotating the same change replaces the previous note |
 | `clear_card_intent` | `group: String, mode: ComparisonMode` | `bool` | Remove the user's note from one card, restoring the reason or title it had before. Returns whether a note was found |
+| `move_card_edits` | `group: String, paths: String[], destination: { group?: String, label?: String }, mode: ComparisonMode` | `()` | Move some of a card's changes into another card, or into a new one. `paths` empty moves the whole card. Stored like a hand-written note — as the moved lines' *content* — so it rebinds when the lines shift and outranks any agent reason on them. Moving into an ordinary card takes that card's own lines over with it, or the move would produce two cards with the same title. A move into the card the selection is already in is refused: it would silently replace the agent reason titling it |
 
 ## Quality-gate hook
 
@@ -282,7 +287,7 @@ Expanding a node past a cap is `inspect_capture` with `RootSpec::Address` and `w
 | `symbol_index_status` | – | `SymbolIndexStatus` | `ready` (there is an index to search) and `building` (one is being built) are independent — a rebuild runs over a usable index — plus the file and symbol counts and whether a cap clipped them |
 | `rebuild_symbol_index` | – | `()` | Discards `.code-basics/symbols.json` and re-reads the workspace from source, in the background. Returns as soon as the build starts; watch `symbol_index_status` for the finish. The old index stays in place until the new one lands |
 
-The index is built on a background thread by `open_workspace` and `rescan_workspace`, and by the app's `setup` hook for a workspace named on the command line. Nothing waits for it: a cold build is ~20 ms on this repository but 637 ms on a 2,864-file .NET solution and 9.4 s against a cold filesystem cache. A build whose root is no longer the open workspace is discarded rather than stored (`AppState::record_symbols`), so opening A then B cannot serve A's paths under B. `fs_write_file` and `git_write_file` re-index the single file they wrote, which is microseconds and is what keeps the palette from going stale on every edit.
+The index is built on a background thread by `open_workspace` and `rescan_workspace`, and by the app's `setup` hook for a workspace named on the command line. Nothing waits for it: a cold build is ~20 ms on this repository but 637 ms on a 2,864-file .NET solution and 9.4 s against a cold filesystem cache. A build whose root is no longer the open workspace is discarded rather than stored (`AppState::record_symbols`), so opening A then B cannot serve A's paths under B. `fs_write_file`, `fs_create_file` and `git_write_file` re-index the single file they wrote, and `fs_rename`/`fs_delete` drop the old key (`symbols::index::remove_file`) — though a deleted *directory*'s descendants keep their entries until the next rescan, because a prefix sweep of the index cannot tell `src/app` from `src/apple`. This is what keeps the palette from going stale on every edit.
 
 ## Language servers
 

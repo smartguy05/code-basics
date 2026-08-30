@@ -111,3 +111,126 @@ export function killRequest(record: RunningRecord, orphan: boolean): KillRequest
     orphan,
   };
 }
+
+// ---------------------------------------------------------------------------
+// The Stop button's menu (Run tab)
+// ---------------------------------------------------------------------------
+
+/**
+ * The order the Stop menu lists kinds in: what the user most likely came to
+ * stop, first. Runs and launched apps are the two things people start and
+ * forget; a build finishes on its own; a terminal, review or behavioral run is
+ * somewhere the user can already see and stop it.
+ */
+const KIND_ORDER: ProcessKind[] = [
+  "run",
+  "external",
+  "build",
+  "terminal",
+  "review",
+  "behavioral",
+];
+
+/** One stoppable process in the Stop menu. */
+export interface StopMenuRow {
+  record: RunningRecord;
+  /** From `RunningReport.orphans` — killing it needs the extra confirmation. */
+  orphan: boolean;
+  /** Started from the codebase whose Run tab this menu belongs to. */
+  here: boolean;
+}
+
+/** A labelled block of rows in the Stop menu. */
+export interface StopMenuGroup {
+  key: string;
+  label: string;
+  rows: StopMenuRow[];
+}
+
+/**
+ * Compare two workspace roots.
+ *
+ * Tolerant of both separators and a trailing one, and case-insensitive, because
+ * the roots being compared come from different places — the open workspace, and
+ * whatever the supervisor recorded when the process started — and on Windows
+ * those routinely differ in case and in how they spell the separator. Getting
+ * this wrong only mis-sorts the menu, so tolerance costs nothing here; it is not
+ * doing security work, which is why it can be looser than
+ * `symbols::index::relative_to_root`, which refuses to guess.
+ */
+export function sameRoot(a: string, b: string): boolean {
+  const normalise = (root: string) =>
+    root
+      .replace(/[\\/]+$/, "")
+      .replace(/\\/g, "/")
+      .toLowerCase();
+  return normalise(a) === normalise(b);
+}
+
+/**
+ * Everything the Stop menu lists, grouped by kind and ordered so the open
+ * codebase's processes come first inside each group.
+ *
+ * The whole report is shown, not just this codebase's: the Stop button exists
+ * because a process the user has lost track of is hard to find, and the ones
+ * hardest to find are precisely the ones started from a tab that is no longer
+ * in front of them. Rows from elsewhere are marked (`here: false`) so the UI can
+ * say where they came from rather than presenting them as local.
+ *
+ * Orphans — processes the app started and can no longer address normally — are
+ * a group of their own at the end rather than being mixed in, because killing
+ * one is a different action with a different confirmation.
+ */
+export function stopMenuGroups(
+  report: RunningReport | null,
+  activeRoot: string,
+): StopMenuGroup[] {
+  if (!report) return [];
+
+  const row = (record: RunningRecord, orphan: boolean): StopMenuRow => ({
+    record,
+    orphan,
+    here: sameRoot(record.root, activeRoot),
+  });
+
+  // This codebase first, then by label, so the list is stable between polls —
+  // the backend's order is enumeration order and is not something to rely on.
+  const order = (rows: StopMenuRow[]) =>
+    [...rows].sort(
+      (a, b) =>
+        Number(b.here) - Number(a.here) ||
+        a.record.label.localeCompare(b.record.label) ||
+        a.record.pid - b.record.pid,
+    );
+
+  const groups: StopMenuGroup[] = [];
+  for (const kind of KIND_ORDER) {
+    const rows = order(report.live.filter((r) => r.kind === kind).map((r) => row(r, false)));
+    if (rows.length > 0) {
+      groups.push({ key: kind, label: kindLabel(kind), rows });
+    }
+  }
+
+  const orphans = order(report.orphans.map((r) => row(r, true)));
+  if (orphans.length > 0) {
+    groups.push({ key: "orphans", label: "Left over", rows: orphans });
+  }
+
+  return groups;
+}
+
+/** How many rows the menu holds — the count beside the button, and the empty test. */
+export function stopMenuCount(groups: StopMenuGroup[]): number {
+  return groups.reduce((total, group) => total + group.rows.length, 0);
+}
+
+/**
+ * What one row says: the process, and where it came from when that is not here.
+ *
+ * The codebase is named only for a process from somewhere else. Repeating the
+ * open codebase's name on every local row would bury the one piece of
+ * information the row exists to carry.
+ */
+export function stopRowLabel(row: StopMenuRow): string {
+  return row.here ? row.record.label : `${row.record.label} — ${rootBasename(row.record.root)}`;
+}

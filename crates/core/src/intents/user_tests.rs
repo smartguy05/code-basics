@@ -191,3 +191,307 @@ fn a_corrupt_file_loads_as_empty_rather_than_failing() {
     std::fs::write(user_intents_path(root), "{ not json").unwrap();
     assert!(load(root).unwrap().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Moving changes between cards
+// ---------------------------------------------------------------------------
+
+fn request(
+    existing: Option<&str>,
+    label: &str,
+    destination: Vec<UserEdit>,
+    moving: Vec<UserEdit>,
+) -> MoveRequest {
+    MoveRequest {
+        existing_id: existing.map(str::to_string),
+        label: label.to_string(),
+        destination_edits: destination,
+        moving,
+    }
+}
+
+#[test]
+fn a_note_id_is_recovered_from_the_grouping_key_it_ends_up_in() {
+    let n = note("u3", 3, "why this changed", vec![]);
+    let key = format!("intent:{}:{}", n.turn_id(), n.label);
+
+    assert_eq!(note_id_of_group(&key), Some("u3"));
+}
+
+#[test]
+fn a_label_with_colons_in_it_does_not_confuse_the_id() {
+    // Ids are colon-free; labels are whatever the user typed.
+    assert_eq!(
+        note_id_of_group("intent:usernote:u7:fix: the thing: properly"),
+        Some("u7")
+    );
+}
+
+#[test]
+fn a_card_that_is_not_a_user_note_yields_no_id() {
+    assert_eq!(note_id_of_group("intent:abc123:some agent reason"), None);
+    assert_eq!(note_id_of_group("symbol:function:handle_request"), None);
+    assert_eq!(note_id_of_group("other:src/main.rs"), None);
+    assert_eq!(note_id_of_group("intent:usernote::no id"), None);
+}
+
+#[test]
+fn moving_into_a_new_card_creates_one_note_holding_the_moved_lines() {
+    let mut list = Vec::new();
+
+    move_edits(
+        &mut list,
+        request(
+            None,
+            "extracted",
+            vec![],
+            vec![edit("a.rs", &["old"], &["new"])],
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].label, "extracted");
+    assert_eq!(list[0].edits, vec![edit("a.rs", &["old"], &["new"])]);
+}
+
+#[test]
+fn moving_into_an_existing_note_keeps_its_own_lines_as_well() {
+    let mut list = vec![note(
+        "u0",
+        0,
+        "the destination",
+        vec![edit("a.rs", &[], &["destination line"])],
+    )];
+
+    move_edits(
+        &mut list,
+        request(
+            Some("u0"),
+            "the destination",
+            vec![edit("a.rs", &[], &["destination line"])],
+            vec![edit("b.rs", &[], &["moved line"])],
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(list.len(), 1, "a move must not leave a second card behind");
+    let paths: Vec<&str> = list[0].edits.iter().map(|e| e.path.as_str()).collect();
+    assert_eq!(paths, vec!["a.rs", "b.rs"]);
+}
+
+#[test]
+fn moving_out_of_a_note_leaves_the_lines_that_stayed_behind_annotated() {
+    // The bug `upsert` alone would cause: it drops an overlapping note whole, so
+    // moving one line out would take the other line's note with it.
+    let mut list = vec![note(
+        "u0",
+        0,
+        "the source",
+        vec![edit("a.rs", &[], &["stays", "goes"])],
+    )];
+
+    move_edits(
+        &mut list,
+        request(
+            None,
+            "elsewhere",
+            vec![],
+            vec![edit("a.rs", &[], &["goes"])],
+        ),
+    )
+    .unwrap();
+
+    let source = list.iter().find(|u| u.id == "u0").expect("source survives");
+    assert_eq!(source.edits, vec![edit("a.rs", &[], &["stays"])]);
+
+    let moved = list.iter().find(|u| u.label == "elsewhere").unwrap();
+    assert_eq!(moved.edits, vec![edit("a.rs", &[], &["goes"])]);
+}
+
+#[test]
+fn moving_the_last_line_out_of_a_note_removes_the_empty_note() {
+    let mut list = vec![note(
+        "u0",
+        0,
+        "the source",
+        vec![edit("a.rs", &[], &["only"])],
+    )];
+
+    move_edits(
+        &mut list,
+        request(
+            None,
+            "elsewhere",
+            vec![],
+            vec![edit("a.rs", &[], &["only"])],
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].label, "elsewhere");
+}
+
+#[test]
+fn the_destination_ends_up_with_the_highest_sequence_number() {
+    // Otherwise a line moved out of one note could still be won by the note it
+    // just left, since attribution hands a contested line to the later record.
+    let mut list = vec![
+        note("u0", 0, "first", vec![edit("a.rs", &[], &["a"])]),
+        note("u1", 9, "second", vec![edit("b.rs", &[], &["b"])]),
+    ];
+
+    move_edits(
+        &mut list,
+        request(None, "third", vec![], vec![edit("c.rs", &[], &["c"])]),
+    )
+    .unwrap();
+
+    let moved = list.iter().find(|u| u.label == "third").unwrap();
+    assert!(
+        list.iter().all(|u| u.label == "third" || u.seq < moved.seq),
+        "the destination must outrank every other note"
+    );
+}
+
+#[test]
+fn moving_something_already_in_the_destination_changes_nothing_and_repeats_nothing() {
+    let mut list = vec![note("u0", 0, "dest", vec![edit("a.rs", &[], &["line"])])];
+
+    move_edits(
+        &mut list,
+        request(
+            Some("u0"),
+            "dest",
+            vec![edit("a.rs", &[], &["line"])],
+            vec![edit("a.rs", &[], &["line"])],
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].edits, vec![edit("a.rs", &[], &["line"])]);
+}
+
+#[test]
+fn moving_into_an_existing_note_can_rename_it() {
+    let mut list = vec![note("u0", 0, "old name", vec![edit("a.rs", &[], &["a"])])];
+
+    move_edits(
+        &mut list,
+        request(
+            Some("u0"),
+            "new name",
+            vec![edit("a.rs", &[], &["a"])],
+            vec![edit("b.rs", &[], &["b"])],
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(list[0].label, "new name");
+}
+
+#[test]
+fn a_moved_file_merges_into_the_destinations_entry_for_the_same_file() {
+    let mut list = Vec::new();
+
+    move_edits(
+        &mut list,
+        request(
+            None,
+            "one card",
+            vec![edit("a.rs", &["old one"], &["new one"])],
+            vec![edit("a.rs", &["old two"], &["new two"])],
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(list[0].edits.len(), 1, "one entry per file");
+    assert_eq!(
+        list[0].edits[0],
+        edit("a.rs", &["old one", "old two"], &["new one", "new two"])
+    );
+}
+
+#[test]
+fn a_file_named_with_the_other_separator_is_the_same_file() {
+    let mut list = vec![note("u0", 0, "dest", vec![edit("src/a.rs", &[], &["a"])])];
+
+    move_edits(
+        &mut list,
+        request(
+            Some("u0"),
+            "dest",
+            vec![edit("src/a.rs", &[], &["a"])],
+            vec![edit("src\\a.rs", &[], &["b"])],
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(list[0].edits.len(), 1, "one entry, not two spellings");
+}
+
+#[test]
+fn a_move_with_nothing_in_it_is_refused_rather_than_stored() {
+    let mut list = Vec::new();
+
+    assert!(move_edits(&mut list, request(None, "name", vec![], vec![])).is_err());
+    assert!(move_edits(
+        &mut list,
+        request(None, "name", vec![], vec![edit("a.rs", &[], &[])])
+    )
+    .is_err());
+    assert!(list.is_empty(), "a refused move stores nothing");
+}
+
+#[test]
+fn a_new_card_needs_a_name() {
+    let mut list = Vec::new();
+
+    assert!(move_edits(
+        &mut list,
+        request(None, "   ", vec![], vec![edit("a.rs", &[], &["a"])])
+    )
+    .is_err());
+    assert!(list.is_empty());
+}
+
+#[test]
+fn moving_into_a_card_that_has_gone_is_refused_and_changes_nothing() {
+    let mut list = vec![note("u0", 0, "still here", vec![edit("a.rs", &[], &["a"])])];
+
+    let error = move_edits(
+        &mut list,
+        request(Some("u9"), "gone", vec![], vec![edit("b.rs", &[], &["b"])]),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("no longer"));
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].edits, vec![edit("a.rs", &[], &["a"])]);
+}
+
+#[test]
+fn a_moved_note_still_converts_into_records_the_pipeline_consumes() {
+    // The whole point of storing a move as a note: it goes through the ordinary
+    // record path and is attributed by content like everything else.
+    let mut list = Vec::new();
+    move_edits(
+        &mut list,
+        request(
+            None,
+            "moved here",
+            vec![],
+            vec![edit("a.rs", &["old"], &["new"])],
+        ),
+    )
+    .unwrap();
+
+    let (records, labels) = to_intents(&list);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].provider, ProviderId::User);
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels[0].label, "moved here");
+    assert_eq!(labels[0].paths, vec!["a.rs".to_string()]);
+}

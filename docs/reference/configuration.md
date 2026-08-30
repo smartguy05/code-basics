@@ -164,8 +164,10 @@ What a scan generates per project, before anything saved is layered on:
 
 | Project | Generated |
 |---------|-----------|
-| Executable | One configuration per launchable `launchSettings.json` profile, plus one per build configuration (`Debug`, `Release`, and anything in `<Configurations>`) |
+| Executable | One configuration per launchable `launchSettings.json` profile, plus **one plain configuration per target framework** — *not* one per build configuration. Debug/Release is a property of a launch, not a different thing to launch, so it is chosen in the Run toolbar beside the environment picker; the entry defaults to Debug and its id keeps the `:run:debug` spelling so saved favourites still match |
 | Test | One Debug configuration. Release is deliberately not offered — `#if !DEBUG` paths make it a trap — but the editor's build-configuration dropdown lists every configuration the project declares |
+
+`<Configurations>` still reaches the UI: it lands on `Project.configurations`, which is where both the Run toolbar's picker and the config editor's dropdown read their options from. A configuration the project no longer declares is dropped from the picker rather than shown, so it cannot send a `-c` MSBuild will reject.
 | Library | None; there is nothing to launch or test |
 
 A multi-targeted project (`<TargetFrameworks>`) multiplies the above by framework, since `dotnet run` and `dotnet test` refuse to guess between them. A single-targeted project omits `-f` entirely.

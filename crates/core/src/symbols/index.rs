@@ -394,6 +394,34 @@ pub fn replace_file(index: &mut SymbolIndex, relative: &Path, symbols: Vec<Symbo
     }
 }
 
+/// Drop a file from the index entirely: its symbols and its own entry.
+///
+/// [`replace_file`] deliberately cannot do this. It re-checks the path on disk
+/// and *keeps* the [`SymbolIndex::files`] entry when the file is not there,
+/// because the file being momentarily unreadable — mid-save, locked by another
+/// process — is not evidence that it is gone. Deleting or renaming one is
+/// evidence, and it is the only thing that is, so the caller who performed the
+/// deletion is the only one who can say so.
+///
+/// Without this, a deleted file goes on being offered by the search palette
+/// until the next full rebuild, and opening it fails on a path that no longer
+/// names anything.
+///
+/// Removing something the index never held is a no-op rather than an error:
+/// a file below the size or extension cut, or under build output, was never
+/// indexed, and its deletion is still a perfectly ordinary thing to report.
+pub fn remove_file(index: &mut SymbolIndex, relative: &Path) {
+    let relative = normalise(relative);
+
+    let start = index.symbols.partition_point(|s| s.path < relative);
+    let end = index.symbols.partition_point(|s| s.path <= relative);
+    index.symbols.drain(start..end);
+
+    if let Ok(position) = index.files.binary_search(&relative) {
+        index.files.remove(position);
+    }
+}
+
 /// The key this index would record for an absolute path, or `None` if the path
 /// is not under `root`.
 ///

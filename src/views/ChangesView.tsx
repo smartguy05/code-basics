@@ -7,7 +7,14 @@ import {
   onlyHunks,
 } from "../components/diffLogic";
 import { buildSections, sortFilesByRisk, statusLetter, type FileSection } from "./changesLogic";
-import { buildFileTree, flattenFileTree } from "./folderTreeLogic";
+import {
+  buildFileTree,
+  decodeCollapsedFolders,
+  defaultFilesLayout,
+  encodeCollapsedFolders,
+  flattenFileTree,
+  type FilesLayout,
+} from "./folderTreeLogic";
 import { fileRisk, hunkRisk, type RiskIndex } from "../components/riskLogic";
 import { confidenceForFile } from "../components/confidenceLogic";
 import { Sidebar } from "../components/Sidebar";
@@ -66,6 +73,7 @@ const EMPTY_SCORECARD: Scorecard = {
 };
 const GROUPING_KEY = "code-basics.changesGrouping";
 const FILES_LAYOUT_KEY = "code-basics.filesLayout";
+const COLLAPSED_FOLDERS_KEY = "code-basics.collapsedFolders";
 const COLLAPSE_KEY = "code-basics.diffCollapseUnchanged";
 const WHITESPACE_KEY = "code-basics.diffIgnoreWhitespace";
 
@@ -88,11 +96,19 @@ function loadGrouping(): Grouping {
     : "files";
 }
 
-/** How the Files view lays out its list: a flat path list, or a folder tree. */
-type FilesLayout = "flat" | "tree";
-
 function loadFilesLayout(): FilesLayout {
-  return localStorage.getItem(FILES_LAYOUT_KEY) === "tree" ? "tree" : "flat";
+  return defaultFilesLayout(localStorage.getItem(FILES_LAYOUT_KEY));
+}
+
+/**
+ * Where one workspace's folded-away tree folders are remembered.
+ *
+ * Keyed by root because the keys are section-and-folder paths, which mean
+ * nothing in another codebase — a shared key would fold away folders the user
+ * never touched here.
+ */
+function collapsedFoldersKey(root: string): string {
+  return `${COLLAPSED_FOLDERS_KEY}:${root}`;
 }
 
 function loadDiffLayout(): DiffLayout {
@@ -169,9 +185,21 @@ export function ChangesView({
   /**
    * Folders the user folded away in the tree layout, keyed by
    * `${section.key}:${folderPath}` so the same folder can be open in one
-   * section and closed in another. In-memory, like the section `collapsed`.
+   * section and closed in another. Persisted per workspace root, so folding a
+   * noisy folder away survives leaving and returning to the tab — this view is
+   * mounted conditionally and re-reads from disk every time.
    */
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() =>
+    decodeCollapsedFolders(localStorage.getItem(collapsedFoldersKey(workspace.root))),
+  );
+  // Persisted from an effect rather than from inside the state updater, so the
+  // updater stays a pure function of its previous value.
+  useEffect(() => {
+    localStorage.setItem(
+      collapsedFoldersKey(workspace.root),
+      encodeCollapsedFolders(collapsedFolders),
+    );
+  }, [collapsedFolders, workspace.root]);
   /**
    * Name being typed for a new group. `null` means the input is hidden;
    * `pendingPath` is a file to drop into it as soon as it exists, so "New
@@ -587,6 +615,23 @@ export function ChangesView({
   const setCardIntent = (group: IntentGroup, label: string) =>
     withBusy(async () => {
       await api.setCardIntent(group.id, label, mode);
+      await refreshAll();
+    });
+
+  /**
+   * Move some of a card's changes into another card, or into a new one.
+   *
+   * Stored as a user note over the moved lines' content, like a hand-written
+   * intent, so it survives the lines shifting and outranks any agent reason on
+   * them. `paths` empty moves the whole card.
+   */
+  const moveCardEdits = (
+    group: IntentGroup,
+    paths: string[],
+    destination: { group?: string; label?: string },
+  ) =>
+    withBusy(async () => {
+      await api.moveCardEdits(group.id, paths, destination, mode);
       await refreshAll();
     });
 
@@ -1141,6 +1186,7 @@ export function ChangesView({
               onPrune={prune}
               onSetIntent={setCardIntent}
               onClearIntent={clearCardIntent}
+              onMoveEdits={moveCardEdits}
               behavioral={behavioral}
               erosionFlags={erosion?.flags}
               coverage={coverage}

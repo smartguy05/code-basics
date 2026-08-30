@@ -487,3 +487,73 @@ export function rejectFeedback(summary: RejectSummary): string {
     `${summary.unmarked.join(", ")}.`
   );
 }
+
+// ---------------------------------------------------------------------------
+// Moving changes between cards
+// ---------------------------------------------------------------------------
+
+/** One entry in the "Move to…" submenu. */
+export interface MoveTargetOption {
+  id: string;
+  label: string;
+}
+
+/**
+ * The cards a selection may be moved into.
+ *
+ * Excluded, each for its own reason:
+ *
+ * * **The card it is already in.** A move into itself changes nothing, and the
+ *   backend would rewrite the card as a user note, discarding whatever agent
+ *   reason titled it. The backend refuses it too — this is so the item is never
+ *   offered in the first place.
+ * * **An ambiguous card.** Its `label` is empty and its reasons live in
+ *   `candidates`, so there is nothing to name it by in a menu; moving into a
+ *   card the user cannot identify is not a choice they can make.
+ *
+ * Everything else is offered, including cards the tooling built itself (a
+ * symbol card, a formatting card, the `Other` bucket). Overriding exactly those
+ * is what the feature is for.
+ */
+export function moveTargets(groups: IntentGroup[], sourceId: string): MoveTargetOption[] {
+  return groups
+    .filter((group) => group.id !== sourceId && group.label.trim() !== "")
+    .map((group) => ({ id: group.id, label: group.label }));
+}
+
+/**
+ * What a move is about to do, in words, for the menu item's tooltip.
+ *
+ * States the consequence the UI would otherwise hide: the destination card
+ * becomes user-authored, so an agent's recorded reason stops titling it.
+ */
+export function moveDescription(
+  paths: string[],
+  target: MoveTargetOption | null,
+  targetIsUserAuthored: boolean,
+): string {
+  const what =
+    paths.length === 0
+      ? "every change in this card"
+      : paths.length === 1
+        ? (paths[0] ?? "this file")
+        : `${paths.length} files`;
+
+  if (target === null) {
+    return `Move ${what} into a new card you name.`;
+  }
+  const consequence = targetIsUserAuthored
+    ? ""
+    : " Both ends of the move become your note, so the reason recorded there stops titling it.";
+  return `Move ${what} into "${target.label}".${consequence}`;
+}
+
+/**
+ * Whether a move is worth sending at all.
+ *
+ * A card with no files has no content to move, and the backend would refuse it;
+ * asking first keeps a dead menu item off the screen.
+ */
+export function canMove(group: IntentGroup): boolean {
+  return group.files.length > 0;
+}

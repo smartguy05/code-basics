@@ -137,6 +137,23 @@ The dots are confidence. Only a verbatim match against distinctive text reads �
 
 Selecting a card opens its first file and lists every file the card touches, each with its share of hunks and lines. Clicking a file shows **only that card's changes in it** — the same file can sit in several cards, and each shows just its own hunks. **Stage group** and **Revert group** act on every line in the card, across every file; the **Stage**/**Revert** buttons on a file row act on that file's share alone.
 
+## Grouping the cards yourself
+
+The grouper abstains rather than guesses, so it routinely leaves changes in a card titled by their enclosing symbol, or in the per-file `Other` bucket, when you know perfectly well which decision they belong to. Two gestures override it:
+
+- **Right-click a card** to move everything in it somewhere else.
+- **Right-click one of a card's files** to move only that file's share.
+
+Both open the same menu: every other card by name, then **New card…**, which asks for a name.
+
+Three things it does that are worth knowing:
+
+- **Moving into an ordinary card takes that card's own changes with it.** Otherwise the destination's hunks would stay attributed to the agent while the moved ones became a *second* card with the same title — a duplicate rather than a move. The consequence is that the destination becomes your card, and whatever reason was recorded there stops titling it. The menu says so in the tooltip.
+- **A card the tooling titled itself is offered like any other**, because overriding exactly those is the point. A card with no name (an ambiguous intent, whose reasons are listed as candidates) is not offered — there is nothing to pick it out by.
+- **A move into the card the changes are already in is refused.** It reads as a no-op but would quietly replace the recorded reason with your own copy of the same words.
+
+An override is stored exactly like a hand-written note — as the moved lines' *content*, in `.code-basics/intents/user-intents.json` — so it survives the lines moving, and it outranks every agent record on those lines. It also means an override retires the same way a note does: once HEAD accounts for the lines it names, the record is archived (see [Retiring what a commit has absorbed](#retiring-what-a-commit-has-absorbed)). That is deliberate — a reason with no timestamp and no commit would otherwise re-title unrelated code the moment its text reappeared — but it does mean a grouping you arranged before a commit is not still arranged after it.
+
 ## Rejecting a change
 
 **Revert group** removes the code and says nothing. The agent that wrote it learns nothing either, so next turn it writes the same thing again and you pay for the same mistake twice.

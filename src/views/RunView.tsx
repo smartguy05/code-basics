@@ -1,12 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import { OutputConsole, type ConsoleHandle } from "../components/OutputConsole";
 import { ConfigEditor } from "../components/ConfigEditor";
-import { projectTarget } from "../components/configLogic";
+import {
+  buildConfigurationsFor,
+  projectTarget,
+  selectedBuildConfiguration,
+} from "../components/configLogic";
 import { FileEditor } from "../components/FileEditor";
 import { FileTree } from "../components/FileTree";
 import { LspStatusIndicator } from "../components/LspStatus";
 import { RiderImportDialog } from "../components/RiderImportDialog";
 import { RunConfigMenu } from "../components/RunConfigMenu";
+import { ContextMenu } from "../components/ContextMenu";
+import {
+  killRequest,
+  kindIcon,
+  stopMenuCount,
+  stopMenuGroups,
+  stopRowLabel,
+  type StopMenuRow,
+} from "../components/runningLogic";
 import { secretsFile, secretsProjects, type OpenEditorFile } from "../components/editorSourceLogic";
 import { Sidebar } from "../components/Sidebar";
 import {
@@ -43,6 +56,7 @@ import type {
   ProcessEvent,
   RunConfig,
   RunDump,
+  RunningReport,
   Workspace,
 } from "../ipc/types";
 
@@ -102,6 +116,31 @@ const DEFAULT_ENVIRONMENTS: EnvironmentState = {
 };
 
 const environmentsKey = (root: string) => `code-basics.environments:${root}`;
+
+/**
+ * The remembered build configuration per run configuration, per workspace.
+ *
+ * In `localStorage` beside the environment and for the same reason: which
+ * configuration a developer builds locally is personal, while
+ * `.code-basics/config.json` is checked in and would push one person's choice
+ * onto the team. It is stored per config id rather than per workspace because a
+ * solution routinely holds one project you debug and another you only ever run
+ * in Release.
+ */
+const buildConfigsKey = (root: string) => `code-basics.buildConfigurations:${root}`;
+
+function loadBuildConfigs(root: string): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(buildConfigsKey(root));
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, string>)
+      : {};
+  } catch {
+    return {};
+  }
+}
 
 /** A file open in the editor pane. */
 /**
@@ -255,6 +294,17 @@ export function RunView({
   const [liveType, setLiveType] = useState("");
 
   // The editor pane: files opened from the directory tree.
+  /**
+   * Everything the app has running, read when the Stop menu is opened rather
+   * than polled: the menu is the only consumer here, and a process list that is
+   * a second old is a process list the user is about to act on wrongly.
+   */
+  const [stopMenu, setStopMenu] = useState<{ x: number; y: number } | null>(null);
+  const [stopReport, setStopReport] = useState<RunningReport | null>(null);
+  /** The build configuration chosen per run configuration, by config id. */
+  const [buildConfigs, setBuildConfigs] = useState<Record<string, string>>(() =>
+    loadBuildConfigs(workspace.root),
+  );
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [dirtyFiles, setDirtyFiles] = useState<Set<string>>(new Set());
@@ -481,6 +531,32 @@ export function RunView({
     // Closing is not a navigation: the fallback to another tab below must not
     // push onto the history (a browser does not record a tab close as "forward").
     if (activeFile === id) {
+      setActiveFile(remaining[remaining.length - 1]?.id ?? null);
+    }
+  }
+
+  /**
+   * Close the tabs for a path that has just been deleted or renamed away.
+   *
+   * Descendants go too: deleting a folder deletes every file under it, and a
+   * tab left pointing at one of them is not merely stale — the editor saves on
+   * a flush timer, so the next save would recreate the file the user deleted.
+   *
+   * A dirty tab is closed along with the rest and its unsaved edits are lost.
+   * That is the honest outcome: there is nowhere to save them to any more, and
+   * the alternative — keeping the tab so the text survives — is exactly the
+   * resurrection above. The delete is confirmed before it happens, which is
+   * where the warning belongs.
+   */
+  function closePathAndDescendants(path: string) {
+    const gone = (id: string) => id === path || id.startsWith(`${path}/`);
+    const remaining = openFiles.filter((f) => !gone(f.id));
+    if (remaining.length === openFiles.length) return;
+
+    setOpenFiles(remaining);
+    setDirtyFiles((previous) => new Set([...previous].filter((id) => !gone(id))));
+    setPinnedFiles((previous) => new Set([...previous].filter((id) => !gone(id))));
+    if (activeFile !== null && gone(activeFile)) {
       setActiveFile(remaining[remaining.length - 1]?.id ?? null);
     }
   }
@@ -833,8 +909,11 @@ export function RunView({
     setRunning((previous) => new Set(previous).add(session));
 
     try {
-      await api.buildProject(config.id, action, (event) =>
-        handleEvent(session, event),
+      await api.buildProject(
+        config.id,
+        action,
+        (event) => handleEvent(session, event),
+        buildConfigurationOf(config) ?? undefined,
       );
     } catch (e) {
       setError(api.errorMessage(e));
@@ -870,7 +949,12 @@ export function RunView({
         : undefined;
 
     try {
-      await api.startRun(config.id, (event) => handleEvent(config.id, event), env);
+      await api.startRun(
+        config.id,
+        (event) => handleEvent(config.id, event),
+        env,
+        buildConfigurationOf(config) ?? undefined,
+      );
     } catch (e) {
       if (current()) {
         setError(api.errorMessage(e));
@@ -887,6 +971,33 @@ export function RunView({
     }
   }
 
+  /** What the picker offers for a configuration; empty when it has no such concept. */
+  function buildConfigurationOptions(config: RunConfig | null): string[] {
+    return buildConfigurationsFor(config, workspace.projects, workspace.root);
+  }
+
+  /**
+   * The build configuration a run or build will actually use: the remembered
+   * choice if the project still declares it, else the configuration's own.
+   * `null` for an ecosystem that has none, which sends no override at all.
+   */
+  function buildConfigurationOf(config: RunConfig | null): string | null {
+    if (!config) return null;
+    return selectedBuildConfiguration(
+      buildConfigurationOptions(config),
+      buildConfigs[config.id] ?? null,
+      config.buildConfiguration,
+    );
+  }
+
+  function chooseBuildConfiguration(configId: string, value: string) {
+    setBuildConfigs((previous) => {
+      const next = { ...previous, [configId]: value };
+      localStorage.setItem(buildConfigsKey(workspace.root), JSON.stringify(next));
+      return next;
+    });
+  }
+
   async function stop(config: RunConfig) {
     await api.cancelRun(config.id);
   }
@@ -897,6 +1008,51 @@ export function RunView({
   async function stopAllRuns() {
     const ids = runningConfigIdsOfKind(workspace.configs, await api.runningIds(), "app");
     await Promise.all(ids.map((id) => api.cancelRun(id)));
+  }
+
+  /** Open the Stop menu under the button, with a freshly read process list. */
+  async function openStopMenu(event: React.MouseEvent) {
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    setStopMenu({ x: box.left, y: box.bottom + 2 });
+    // Cleared first: a list left over from the last time the menu was open is
+    // worse than no list, because the user would act on it.
+    setStopReport(null);
+    try {
+      setStopReport(await api.listRunning());
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
+  }
+
+  /**
+   * Stop one process from the Stop menu.
+   *
+   * Routed through `kill_running` rather than `cancel_run` because the menu
+   * lists every kind, and only `kill_running` knows that a terminal belongs to
+   * the PTY manager and a launched app to the global supervisor. An orphan is
+   * confirmed first: the backend re-checks the pid's identity before killing,
+   * but a pid the app has lost track of is the one case where a mistake lands
+   * on a process the app never started.
+   */
+  async function stopOne(row: StopMenuRow) {
+    if (
+      row.orphan &&
+      !window.confirm(
+        `Kill leftover process ${row.record.pid} (${row.record.program})?
+
+` +
+          "The app can no longer address this one normally. Its identity is " +
+          "re-checked before anything is killed, so a reused pid is refused.",
+      )
+    ) {
+      return;
+    }
+    setStopMenu(null);
+    try {
+      await api.killRunning(killRequest(row.record, row.orphan));
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
   }
 
   async function save(config: RunConfig) {
@@ -1119,8 +1275,54 @@ export function RunView({
             openFile(path, name);
             recordNav(path);
           }}
+          onPathGone={closePathAndDescendants}
         />
       </Sidebar>
+
+      {stopMenu && (
+        <ContextMenu x={stopMenu.x} y={stopMenu.y} onClose={() => setStopMenu(null)}>
+          {(() => {
+            const groups = stopMenuGroups(stopReport, workspace.root);
+            if (stopReport === null) {
+              return <div className="dropdown-item disabled">Reading…</div>;
+            }
+            if (stopMenuCount(groups) === 0) {
+              return <div className="dropdown-item disabled">Nothing is running.</div>;
+            }
+            return (
+              <>
+                {groups.map((group) => (
+                  <div key={group.key}>
+                    <div className="dropdown-section">{group.label}</div>
+                    {group.rows.map((row) => (
+                      <div
+                        key={`${row.record.kind}:${row.record.pid}:${row.record.key}`}
+                        className="dropdown-item"
+                        onClick={() => void stopOne(row)}
+                        title={`${row.record.program} · pid ${row.record.pid} · ${row.record.root}`}
+                      >
+                        <span style={{ marginRight: 6 }}>{kindIcon(row.record.kind)}</span>
+                        {stopRowLabel(row)}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                <div className="dropdown-separator" />
+                <div
+                  className="dropdown-item"
+                  onClick={() => {
+                    setStopMenu(null);
+                    void stopAllRuns();
+                  }}
+                  title="Stop every running application in this codebase. Tests, builds, terminals and launched apps are left alone — stop those individually above."
+                >
+                  Stop all applications
+                </div>
+              </>
+            );
+          })()}
+        </ContextMenu>
+      )}
 
       <div className="main">
         <div className="toolbar">
@@ -1135,15 +1337,16 @@ export function RunView({
           <button
             onClick={() => selected && stop(selected)}
             disabled={!selected || !running.has(selected.id)}
+            title="Stop the selected configuration"
           >
             Stop
           </button>
           <button
-            onClick={() => void stopAllRuns()}
-            disabled={runningConfigIdsOfKind(workspace.configs, [...running], "app").length === 0}
-            title="Stop every running application (leaves tests and builds running)"
+            onClick={(e) => void openStopMenu(e)}
+            title="Choose what to stop — every process this app is running"
+            aria-label="Choose what to stop"
           >
-            Stop All
+            ▾
           </button>
           <button
             onClick={() => selected && start(selected)}
@@ -1234,7 +1437,33 @@ export function RunView({
             </button>
           )}
           {selected?.ecosystem === "dotnet" && (
+            <>
+            {(() => {
+              // Only shown for an ecosystem that has build configurations at
+              // all, which today means .NET. `buildConfigurationsFor` returns
+              // nothing for the others rather than inventing a Debug/Release
+              // pair that would put a flag on a command line that never took
+              // one.
+              const options = buildConfigurationOptions(selected);
+              if (!selected || options.length === 0) return null;
+              const current = buildConfigurationOf(selected) ?? options[0];
+              return (
+                <select
+                  value={current}
+                  onChange={(e) => chooseBuildConfiguration(selected.id, e.target.value)}
+                  title="The build configuration this configuration runs and builds in"
+                  aria-label="Build configuration"
+                >
+                  {options.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              );
+            })()}
             <EnvironmentPicker state={environments} onChange={saveEnvironments} />
+            </>
           )}
           {/* The run-configuration picker sits just right of the environment
               dropdown, so what you run and what you run it in are together. */}
@@ -1274,7 +1503,9 @@ export function RunView({
           {selected && (
             <span className="muted mono" style={{ fontSize: 11 }}>
               {selected.ecosystem}
-              {selected.buildConfiguration ? ` · ${selected.buildConfiguration}` : ""}
+              {/* The build configuration is not repeated here: it is the
+                  picker above, and a second copy would go stale the moment the
+                  picker overrode the configuration's own default. */}
               {selected.launchProfile ? ` · ${selected.launchProfile}` : ""}
               {selected.script ? ` · ${selected.script}` : ""}
             </span>

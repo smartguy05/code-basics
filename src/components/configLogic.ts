@@ -1,4 +1,4 @@
-import type { Project } from "../ipc/types";
+import type { Project, RunConfig } from "../ipc/types";
 
 export function envToText(env: Record<string, string> | undefined): string {
   return Object.entries(env ?? {})
@@ -45,4 +45,55 @@ export function projectTarget(project: Project, root: string): string {
   return absolute.startsWith(trimmedRoot)
     ? absolute.slice(trimmedRoot.length).replace(/^[\\/]+/, "")
     : absolute;
+}
+
+/**
+ * The build configurations the Run toolbar's picker offers for a configuration.
+ *
+ * Read from the *project*, not from the run configuration, because that is
+ * where MSBuild's `<Configurations>` actually lands
+ * (`workspace::Project.configurations`) and because detection now produces one
+ * run configuration per project rather than one per build configuration — so
+ * the run config knows only which one is currently chosen, never the set.
+ *
+ * Empty is a real answer and the caller must respect it: a Node package, a
+ * cargo crate or a declarative adapter has no Debug/Release distinction at all,
+ * and offering a made-up pair would put a `-c Release` on a command line that
+ * has never accepted one. The default pair is supplied only for a *.NET*
+ * project the scan could not read — there the concept exists and only the
+ * declaration is missing, which is exactly when a fallback is honest.
+ *
+ * The same lookup as `ConfigEditor`'s dropdown, which is why it is here rather
+ * than inline in either.
+ */
+export function buildConfigurationsFor(
+  config: Pick<RunConfig, "ecosystem" | "project"> | null,
+  projects: Project[],
+  root: string,
+): string[] {
+  if (!config || config.ecosystem !== "dotnet") return [];
+
+  const project = projects.find((p) => projectTarget(p, root) === config.project);
+  if (project?.configurations?.length) return project.configurations;
+  return ["Debug", "Release"];
+}
+
+/**
+ * Which entry the picker shows: the remembered choice when it is still on
+ * offer, else the configuration's own default, else the first option.
+ *
+ * A remembered choice that is no longer offered is dropped rather than shown.
+ * `<Configurations>` can lose a value between scans, and a picker displaying
+ * `Staging` for a project that no longer declares it would send a `-c Staging`
+ * that fails at build time with an error naming MSBuild rather than the picker.
+ */
+export function selectedBuildConfiguration(
+  options: string[],
+  remembered: string | null,
+  fallback: string | null | undefined,
+): string | null {
+  if (options.length === 0) return null;
+  if (remembered !== null && options.includes(remembered)) return remembered;
+  if (fallback != null && options.includes(fallback)) return fallback;
+  return options[0] ?? null;
 }

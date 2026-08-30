@@ -1447,11 +1447,20 @@ report_format = "junitXml"
 
         assert_eq!(ws.projects[0].unreadable, None, "this file is well-formed");
         assert_eq!(ws.projects[0].kind, ProjectKind::Executable);
+        // One runnable entry for the one runnable project. What this test is
+        // really guarding is that the parse survived the comment, the CDATA and
+        // the namespace at all — a project it could not read produces *no*
+        // configurations, so a count of zero here is the failure worth catching.
         assert_eq!(
             ws.configs.len(),
-            2,
-            "Debug and Release; got {:?}",
+            1,
+            "one entry for one project; got {:?}",
             ws.configs.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            ws.projects[0].configurations,
+            vec!["Debug", "Release"],
+            "the default pair is still what the toolbar's picker offers"
         );
     }
 
@@ -1612,10 +1621,20 @@ report_format = "junitXml"
             ws.projects[0].configurations,
             vec!["Debug", "Release", "Staging"]
         );
+        // `Project.configurations` is where the Run toolbar's build-configuration
+        // picker reads its options from. It is the *only* place a declared
+        // configuration surfaces now: the scan produces one run configuration
+        // per project, defaulted to Debug, and the toolbar overrides it for a
+        // launch. Fanning Staging out into a `App (Staging)` entry of its own is
+        // exactly what was removed.
+        assert_eq!(
+            ws.configs.iter().filter(|c| c.kind == RunKind::App).count(),
+            1
+        );
         assert!(ws
             .configs
             .iter()
-            .any(|c| c.build_configuration.as_deref() == Some("Staging")));
+            .all(|c| c.build_configuration.as_deref() != Some("Staging")));
     }
 
     #[test]
