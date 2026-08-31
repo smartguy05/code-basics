@@ -32,7 +32,6 @@ import {
   loadSplit,
   saveCollapsed,
   saveSplit,
-  isBuildSession,
   shouldCloseBuildSession,
   shouldForceExpand,
 } from "./consolePanelLogic";
@@ -176,7 +175,7 @@ export function RunView({
   pendingSelect,
   onSelectConsumed,
   onNavigate,
-  onBuildResult,
+  onProcessResult,
   active,
 }: {
   workspace: Workspace;
@@ -208,12 +207,8 @@ export function RunView({
   /** A configuration the search palette chose. Selected, never started. */
   pendingSelect?: SelectConfigRequest | null;
   onSelectConsumed?: () => void;
-  /**
-   * Report how a build, rebuild or clean ended, so a backgrounded codebase can
-   * say so on its tab. Only the `exited` event knows this — `runBuild`'s
-   * `finally` sees a failed build resolve exactly like a successful one.
-   */
-  onBuildResult?: (success: boolean) => void;
+  /** Report how any hosted run/build process ended to the workspace tab. */
+  onProcessResult?: (success: boolean) => void;
 }) {
   const appConfigs = workspace.configs.filter((c) => c.kind === "app");
 
@@ -744,7 +739,7 @@ export function RunView({
           const info = inspectInfoRef.current[id];
           void findDump(id, info?.startedAt ?? nowSeconds(), info?.pid);
         }
-        if (isBuildSession(id) && !cancelled) onBuildResult?.(success);
+        if (!cancelled) onProcessResult?.(success);
         // A build that worked has nothing to read: its tab would hold a wall of
         // "Build succeeded" that the sidebar dot already says in one pixel. The
         // status is kept so that dot survives its tab.
@@ -758,6 +753,7 @@ export function RunView({
       }
       case "failed":
         setStatus(id, "fail");
+        onProcessResult?.(false);
         break;
       case "output":
         // A server is "up" long before its process exits.
@@ -1327,6 +1323,7 @@ export function RunView({
       <div className="main">
         <div className="toolbar">
           <button
+            data-command="run.run"
             className="primary"
             onClick={() => selected && start(selected)}
             disabled={!selected || running.has(selected.id) || selectedUnreadable !== null}
@@ -1335,6 +1332,7 @@ export function RunView({
             Run
           </button>
           <button
+            data-command="run.stop"
             onClick={() => selected && stop(selected)}
             disabled={!selected || !running.has(selected.id)}
             title="Stop the selected configuration"
@@ -1349,6 +1347,7 @@ export function RunView({
             ▾
           </button>
           <button
+            data-command="run.restart"
             onClick={() => selected && start(selected)}
             disabled={!selected || selectedUnreadable !== null}
             title={selectedUnreadable ?? "Stop and start again"}
@@ -1366,6 +1365,7 @@ export function RunView({
           </button>
 
           <button
+            data-command="run.build"
             onClick={() => selected && runBuild(selected, "build")}
             disabled={
               selected?.ecosystem !== "dotnet" || building || selectedUnreadable !== null
@@ -1375,6 +1375,7 @@ export function RunView({
             🔨
           </button>
           <button
+            data-command="run.rebuild"
             onClick={() => selected && runBuild(selected, "rebuild")}
             disabled={
               selected?.ecosystem !== "dotnet" || building || selectedUnreadable !== null
@@ -1384,6 +1385,7 @@ export function RunView({
             ⟳
           </button>
           <button
+            data-command="run.clean"
             onClick={() => selected && runBuild(selected, "clean")}
             disabled={
               selected?.ecosystem !== "dotnet" || building || selectedUnreadable !== null

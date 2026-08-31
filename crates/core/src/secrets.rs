@@ -182,7 +182,11 @@ const BOM: &str = "\u{feff}";
 /// byte-order mark, `//` and `/* */` comments, and trailing commas — to strict
 /// JSON, for validation. Comments become spaces rather than disappearing, so
 /// error positions still roughly line up with the original text.
-fn strip_jsonc(text: &str) -> String {
+///
+/// Shared with [`crate::sql::discover`], which reads the same dialect out of
+/// `appsettings*.json` and `secrets.json`. It is reused rather than copied
+/// because there must be exactly one description of what .NET accepts.
+pub(crate) fn strip_jsonc(text: &str) -> String {
     // The mark becomes spaces for the same reason a comment does: so a position
     // serde reports still points at the right place in what the user wrote.
     let text = match text.strip_prefix(BOM) {

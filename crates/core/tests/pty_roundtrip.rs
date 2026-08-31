@@ -196,3 +196,65 @@ async fn writing_to_an_unknown_terminal_errors_rather_than_panicking() {
     assert!(mgr.resize("never-opened", 100, 40).is_ok());
     assert!(!mgr.close("never-opened").await);
 }
+
+/// The batch-shim argv guard, at the seam it actually protects.
+///
+/// `cb_core::pty::argv` proves the rule in isolation; these two prove it is
+/// wired into `open` — and, more importantly, that it is wired in
+/// **asymmetrically**. A `.cmd`/`.bat` target is re-parsed by `cmd.exe`, so a
+/// question carrying `%` or `&` must be refused before anything is spawned; a
+/// real program is not, so the identical argument must still open a terminal.
+/// Collapsing those two into one answer is the whole bug this guards.
+#[tokio::test]
+async fn a_batch_target_refuses_a_reparsable_argument_without_spawning() {
+    let mgr = PtyManager::new();
+    let (tx, _rx) = mpsc::channel(8);
+    // A shim that really exists and would really start, so the refusal is the
+    // only thing that can stop it — a missing file would fail the spawn for an
+    // unrelated reason and prove nothing.
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let shim = dir.path().join("cb-fake-agent.cmd");
+    std::fs::write(&shim, "@echo off\r\necho ran\r\n").expect("write the shim");
+    let mut spec = spec(&[]);
+    spec.shell = shim.display().to_string();
+    spec.args = vec!["what is in %TEMP% & why".into()];
+
+    let err = mgr
+        .open("guarded", spec, tx)
+        .expect_err("a cmd shim must refuse an argument cmd.exe would re-parse");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("cannot start") && message.contains("environment variable"),
+        "the refusal must be the guard's, naming the character and why, got: {message}"
+    );
+    assert!(
+        !mgr.is_open("guarded"),
+        "nothing may be spawned or registered when the argv is refused"
+    );
+}
+
+#[tokio::test]
+async fn a_real_program_still_accepts_the_same_argument() {
+    if !sh_available() {
+        return; // no sh on this machine — nothing to prove
+    }
+
+    let mgr = PtyManager::new();
+    let (tx, rx) = mpsc::channel(256);
+    // `sh` is not a batch target, MSVC argv quoting is correct for it, and
+    // nothing re-parses the command line — so the argument that the shim
+    // refused above must cross verbatim as one argv entry.
+    mgr.open(
+        "unguarded",
+        spec(&["-c", "echo got:$1", "sh", "what is in %TEMP% & why"]),
+        tx,
+    )
+    .expect("a non-batch target must not be subject to the batch guard");
+
+    let out = collect_until(&mgr, "unguarded", rx, "got:").await;
+    assert!(
+        out.contains("%TEMP%") && out.contains('&'),
+        "the argument must reach the program unchanged; saw: {out:?}"
+    );
+    let _ = mgr.close("unguarded").await;
+}

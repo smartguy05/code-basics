@@ -353,3 +353,77 @@ fn is_installed(program: &str) -> bool {
     let resolved = crate::process::resolve_program(program);
     resolved != Path::new(program) && resolved.is_file()
 }
+
+/// The argument vector for an **interactive** agent session seeded with a first
+/// question.
+///
+/// [`agent_args`] builds the *headless* posture: one shot, answer, exit. That is
+/// wrong for a session the user keeps talking to, so this is a separate builder
+/// rather than a mode of that one — the flags that make a run headless are the
+/// exact flags this must not pass:
+///
+/// - Claude Code: the prompt is **positional** (`claude -- "<prompt>"`). `-p` /
+///   `--print` makes the run non-interactive, and `--output-format stream-json`
+///   (with its required `--verbose`) replaces the TUI with an NDJSON stream, so
+///   none of them appear here. `--model` is passed only when one resolved.
+/// - Codex: plain `codex -- "<prompt>"`, **not** `codex exec` — `exec` *is* the
+///   non-interactive subcommand. `-m` is passed only when one resolved; it is a
+///   global Codex flag, so it is as valid here as in the `exec` form.
+///
+/// Both forms end option parsing with `--` before the prompt, so a question is
+/// always read as a question. Without it a question beginning with a dash is
+/// read as a **flag** — two distinct outcomes collapsing into one argv
+/// position, and the failure is loud rather than silent: the installed CLIs
+/// answer `error: unexpected argument '--why-does-the-build-fail' found` (Codex,
+/// whose own tip names `--` as the fix) and `error: unknown option
+/// '--why-does-the-build-fail'` (Claude Code). Both were then checked to accept
+/// the separator and to treat what follows it as the prompt. The model flag has
+/// to precede `--`, since everything after it is a positional.
+///
+/// No permission/sandbox posture is set: an interactive session runs the agent's
+/// own defaults and can prompt the user, because — unlike the supervisor-run
+/// headless review — this runs on a PTY with stdin open, so a prompt is answered
+/// rather than a hang. The prompt stays one argv entry, never shell-joined, so
+/// nothing here can split or re-interpret a multi-line question.
+///
+/// One caveat, which lives at the spawn rather than here: on Windows an agent
+/// name can resolve to a `.cmd`/`.bat` shim, and `cmd.exe` re-parses the
+/// command line the PTY builds. A prompt carrying `&`, `|`, `<`, `>`, `^`, `"`
+/// or `%` is therefore refused for such a target by [`crate::pty::argv`] before
+/// anything runs — it crosses verbatim through a real executable, and is
+/// refused with a reason through a shim, never silently rewritten.
+pub fn agent_args_interactive(
+    agent: ReviewAgent,
+    model: Option<&str>,
+    prompt: &str,
+) -> Vec<String> {
+    match agent {
+        ReviewAgent::ClaudeCode => {
+            // claude [--model <m>] <prompt>
+            let mut args = Vec::new();
+            if let Some(m) = model {
+                args.push("--model".to_string());
+                args.push(m.to_string());
+            }
+            args.push("--".to_string());
+            args.push(prompt.to_string());
+            args
+        }
+        ReviewAgent::Codex => {
+            // codex [-m <m>] -- <prompt> — the bare command is the interactive
+            // TUI. `-m/--model` is a *global* Codex flag, not one of `exec`'s,
+            // so the interactive form carries it exactly as the headless one
+            // does; a resolved model that never reached the argv would run the
+            // configured default under the label the user picked. It sits
+            // before `--`, which ends option parsing.
+            let mut args = Vec::new();
+            if let Some(m) = model {
+                args.push("-m".to_string());
+                args.push(m.to_string());
+            }
+            args.push("--".to_string());
+            args.push(prompt.to_string());
+            args
+        }
+    }
+}

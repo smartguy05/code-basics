@@ -17,6 +17,9 @@
 //! reader and waiter threads that touch it run on plain OS threads with no async
 //! runtime — a tokio mutex would need a runtime handle they do not have.
 
+mod argv;
+pub use argv::{batch_argv_refusal, check_batch_argv, is_batch_target};
+
 mod shell;
 
 pub use shell::{clamp_size, default_shell};
@@ -107,6 +110,21 @@ impl PtyManager {
         events: mpsc::Sender<TerminalEvent>,
         meta: Option<crate::running::RunMeta>,
     ) -> Result<()> {
+        // A bare name only exists as a shim on Windows, which the spawn cannot
+        // resolve; resolve it the same way `Supervisor` does. On Unix this is an
+        // identity. Resolved **first**, before anything is allocated, because
+        // whether the target is a batch shim decides whether these arguments can
+        // be passed at all — see `argv`.
+        let program = resolve_program(&spec.shell);
+        // Refuse before spawning, never after: a `.cmd`/`.bat` target means
+        // `cmd.exe` re-parses the command line portable-pty built with MSVC
+        // quoting alone, so an argument carrying `&`, `%` and friends would run
+        // as something else. A real executable is unaffected and nothing here
+        // applies to it.
+        if let Err(reason) = argv::check_batch_argv(&program, &spec.args) {
+            anyhow::bail!(reason);
+        }
+
         let (cols, rows) = shell::clamp_size(spec.cols, spec.rows);
 
         let pty_system = native_pty_system();
@@ -119,10 +137,7 @@ impl PtyManager {
             })
             .context("failed to allocate a pseudo-terminal")?;
 
-        // A bare `pwsh`/`pnpm`-style name only exists as a shim on Windows,
-        // which the spawn cannot resolve; resolve it the same way `Supervisor`
-        // does. On Unix this is an identity.
-        let mut cmd = CommandBuilder::new(resolve_program(&spec.shell));
+        let mut cmd = CommandBuilder::new(&program);
         cmd.args(&spec.args);
         cmd.cwd(&spec.cwd);
         // The child inherits the full parent environment by default (PATH and

@@ -7,12 +7,12 @@ import {
   highlightSpans,
   indexNote,
   nextIndex,
-  recogniseShortcut,
   resultsState,
   searchKey,
   type SearchScope,
 } from "./searchLogic";
 import type { SearchHit, SymbolIndexStatus, Workspace } from "../ipc/types";
+import { registerCommand } from "../shortcuts";
 
 /**
  * The search palette: one overlay over the whole app that finds a file, a
@@ -145,17 +145,6 @@ export function SearchEverywhere({
    */
   const sequence = useRef(0);
 
-  /**
-   * When the last bare Shift keydown happened, for the double-Shift binding.
-   *
-   * `recogniseShortcut` is shown one event at a time and cannot know what came
-   * between two Shifts, so clearing this on every other key is this file's half
-   * of that binding. Auto-repeat is ignored outright: holding Shift down emits
-   * a stream of keydowns, and each one would see the previous one's timestamp
-   * inside the window and open the palette in the user's face.
-   */
-  const lastShiftAt = useRef<number | null>(null);
-
   const close = useCallback(() => {
     setOpen(false);
     // A stale reply from the search that was in flight when the palette closed
@@ -185,38 +174,15 @@ export function SearchEverywhere({
     setTimeout(() => inputRef.current?.select(), 0);
   }, []);
 
-  // The window-level, capture-phase binding. Capture and `stopPropagation` for
-  // the same reason `OutputConsole` takes Ctrl+F that way: a chord that reaches
-  // the webview's own handling is a chord the app has lost.
   useEffect(() => {
-    // Only the foreground tab's palette listens, so one keystroke does not open
-    // a palette in every open codebase.
     if (!active) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.repeat) return;
-
-      const wanted = recogniseShortcut(event, lastShiftAt.current);
-
-      if (event.key === "Shift") {
-        // Only a Shift with nothing else held starts the window. A Shift
-        // pressed as part of Ctrl+Shift+N is the user reaching for a chord,
-        // and remembering it would let the *next* bare Shift open the palette
-        // out of nowhere. A Shift that just opened the palette clears it, so a
-        // third press is not a second double-Shift.
-        const bare = !event.ctrlKey && !event.altKey && !event.metaKey;
-        lastShiftAt.current = bare && wanted === null ? Date.now() : null;
-      } else {
-        lastShiftAt.current = null;
-      }
-
-      if (wanted === null) return;
-      event.preventDefault();
-      event.stopPropagation();
-      openAt(wanted);
-    };
-
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
+    const registrations = [
+      registerCommand("search.all", () => openAt("all")),
+      registerCommand("search.symbols", () => openAt("symbols")),
+      registerCommand("search.files", () => openAt("files")),
+      registerCommand("search.actions", () => openAt("actions")),
+    ];
+    return () => registrations.forEach((unregister) => unregister());
   }, [openAt, active]);
 
   /** Bumped to restart the status read after a rebuild is asked for. */

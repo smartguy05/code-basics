@@ -1,15 +1,49 @@
 {
   "hooks": {
-    "Stop": [
+    "PostToolUse": [
       {
-        "matcher": "",
         "hooks": [
           {
-            "type": "command",
-            "command": "\"C:\\Users\\AnthonyJames\\Documents\\Code\\code-basics\\target\\release\\cb-app.exe\" quality-gate --code-basics-qgate --workspace \"C:\\Users\\AnthonyJames\\Documents\\Code\\code-basics\"",
-            "timeout": 180
+            "command": "\"C:\\Program Files\\code-basics\\cb-app.exe\" record-intent --code-basics-intent --provider claudeCode --event PostToolUse --workspace \"C:\\Users\\AnthonyJames\\Documents\\Code\\code-basics\"",
+            "timeout": 5,
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "apply_patch|Edit|Write"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "\"C:\\Program Files\\code-basics\\cb-app.exe\" record-intent --code-basics-intent --provider claudeCode --event Stop --workspace \"C:\\Users\\AnthonyJames\\Documents\\Code\\code-basics\"",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "command": "\"C:\\Program Files\\code-basics\\cb-app.exe\" quality-gate --code-basics-qgate --workspace \"C:\\Users\\AnthonyJames\\Documents\\Code\\code-basics\"",
+            "timeout": 180,
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "command": "\"C:\\Program Files\\code-basics\\cb-app.exe\" record-intent --code-basics-intent --provider claudeCode --event SubagentStop --workspace \"C:\\Users\\AnthonyJames\\Documents\\Code\\code-basics\"",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": ""
       }
     ]
   }

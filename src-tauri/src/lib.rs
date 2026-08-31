@@ -13,6 +13,7 @@ mod commands {
     pub mod changelists;
     pub mod enhancements;
     pub mod erosion;
+    pub mod features;
     pub mod files;
     pub mod git;
     pub mod inspect;
@@ -27,6 +28,7 @@ mod commands {
     pub mod running;
     pub mod secrets;
     pub mod setup;
+    pub mod sql;
     pub mod symbols;
     pub mod terminal;
     pub mod workspace;
@@ -131,6 +133,8 @@ pub fn run() {
             commands::launcher::stop_command,
             commands::launcher::save_launchable,
             commands::launcher::delete_launchable,
+            commands::features::list_features,
+            commands::features::set_feature,
             commands::notes::read_notes,
             commands::notes::write_notes,
             commands::files::fs_list_dir,
@@ -152,6 +156,7 @@ pub fn run() {
             commands::review::start_review,
             commands::review::cancel_review,
             commands::review::review_agents,
+            commands::review::agent_interactive_command,
             commands::git::git_status,
             commands::git::git_file_diff,
             commands::git::git_file_contents,
@@ -246,6 +251,14 @@ pub fn run() {
             commands::terminal::terminal_set_label,
             commands::running::list_running,
             commands::running::kill_running,
+            commands::sql::sql_list_connections,
+            commands::sql::sql_discover,
+            commands::sql::sql_save_connection,
+            commands::sql::sql_delete_connection,
+            commands::sql::sql_set_allow_writes,
+            commands::sql::sql_test_connection,
+            commands::sql::sql_execute,
+            commands::sql::sql_cancel,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start code-basics")

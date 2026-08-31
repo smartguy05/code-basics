@@ -10,6 +10,8 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { onAppearanceChange, terminalAppearance } from "../appearance";
+import { registerCommand } from "../shortcuts";
 import type { ProcessEvent } from "../ipc/types";
 import {
   appendConsoleLines,
@@ -194,17 +196,10 @@ export const OutputConsole = forwardRef<ConsoleHandle, OutputConsoleProps>(
       if (!hostRef.current) return;
 
       const term = new Terminal({
-        fontFamily:
-          '"JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-        fontSize: 12,
+        ...terminalAppearance(),
         convertEol: true,
         scrollback: 20000,
         allowProposedApi: true,
-        theme: {
-          background: "#12141a",
-          foreground: "#d6dae2",
-          cursor: "#12141a",
-        },
       });
 
       const fit = new FitAddon();
@@ -240,15 +235,12 @@ export const OutputConsole = forwardRef<ConsoleHandle, OutputConsoleProps>(
       // Ctrl+F is intercepted at the window level, capture phase, so the
       // webview's own find bar never sees it. Only the visible console reacts
       // (hidden tabs have no offsetParent).
-      const onKeyDown = (event: KeyboardEvent) => {
-        if (!event.ctrlKey || event.key.toLowerCase() !== "f") return;
-        if (!hostRef.current || hostRef.current.offsetParent === null) return;
-        event.preventDefault();
-        event.stopPropagation();
+      const unregisterFind = registerCommand("console.find", () => {
+        if (!hostRef.current || hostRef.current.offsetParent === null) return false;
         setSearchOpen(true);
         setTimeout(() => searchInputRef.current?.focus(), 0);
-      };
-      window.addEventListener("keydown", onKeyDown, true);
+        return true;
+      });
 
       termRef.current = term;
 
@@ -261,10 +253,18 @@ export const OutputConsole = forwardRef<ConsoleHandle, OutputConsoleProps>(
         }
       });
       observer.observe(hostRef.current);
+      const stopAppearance = onAppearanceChange(() => {
+        const appearance = terminalAppearance();
+        term.options.fontFamily = appearance.fontFamily;
+        term.options.fontSize = appearance.fontSize;
+        term.options.theme = appearance.theme;
+        try { fit.fit(); } catch { /* hidden */ }
+      });
 
       return () => {
         observer.disconnect();
-        window.removeEventListener("keydown", onKeyDown, true);
+        stopAppearance();
+        unregisterFind();
         term.dispose();
         termRef.current = null;
         searchRef.current = null;

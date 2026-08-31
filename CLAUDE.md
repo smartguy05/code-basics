@@ -57,6 +57,71 @@ All four look like broken code, all four have wasted real time, and the obvious 
 - **`cargo build` fails on `cb-app.exe` with `Access is denied. (os error 5)` and no compiler diagnostic.** The app is running and Windows will not let a running exe be replaced. Compilation is fine. Prove it with `cargo check --workspace --all-targets` or a build into a scratch `CARGO_TARGET_DIR`, and say the app is holding the file — do not kill it, since that discards whatever the user had open.
 - **`cargo test -p cb-core` appears to hang in the `process::` tests.** Concurrent cargo invocations block on the shared `target/` lock, and those tests spawn real child processes late in the run, so the stall lands somewhere plausible. The suite finishes in about a minute. Re-run before reporting the suite as broken — a subagent's build report is a claim, not evidence. If you give a parallel agent its own `CARGO_TARGET_DIR` to dodge the lock, **read the disk-space rule below first**.
 
+### The frontend logic tests CAN be run without pnpm — shim vitest and use `tsc`
+
+The junction block stops `pnpm test`, but it does **not** stop `npx tsc`, and the
+`*Logic.ts` modules import nothing at runtime except vitest's `describe`/`it`/`expect`.
+So the pure-logic half of the frontend gate is reachable after all:
+
+1. `npx tsc <the .ts files> --outDir <scratch>/out --module commonjs --target es2022
+   --moduleResolution node --skipLibCheck --strict --noUncheckedIndexedAccess`
+   — CommonJS matters: node then resolves `./featuresLogic` with no `.js` suffix rewriting.
+2. Put a hand-written `vitest` shim at `<scratch>/node_modules/vitest/index.js` exporting
+   `describe`/`it`/`expect`/`vi`. Node's upward `node_modules` lookup finds it, and the
+   scratch dir has no junctions.
+3. `node <scratch>/out/components/<name>.test.js`.
+
+Three files need more than the recipe, and each one **scores zero without saying so** —
+a file that dies at `require` never reaches the shim's exit handler, so it prints
+`0 passed, 0 failed` and reads as an empty file rather than a crash. Scan **stderr per
+file**, not just the summary line. `views/architecture/nodeTargets.test.ts` (42 tests)
+imports a cb-core JSON fixture and needs `--resolveJsonModule --esModuleInterop --rootDir .`,
+compiled on its own since `--rootDir .` relocates a whole-tree build; `components/language.test.ts`
+(14) needs `@codemirror/language` and `reexportGuards.test.ts` (1) needs Vite's
+`import.meta.glob`, so both are unrunnable here like the `.tsx`.
+
+And the shim inverts one very common call: `makeExpect(actual, negated)` takes a second
+argument as the negation flag, but vitest's second argument is a **message string** — truthy,
+so every `expect(x, "why").toBe(...)` asserts the opposite and fails on correct code. That is
+most of the standing failures; do not chase them as bugs.
+
+Measured: **1179 of 1190 logic tests pass** this way. Two shim details are needed or you get
+dozens of false failures — `toEqual` must ignore keys whose value is `undefined` (vitest does),
+and you need `toMatch`/`toBeCloseTo`/`toMatchObject`/`toBeNaN` beyond the obvious matchers.
+
+What this does **not** cover, and must not be claimed: it is not vitest (no coverage, no
+`environment`, no config), and it cannot touch `.tsx` — every React component still needs
+`react` through the junction. So `AskPanel.tsx`, `FeaturesPicker.tsx` and the views remain
+unverifiable here. Typechecking the whole project still fails on the react cascade; only the
+listed pure files typecheck clean.
+
+### On Windows, a PTY spawn *can* be re-parsed by `cmd.exe`. The launcher path cannot.
+
+Found by adversarially reviewing the "Ask the codebase" feature, then reproduced with
+`CreateProcessW` directly. Five doc comments across the tree asserted "there is no shell to
+interpret any of it". That is true for a real `.exe` and **false for a `.cmd`/`.bat` target**.
+
+- `process::resolve::resolve_program` walks `PATHEXT`, so a bare name resolves to a `.CMD`
+  when no `.EXE` exists. On a dev box `claude` is `claude.exe` (safe) but `codex` is
+  `codex.cmd` (an npm shim) — so the two agents take *different* paths for the same code.
+- `portable-pty`'s `CommandBuilder::append_quoted` implements **MSVC argv quoting only**. It
+  has none of the CVE-2024-24576 batch mitigation that `std::process::Command` gained, and it
+  emits an argument unquoted unless it contains a space, tab, newline or `"`. So `cmd.exe`
+  re-parses the line: `&` splits it, and `%VAR%` expands **even inside quotes**.
+- It applies to the **program path too**, not just the arguments (`cmdbuilder.rs` quotes the
+  exe with the same function) — a PATH directory named `foo&calc` is enough.
+
+`crates/core/src/pty/argv.rs` is the guard: `check_batch_argv` runs at the one spawn seam in
+`PtyManager::open_inner`, **after** `resolve_program` (checking the typed name instead of the
+resolved path would miss `codex` → `codex.cmd` entirely and make the whole thing theatre).
+It refuses precisely the hazardous inputs rather than the feature, and deliberately does
+**not** apply to a real executable, where MSVC quoting is correct — that asymmetry is pinned
+by `the_same_argument_is_allowed_for_a_real_executable`.
+
+**The contrast worth remembering:** `process::Supervisor` (`tokio::process`) *does* carry the
+std fix, so the app launcher and the headless review were never exposed. Only the PTY path is.
+Anything new that sends caller-supplied text as argv through `pty/` must go through the guard.
+
 ### A private `CARGO_TARGET_DIR` costs 2–6 GB. Budget it.
 
 This has bitten twice, and both times nobody noticed until the disk did.
@@ -168,6 +233,22 @@ Three layers with a strict dependency rule:
 
 ## Documentation and the code index
 
+### Frontend customization contracts
+
+- Appearance storage and validation are versioned in `src/appearanceLogic.ts`;
+  `src/appearance.ts` is the DOM/application layer and derives terminal colours.
+  UI and code font sizes are independent, and theme changes must continue to
+  reach CodeMirror, xterm, diffs, and application chrome.
+- App-owned keyboard commands are declared in `src/shortcutLogic.ts` and
+  dispatched through `src/shortcuts.ts`. Settings must not advertise a command
+  without a registered handler or stable `data-command` target. Native
+  CodeMirror/xterm bindings are reference-only. Search All defaults to Ctrl+N;
+  Search Symbols is deliberately unbound.
+- Background workspace events merge through `workspaceTabsLogic.ts`: failure
+  persists, terminal attention remains until acknowledged, success expires,
+  cancellation is quiet, and an event already visible in the active workspace
+  must not latch and appear after switching away.
+
 - `docs/INDEX.md` is a **generated** map of every source file (with one-line purpose), the full Tauri command surface, the `ipc/api.ts` wrappers, and each `cb-core` module's public API. **Consult it first when locating code** — it is usually faster than searching. Never edit it by hand.
 - `pnpm docs:index` regenerates it (`scripts/generate-index.mjs`). Run it after adding/removing source files, Tauri commands, or public core APIs.
 - `pnpm docs:check` (`scripts/check-docs.mjs`) enforces the docs rules: every markdown file in `docs/` (plus README.md and this file) stays under 500 lines, and all relative links resolve. Run it after editing docs.
@@ -203,6 +284,13 @@ Each entry is a workspace-relative path with forward slashes — a specific file
 or a directory to cover everything you edited beneath it (e.g.
 `Intent(src/components): …`). Prefer naming the specific files; reach for a
 directory only when the turn's edits are one cohesive set under it.
+
+You may append `[confidence: low|medium|high]` to an Intent line to mark how sure
+you are the change is correct (low = please review closely):
+
+```
+Intent(src/parser.ts): rewrite the tokenizer [confidence: low]
+```
 
 A scoped line covers the files it names; one plain line may cover the rest.
 Keep each label short enough to read at a glance — it titles a group of hunks

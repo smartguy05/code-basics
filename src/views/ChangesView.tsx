@@ -240,26 +240,6 @@ export function ChangesView({
   const coverageSignature = useRef<string | null>(null);
   busyRef.current = busy;
 
-  /**
-   * F7 / Shift+F7 step through the changes, as they do in Rider.
-   *
-   * Window-level and capture phase, matching `SearchEverywhere`: the focus is
-   * usually inside CodeMirror, which would otherwise swallow the key. This view
-   * is only mounted while its tab is showing (see `App.tsx`), so the binding is
-   * scoped to the Changes tab without having to check.
-   */
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "F7" || event.ctrlKey || event.altKey || event.metaKey) return;
-      event.preventDefault();
-      event.stopPropagation();
-      diffHandle.current?.goToChange(event.shiftKey ? -1 : 1);
-    };
-
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, []);
-
   const [grouping, setGrouping] = useState<Grouping>(loadGrouping);
   const [intentGroups, setIntentGroups] = useState<IntentGroup[]>([]);
   const [scorecard, setScorecard] = useState<Scorecard>(EMPTY_SCORECARD);
@@ -1295,6 +1275,7 @@ export function ChangesView({
             Amend previous commit
           </label>
           <button
+            data-command="changes.commit"
             className="primary"
             onClick={commit}
             disabled={busy || !message.trim()}
@@ -1421,16 +1402,17 @@ export function ChangesView({
 
           <span style={{ width: 12 }} />
 
-          <button onClick={() => stage(selectedLines)} disabled={busy || !selectedPath}>
+          <button data-command="changes.stage" onClick={() => stage(selectedLines)} disabled={busy || !selectedPath}>
             Stage{hasSelection ? " selected" : " file"}
           </button>
-          <button onClick={() => unstage(selectedLines)} disabled={busy || !selectedPath}>
+          <button data-command="changes.unstage" onClick={() => unstage(selectedLines)} disabled={busy || !selectedPath}>
             Unstage{hasSelection ? " selected" : " file"}
           </button>
 
           <span style={{ width: 12 }} />
 
           <button
+            data-command="change.previous"
             onClick={() => diffHandle.current?.goToChange(-1)}
             disabled={differences === 0}
             title="Previous change (Shift+F7)"
@@ -1439,6 +1421,7 @@ export function ChangesView({
             ↑
           </button>
           <button
+            data-command="change.next"
             onClick={() => diffHandle.current?.goToChange(1)}
             disabled={differences === 0}
             title="Next change (F7)"

@@ -31,6 +31,8 @@ export interface AppTab {
   entryId: string;
   label: string;
   cwd: string;
+  /** Workspace that owned the launcher when this command was started. */
+  workspaceRoot: string | null;
   /** Known once the `started` event arrives; `null` before that and if absent. */
   pid: number | null;
   status: AppStatus;
@@ -50,12 +52,13 @@ export interface AppTab {
 export const APP_OUTPUT_LAYOUT_KEY = "cb.launcher.layout";
 
 /** A fresh tab for a just-launched app. */
-export function makeTab(app: LaunchedApp): AppTab {
+export function makeTab(app: LaunchedApp, workspaceRoot: string | null = null): AppTab {
   return {
     key: app.key,
     entryId: app.id,
     label: app.label,
     cwd: app.cwd,
+    workspaceRoot,
     pid: null,
     status: { kind: "running" },
     severity: "all",

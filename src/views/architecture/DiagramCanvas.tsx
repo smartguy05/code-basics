@@ -573,22 +573,22 @@ export function DiagramCanvas({
       <style>{CANVAS_CSS}</style>
 
       <div className="toolbar">
-        <button onClick={() => zoomFromCentre(BUTTON_ZOOM_DELTA)} disabled={!drawn}>
+        <button data-command="architecture.zoom-out" onClick={() => zoomFromCentre(BUTTON_ZOOM_DELTA)} disabled={!drawn}>
           −
         </button>
-        <button onClick={() => zoomFromCentre(-BUTTON_ZOOM_DELTA)} disabled={!drawn}>
+        <button data-command="architecture.zoom-in" onClick={() => zoomFromCentre(-BUTTON_ZOOM_DELTA)} disabled={!drawn}>
           +
         </button>
         <span className="muted mono" style={{ fontSize: 11, minWidth: 38 }}>
           {Math.round(view.k * 100)}%
         </span>
-        <button onClick={fitToHost} disabled={!drawn}>
+        <button data-command="architecture.fit" onClick={fitToHost} disabled={!drawn}>
           Fit
         </button>
         {/* "100%" is the identity view exactly as panZoomLogic defines it: the
             natural size, top-left in the corner. Re-centring it would be new
             arithmetic invented in a file with no tests to hold it. */}
-        <button onClick={() => setView(IDENTITY)} disabled={!drawn}>
+        <button data-command="architecture.actual-size" onClick={() => setView(IDENTITY)} disabled={!drawn}>
           100%
         </button>
         <span className="spacer" style={{ flex: 1 }} />

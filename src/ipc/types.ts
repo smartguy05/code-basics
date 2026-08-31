@@ -516,6 +516,26 @@ export interface NotesFile {
 }
 
 /**
+ * One optional feature and whether it is switched on
+ * (`features::FeatureInfo`). Keys pinned by
+ * `serialisation_shape_pins_the_wire_keys` in
+ * `crates/core/src/features/features_tests.rs`.
+ *
+ * `enabled` is already resolved: a feature the store says nothing about is
+ * reported at its built-in default rather than as absent, so the picker never
+ * has to know what the defaults are.
+ */
+export interface FeatureInfo {
+  /** Stable id, e.g. `sqlConsole`. Also what both installers write. */
+  id: string;
+  /** Human label for the checkbox. */
+  label: string;
+  /** One line saying what the feature is, shown under the checkbox. */
+  description: string;
+  enabled: boolean;
+}
+
+/**
  * One remembered command line from the app launcher (`launcher::Launchable`).
  * Keys pinned by `launchable_serialises_with_camel_case_keys` in
  * `crates/core/src/launcher/model_tests.rs`. `label` is deliberately nullable
@@ -570,6 +590,19 @@ export interface ReviewAgentInfo {
   label: string;
   /** Model aliases the picker may offer; empty means the agent's own default. */
   models: string[];
+}
+
+/**
+ * A program and its argument vector, ready to spawn
+ * (`commands::review::AgentCommand`).
+ *
+ * Not a command *string*: the PTY spawns through `CommandBuilder` with these
+ * arguments as they stand, so nothing quotes or re-splits them and a question
+ * containing a quote, a newline or a `&` crosses intact.
+ */
+export interface AgentCommand {
+  program: string;
+  args: string[];
 }
 
 /** Why a set of hunks belongs together (`git/grouping.rs`). */
@@ -1904,3 +1937,274 @@ export interface DebugStatus {
   /** The stopped thread's frames. Empty unless paused. */
   stack: DebugStackFrame[];
 }
+
+// ---------------------------------------------------------------------------
+// The SQL console
+// ---------------------------------------------------------------------------
+//
+// Mirrors `crates/core/src/sql/` and `src-tauri/src/commands/sql.rs`. Three
+// rules from `sql/mod.rs` are visible in the shapes below and must not be
+// tidied away:
+//
+// 1. A connection string crosses IPC **one way only**. `SqlSecretSource` is a
+//    request type — it may carry a literal — and `SqlSecretView` is the
+//    response type, which cannot: a saved literal comes back only as its
+//    redacted `SqlConnectionDisplay`.
+// 2. Every "no answer" is its own shape. `null` is always an explicit value
+//    here (the Rust side carries no `skip_serializing_if`), so a missing key is
+//    a bug rather than an absent answer.
+// 3. Numbers from a result set arrive as **strings**. `NUMERIC(38,10)`,
+//    `bigint` and `money` do not survive a JSON number, and a rounded value in
+//    a console is a wrong answer rendered confidently.
+
+/**
+ * The engines the console can speak to. `null` anywhere one of these is
+ * optional means *not determined or ambiguous* — the sniffer abstains rather
+ * than defaulting.
+ */
+export type SqlEngine = "postgres" | "sqlServer" | "sqlite";
+
+/**
+ * How a connection string says it authenticates. Four answers: "it states no
+ * credentials" (a SQLite file) and "this could not be read as a connection
+ * string" are different facts.
+ */
+export type SqlAuthMode = "integrated" | "password" | "noneStated" | "unknown";
+
+/**
+ * Whether the string could be described at all. `refused` and a `described`
+ * with every field null are different: the second says "read, and it states
+ * nothing", the first says "anything reported might be a slice of the
+ * password".
+ */
+export type SqlDisplayConfidence = "described" | "refused";
+
+/** The redacted view of a connection string — the only form allowed to cross. */
+export interface SqlConnectionDisplay {
+  engine: SqlEngine | null;
+  /** Host (and port when stated). Null for a file-backed database. */
+  server: string | null;
+  /** Database name, or the file path for SQLite. */
+  database: string | null;
+  authMode: SqlAuthMode;
+  confidence: SqlDisplayConfidence;
+}
+
+/**
+ * Where a connection string is to be found at connect time.
+ *
+ * The **request** shape: `literal` carries a value, and is the only variant
+ * that ever does. Never returned by a command — see {@link SqlSecretView}.
+ */
+export type SqlSecretSource =
+  | { kind: "literal"; connectionString: string }
+  | { kind: "appSettings"; path: string; key: string }
+  | { kind: "userSecrets"; project: string; key: string }
+  | { kind: "dotEnv"; path: string; key: string };
+
+/**
+ * The same thing as it comes back. A literal is described and never quoted;
+ * the references describe themselves by naming a file and a key, which is not
+ * a secret and is what lets the UI say where a connection is defined.
+ */
+export type SqlSecretView =
+  | { kind: "literal"; display: SqlConnectionDisplay }
+  | { kind: "appSettings"; path: string; key: string }
+  | { kind: "userSecrets"; project: string; key: string }
+  | { kind: "dotEnv"; path: string; key: string };
+
+/** A saved connection profile, as sent to `sqlSaveConnection`. */
+export interface SqlConnectionProfile {
+  id: string;
+  name: string;
+  engine: SqlEngine | null;
+  secret: SqlSecretSource;
+  workspaceRoot: string | null;
+  /**
+   * Sent and **ignored**: consent moves only through `sqlSetAllowWrites`, so a
+   * form round-trip cannot turn the read-only guard off.
+   */
+  allowWrites: boolean;
+  createdAtMs: number;
+  lastUsedMs: number | null;
+}
+
+/** A saved connection as every command hands it back: no secret, ever. */
+export interface SqlConnectionView {
+  id: string;
+  name: string;
+  engine: SqlEngine | null;
+  secret: SqlSecretView;
+  /** Whether the stored profile holds a secret *value* rather than a reference. */
+  holdsASecret: boolean;
+  workspaceRoot: string | null;
+  allowWrites: boolean;
+  createdAtMs: number;
+  lastUsedMs: number | null;
+}
+
+/**
+ * Why a discovered candidate cannot simply be connected to, or that it can.
+ * `unresolved` means the value is still a variable reference — there is nothing
+ * to connect *to* yet, which is not the same as an unknown engine.
+ */
+export type SqlCandidateState =
+  | { kind: "ready" }
+  | { kind: "engineUnknown"; reason: string }
+  | { kind: "unresolved"; reason: string };
+
+/** One connection the workspace mentions. Carries no connection string. */
+export interface SqlCandidate {
+  id: string;
+  name: string;
+  /** Workspace-relative, for the label beside the name. */
+  origin: string;
+  project: string | null;
+  engine: SqlEngine | null;
+  source: SqlSecretSource;
+  display: SqlConnectionDisplay;
+  state: SqlCandidateState;
+}
+
+/** Everything one discovery scan found. */
+export interface SqlDiscovery {
+  candidates: SqlCandidate[];
+  /** Everything seen and not listed, and why. Never quotes a value. */
+  warnings: string[];
+}
+
+/**
+ * One cell of one row.
+ *
+ * A null cell, an empty `text` and the same `text` with `truncated: true` are
+ * three different answers — *there is no value*, *there is a value and it is
+ * empty*, and *you are not looking at all of it*. A grid that renders any two
+ * of them the same has told the reader something untrue about their data.
+ */
+export type SqlValue =
+  | { kind: "null" }
+  | { kind: "text"; text: string; truncated: boolean }
+  /** Already formatted by the driver; a string on purpose. See the header. */
+  | { kind: "number"; text: string }
+  | { kind: "bool"; value: boolean }
+  /** `byteLength` is the *original* length, so a truncated blob says how big it was. */
+  | { kind: "bytes"; hex: string; byteLength: number; truncated: boolean }
+  /** No representation for the column's type. Never a placeholder that reads as data. */
+  | { kind: "unsupported"; typeName: string }
+  /** The driver failed on this cell while the rest of the row read fine. */
+  | { kind: "unavailable"; reason: string };
+
+export interface SqlColumn {
+  name: string;
+  /** Null means *not reported*, never "it has no type". */
+  typeName: string | null;
+}
+
+/**
+ * Why a result set stopped short. `byteLimit` is not `rowLimit`: raising the
+ * row limit would not return more rows.
+ */
+export type SqlRowCapReason = "rowLimit" | "byteLimit";
+
+export interface SqlRowCap {
+  /** The ceiling that bit, in rows — the number actually delivered. */
+  limit: number;
+  reason: SqlRowCapReason;
+}
+
+/**
+ * A whole result set. **Not** what the `completed` event carries — see
+ * {@link SqlCompletion}; this is the backend's own assembled copy, used where a
+ * command returns a result rather than streaming one.
+ */
+export interface SqlResultSet {
+  columns: SqlColumn[];
+  rows: SqlValue[][];
+  /** Null means **every row is here**; its presence *is* the truncation report. */
+  rowCap: SqlRowCap | null;
+  /** `0` (it ran and matched nothing) and `null` (no count to report) are opposite facts. */
+  rowsAffected: number | null;
+  elapsedMs: number;
+  /** 0-based index of the statement within the submitted script. */
+  statementIndex: number;
+}
+
+/**
+ * What the backend streams while a script runs.
+ *
+ * The three ways a run can stop are three variants. `refused` never reached the
+ * database; `failed` did (or the connection did not open); and a `finished`
+ * with `cancelled: true` is the user stopping a run that was otherwise fine.
+ */
+export type SqlCompletion = {
+  statementIndex: number;
+  /** How many rows were delivered, across every `rows` event. */
+  rowCount: number;
+  /** Null means **every row is here**; its presence *is* the truncation report. */
+  rowCap: SqlRowCap | null;
+  /** `0` (it ran and matched nothing) and `null` (no count to report) are opposite facts. */
+  rowsAffected: number | null;
+  elapsedMs: number;
+};
+
+export type SqlEvent =
+  | { kind: "started"; statementIndex: number }
+  | { kind: "columns"; statementIndex: number; columns: SqlColumn[] }
+  | { kind: "rows"; statementIndex: number; rows: SqlValue[][] }
+  /**
+   * The statement ended. Carries **no rows**: the `rows` events are the
+   * authoritative copy and the grid is built from them. Sending the result set
+   * again put every row across IPC twice.
+   */
+  | { kind: "completed"; completion: SqlCompletion }
+  /**
+   * Something about how this statement is being run — an *allowed* write, which
+   * the guard still names as a write. Not a refusal and not a failure: the
+   * statement is about to run, or has.
+   */
+  | { kind: "notice"; statementIndex: number; message: string }
+  /** The guard refused, so nothing was sent. `reason` names itself a heuristic. */
+  | { kind: "refused"; statementIndex: number; reason: string }
+  /** `statementIndex` is null when nothing had run — a connection that would not open. */
+  | { kind: "failed"; statementIndex: number | null; message: string }
+  | { kind: "finished"; cancelled: boolean };
+
+/**
+ * What a connection test found.
+ *
+ * Eleven variants and not a boolean, for the reason `Availability` is one: a
+ * wrong password, an unreachable host, a failed handshake, a timeout, a secret
+ * that could not be read and an engine nobody determined are answered
+ * differently. `failed` is the abstention — a driver message the backend has no
+ * rule for is never filed under whichever category looks closest.
+ *
+ * `ok`, `cannotOpenFile` and `notADatabase` are three answers because *opening
+ * a handle* is not *finding a database*: sqlite3 opens any file and defers its
+ * header check to the first page read, so the backend runs a probe that really
+ * reads a page. A text file answers `notADatabase`; a path that would not open
+ * at all answers `cannotOpenFile`, which is a wrong path and not a network.
+ */
+export type SqlTestOutcome =
+  /** Null means no version query for this engine, or the server gave no version. */
+  | { kind: "ok"; serverVersion: string | null }
+  | { kind: "authFailed"; message: string }
+  /** A *host* that could not be reached. A database file is `cannotOpenFile`. */
+  | { kind: "unreachable"; message: string }
+  /** The named database file would not open: missing, a directory, unreadable. */
+  | { kind: "cannotOpenFile"; message: string }
+  /** The handle opened and what is behind it is not a database this build reads. */
+  | { kind: "notADatabase"; message: string }
+  | { kind: "tlsFailed"; message: string }
+  /** `afterMs` is null when the *driver* reported it; its duration is not invented. */
+  | { kind: "timeout"; afterMs: number | null }
+  | { kind: "engineUnknown" }
+  | { kind: "engineUnsupported"; engine: SqlEngine }
+  | { kind: "secretUnresolved"; reason: string }
+  | { kind: "failed"; message: string };
+
+/**
+ * What a stop request did. Stopping something already finished is a different
+ * fact from stopping something that was running, and reporting both as success
+ * would make a race look like a working feature.
+ */
+export type SqlStopOutcome = "signalled" | "alreadyStopping" | "notFound";

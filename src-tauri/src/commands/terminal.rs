@@ -30,6 +30,36 @@ pub(crate) fn spec_cwd(requested: Option<String>, workspace_root: PathBuf) -> Pa
     }
 }
 
+/// What a new terminal should run: the caller's program and its arguments, or
+/// the platform's default shell with no arguments when they name none.
+///
+/// Arguments without a program are **dropped, never attached to the shell**.
+/// They were written for a program that is not there, so handing them to the
+/// default shell would run something the caller never asked for — a `cmd.exe`
+/// spawned with `--resume` is not a bare shell. That is a caller bug rather
+/// than a user action, so it is reported on stderr instead of being ignored
+/// quietly; the terminal still opens as an ordinary shell.
+///
+/// Extracted from the command body because it is a defaulting decision, which
+/// a `#[tauri::command]` cannot be tested through — see the module rules in
+/// `CLAUDE.md`.
+pub(crate) fn spec_program(
+    program: Option<String>,
+    args: Option<Vec<String>>,
+) -> (String, Vec<String>) {
+    match program.filter(|p| !p.trim().is_empty()) {
+        Some(program) => (program, args.unwrap_or_default()),
+        None => {
+            if args.is_some_and(|a| !a.is_empty()) {
+                eprintln!(
+                    "code-basics: terminal_open was given args with no program; they were dropped rather than passed to the default shell"
+                );
+            }
+            (cb_core::pty::default_shell(), Vec::new())
+        }
+    }
+}
+
 /// Forward terminal events onto the IPC channel until the session ends.
 fn forward(mut events: mpsc::Receiver<TerminalEvent>, channel: Channel<TerminalEvent>) {
     tokio::spawn(async move {
@@ -45,6 +75,11 @@ fn forward(mut events: mpsc::Receiver<TerminalEvent>, channel: Channel<TerminalE
 
 /// Open a terminal and stream its output to `channel`. Returns the session id
 /// used by the write/resize/close commands.
+///
+/// The parameter list *is* the IPC signature: the frontend names these fields in
+/// its `invoke` call, so bundling them into a struct to satisfy the lint would
+/// change the wire contract rather than simplify anything.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn terminal_open(
     state: State<'_, AppState>,
@@ -54,6 +89,10 @@ pub async fn terminal_open(
     // The terminal's initial title, shown in the Running panel and recorded for
     // orphan recovery. A rename later calls `terminal_set_label`.
     label: Option<String>,
+    // The program to run instead of the default shell, with its arguments.
+    // See `spec_program` for what each combination means.
+    program: Option<String>,
+    args: Option<Vec<String>>,
     channel: Channel<TerminalEvent>,
 ) -> Result<String, String> {
     // A terminal does not require an open workspace (a bare shell is useful on
@@ -64,9 +103,10 @@ pub async fn terminal_open(
         .ok()
         .or_else(dirs_home)
         .unwrap_or_else(|| PathBuf::from("."));
+    let (shell, args) = spec_program(program, args);
     let spec = PtySpec {
-        shell: cb_core::pty::default_shell(),
-        args: Vec::new(),
+        shell,
+        args,
         cwd: spec_cwd(cwd, root),
         cols,
         rows,
@@ -168,6 +208,42 @@ mod tests {
     #[test]
     fn spec_cwd_falls_back_to_the_workspace_root_when_absent() {
         assert_eq!(spec_cwd(None, PathBuf::from("/ws")), PathBuf::from("/ws"));
+    }
+
+    #[test]
+    fn no_program_falls_back_to_the_default_shell() {
+        assert_eq!(
+            spec_program(None, None),
+            (cb_core::pty::default_shell(), Vec::new())
+        );
+    }
+
+    #[test]
+    fn a_blank_program_is_no_program_at_all() {
+        // The frontend may send "" for "just a shell"; spawning a blank program
+        // would fail rather than open the terminal the user asked for.
+        assert_eq!(
+            spec_program(Some("  ".into()), None),
+            (cb_core::pty::default_shell(), Vec::new())
+        );
+    }
+
+    #[test]
+    fn a_program_is_spawned_directly_with_its_args() {
+        assert_eq!(
+            spec_program(Some("claude".into()), Some(vec!["--resume".into()])),
+            ("claude".to_string(), vec!["--resume".to_string()])
+        );
+    }
+
+    #[test]
+    fn args_without_a_program_do_not_silently_attach_to_the_shell() {
+        // Arguments were written for a program that is not there; handing them
+        // to the default shell would run something the caller never asked for.
+        assert_eq!(
+            spec_program(None, Some(vec!["--resume".into()])),
+            (cb_core::pty::default_shell(), Vec::new())
+        );
     }
 
     #[test]

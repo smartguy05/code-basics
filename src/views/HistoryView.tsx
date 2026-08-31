@@ -150,22 +150,6 @@ export function HistoryView() {
     };
   }, [selected, selectedFile]);
 
-  /**
-   * F7 / Shift+F7, as in the Changes tab. This view is only mounted while its
-   * tab is showing, so the binding is scoped without having to check.
-   */
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "F7" || event.ctrlKey || event.altKey || event.metaKey) return;
-      event.preventDefault();
-      event.stopPropagation();
-      diffHandle.current?.goToChange(event.shiftKey ? -1 : 1);
-    };
-
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, []);
-
   async function network(kind: NetworkKind) {
     setBusy(true);
     setShowConsole(true);
@@ -403,6 +387,7 @@ export function HistoryView() {
           <span style={{ width: 12 }} />
 
           <button
+            data-command="change.previous"
             onClick={() => diffHandle.current?.goToChange(-1)}
             disabled={!shownDiff}
             title="Previous change (Shift+F7)"
@@ -411,6 +396,7 @@ export function HistoryView() {
             ↑
           </button>
           <button
+            data-command="change.next"
             onClick={() => diffHandle.current?.goToChange(1)}
             disabled={!shownDiff}
             title="Next change (F7)"

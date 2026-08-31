@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cascadeShift,
+  makeAgentTerminal,
   makeTerminal,
   outputNeedsAttention,
   pillBottom,
@@ -275,5 +276,42 @@ describe("stackOffset", () => {
     // terminal band. Changing one without the other silently lets a terminal
     // climb into the Notes band.
     expect(TERMINAL_STACK_SPAN).toBe(100);
+  });
+});
+
+describe("makeAgentTerminal", () => {
+  it("keys off the same sequence but carries the command and its own title", () => {
+    const t = makeAgentTerminal(3, "/ws", "claude", ["--model", "opus", "why?"], "why?");
+    expect(t).toEqual({
+      key: "term-3",
+      title: "why?",
+      cwd: "/ws",
+      command: { program: "claude", args: ["--model", "opus", "why?"] },
+    });
+  });
+
+  it("shares one sequence with makeTerminal so two terminals never share a key", () => {
+    // The host keeps a single monotonic counter for both kinds; a separate one
+    // would eventually mint `term-2` twice and React would reuse a live xterm.
+    expect(makeAgentTerminal(2, "/ws", "codex", ["q"], "q").key).toBe(makeTerminal(2, "/ws").key);
+  });
+
+  it("falls back to a plain terminal title rather than an empty header", () => {
+    // `terminalTitle` never returns blank, so this is defensive — but an
+    // unlabelled panel is indistinguishable from a broken one.
+    expect(makeAgentTerminal(5, "/ws", "claude", ["q"], "   ").title).toBe("Terminal 5");
+  });
+
+  it("copies the argument list, so a later mutation cannot rewrite the command", () => {
+    const args = ["--model", "opus", "why?"];
+    const t = makeAgentTerminal(1, "/ws", "claude", args, "why?");
+    args.push("--dangerously-skip-permissions");
+    expect(t.command?.args).toEqual(["--model", "opus", "why?"]);
+  });
+
+  it("leaves a plain terminal with no command at all", () => {
+    // `undefined` rather than an empty command: `TerminalPanel` passes it
+    // through to `terminal_open`, where a blank program means "the shell".
+    expect(makeTerminal(1, "/ws").command).toBeUndefined();
   });
 });

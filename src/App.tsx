@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { AppOutputPanel } from "./components/AppOutputPanel";
 import { BranchMenu } from "./components/BranchMenu";
 import { LauncherPicker } from "./components/LauncherPicker";
+import { FeaturesPicker } from "./components/FeaturesPicker";
 import { MenuBar } from "./components/MenuBar";
 import { NotesPanel } from "./components/NotesPanel";
 import { RunningPanel } from "./components/RunningPanel";
@@ -19,6 +20,7 @@ import {
 import type { Severity } from "./components/consoleLogic";
 import type { ConsoleHandle } from "./components/OutputConsole";
 import { WorkspaceTab, type WorkspaceTabHandle } from "./components/WorkspaceTab";
+import { SettingsDialog } from "./components/SettingsDialog";
 import {
   addOpenWorkspace,
   closeOpenWorkspace,
@@ -36,12 +38,13 @@ import * as api from "./ipc/api";
  * unlike the other three signals it expires without being acknowledged.
  */
 const DONE_SIGNAL_MS = 1900;
-import { applyEditorFontSize, loadEditorFontSize } from "./editorFontSize";
-import { DEFAULT_EDITOR_FONT_SIZE, recogniseFontSizeShortcut, stepFontSize } from "./editorFontSizeLogic";
+import { applyAppearance, loadAppearance } from "./appearance";
+import { dispatchShortcut, registerCommand } from "./shortcuts";
 import { loadRecents, rememberRecent } from "./recentsLogic";
 import type {
   InspectTarget,
   ProcessEvent,
+  FeatureInfo,
   RootSpec,
   RunningReport,
   Workspace,
@@ -95,10 +98,21 @@ export function App() {
   // Every open codebase, and which one is in the foreground. Identity is `root`.
   const [openWorkspaces, setOpenWorkspaces] = useState<Workspace[]>([]);
   const [activeRoot, setActiveRoot] = useState<string | null>(null);
+  const activeRootRef = useRef<string | null>(null);
+  activeRootRef.current = activeRoot;
   const [error, setError] = useState<string | null>(null);
   const [recents, setRecents] = useState<string[]>(() => loadRecents(localStorage));
   const [loading, setLoading] = useState(true);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  /**
+   * Which optional features are on. Loaded once at startup — before any
+   * workspace can be opened — so `featuresLogic` never has to render against a
+   * half-known answer. `null` is "not loaded yet", which `featureEnabled` reads
+   * as everything on; see the comment there for why that is the safe direction.
+   */
+  const [features, setFeatures] = useState<FeatureInfo[] | null>(null);
+  const [featuresOpen, setFeaturesOpen] = useState(false);
   // The Running panel and the report it renders. The report is polled here (not
   // in the panel) so the titlebar badge stays live even while the panel is
   // closed; `list_running` is a cheap in-memory read.
@@ -131,6 +145,9 @@ export function App() {
 
   /** Latch a signal onto a codebase's tab, keeping the strongest one showing. */
   const raiseSignal = useCallback((root: string, incoming: TabSignal) => {
+    // Events that finish on screen have already told the user. Latching them
+    // would make the tab begin flashing only after the user switched away.
+    if (root === activeRootRef.current) return;
     setSignalByRoot((prev) => {
       const next = mergeSignal(prev[root] ?? null, incoming);
       return next === prev[root] ? prev : { ...prev, [root]: next };
@@ -142,7 +159,7 @@ export function App() {
       window.clearTimeout(pending);
       timers.delete(root);
     }
-    if (incoming !== "done") return;
+    if (incoming !== "done" && incoming !== "success") return;
     timers.set(
       root,
       window.setTimeout(() => {
@@ -150,7 +167,7 @@ export function App() {
         // Only a signal that is *still* `done` expires: anything louder that
         // arrived meanwhile outranked it and is not this timer's to clear.
         setSignalByRoot((prev) => {
-          if (prev[root] !== "done") return prev;
+          if (prev[root] !== "done" && prev[root] !== "success") return prev;
           const { [root]: _expired, ...rest } = prev;
           return rest;
         });
@@ -170,6 +187,27 @@ export function App() {
       const { [root]: _seen, ...rest } = prev;
       return rest;
     });
+  }, []);
+
+  /**
+   * Load the optional-feature set once, at startup. This is also what adopts an
+   * installer seed on a first run — `list_features` is the only caller that
+   * needs the answer, so the seeding hangs off it rather than a separate step.
+   *
+   * A failure leaves `features` at `null`, which reads as everything enabled: a
+   * preferences file that cannot be read must never make the app look broken.
+   */
+  useEffect(() => {
+    let live = true;
+    api
+      .listFeatures()
+      .then((list) => {
+        if (live) setFeatures(list);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -226,6 +264,7 @@ export function App() {
    */
   const appConsoles = useRef(new Map<string, ConsoleHandle>());
   const appPending = useRef(new Map<string, ProcessEvent[]>());
+  const appWorkspaceRoots = useRef(new Map<string, string>());
 
   const registerAppConsole = useCallback((key: string, handle: ConsoleHandle | null) => {
     if (!handle) {
@@ -250,8 +289,14 @@ export function App() {
       queued.push(event);
       appPending.current.set(key, queued);
     }
+    const root = appWorkspaceRoots.current.get(key);
+    if (root && event.type === "exited" && !event.cancelled) {
+      raiseSignal(root, event.success ? "success" : "error");
+    } else if (root && event.type === "failed") {
+      raiseSignal(root, "error");
+    }
     setAppTabs((tabs) => applyEvent(tabs, key, event));
-  }, []);
+  }, [raiseSignal]);
 
   /** Launch a command from the picker: open a tab for it, then start it. */
   const launchApp = useCallback(
@@ -259,13 +304,17 @@ export function App() {
       // The key is minted here, not by the backend: output starts arriving the
       // moment the process spawns, which is before `launchCommand` resolves.
       const key = `ext:${crypto.randomUUID()}`;
-      const placeholder = makeTab({
-        key,
-        id: key,
-        label: spec.label?.trim() || spec.command,
-        cwd: spec.cwd,
-      });
+      const placeholder = makeTab(
+        {
+          key,
+          id: key,
+          label: spec.label?.trim() || spec.command,
+          cwd: spec.cwd,
+        },
+        activeRootRef.current,
+      );
       const added = addTab(appTabs, placeholder);
+      if (placeholder.workspaceRoot) appWorkspaceRoots.current.set(key, placeholder.workspaceRoot);
       setAppTabs(added.tabs);
       setActiveAppKey(added.activeKey);
       setAppOutputOpen(true);
@@ -285,7 +334,7 @@ export function App() {
           setError(message);
           // A command line that could not even be resolved never became a
           // process, so its tab would otherwise sit "running" for ever.
-          setAppTabs((tabs) => applyEvent(tabs, key, { type: "failed", message }));
+          onAppEvent(key, { type: "failed", message });
         });
     },
     [appTabs, onAppEvent, refreshRunning],
@@ -317,6 +366,7 @@ export function App() {
       setActiveAppKey(result.activeKey);
       appConsoles.current.delete(key);
       appPending.current.delete(key);
+      appWorkspaceRoots.current.delete(key);
       if (result.tabs.length === 0) setAppOutputOpen(false);
     },
     [appTabs, activeAppKey, stopApp],
@@ -336,25 +386,46 @@ export function App() {
     return () => clearInterval(timer);
   }, [refreshRunning]);
 
-  /**
-   * The editor font size: restored on start and driven by Ctrl+= / Ctrl+- /
-   * Ctrl+0 from anywhere. App-wide, so it lives here rather than in a tab.
-   */
+  /** Apply user-global appearance and route every configurable shortcut. */
   useEffect(() => {
-    applyEditorFontSize(loadEditorFontSize());
+    applyAppearance(loadAppearance(), false);
     const onKeyDown = (event: KeyboardEvent) => {
-      const action = recogniseFontSizeShortcut(event);
-      if (action === null) return;
+      if (!dispatchShortcut(event)) return;
       event.preventDefault();
       event.stopPropagation();
-      const current = loadEditorFontSize();
-      applyEditorFontSize(
-        action === "reset" ? DEFAULT_EDITOR_FONT_SIZE : stepFontSize(current, action === "increase" ? 1 : -1),
-      );
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, []);
+
+  useEffect(() => {
+    const registrations = [
+      registerCommand("file.open", pickFolder),
+      registerCommand("file.rescan", () => void rescan()),
+      registerCommand("file.settings", () => setSettingsOpen(true)),
+      registerCommand("panel.notes", () => setNotesOpen(true)),
+      registerCommand("panel.launch", () => setLauncherOpen(true)),
+      registerCommand("panel.apps", () => setAppOutputOpen(true)),
+      registerCommand("panel.running", () => setRunningOpen(true)),
+      registerCommand("terminal.new", () => activeHandle()?.openTerminal()),
+      registerCommand("agent.review", () => activeHandle()?.openReview()),
+      registerCommand("project.next", () => switchWorkspace(1)),
+      registerCommand("project.previous", () => switchWorkspace(-1)),
+      registerCommand("project.close", () => { if (activeRootRef.current) void closeWorkspace(activeRootRef.current); }),
+      ...[[-1, "decrease"], [1, "increase"], [0, "reset"]].map(([delta, name]) => registerCommand(`font.code.${name}`, () => {
+        const settings = loadAppearance();
+        settings.codeFontSize = delta === 0 ? 12.5 : Math.min(32, Math.max(8, Math.round(settings.codeFontSize) + Number(delta)));
+        applyAppearance(settings, true);
+      })),
+      ...[[-1, "decrease"], [1, "increase"], [0, "reset"]].map(([delta, name]) => registerCommand(`font.ui.${name}`, () => {
+        const settings = loadAppearance();
+        settings.uiFontSize = delta === 0 ? 13 : Math.min(24, Math.max(10, settings.uiFontSize + Number(delta)));
+        applyAppearance(settings, true);
+      })),
+    ];
+    return () => registrations.forEach((unregister) => unregister());
+    // Handlers read current mutable refs or are intentionally rebound with state.
+  });
 
   // The backend keeps every open workspace across a window reload, so the tab
   // strip is rebuilt from it (there is no event channel; identity is `root`).
@@ -408,6 +479,13 @@ export function App() {
     } catch (e) {
       setError(api.errorMessage(e));
     }
+  }
+
+  function switchWorkspace(direction: -1 | 1) {
+    if (openWorkspaces.length < 2) return;
+    const current = openWorkspaces.findIndex((workspace) => workspace.root === activeRootRef.current);
+    const next = openWorkspaces[(current + direction + openWorkspaces.length) % openWorkspaces.length];
+    if (next) void activateWorkspace(next.root);
   }
 
   /** Close a tab: tears its backend workspace down, then repoints to a neighbour
@@ -497,6 +575,8 @@ export function App() {
           onRescan={rescan}
           onRunAgent={(promptId) => activeHandle()?.openRunAgent(promptId)}
           onOpenReview={() => activeHandle()?.openReview()}
+          onOpenFeatures={() => setFeaturesOpen(true)}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
 
         {activeWorkspace && (
@@ -605,11 +685,22 @@ export function App() {
             setAttentionByRoot((prev) => ({ ...prev, [root]: has }))
           }
           onSignal={raiseSignal}
+          features={features}
         />
       ))}
 
       {/* The global Notes / scratchpad panel — one instance, not per-workspace.
           Its "send to agent" runs in the foreground tab. */}
+      {featuresOpen && (
+        <FeaturesPicker
+          features={features}
+          onChange={setFeatures}
+          onClose={() => setFeaturesOpen(false)}
+        />
+      )}
+
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+
       {notesOpen && (
         <NotesPanel
           onClose={() => setNotesOpen(false)}

@@ -25,6 +25,26 @@ export interface TerminalDescriptor {
    * descriptor — terminals do not survive a restart, so neither does the colour.
    */
   color?: string;
+  /**
+   * What this terminal runs instead of the default shell: an interactive agent
+   * seeded with a question ("Ask the codebase"). `undefined` is a plain shell,
+   * which is what every terminal opened from the titlebar is.
+   *
+   * A program **and** its arguments, never a command string. The PTY spawns
+   * through `CommandBuilder` with these arguments as they stand, so nothing on
+   * this side joins or re-splits them — assembling a string here and
+   * re-splitting it in the backend is the bug this shape exists to make
+   * impossible.
+   *
+   * That is not the same as "there is no shell". On Windows a program name can
+   * resolve to a `.cmd`/`.bat` shim, and `cmd.exe` then re-parses the command
+   * line: `&`, `|`, `<`, `>`, `^`, `"` and `%` change its meaning. The backend
+   * (`cb_core::pty::argv`) refuses such an argument for a batch target before
+   * spawning, so `terminalOpen` rejects rather than running something else. For
+   * a real executable the guard does not apply and a question containing a
+   * quote, a newline or a `&` crosses verbatim as one argv entry.
+   */
+  command?: { program: string; args: string[] };
 }
 
 /**
@@ -36,6 +56,42 @@ export interface TerminalDescriptor {
  */
 export function makeTerminal(seq: number, cwd: string): TerminalDescriptor {
   return { key: `term-${seq}`, title: `Terminal ${seq}`, cwd };
+}
+
+/**
+ * Build the descriptor for a terminal running an **agent** rather than a shell —
+ * the "Ask the codebase" terminal, opened already asking its question.
+ *
+ * A sibling of {@link makeTerminal} rather than an extra parameter on it,
+ * because the two differ in more than the command: this one is titled after the
+ * question (a strip of "Terminal 4"s would tell two asks apart not at all),
+ * while a plain terminal is titled after its sequence number. They share the
+ * *sequence*, and so the key space, deliberately: one monotonic counter in the
+ * host means two terminals can never mint the same `term-N` and have React
+ * reuse a live xterm for a different session.
+ *
+ * `args` is **copied**, not aliased: the caller assembled it from an IPC result
+ * and a later mutation of that array must not rewrite what a running terminal
+ * was spawned with.
+ *
+ * A blank `title` falls back to the plain terminal name. `terminalTitle` in
+ * `askLogic` never returns blank, so this is defensive — but an unlabelled
+ * panel is indistinguishable from a broken one, and the fallback costs nothing.
+ */
+export function makeAgentTerminal(
+  seq: number,
+  cwd: string,
+  program: string,
+  args: readonly string[],
+  title: string,
+): TerminalDescriptor {
+  const clean = title.trim();
+  return {
+    key: `term-${seq}`,
+    title: clean === "" ? `Terminal ${seq}` : clean,
+    cwd,
+    command: { program, args: [...args] },
+  };
 }
 
 /**

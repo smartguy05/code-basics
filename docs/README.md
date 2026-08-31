@@ -6,6 +6,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 
 - [Installation](getting-started/installation.md) — prerequisites, first run, building a distributable
 - [Using the app](getting-started/using-the-app.md) — opening workspaces, a tour of the six views, the floating terminals, and launching other apps
+- [Customizing the app](getting-started/customizing.md) — themes, fonts, font sizes, shortcuts, and project attention signals
 
 ## Architecture
 

@@ -20,6 +20,11 @@ walkdir.workspace = true
 globset.workspace = true
 toml.workspace = true
 regex.workspace = true
+sqlparser.workspace = true
+futures-core.workspace = true
+sqlx.workspace = true
+tiberius.workspace = true
+tokio-util.workspace = true
 specta.workspace = true
 uuid.workspace = true
 yaml-rust2.workspace = true
@@ -43,6 +48,14 @@ sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Integrated (Windows) authentication for the SQL Server driver. Split out
+# rather than enabled in `[dependencies]` because the `winauth` crate tiberius
+# pulls in for it does not compile off Windows, and a Linux build of `cb-core`
+# must keep working. Cargo unions features per target, so this is additive to
+# the workspace entry rather than a second copy of the dependency.
+[target.'cfg(windows)'.dependencies]
+tiberius = { workspace = true, features = ["winauth"] }
 
 [dev-dependencies]
 tempfile = "3"

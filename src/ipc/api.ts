@@ -2,6 +2,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  AgentCommand,
   AnchorResult,
   ArchGraph,
   AttachableList,
@@ -18,6 +19,7 @@ import type {
   ElidedReason,
   EnhancementInfo,
   ErosionReport,
+  FeatureInfo,
   FileContents,
   FileDiff,
   InspectGraph,
@@ -53,6 +55,12 @@ import type {
   RunningReport,
   SearchHit,
   SearchScope,
+  SqlConnectionProfile,
+  SqlConnectionView,
+  SqlDiscovery,
+  SqlEvent,
+  SqlStopOutcome,
+  SqlTestOutcome,
   StashEntry,
   SymbolIndexStatus,
   TerminalEvent,
@@ -203,6 +211,19 @@ export const saveNoteAsInstruction = (title: string, body: string) =>
 // Notes / scratchpad (user-global, not per-workspace)
 // ---------------------------------------------------------------------------
 
+/**
+ * Every optional feature with its current state. The first call also adopts an
+ * installer seed, if one is present and the user has no store yet.
+ */
+export const listFeatures = () => invoke<FeatureInfo[]>("list_features");
+
+/**
+ * Switch one feature on or off. Returns the whole list as persisted, so the
+ * caller re-renders from what was written rather than what it hoped to write.
+ */
+export const setFeature = (id: string, enabled: boolean) =>
+  invoke<FeatureInfo[]>("set_feature", { id, enabled });
+
 /** Read the global notes file. Missing/unreadable yields an empty set. */
 export const readNotes = () => invoke<NotesFile>("read_notes");
 
@@ -340,6 +361,18 @@ export const cancelReview = () => invoke<boolean>("cancel_review");
 /** The review agents whose CLI is installed, in preference order. */
 export const reviewAgents = () => invoke<ReviewAgentInfo[]>("review_agents");
 
+/**
+ * The program and argv that start an interactive agent session already asked
+ * `prompt` — the command line behind "Ask the codebase", handed straight to
+ * {@link terminalOpen}.
+ *
+ * Built in `cb_core::review` rather than here on purpose: the argument order,
+ * the model validation and the refusals are one decision and live in one place,
+ * so the frontend never assembles a command line of its own.
+ */
+export const agentInteractiveCommand = (agentId: string, model: string | undefined, prompt: string) =>
+  invoke<AgentCommand>("agent_interactive_command", { agentId, model, prompt });
+
 // ---------------------------------------------------------------------------
 // Interactive terminals
 // ---------------------------------------------------------------------------
@@ -353,6 +386,18 @@ export const reviewAgents = () => invoke<ReviewAgentInfo[]>("review_agents");
  *
  * `cols`/`rows` are the initial size; `cwd` defaults to the open workspace when
  * omitted.
+ *
+ * `program`/`args` run something other than the default shell — an interactive
+ * agent seeded with a question, for "Ask the codebase". They are **appended**
+ * and optional so every existing caller (a plain terminal) is untouched. The
+ * arguments reach `CommandBuilder` directly — nothing joins or re-splits them —
+ * so through a real executable a question containing a quote, a newline or a
+ * `&` crosses verbatim as one argv entry. Through a Windows `.cmd`/`.bat` shim
+ * it does not: `cmd.exe` re-parses the command line, so an argument carrying
+ * `&`, `|`, `<`, `>`, `^`, `"` or `%` is **rejected** by the backend before the
+ * spawn (this promise rejects with a reason naming the character) rather than
+ * running as something else. Args given without a program are dropped by the
+ * backend rather than handed to the shell.
  */
 export function terminalOpen(
   cols: number,
@@ -360,10 +405,12 @@ export function terminalOpen(
   onEvent: (event: TerminalEvent) => void,
   cwd?: string,
   label?: string,
+  program?: string,
+  args?: string[],
 ): Promise<string> {
   const channel = new Channel<TerminalEvent>();
   channel.onmessage = onEvent;
-  return invoke<string>("terminal_open", { cwd, cols, rows, label, channel });
+  return invoke<string>("terminal_open", { cwd, cols, rows, label, program, args, channel });
 }
 
 /**
@@ -1053,6 +1100,119 @@ export const lspGotoDefinition = (
  */
 export const lspDeclarationAnchors = (path: string) =>
   invoke<AnchorResult>("lsp_declaration_anchors", { path });
+
+// ---------------------------------------------------------------------------
+// The SQL console
+// ---------------------------------------------------------------------------
+
+/**
+ * Every saved connection, redacted.
+ *
+ * No command in this section ever returns a connection string: a saved literal
+ * comes back only as the redacted `display` on its {@link SqlSecretView}. The
+ * store is user-global, not per-workspace, because a connection string is a
+ * password and `.code-basics/` is the directory this app shares with the team.
+ */
+export const sqlListConnections = () =>
+  invoke<SqlConnectionView[]>("sql_list_connections");
+
+/**
+ * The connections a workspace mentions — appsettings, user secrets, `.env`.
+ *
+ * Reads files and nothing else: it connects to nothing and saves nothing, and a
+ * candidate carries a *reference* to where its connection string lives rather
+ * than the string. Read `state` before offering to connect: `unresolved` means
+ * the value is still a variable reference, which is not the same as an engine
+ * nobody could determine.
+ */
+export const sqlDiscover = (root: string) =>
+  invoke<SqlDiscovery>("sql_discover", { root });
+
+/**
+ * Add or update a saved connection; returns the redacted list.
+ *
+ * `allowWrites` on the payload is **ignored**. Consent moves only through
+ * {@link sqlSetAllowWrites}, so no form round-trip can turn the read-only guard
+ * off, and a newly saved profile always starts with writes disallowed.
+ */
+export const sqlSaveConnection = (connection: SqlConnectionProfile) =>
+  invoke<SqlConnectionView[]>("sql_save_connection", { connection });
+
+/** Forget a saved connection. Rejects when the id names nothing. */
+export const sqlDeleteConnection = (id: string) =>
+  invoke<SqlConnectionView[]>("sql_delete_connection", { id });
+
+/**
+ * Allow or disallow writes on one connection — the consent action.
+ *
+ * Its own verb on purpose. Enabling writes both lifts the read-only guard for
+ * recognised writes (it never lifts a *refusal*, which is a different verdict)
+ * and, on an engine whose driver has a read-only open mode, gives up that
+ * protection: SQLite is then opened without `SQLITE_OPEN_READONLY`.
+ */
+export const sqlSetAllowWrites = (id: string, allowWrites: boolean) =>
+  invoke<SqlConnectionView[]>("sql_set_allow_writes", { id, allowWrites });
+
+/**
+ * Open the connection, prove a database is behind it, ask its version, and
+ * close it.
+ *
+ * The outcome is a variant and not a boolean, and the variants are the point: a
+ * timeout, a wrong password, an unresolvable secret and an engine this build
+ * has no driver for are four things the user does four different things about.
+ * `failed` is the honest fallback for a driver message the backend has no rule
+ * for — do not present it as "unreachable".
+ *
+ * Two of them are easy to merge and must not be. `notADatabase` means the
+ * handle opened and what is behind it is not a database (SQLite opens any file
+ * and only fails when a page is read, so this is *not* an `ok`), and
+ * `cannotOpenFile` means the path itself would not open — which is a wrong
+ * path, not an `unreachable` host.
+ */
+export const sqlTestConnection = (id: string) =>
+  invoke<SqlTestOutcome>("sql_test_connection", { id });
+
+/**
+ * Run SQL, streaming its rows to `onEvent`.
+ *
+ * `queryId` is minted by the caller — it is the handle {@link sqlCancel} stops
+ * the statement by, and it must be unique among the statements running on this
+ * connection. The promise resolves once the run is over; the last event is
+ * always `finished`, and everything the driver produced has already been
+ * delivered before it arrives.
+ *
+ * **The `rows` events are the rows.** `completed` carries a {@link
+ * SqlCompletion} — the counts, the cap and the elapsed time — and not the
+ * result set, so a grid must accumulate what it is streamed rather than waiting
+ * for a copy at the end. A `notice` is neither a refusal nor a failure: it is
+ * the guard saying what it thinks this statement is (an allowed write, for
+ * instance) while the statement runs.
+ *
+ * The submitted text is guarded and run as **one** statement at index 0: there
+ * is no splitter, because cutting a script on `;` would split a string literal
+ * or a `BEGIN … END` block and send the pieces.
+ */
+export function sqlExecute(
+  queryId: string,
+  connectionId: string,
+  sql: string,
+  onEvent: (event: SqlEvent) => void,
+): Promise<void> {
+  const channel = new Channel<SqlEvent>();
+  channel.onmessage = onEvent;
+  return invoke<void>("sql_execute", { queryId, connectionId, sql, channel });
+}
+
+/**
+ * Ask a running statement to stop reading.
+ *
+ * **Not a server-side cancel.** It stops this side reading and drops the
+ * connection; the server may still be executing the statement. `notFound` means
+ * nothing is running under that id — ordinary when a Stop click races a
+ * statement that has just finished, and not an error.
+ */
+export const sqlCancel = (queryId: string) =>
+  invoke<SqlStopOutcome>("sql_cancel", { queryId });
 
 /** Tauri returns command errors as plain strings. */
 export function errorMessage(error: unknown): string {
