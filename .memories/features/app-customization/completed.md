@@ -5,3 +5,4 @@
 - Themes support duplication, deletion, validation, JSON import, and export.
 - App shortcuts support discovery, recording, conflict checks, clear, and reset.
 - Documentation describes user behavior and maintainer contracts.
+- Cleared the remaining frontend expectation, strict-Clippy, and cancellation-race failures.

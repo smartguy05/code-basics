@@ -299,11 +299,13 @@ fn build_node(
 
             Ok(node::test_invocation(
                 config,
-                root,
-                &project_dir,
-                manager,
-                runner,
-                results,
+                node::TestInvocationContext {
+                    workspace_root: root,
+                    project_dir: &project_dir,
+                    manager,
+                    runner,
+                    results_dir: results,
+                },
                 filter,
                 coverage,
             ))

@@ -57,6 +57,9 @@ pub async fn review_agents() -> Result<Vec<ReviewAgentInfo>, String> {
 /// Serves both the adversarial **Review** (read-only) and the Enhancements
 /// **Run Agent** action (read-only or edit, via `mode`).
 #[tauri::command]
+// Tauri exposes command parameters as top-level IPC keys; wrapping these in a
+// context struct would change the frontend contract solely to satisfy a lint.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_review(
     app: AppHandle,
     state: State<'_, AppState>,

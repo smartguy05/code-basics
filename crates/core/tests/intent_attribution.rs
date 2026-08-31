@@ -217,7 +217,8 @@ fn a_declared_reason_binds_across_turns_through_the_public_review() {
         }],
     };
 
-    let attributions = attribution::attribute(&[diff.clone()], &intents, Options::default());
+    let attributions =
+        attribution::attribute(std::slice::from_ref(&diff), &intents, Options::default());
     let review = coverage::review(&[diff], &attributions, &intents);
 
     assert!(

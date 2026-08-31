@@ -15,12 +15,13 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn file_with(pairs: &[(&str, bool)]) -> FeaturesFile {
-    let mut file = FeaturesFile::default();
-    file.enabled = pairs
-        .iter()
-        .map(|(id, on)| ((*id).to_string(), *on))
-        .collect::<BTreeMap<_, _>>();
-    file
+    FeaturesFile {
+        enabled: pairs
+            .iter()
+            .map(|(id, on)| ((*id).to_string(), *on))
+            .collect::<BTreeMap<_, _>>(),
+        ..FeaturesFile::default()
+    }
 }
 
 #[test]

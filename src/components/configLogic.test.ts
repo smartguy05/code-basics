@@ -117,13 +117,13 @@ describe("projectTarget", () => {
 });
 
 describe("buildConfigurationsFor", () => {
-  const root = "C:\ws";
+  const root = "C:\\ws";
   const dotnet = project({ configurations: ["Debug", "Release", "Staging"] });
 
   it("offers what the project declares", () => {
     expect(
       buildConfigurationsFor(
-        { ecosystem: "dotnet", project: "src\App\App.csproj" },
+        { ecosystem: "dotnet", project: "src\\App\\App.csproj" },
         [dotnet],
         root,
       ),
@@ -133,7 +133,7 @@ describe("buildConfigurationsFor", () => {
   it("falls back to the default pair for a .NET project it could not read", () => {
     expect(
       buildConfigurationsFor(
-        { ecosystem: "dotnet", project: "src\App\App.csproj" },
+        { ecosystem: "dotnet", project: "src\\App\\App.csproj" },
         [project({ configurations: [] })],
         root,
       ),

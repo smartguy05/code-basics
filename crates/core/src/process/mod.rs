@@ -332,19 +332,39 @@ impl Supervisor {
     /// Returns `false` when no process is registered under `id` — normally
     /// because it already exited.
     pub async fn cancel(&self, id: &str) -> bool {
-        let target = {
+        let (target, token) = {
             let guard = self.running.lock().await;
             match guard.get(id) {
                 Some(r) => {
                     r.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
-                    r.pid
+                    (r.pid, r.token)
                 }
                 None => return false,
             }
         };
 
         match target {
-            Some(pid) => kill::kill_tree_async(pid).await,
+            Some(pid) => {
+                if kill::kill_tree_async(pid).await {
+                    return true;
+                }
+
+                // A process can be reaped between the registry lookup above
+                // and `taskkill` reaching it. In that race the cancellation
+                // request still succeeded; do not report failure merely
+                // because the target disappeared first. Give the waiter a
+                // bounded chance to remove this exact run, while preserving a
+                // real kill failure when it continues to own the id.
+                for _ in 0..50 {
+                    let still_owns_id =
+                        self.running.lock().await.get(id).map(|r| r.token) == Some(token);
+                    if !still_owns_id {
+                        return true;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                false
+            }
             // Spawned but no pid means it already exited.
             None => false,
         }

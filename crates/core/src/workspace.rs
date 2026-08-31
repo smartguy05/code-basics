@@ -1767,7 +1767,7 @@ EndGlobal
             // relative path are the same string, so there is nothing to catch.
             // Everywhere else the id has had its separators flattened and must
             // not resolve.
-            if PathBuf::from(&project.id) != target {
+            if Path::new(&project.id) != target {
                 let by_id = RunConfig {
                     project: Some(PathBuf::from(&project.id)),
                     ..ws.configs[0].clone()
