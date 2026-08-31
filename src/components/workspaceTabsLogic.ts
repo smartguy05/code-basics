@@ -97,3 +97,80 @@ export function tabLabels(open: Workspace[]): string[] {
     return parent ? `${parent}/${w.name}` : w.name;
   });
 }
+
+/**
+ * What a background workspace tab is signalling.
+ *
+ * Four states, deliberately distinct rather than collapsed into one "something
+ * happened" flag, because they answer different questions and want different
+ * reactions: a build that broke is worth interrupting yourself for, a terminal
+ * that finished is not.
+ *
+ * - `error` — a build, rebuild or clean in that codebase failed.
+ * - `attention` — a minimized terminal there rang the bell (the original, and
+ *   still the only thing a *running* terminal can say).
+ * - `success` — a build, rebuild or clean there succeeded.
+ * - `done` — a minimized terminal there exited. Transient: it pulses twice and
+ *   stops, because "it finished" goes stale the moment you have seen it, and
+ *   an outline that persisted would still be there tomorrow.
+ */
+export type TabSignal = "error" | "attention" | "success" | "done";
+
+/**
+ * Rank, highest first. `error` outranks everything because a broken build is
+ * the only one of these you cannot choose to ignore; `done` ranks lowest
+ * because it is the only one that expires on its own.
+ */
+const SIGNAL_PRIORITY: Record<TabSignal, number> = {
+  error: 4,
+  attention: 3,
+  success: 2,
+  done: 1,
+};
+
+/**
+ * Fold a new signal into whatever a tab was already showing.
+ *
+ * A weaker signal never masks a stronger one: a terminal finishing after a
+ * build broke must not turn the tab from red to green, because the broken
+ * build is still broken and the tab is the only place that is said. The user
+ * clearing the tab (by clicking it) is the only thing that lowers the state.
+ */
+export function mergeSignal(current: TabSignal | null | undefined, incoming: TabSignal): TabSignal {
+  if (!current) return incoming;
+  return SIGNAL_PRIORITY[incoming] > SIGNAL_PRIORITY[current] ? incoming : current;
+}
+
+/**
+ * The class suffix a signal renders as. `attention` is abbreviated because the
+ * CSS class it pairs with (`.ws-tab.signal-attn`) predates the other three as
+ * `.ws-tab.attention`, and a full word there reads as the old boolean.
+ */
+const SIGNAL_CLASS: Record<TabSignal, string> = {
+  error: "signal-error",
+  attention: "signal-attn",
+  success: "signal-success",
+  done: "signal-done",
+};
+
+/**
+ * The classes a workspace tab wears for its current signal — empty when it
+ * should not be flashing at all.
+ *
+ * Reuses {@link shouldFlashWorkspaceTab}'s rule that only a **background** tab
+ * flashes. The active codebase is on screen: its terminals flash their own
+ * pills and its build output is right there, so re-flashing its tab would be
+ * noise. Unlike the original bell flash this is not purely derived — the
+ * caller must drop the signal when the tab is activated — because a `success`
+ * or `error` that survived being looked at would flash again the moment you
+ * switched away.
+ */
+export function tabSignalClass(
+  root: string,
+  activeRoot: string | null,
+  signal: TabSignal | null | undefined,
+): string {
+  if (!signal) return "";
+  if (!shouldFlashWorkspaceTab(root, activeRoot, true)) return "";
+  return ` signal ${SIGNAL_CLASS[signal]}`;
+}

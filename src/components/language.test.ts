@@ -54,6 +54,14 @@ describe("languageFor", () => {
     expect(languageName("index.html")).toBe("html");
   });
 
+  it("approximates ASP.NET razor/cshtml views with the html mode", () => {
+    // HTML-dominant with embedded C#; no razor mode ships, so the markup mode
+    // is the close-enough approximation (like cpp for C#).
+    expect(languageName("src/Pages/Counter.razor")).toBe("html");
+    expect(languageName("Views/Home/Index.cshtml")).toBe("html");
+    expect(languageName("PAGES/COUNTER.RAZOR")).toBe("html");
+  });
+
   it("maps python and rust sources", () => {
     expect(languageName("tools/report.py")).toBe("python");
     expect(languageName("crates/core/src/lib.rs")).toBe("rust");

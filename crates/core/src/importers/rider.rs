@@ -62,14 +62,9 @@ pub fn parse(xml: &str) -> Vec<RiderConfiguration> {
     let mut out: Vec<RiderConfiguration> = Vec::new();
     let mut current: Option<RiderConfiguration> = None;
 
-    loop {
-        let event = match reader.read_event() {
-            Ok(e) => e,
-            // A malformed file yields whatever was understood so far rather
-            // than nothing at all.
-            Err(_) => break,
-        };
-
+    // A malformed file ends iteration and yields whatever was understood so
+    // far rather than nothing at all.
+    while let Ok(event) = reader.read_event() {
         match event {
             Event::Start(e) if e.local_name().as_ref() == b"configuration" => {
                 current = Some(RiderConfiguration {

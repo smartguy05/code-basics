@@ -2,9 +2,10 @@
 //! an in-app adversarial review.
 
 use crate::review::{
-    agent_args, compose_prompt, detect_agents, models_for, parse_codex_models, resolve_model,
-    resolve_prompt_body, AgentMode, ReviewAgent, CLAUDE_DEFAULT_MODEL, CLAUDE_EDIT_PERMISSION_MODE,
-    CLAUDE_PERMISSION_MODE, CODEX_EDIT_SANDBOX, CODEX_SANDBOX,
+    agent_args, agent_args_interactive, compose_prompt, detect_agents, models_for,
+    parse_codex_models, resolve_model, resolve_prompt_body, AgentMode, ReviewAgent,
+    CLAUDE_DEFAULT_MODEL, CLAUDE_EDIT_PERMISSION_MODE, CLAUDE_PERMISSION_MODE, CODEX_EDIT_SANDBOX,
+    CODEX_SANDBOX,
 };
 
 // --- Agent identity ------------------------------------------------------
@@ -376,4 +377,197 @@ fn the_library_prompt_is_used_when_there_is_no_inline_body() {
 fn neither_source_is_an_error_rather_than_an_empty_prompt() {
     assert!(resolve_prompt_body(None, None).is_err());
     assert!(resolve_prompt_body(Some("  "), None).is_err());
+}
+
+// --- Interactive argument assembly ---------------------------------------
+
+#[test]
+fn claude_interactive_argv_passes_the_prompt_positionally() {
+    let args = agent_args_interactive(ReviewAgent::ClaudeCode, Some("opus"), "What does this do?");
+
+    // The prompt is a bare positional, not the value of a flag. The one thing
+    // that may precede it is `--`, which is what *makes* it positional.
+    let at = args
+        .iter()
+        .position(|a| a == "What does this do?")
+        .expect("prompt present");
+    assert!(
+        at > 0 && args[at - 1] == "--",
+        "prompt is positional behind the separator, not a flag value: {args:?}"
+    );
+
+    let model_at = args.iter().position(|a| a == "--model").expect("--model");
+    assert_eq!(args.get(model_at + 1), Some(&"opus".to_string()));
+}
+
+#[test]
+fn claude_interactive_argv_is_not_headless() {
+    // -p/--print, --output-format and --verbose force the one-shot posture: the
+    // session exits with the first answer instead of staying open to talk to.
+    let args = agent_args_interactive(ReviewAgent::ClaudeCode, None, "Explain the auth flow.");
+    for banned in [
+        "-p",
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ] {
+        assert!(
+            !args.iter().any(|a| a == banned),
+            "{banned} forces headless: {args:?}"
+        );
+    }
+    // No model resolved means no flag at all, rather than an empty value.
+    assert!(!args.contains(&"--model".to_string()), "no model: {args:?}");
+    assert!(args.contains(&"Explain the auth flow.".to_string()));
+}
+
+#[test]
+fn codex_interactive_argv_is_not_the_exec_form() {
+    // `codex exec` is the headless subcommand; the interactive session is plain
+    // `codex <prompt>`.
+    let args = agent_args_interactive(ReviewAgent::Codex, None, "Where is the retry policy?");
+    assert!(
+        !args.iter().any(|a| a == "exec"),
+        "exec is the headless form: {args:?}"
+    );
+    assert_eq!(
+        args.last(),
+        Some(&"Where is the retry policy?".to_string()),
+        "prompt is the trailing positional: {args:?}"
+    );
+}
+
+#[test]
+fn codex_interactive_argv_carries_a_resolved_model() {
+    // `-m/--model` is a *global* Codex flag, not exec-only, so the interactive
+    // form can carry it. The command layer validates the choice against the
+    // user's own `config.toml` and even refuses a name that is not in it, so
+    // dropping it here would run the default under the label of a chosen model.
+    let args = agent_args_interactive(ReviewAgent::Codex, Some("gpt-5-codex"), "Why is this slow?");
+
+    let at = args.iter().position(|a| a == "-m").expect("-m present");
+    assert_eq!(args.get(at + 1), Some(&"gpt-5-codex".to_string()));
+    assert_eq!(
+        args.last(),
+        Some(&"Why is this slow?".to_string()),
+        "prompt stays the trailing positional: {args:?}"
+    );
+    assert!(
+        !args.iter().any(|a| a == "exec"),
+        "still not the headless form: {args:?}"
+    );
+}
+
+#[test]
+fn codex_interactive_argv_omits_the_model_flag_when_none_resolved() {
+    // No model resolved means no flag at all, rather than an empty value.
+    let args = agent_args_interactive(ReviewAgent::Codex, None, "Where is the retry policy?");
+    assert!(!args.iter().any(|a| a == "-m"), "no -m: {args:?}");
+    assert!(!args.iter().any(|a| a == "--model"), "no --model: {args:?}");
+    // `--` stays: it is what keeps a dash-leading question a question, and it
+    // is harmless for ordinary prose.
+    assert_eq!(
+        args,
+        vec!["--".to_string(), "Where is the retry policy?".to_string()]
+    );
+}
+
+#[test]
+fn a_multi_line_question_stays_one_argument() {
+    let prompt = "line one\nline two with spaces";
+    for agent in ReviewAgent::ALL {
+        // With a model present too: a model flag must not swallow the prompt or
+        // split it into a second argument.
+        for model in [None, Some("a-model")] {
+            let args = agent_args_interactive(agent, model, prompt);
+            assert_eq!(
+                args.iter().filter(|a| *a == prompt).count(),
+                1,
+                "{agent:?}/{model:?}: whole prompt is exactly one argument: {args:?}"
+            );
+            assert_eq!(
+                args.last(),
+                Some(&prompt.to_string()),
+                "{agent:?}/{model:?}: the prompt trails everything: {args:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_headless_argv_is_unchanged() {
+    // The Review panel depends on this exact argv; adding the interactive form
+    // must not have disturbed it.
+    assert_eq!(
+        agent_args(
+            ReviewAgent::ClaudeCode,
+            AgentMode::ReadOnly,
+            Some("opus"),
+            "Review."
+        ),
+        vec![
+            "-p",
+            "Review.",
+            "--model",
+            "opus",
+            "--permission-mode",
+            CLAUDE_PERMISSION_MODE,
+            "--output-format",
+            "stream-json",
+            "--verbose",
+        ]
+    );
+    assert_eq!(
+        agent_args(
+            ReviewAgent::Codex,
+            AgentMode::ReadOnly,
+            Some("o3"),
+            "Review."
+        ),
+        vec!["exec", "--sandbox", CODEX_SANDBOX, "-m", "o3", "Review."]
+    );
+}
+
+#[test]
+fn a_question_beginning_with_a_dash_is_still_a_question() {
+    // A question and a flag are two distinct outcomes and must not collapse
+    // into one argv position. Verified against both installed CLIs:
+    //   codex "--why-does-the-build-fail"
+    //     -> error: unexpected argument '--why-does-the-build-fail' found
+    //        tip: to pass ... as a value, use '-- --why-does-the-build-fail'
+    //   claude "--why-does-the-build-fail"
+    //     -> error: unknown option '--why-does-the-build-fail'
+    // With the separator both accept it and treat it as the prompt (checked by
+    // round-tripping a sentinel through `codex exec --` and `claude -p --`).
+    let prompt = "--why-does-the-build-fail";
+    for agent in ReviewAgent::ALL {
+        for model in [None, Some("a-model")] {
+            let args = agent_args_interactive(agent, model, prompt);
+            assert_eq!(
+                args.last(),
+                Some(&prompt.to_string()),
+                "{agent:?}/{model:?}: the question still trails: {args:?}"
+            );
+            assert_eq!(
+                args.len().checked_sub(2).map(|i| args[i].as_str()),
+                Some("--"),
+                "{agent:?}/{model:?}: `--` must immediately precede the question: {args:?}"
+            );
+            // The separator ends option parsing, so a model flag has to sit
+            // ahead of it or it becomes part of the prompt.
+            if let Some(m) = model {
+                let flag_at = args
+                    .iter()
+                    .position(|a| a == "--model" || a == "-m")
+                    .expect("model flag present");
+                let sep_at = args.iter().position(|a| a == "--").expect("separator");
+                assert!(
+                    flag_at < sep_at,
+                    "{agent:?}: the model flag must precede `--`: {args:?}"
+                );
+                assert_eq!(args.get(flag_at + 1), Some(&m.to_string()));
+            }
+        }
+    }
 }

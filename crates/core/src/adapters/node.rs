@@ -190,16 +190,27 @@ pub fn project_kind(pkg: &PackageJson) -> ProjectKind {
 }
 
 /// Build the test invocation for a Node project.
+pub struct TestInvocationContext<'a> {
+    pub workspace_root: &'a Path,
+    pub project_dir: &'a Path,
+    pub manager: PackageManager,
+    pub runner: TestRunner,
+    pub results_dir: &'a Path,
+}
+
 pub fn test_invocation(
     config: &RunConfig,
-    workspace_root: &Path,
-    project_dir: &Path,
-    manager: PackageManager,
-    runner: TestRunner,
-    results_dir: &Path,
+    context: TestInvocationContext<'_>,
     filter: Option<&[String]>,
     coverage: bool,
 ) -> Invocation {
+    let TestInvocationContext {
+        workspace_root,
+        project_dir,
+        manager,
+        runner,
+        results_dir,
+    } = context;
     let report_path = results_dir.join(format!("{}.json", sanitise(&config.id)));
     // Each config's coverage lands in its own directory so parallel configs do
     // not overwrite each other's `lcov.info`.

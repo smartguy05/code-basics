@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   addOpenWorkspace,
   closeOpenWorkspace,
+  mergeSignal,
   shouldFlashWorkspaceTab,
   tabLabels,
+  tabSignalClass,
 } from "./workspaceTabsLogic";
 import type { Workspace } from "../ipc/types";
 
@@ -114,5 +116,51 @@ describe("shouldFlashWorkspaceTab", () => {
 
   it("flashes a background tab when nothing is active (defensive)", () => {
     expect(shouldFlashWorkspaceTab("/a", null, true)).toBe(true);
+  });
+});
+
+describe("mergeSignal", () => {
+  it("takes the incoming signal when the tab is showing nothing", () => {
+    expect(mergeSignal(null, "done")).toBe("done");
+    expect(mergeSignal(undefined, "error")).toBe("error");
+  });
+
+  it("never lets a weaker signal mask a stronger one", () => {
+    // The case this exists for: a terminal finishing after the build broke must
+    // not turn the tab from red to green — the build is still broken.
+    expect(mergeSignal("error", "done")).toBe("error");
+    expect(mergeSignal("error", "success")).toBe("error");
+    expect(mergeSignal("error", "attention")).toBe("error");
+    expect(mergeSignal("attention", "success")).toBe("attention");
+    expect(mergeSignal("success", "done")).toBe("success");
+  });
+
+  it("upgrades to a stronger signal", () => {
+    expect(mergeSignal("done", "success")).toBe("success");
+    expect(mergeSignal("success", "attention")).toBe("attention");
+    expect(mergeSignal("attention", "error")).toBe("error");
+  });
+
+  it("keeps the current signal when the same one arrives again", () => {
+    expect(mergeSignal("attention", "attention")).toBe("attention");
+  });
+});
+
+describe("tabSignalClass", () => {
+  it("dresses a background tab in its signal's classes", () => {
+    expect(tabSignalClass("/a", "/b", "error")).toBe(" signal signal-error");
+    expect(tabSignalClass("/a", "/b", "attention")).toBe(" signal signal-attn");
+    expect(tabSignalClass("/a", "/b", "success")).toBe(" signal signal-success");
+    expect(tabSignalClass("/a", "/b", "done")).toBe(" signal signal-done");
+  });
+
+  it("never flashes the active tab", () => {
+    // Its terminals flash their own pills and its build output is on screen.
+    expect(tabSignalClass("/a", "/a", "error")).toBe("");
+  });
+
+  it("is empty with no signal", () => {
+    expect(tabSignalClass("/a", "/b", null)).toBe("");
+    expect(tabSignalClass("/a", "/b", undefined)).toBe("");
   });
 });

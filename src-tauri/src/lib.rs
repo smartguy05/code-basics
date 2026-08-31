@@ -13,10 +13,12 @@ mod commands {
     pub mod changelists;
     pub mod enhancements;
     pub mod erosion;
+    pub mod features;
     pub mod files;
     pub mod git;
     pub mod inspect;
     pub mod intents;
+    pub mod launcher;
     pub mod lsp;
     pub mod notes;
     pub mod qgate;
@@ -26,6 +28,7 @@ mod commands {
     pub mod running;
     pub mod secrets;
     pub mod setup;
+    pub mod sql;
     pub mod symbols;
     pub mod terminal;
     pub mod workspace;
@@ -125,11 +128,22 @@ pub fn run() {
             commands::enhancements::agent_runs,
             commands::enhancements::mark_agent_run,
             commands::enhancements::save_note_as_instruction,
+            commands::launcher::list_launchables,
+            commands::launcher::launch_command,
+            commands::launcher::stop_command,
+            commands::launcher::save_launchable,
+            commands::launcher::delete_launchable,
+            commands::features::list_features,
+            commands::features::set_feature,
             commands::notes::read_notes,
             commands::notes::write_notes,
             commands::files::fs_list_dir,
             commands::files::fs_read_file,
             commands::files::fs_write_file,
+            commands::files::fs_create_file,
+            commands::files::fs_create_dir,
+            commands::files::fs_rename,
+            commands::files::fs_delete,
             commands::secrets::read_project_secrets,
             commands::secrets::write_project_secrets,
             commands::run::start_run,
@@ -142,6 +156,7 @@ pub fn run() {
             commands::review::start_review,
             commands::review::cancel_review,
             commands::review::review_agents,
+            commands::review::agent_interactive_command,
             commands::git::git_status,
             commands::git::git_file_diff,
             commands::git::git_file_contents,
@@ -186,9 +201,12 @@ pub fn run() {
             commands::intents::intent_uninstall_plan,
             commands::intents::disable_intent_capture,
             commands::intents::import_intent_history,
+            commands::intents::intent_prune_preview,
+            commands::intents::prune_intent_history,
             commands::intents::clear_intent_history,
             commands::intents::set_card_intent,
             commands::intents::clear_card_intent,
+            commands::intents::move_card_edits,
             commands::qgate::quality_gate_status,
             commands::qgate::quality_gate_install_plan,
             commands::qgate::install_quality_gate,
@@ -218,6 +236,7 @@ pub fn run() {
             commands::symbols::symbol_index_status,
             commands::symbols::rebuild_symbol_index,
             commands::lsp::lsp_status,
+            commands::lsp::lsp_restart,
             commands::lsp::lsp_open_document,
             commands::lsp::lsp_change_document,
             commands::lsp::lsp_close_document,
@@ -232,7 +251,30 @@ pub fn run() {
             commands::terminal::terminal_set_label,
             commands::running::list_running,
             commands::running::kill_running,
+            commands::sql::sql_list_connections,
+            commands::sql::sql_discover,
+            commands::sql::sql_save_connection,
+            commands::sql::sql_delete_connection,
+            commands::sql::sql_set_allow_writes,
+            commands::sql::sql_test_connection,
+            commands::sql::sql_execute,
+            commands::sql::sql_cancel,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to start code-basics");
+        .build(tauri::generate_context!())
+        .expect("failed to start code-basics")
+        .run(|app_handle, event| {
+            // When the app is quitting (last window closed, or an explicit
+            // exit), tree-kill everything it started so nothing is orphaned.
+            // Every spawning handle — per-workspace supervisors, the global
+            // supervisor and the PTY manager — records into the one shared
+            // registry, so its live set is the complete set of live pids.
+            // A true crash (panic = abort) cannot run this; that case stays
+            // covered by the next-launch orphan detection in `.setup`.
+            if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                for record in app_handle.state::<AppState>().running.live() {
+                    cb_core::process::kill_tree(record.pid);
+                }
+            }
+        });
 }

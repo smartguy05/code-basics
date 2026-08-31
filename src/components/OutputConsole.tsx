@@ -10,11 +10,31 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { onAppearanceChange, terminalAppearance } from "../appearance";
+import { registerCommand } from "../shortcuts";
 import type { ProcessEvent } from "../ipc/types";
-import { decorate, filterLines, stripAnsi, type Severity } from "./consoleLogic";
+import {
+  appendConsoleLines,
+  decorate,
+  filterConsoleLines,
+  joinConsoleLines,
+  stripAnsi,
+  type ConsoleLine,
+  type LineStream,
+  type Severity,
+} from "./consoleLogic";
 
-/** How much raw output to keep for Copy All / diagnostics. */
-const RAW_CAP = 1_000_000;
+/**
+ * How many output lines to keep for Copy All / diagnostics and for rebuilding
+ * a filtered view.
+ *
+ * Lines rather than the bytes this used to count, because the store is now a
+ * line list: the severity filter has to know which stream each line came from,
+ * and a single string cannot say. Sized to sit alongside xterm's own 20000-line
+ * scrollback rather than to bound bytes — a process that emits one enormous
+ * line is bounded by xterm, not by this.
+ */
+const LINE_CAP = 20_000;
 
 const SEARCH_DECORATIONS = {
   matchBackground: "#3d55a8",
@@ -43,14 +63,33 @@ export interface ConsoleHandle {
  * search, copy-on-select, and a right-click menu with Copy All and Copy
  * diagnostics (command line + exit + the last output lines, paste-ready).
  */
-export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
-  function OutputConsole({ className }, ref) {
+export interface OutputConsoleProps {
+  className?: string;
+  /**
+   * Drive the severity threshold from outside, for a host that shows its own
+   * picker (the launched-apps panel does, in its toolbar).
+   *
+   * Supplying this makes the threshold **controlled**: it is the level the
+   * console filters to, and the picker inside the find bar reports changes back
+   * through {@link onSeverityChange} rather than keeping its own. Omitting it
+   * leaves the console exactly as it was, owning the level itself behind Ctrl+F.
+   */
+  severity?: Severity;
+  onSeverityChange?: (severity: Severity) => void;
+}
+
+export const OutputConsole = forwardRef<ConsoleHandle, OutputConsoleProps>(
+  function OutputConsole({ className, severity: controlledSeverity, onSeverityChange }, ref) {
     const hostRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
     const searchRef = useRef<SearchAddon | null>(null);
 
-    /** Plain-text tail of everything written, for clipboard features. */
-    const rawRef = useRef("");
+    /**
+     * Tail of everything written, one entry per line and each carrying the
+     * stream it came from — the clipboard features read it, and so does the
+     * severity filter, which needs the stream to rank an unmarked line.
+     */
+    const linesRef = useRef<ConsoleLine[]>([]);
     /** The last `started` / `exited` events, for Copy diagnostics. */
     const startedRef = useRef<Extract<ProcessEvent, { type: "started" }> | null>(null);
     const exitedRef = useRef<Extract<ProcessEvent, { type: "exited" }> | null>(null);
@@ -58,7 +97,9 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
     const [searchOpen, setSearchOpen] = useState(false);
     const [query, setQuery] = useState("");
     const [filterOn, setFilterOn] = useState(false);
-    const [severity, setSeverity] = useState<Severity>("all");
+    const [ownSeverity, setOwnSeverity] = useState<Severity>("all");
+    // The host's level wins when there is one; otherwise the console's own.
+    const severity = controlledSeverity ?? ownSeverity;
     const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -70,9 +111,8 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
     });
     const rebuildTimer = useRef<number | null>(null);
 
-    function appendRaw(text: string) {
-      const next = rawRef.current + text;
-      rawRef.current = next.length > RAW_CAP ? next.slice(-RAW_CAP) : next;
+    function appendRaw(text: string, stream: LineStream = "meta") {
+      linesRef.current = appendConsoleLines(linesRef.current, stream, text, LINE_CAP);
     }
 
     /** Re-render the terminal from the raw buffer, filtered or not. */
@@ -81,8 +121,8 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
       if (!term) return;
       const filter = filterRef.current;
       const content = filter.active
-        ? filterLines(rawRef.current, filter.severity, filter.text)
-        : rawRef.current;
+        ? filterConsoleLines(linesRef.current, filter.severity, filter.text)
+        : joinConsoleLines(linesRef.current);
 
       term.reset();
       if (content) term.write(decorate(content.endsWith("\n") ? content : `${content}\r\n`));
@@ -100,7 +140,8 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
 
     function updateFilter(on: boolean, level: Severity, text: string) {
       setFilterOn(on);
-      setSeverity(level);
+      if (controlledSeverity === undefined) setOwnSeverity(level);
+      else if (level !== controlledSeverity) onSeverityChange?.(level);
       filterRef.current = {
         active: on || level !== "all",
         severity: level,
@@ -123,14 +164,14 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
     }
 
     function copyAll() {
-      copyText(stripAnsi(rawRef.current));
+      copyText(stripAnsi(joinConsoleLines(linesRef.current)));
     }
 
     /** A paste-ready troubleshooting block. */
     function copyDiagnostics() {
       const started = startedRef.current;
       const exited = exitedRef.current;
-      const lines = stripAnsi(rawRef.current).split(/\r?\n/);
+      const lines = stripAnsi(joinConsoleLines(linesRef.current)).split(/\r?\n/);
       const tail = lines.slice(-100).join("\n");
 
       const block = [
@@ -155,17 +196,10 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
       if (!hostRef.current) return;
 
       const term = new Terminal({
-        fontFamily:
-          '"JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-        fontSize: 12,
+        ...terminalAppearance(),
         convertEol: true,
         scrollback: 20000,
         allowProposedApi: true,
-        theme: {
-          background: "#12141a",
-          foreground: "#d6dae2",
-          cursor: "#12141a",
-        },
       });
 
       const fit = new FitAddon();
@@ -201,15 +235,12 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
       // Ctrl+F is intercepted at the window level, capture phase, so the
       // webview's own find bar never sees it. Only the visible console reacts
       // (hidden tabs have no offsetParent).
-      const onKeyDown = (event: KeyboardEvent) => {
-        if (!event.ctrlKey || event.key.toLowerCase() !== "f") return;
-        if (!hostRef.current || hostRef.current.offsetParent === null) return;
-        event.preventDefault();
-        event.stopPropagation();
+      const unregisterFind = registerCommand("console.find", () => {
+        if (!hostRef.current || hostRef.current.offsetParent === null) return false;
         setSearchOpen(true);
         setTimeout(() => searchInputRef.current?.focus(), 0);
-      };
-      window.addEventListener("keydown", onKeyDown, true);
+        return true;
+      });
 
       termRef.current = term;
 
@@ -222,15 +253,39 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
         }
       });
       observer.observe(hostRef.current);
+      const stopAppearance = onAppearanceChange(() => {
+        const appearance = terminalAppearance();
+        term.options.fontFamily = appearance.fontFamily;
+        term.options.fontSize = appearance.fontSize;
+        term.options.theme = appearance.theme;
+        try { fit.fit(); } catch { /* hidden */ }
+      });
 
       return () => {
         observer.disconnect();
-        window.removeEventListener("keydown", onKeyDown, true);
+        stopAppearance();
+        unregisterFind();
         term.dispose();
         termRef.current = null;
         searchRef.current = null;
       };
     }, []);
+
+    // A host-driven level change has to reach the filter even with the find bar
+    // closed, which is where it will usually be: the panel's picker is the only
+    // control the user sees.
+    useEffect(() => {
+      if (controlledSeverity === undefined) return;
+      filterRef.current = {
+        active: filterOn || controlledSeverity !== "all",
+        severity: controlledSeverity,
+        text: filterOn ? query : "",
+      };
+      rebuildView();
+      // `filterOn`/`query` are read, not depended on: their own handlers already
+      // rebuild, and re-running here would fight the debounce.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [controlledSeverity]);
 
     function findNext(text: string, backwards = false) {
       const search = searchRef.current;
@@ -245,7 +300,10 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
     function closeSearch() {
       setSearchOpen(false);
       searchRef.current?.clearDecorations();
-      updateFilter(false, "all", "");
+      // Closing the find bar drops the *text* filter. A host-supplied level is
+      // not the find bar's to reset — it belongs to the panel's own picker,
+      // which is still on screen.
+      updateFilter(false, controlledSeverity ?? "all", "");
       termRef.current?.focus();
     }
 
@@ -255,7 +313,7 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
         termRef.current?.write(text);
       },
       clear() {
-        rawRef.current = "";
+        linesRef.current = [];
         startedRef.current = null;
         exitedRef.current = null;
         // reset() rather than clear(): clear() keeps the cursor line, which
@@ -278,7 +336,7 @@ export const OutputConsole = forwardRef<ConsoleHandle, { className?: string }>(
             );
             break;
           case "output":
-            appendRaw(event.text);
+            appendRaw(event.text, event.stream);
             emit(term, decorate(event.text));
             break;
           case "exited": {

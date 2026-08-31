@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   cascadeShift,
+  makeAgentTerminal,
   makeTerminal,
   outputNeedsAttention,
   pillBottom,
+  raiseTerminal,
   recolorTerminal,
   renameTerminal,
+  stackOffset,
+  syncStackOrder,
+  TERMINAL_STACK_SPAN,
   terminalKeyAction,
   terminalLayoutKey,
 } from "./terminalLogic";
@@ -177,5 +182,136 @@ describe("terminalLayoutKey", () => {
 
   it("is distinct from the agent panel's key so their layouts do not collide", () => {
     expect(terminalLayoutKey("/a")).not.toBe("cb.agentPanel.layout");
+  });
+});
+
+describe("raiseTerminal", () => {
+  it("moves a key to the top, keeping the others in their order", () => {
+    expect(raiseTerminal(["a", "b", "c"], "b")).toEqual(["a", "c", "b"]);
+  });
+
+  it("appends a key it has never seen, so an unreconciled terminal still raises", () => {
+    expect(raiseTerminal(["a"], "z")).toEqual(["a", "z"]);
+  });
+
+  it("returns the same array when the key is already top", () => {
+    // Load-bearing, not cosmetic: identity is what lets `setStackOrder` bail out,
+    // so clicking the front terminal — the common case — re-renders nothing.
+    const order = ["a", "b"];
+    expect(raiseTerminal(order, "b")).toBe(order);
+  });
+
+  it("raising into an empty order yields just that key", () => {
+    expect(raiseTerminal([], "a")).toEqual(["a"]);
+  });
+});
+
+describe("syncStackOrder", () => {
+  it("appends newly opened keys, so a fresh terminal starts on top", () => {
+    expect(syncStackOrder(["a"], ["a", "b"])).toEqual(["a", "b"]);
+  });
+
+  it("drops keys that are no longer open", () => {
+    expect(syncStackOrder(["a", "b", "c"], ["c", "a"])).toEqual(["a", "c"]);
+  });
+
+  it("never reorders to match the open list", () => {
+    // This *is* the index-decoupling contract: the `terminals` array order drives
+    // `pillBottom` and `cascadeShift`, and must never dictate stacking.
+    const order = ["b", "a"];
+    expect(syncStackOrder(order, ["a", "b"])).toBe(order);
+  });
+
+  it("returns the same array when nothing changed, so the reconciling effect cannot loop", () => {
+    const order = ["a", "b"];
+    expect(syncStackOrder(order, ["a", "b"])).toBe(order);
+  });
+
+  it("handles the top closing while a new one opens in the same commit", () => {
+    expect(syncStackOrder(["a", "b"], ["a", "c"])).toEqual(["a", "c"]);
+  });
+
+  it("an empty open list yields an empty order", () => {
+    expect(syncStackOrder(["a", "b"], [])).toEqual([]);
+  });
+});
+
+describe("stackOffset", () => {
+  it("numbers the order from the bottom, so the last key is the top", () => {
+    expect(stackOffset(["a", "b", "c"], "a")).toBe(0);
+    expect(stackOffset(["a", "b", "c"], "c")).toBe(2);
+  });
+
+  it("returns 0 for a key not in the order, never NaN", () => {
+    // A terminal rendered in the commit before the reconciling effect runs must
+    // still render somewhere.
+    expect(stackOffset(["a"], "z")).toBe(0);
+  });
+
+  it("never exceeds the band the stylesheet reserves", () => {
+    const keys = Array.from({ length: TERMINAL_STACK_SPAN + 5 }, (_, i) => `t${i}`);
+    for (const key of keys) {
+      const offset = stackOffset(keys, key);
+      expect(offset).toBeGreaterThanOrEqual(0);
+      expect(offset).toBeLessThanOrEqual(TERMINAL_STACK_SPAN - 1);
+    }
+    // `at(-1)` rather than an index: `noUncheckedIndexedAccess` widens an index
+    // read to `string | undefined`, and the top key is what the assertion is about.
+    expect(stackOffset(keys, keys.at(-1) ?? "")).toBe(TERMINAL_STACK_SPAN - 1);
+  });
+
+  it("stays non-decreasing along the order even while clamped", () => {
+    const keys = Array.from({ length: TERMINAL_STACK_SPAN + 5 }, (_, i) => `t${i}`);
+    // Walked with `for...of` rather than by index: `noUncheckedIndexedAccess`
+    // would widen an indexed read to `number | undefined`.
+    let previous = 0;
+    for (const offset of keys.map((k) => stackOffset(keys, k))) {
+      expect(offset).toBeGreaterThanOrEqual(previous);
+      previous = offset;
+    }
+  });
+
+  it("pins the span against the stylesheet's --z-panel-stack-span", () => {
+    // Deliberate drift alarm: styles.css reserves this many steps for the
+    // terminal band. Changing one without the other silently lets a terminal
+    // climb into the Notes band.
+    expect(TERMINAL_STACK_SPAN).toBe(100);
+  });
+});
+
+describe("makeAgentTerminal", () => {
+  it("keys off the same sequence but carries the command and its own title", () => {
+    const t = makeAgentTerminal(3, "/ws", "claude", ["--model", "opus", "why?"], "why?");
+    expect(t).toEqual({
+      key: "term-3",
+      title: "why?",
+      cwd: "/ws",
+      command: { program: "claude", args: ["--model", "opus", "why?"] },
+    });
+  });
+
+  it("shares one sequence with makeTerminal so two terminals never share a key", () => {
+    // The host keeps a single monotonic counter for both kinds; a separate one
+    // would eventually mint `term-2` twice and React would reuse a live xterm.
+    expect(makeAgentTerminal(2, "/ws", "codex", ["q"], "q").key).toBe(makeTerminal(2, "/ws").key);
+  });
+
+  it("falls back to a plain terminal title rather than an empty header", () => {
+    // `terminalTitle` never returns blank, so this is defensive — but an
+    // unlabelled panel is indistinguishable from a broken one.
+    expect(makeAgentTerminal(5, "/ws", "claude", ["q"], "   ").title).toBe("Terminal 5");
+  });
+
+  it("copies the argument list, so a later mutation cannot rewrite the command", () => {
+    const args = ["--model", "opus", "why?"];
+    const t = makeAgentTerminal(1, "/ws", "claude", args, "why?");
+    args.push("--dangerously-skip-permissions");
+    expect(t.command?.args).toEqual(["--model", "opus", "why?"]);
+  });
+
+  it("leaves a plain terminal with no command at all", () => {
+    // `undefined` rather than an empty command: `TerminalPanel` passes it
+    // through to `terminal_open`, where a blank program means "the shell".
+    expect(makeTerminal(1, "/ws").command).toBeUndefined();
   });
 });

@@ -22,6 +22,11 @@ pub enum RunKind {
     Review,
     /// A behavioral before/after run.
     Behavioral,
+    /// A command the user launched themselves from the app launcher — an app
+    /// that belongs to no project, so it is neither a configuration `Run` nor a
+    /// `Terminal`. Its own variant because the panel labels it differently and a
+    /// kill routes to the global supervisor, not a codebase's.
+    External,
 }
 
 /// One process the app started, as tracked for the Running panel and persisted

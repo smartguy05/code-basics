@@ -157,6 +157,78 @@ pub fn plan_compound(
     }
 }
 
+/// One project of a solution build: a label and the command that builds it.
+pub struct SolutionBuildStep {
+    pub name: String,
+    pub invocation: Invocation,
+}
+
+/// Plan a "build solution" as a per-project sequence.
+///
+/// The user builds **each** project rather than handing the `.sln` to MSBuild,
+/// so this resolves the solution's members onto the projects the scan actually
+/// found — a member that resolves to nothing, or to a non-.NET project, is
+/// reported in the warnings and never invented — and emits one
+/// `dotnet build`/`clean` per resolved project. Resolution mirrors
+/// `architecture::graph::solution_containment`: a member's root-relative path,
+/// joined onto the workspace root, is looked up against each project's manifest
+/// path. The steps are returned in solution order for the caller to run in
+/// sequence.
+pub fn plan_solution_build(
+    workspace: &Workspace,
+    solution: &crate::adapters::solution::Solution,
+    action: dotnet::BuildAction,
+) -> (Vec<SolutionBuildStep>, Vec<String>) {
+    let by_manifest: BTreeMap<&std::path::PathBuf, &crate::model::Project> = workspace
+        .projects
+        .iter()
+        .map(|p| (&p.manifest_path, p))
+        .collect();
+
+    let mut steps = Vec::new();
+    let mut warnings = Vec::new();
+
+    for member in &solution.projects {
+        let absolute = workspace.root.join(&member.path);
+        let Some(project) = by_manifest.get(&absolute) else {
+            warnings.push(format!(
+                "{}: solution member '{}' matches no project the scan found, so it was not built",
+                solution.name,
+                member.path.display()
+            ));
+            continue;
+        };
+        if project.ecosystem != "dotnet" {
+            warnings.push(format!(
+                "{}: solution member '{}' is not a .NET project ({}), so it was not built",
+                solution.name,
+                member.path.display(),
+                project.ecosystem
+            ));
+            continue;
+        }
+
+        // A minimal configuration is all `build_action_invocation` reads: it
+        // takes only the project path (plus optional configuration/framework,
+        // left unset so MSBuild's defaults apply).
+        let mut config = RunConfig::new(
+            format!("solution-build:{}", member.name),
+            member.name.clone(),
+            RunKind::App,
+            "dotnet",
+            crate::model::ConfigSource::Detected,
+        );
+        config.project = Some(member.path.clone());
+
+        steps.push(SolutionBuildStep {
+            name: member.name.clone(),
+            invocation: dotnet::build_action_invocation(&config, action, &workspace.root),
+        });
+    }
+
+    (steps, warnings)
+}
+
 fn build_dotnet(
     workspace: &Workspace,
     config: &RunConfig,
@@ -227,11 +299,13 @@ fn build_node(
 
             Ok(node::test_invocation(
                 config,
-                root,
-                &project_dir,
-                manager,
-                runner,
-                results,
+                node::TestInvocationContext {
+                    workspace_root: root,
+                    project_dir: &project_dir,
+                    manager,
+                    runner,
+                    results_dir: results,
+                },
                 filter,
                 coverage,
             ))

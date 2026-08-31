@@ -48,6 +48,7 @@ use cb_core::model::TestRunResult;
 use cb_core::process::Supervisor;
 use cb_core::pty::PtyManager;
 use cb_core::running::RunningStore;
+use cb_core::sql::session::SqlSessions;
 use cb_core::symbols::index::SymbolIndex;
 use cb_core::testing::changecov::ChangeCoverage;
 use cb_core::workspace::Workspace;
@@ -75,6 +76,15 @@ pub struct AppState {
     /// so they all record into it. Global like `pty`, because the panel spans
     /// every open codebase and orphans are not tied to one.
     pub running: RunningStore,
+    /// Every in-flight SQL statement, and the handles that stop them.
+    ///
+    /// Global and **not** per-workspace, and cleared by nothing a tab does: a
+    /// connection belongs to the connection profile, which is user-global (see
+    /// [`cb_core::sql::store`]), not to whichever codebase happens to be open.
+    /// A statement running against a database must survive a tab switch, a
+    /// rescan and a `close` of the workspace it was started from — exactly the
+    /// argument [`AppState::pty`] makes for a terminal.
+    pub sql: SqlSessions,
 }
 
 impl Default for AppState {
@@ -90,6 +100,7 @@ impl Default for AppState {
             supervisor: Supervisor::with_store(running.clone()),
             pty: PtyManager::with_store(running.clone()),
             running,
+            sql: SqlSessions::new(),
         }
     }
 }

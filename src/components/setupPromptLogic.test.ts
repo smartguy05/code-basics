@@ -42,8 +42,15 @@ describe("needsSetup", () => {
     expect(needsSetup([provider({ capture: null })], "project")).toBe(true);
   });
 
-  it("does not prompt when both are installed", () => {
-    expect(needsSetup([provider({ capture: "user" })], "project")).toBe(false);
+  it("does not prompt when both are installed at project scope", () => {
+    expect(needsSetup([provider({ capture: "project" })], "project")).toBe(false);
+  });
+
+  it("still prompts when capture is only at user (global) scope", () => {
+    // A developer with the hooks installed globally must still be prompted to
+    // set up the per-project, team-shared intent capture for this repo.
+    expect(needsSetup([provider({ capture: "user" })], "project")).toBe(true);
+    expect(needsSetup([provider({ capture: "user" })], "user")).toBe(true);
   });
 
   it("prompts for a gate-less repo with no agent detected", () => {

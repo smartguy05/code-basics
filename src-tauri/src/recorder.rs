@@ -132,5 +132,8 @@ fn record_why_for_head(workspace: Option<&str>) -> anyhow::Result<()> {
     let Some(commit) = head.first() else {
         return Ok(());
     };
-    why::record_note(&repo, root, &commit.id)
+    why::record_note(&repo, root, &commit.id)?;
+
+    // Strictly after the note, which is built from the records this retires.
+    cb_core::intents::retire::run_if_head_moved(&repo, root).map(|_| ())
 }

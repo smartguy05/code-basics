@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { envToText, projectTarget, textToEnv } from "./configLogic";
+import {
+  buildConfigurationsFor,
+  envToText,
+  projectTarget,
+  selectedBuildConfiguration,
+  textToEnv,
+} from "./configLogic";
 import type { Project } from "../ipc/types";
 
 function project(overrides: Partial<Project>): Project {
@@ -107,5 +113,73 @@ describe("projectTarget", () => {
   it("returns an empty string when the project is the root itself", () => {
     const atRoot = project({ ecosystem: "node", dir: "C:\\ws" });
     expect(projectTarget(atRoot, "C:\\ws")).toBe("");
+  });
+});
+
+describe("buildConfigurationsFor", () => {
+  const root = "C:\\ws";
+  const dotnet = project({ configurations: ["Debug", "Release", "Staging"] });
+
+  it("offers what the project declares", () => {
+    expect(
+      buildConfigurationsFor(
+        { ecosystem: "dotnet", project: "src\\App\\App.csproj" },
+        [dotnet],
+        root,
+      ),
+    ).toEqual(["Debug", "Release", "Staging"]);
+  });
+
+  it("falls back to the default pair for a .NET project it could not read", () => {
+    expect(
+      buildConfigurationsFor(
+        { ecosystem: "dotnet", project: "src\\App\\App.csproj" },
+        [project({ configurations: [] })],
+        root,
+      ),
+    ).toEqual(["Debug", "Release"]);
+  });
+
+  it("falls back for a .NET config whose project is not in the scan", () => {
+    expect(
+      buildConfigurationsFor({ ecosystem: "dotnet", project: "gone.csproj" }, [dotnet], root),
+    ).toEqual(["Debug", "Release"]);
+  });
+
+  it("offers nothing for an ecosystem with no such concept", () => {
+    expect(buildConfigurationsFor({ ecosystem: "node", project: "web" }, [dotnet], root)).toEqual(
+      [],
+    );
+    expect(buildConfigurationsFor({ ecosystem: "cargo", project: "." }, [dotnet], root)).toEqual(
+      [],
+    );
+  });
+
+  it("offers nothing when no configuration is selected", () => {
+    expect(buildConfigurationsFor(null, [dotnet], root)).toEqual([]);
+  });
+});
+
+describe("selectedBuildConfiguration", () => {
+  const options = ["Debug", "Release", "Staging"];
+
+  it("keeps what the user last chose", () => {
+    expect(selectedBuildConfiguration(options, "Staging", "Debug")).toBe("Staging");
+  });
+
+  it("uses the configuration's own default when nothing is remembered", () => {
+    expect(selectedBuildConfiguration(options, null, "Release")).toBe("Release");
+  });
+
+  it("drops a remembered choice the project no longer declares", () => {
+    expect(selectedBuildConfiguration(["Debug", "Release"], "Staging", "Debug")).toBe("Debug");
+  });
+
+  it("drops a default the project no longer declares", () => {
+    expect(selectedBuildConfiguration(["Staging"], null, "Debug")).toBe("Staging");
+  });
+
+  it("has nothing to select when nothing is offered", () => {
+    expect(selectedBuildConfiguration([], "Debug", "Debug")).toBeNull();
   });
 });

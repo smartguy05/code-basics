@@ -108,6 +108,53 @@ fn a_file_with_no_parsable_extension_is_listed_but_yields_no_symbols() {
 }
 
 #[test]
+fn a_razor_component_indexes_the_csharp_in_its_code_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    // A typical Blazor component: routable markup up top, C# in an `@code`
+    // block. The markup and directives carry no declaring keyword and must
+    // abstain; the C# member is a real symbol worth jumping to.
+    write(
+        root,
+        "src/App/Pages/Counter.razor",
+        concat!(
+            "@page \"/counter\"\n",
+            "@inject IState State\n",
+            "<h1>Counter</h1>\n",
+            "<button @onclick=\"IncrementCount\">Click</button>\n",
+            "@code {\n",
+            "    private int currentCount = 0;\n",
+            "    private void IncrementCount() { currentCount++; }\n",
+            "}\n",
+        ),
+    );
+
+    let index = build(root, &[project(root, "App", "src/App")]);
+
+    assert!(
+        files(&index).contains(&"src/App/Pages/Counter.razor".to_string()),
+        "go-to-file must see it: {:?}",
+        files(&index)
+    );
+    let found = names(&index);
+    assert!(
+        found.contains(&"IncrementCount"),
+        "the @code method must be searchable: {found:?}"
+    );
+    assert!(
+        found.contains(&"currentCount"),
+        "the @code field must be searchable: {found:?}"
+    );
+    // The `@page` / `@inject` directives and the markup declare nothing.
+    assert!(
+        !found
+            .iter()
+            .any(|n| n.contains('<') || *n == "page" || *n == "inject"),
+        "razor markup and directives must not fabricate symbols: {found:?}"
+    );
+}
+
+#[test]
 fn an_oversized_file_is_listed_but_yields_no_symbols() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -835,4 +882,55 @@ fn a_path_the_walk_would_never_have_produced_changes_nothing() {
 
     assert_eq!(names(&index), ["alpha", "beta"]);
     assert_eq!(files(&index), ["a.rs", "b.rs"]);
+}
+
+// ---------------------------------------------------------------------------
+// remove_file
+// ---------------------------------------------------------------------------
+
+#[test]
+fn removing_a_file_drops_its_symbols_and_its_own_entry() {
+    let mut index = small_index();
+
+    remove_file(&mut index, Path::new("a.rs"));
+
+    assert_eq!(names(&index), ["beta"]);
+    assert_eq!(files(&index), ["b.rs"]);
+}
+
+#[test]
+fn removing_a_file_leaves_every_other_file_alone() {
+    let mut index = small_index();
+
+    remove_file(&mut index, Path::new("b.rs"));
+
+    assert_eq!(names(&index), ["alpha"]);
+    assert_eq!(files(&index), ["a.rs"]);
+}
+
+#[test]
+fn removing_a_file_the_index_never_held_changes_nothing() {
+    let mut index = small_index();
+
+    remove_file(&mut index, Path::new("never/indexed.rs"));
+
+    assert_eq!(names(&index), ["alpha", "beta"]);
+    assert_eq!(files(&index), ["a.rs", "b.rs"]);
+}
+
+#[test]
+fn removing_a_file_accepts_the_other_separator() {
+    // The Run tab's tree hands back Windows-spelled paths; the index keys on
+    // the normalised form, so the two must not miss each other.
+    let mut index = SymbolIndex {
+        root: PathBuf::from("/w"),
+        files: vec![PathBuf::from("src/a.rs")],
+        symbols: vec![symbol("alpha", "src/a.rs", 1)],
+        truncated: false,
+    };
+
+    remove_file(&mut index, Path::new("src\\a.rs"));
+
+    assert!(index.symbols.is_empty());
+    assert!(index.files.is_empty());
 }

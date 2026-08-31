@@ -1009,7 +1009,10 @@ fn scannable(line: &str) -> (String, bool) {
     if line.trim_start().starts_with("%%") {
         return (String::new(), true);
     }
-    if line.matches('"').count() % 2 == 0 {
+    // `usize::is_multiple_of` is newer than the workspace's Rust 1.82 floor.
+    #[allow(clippy::manual_is_multiple_of)]
+    let quotes_are_paired = line.matches('"').count() % 2 == 0;
+    if quotes_are_paired {
         (code_of(line), true)
     } else {
         (line.to_string(), false)

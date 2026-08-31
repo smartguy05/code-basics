@@ -154,3 +154,52 @@ export function saveSplit(storage: PanelStorage, root: string, split: number): v
   if (!Number.isFinite(split)) return;
   write(storage, splitKey(root), String(clampSplit(split)));
 }
+
+/**
+ * Whether the console panel must be forced back open.
+ *
+ * The Run tab's collapse control is offered only with a file open — collapsed
+ * or not, with no editor above it this pane *is* the view, so putting it away
+ * would leave a strip and nothing else. That reasoning is sound and the
+ * rendering still follows it; what it missed is that closing the last file is
+ * itself a way to reach that state. Collapse the panel with a file open, close
+ * every file, and the output is hidden by `.console-pane.collapsed` while the
+ * only control that could unhide it is no longer rendered — and because the
+ * flag is persisted, a restart lands in the same place.
+ *
+ * So the state is not merely awkward, it is unreachable-from, and the fix is to
+ * refuse to be in it: with no files open the panel is always expanded. The
+ * caller must persist the change too, or the stored flag and the screen
+ * disagree and the next open re-enters the trap.
+ */
+export function shouldForceExpand(openFileCount: number, collapsed: boolean): boolean {
+  return collapsed && openFileCount === 0;
+}
+
+/**
+ * Whether a console session id belongs to a build/rebuild/clean rather than a
+ * run. `RunView` mints these as `` `${config.id}:build` ``.
+ */
+export function isBuildSession(id: string): boolean {
+  return id.endsWith(":build");
+}
+
+/**
+ * Whether a finished build should take its output tab away with it.
+ *
+ * A build that worked has nothing to read: the tab would sit in the strip
+ * holding a wall of `Build succeeded` that the sidebar's green dot already
+ * says in one pixel. A build that **failed** keeps its tab, because the errors
+ * are the entire reason it ran — and so does a cancelled one, since the user
+ * stopping a build is not the build reporting anything.
+ *
+ * Only the `exited` event knows this. `runBuild`'s `finally` cannot: a failed
+ * build resolves its promise perfectly normally.
+ */
+export function shouldCloseBuildSession(
+  id: string,
+  success: boolean,
+  cancelled: boolean,
+): boolean {
+  return isBuildSession(id) && success && !cancelled;
+}

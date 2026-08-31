@@ -11,6 +11,7 @@ import {
 } from "./reviewLayoutLogic";
 import {
   formatAge,
+  hasOutput,
   isEmpty,
   killRequest,
   kindIcon,
@@ -36,6 +37,7 @@ export function RunningPanel({
   report,
   onKill,
   onRefresh,
+  onViewOutput,
   onClose,
 }: {
   report: RunningReport | null;
@@ -43,6 +45,12 @@ export function RunningPanel({
   onKill: (req: KillRequest) => void;
   /** Ask the app to refresh the list now (the manual Refresh button). */
   onRefresh: () => void;
+  /**
+   * Focus a launched app's output tab, by the record's `key`. Offered only for
+   * the rows `hasOutput` admits — every other kind's output lives somewhere this
+   * panel cannot reach, and a button that did nothing would be worse than none.
+   */
+  onViewOutput: (key: string) => void;
   onClose: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -163,6 +171,15 @@ export function RunningPanel({
                     <span className="running-meta">{rootBasename(r.root)}</span>
                     <span className="running-meta">pid {r.pid}</span>
                     <span className="running-meta">{formatAge(r.startedAtMs, now)}</span>
+                    {hasOutput(r) && (
+                      <button
+                        className="running-view"
+                        title="Show this app's output"
+                        onClick={() => onViewOutput(r.key)}
+                      >
+                        View
+                      </button>
+                    )}
                     <button className="running-kill" onClick={() => onKill(killRequest(r, false))}>
                       Kill
                     </button>

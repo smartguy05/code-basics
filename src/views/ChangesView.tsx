@@ -7,6 +7,14 @@ import {
   onlyHunks,
 } from "../components/diffLogic";
 import { buildSections, sortFilesByRisk, statusLetter, type FileSection } from "./changesLogic";
+import {
+  buildFileTree,
+  decodeCollapsedFolders,
+  defaultFilesLayout,
+  encodeCollapsedFolders,
+  flattenFileTree,
+  type FilesLayout,
+} from "./folderTreeLogic";
 import { fileRisk, hunkRisk, type RiskIndex } from "../components/riskLogic";
 import { confidenceForFile } from "../components/confidenceLogic";
 import { Sidebar } from "../components/Sidebar";
@@ -44,6 +52,7 @@ import type {
   ProviderId,
   ProviderStatus,
   RejectSummary,
+  RetireSummary,
   RunConfig,
   Scorecard,
   UnfulfilledClaim,
@@ -63,6 +72,8 @@ const EMPTY_SCORECARD: Scorecard = {
   unattributedLines: 0,
 };
 const GROUPING_KEY = "code-basics.changesGrouping";
+const FILES_LAYOUT_KEY = "code-basics.filesLayout";
+const COLLAPSED_FOLDERS_KEY = "code-basics.collapsedFolders";
 const COLLAPSE_KEY = "code-basics.diffCollapseUnchanged";
 const WHITESPACE_KEY = "code-basics.diffIgnoreWhitespace";
 
@@ -83,6 +94,21 @@ function loadGrouping(): Grouping {
   return stored === "intent" || stored === "stashes" || stored === "erosion"
     ? stored
     : "files";
+}
+
+function loadFilesLayout(): FilesLayout {
+  return defaultFilesLayout(localStorage.getItem(FILES_LAYOUT_KEY));
+}
+
+/**
+ * Where one workspace's folded-away tree folders are remembered.
+ *
+ * Keyed by root because the keys are section-and-folder paths, which mean
+ * nothing in another codebase — a shared key would fold away folders the user
+ * never touched here.
+ */
+function collapsedFoldersKey(root: string): string {
+  return `${COLLAPSED_FOLDERS_KEY}:${root}`;
 }
 
 function loadDiffLayout(): DiffLayout {
@@ -154,6 +180,26 @@ export function ChangesView({
   );
   /** Sections the user folded away, by section key. */
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  /** Flat path list vs. a collapsible folder tree, in the Files view. */
+  const [filesLayout, setFilesLayout] = useState<FilesLayout>(loadFilesLayout);
+  /**
+   * Folders the user folded away in the tree layout, keyed by
+   * `${section.key}:${folderPath}` so the same folder can be open in one
+   * section and closed in another. Persisted per workspace root, so folding a
+   * noisy folder away survives leaving and returning to the tab — this view is
+   * mounted conditionally and re-reads from disk every time.
+   */
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() =>
+    decodeCollapsedFolders(localStorage.getItem(collapsedFoldersKey(workspace.root))),
+  );
+  // Persisted from an effect rather than from inside the state updater, so the
+  // updater stays a pure function of its previous value.
+  useEffect(() => {
+    localStorage.setItem(
+      collapsedFoldersKey(workspace.root),
+      encodeCollapsedFolders(collapsedFolders),
+    );
+  }, [collapsedFolders, workspace.root]);
   /**
    * Name being typed for a new group. `null` means the input is hidden;
    * `pendingPath` is a file to drop into it as soon as it exists, so "New
@@ -193,26 +239,6 @@ export function ChangesView({
   const erosionSignature = useRef<string | null>(null);
   const coverageSignature = useRef<string | null>(null);
   busyRef.current = busy;
-
-  /**
-   * F7 / Shift+F7 step through the changes, as they do in Rider.
-   *
-   * Window-level and capture phase, matching `SearchEverywhere`: the focus is
-   * usually inside CodeMirror, which would otherwise swallow the key. This view
-   * is only mounted while its tab is showing (see `App.tsx`), so the binding is
-   * scoped to the Changes tab without having to check.
-   */
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "F7" || event.ctrlKey || event.altKey || event.metaKey) return;
-      event.preventDefault();
-      event.stopPropagation();
-      diffHandle.current?.goToChange(event.shiftKey ? -1 : 1);
-    };
-
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, []);
 
   const [grouping, setGrouping] = useState<Grouping>(loadGrouping);
   const [intentGroups, setIntentGroups] = useState<IntentGroup[]>([]);
@@ -572,6 +598,23 @@ export function ChangesView({
       await refreshAll();
     });
 
+  /**
+   * Move some of a card's changes into another card, or into a new one.
+   *
+   * Stored as a user note over the moved lines' content, like a hand-written
+   * intent, so it survives the lines shifting and outranks any agent reason on
+   * them. `paths` empty moves the whole card.
+   */
+  const moveCardEdits = (
+    group: IntentGroup,
+    paths: string[],
+    destination: { group?: string; label?: string },
+  ) =>
+    withBusy(async () => {
+      await api.moveCardEdits(group.id, paths, destination, mode);
+      await refreshAll();
+    });
+
   /** Remove the user's note from a card, restoring its previous title. */
   const clearCardIntent = (group: IntentGroup) =>
     withBusy(async () => {
@@ -632,6 +675,26 @@ export function ChangesView({
       await refreshAll();
     });
     return total;
+  };
+
+  /**
+   * Preview the archive, and run it. Two calls rather than one so the panel can
+   * confirm with real counts: retirement moves records out of the live store,
+   * and the user should see how many before agreeing to it.
+   */
+  const previewPrune = () => api.intentPrunePreview();
+  const prune = async () => {
+    let summary: RetireSummary = {
+      recordsRetired: 0,
+      labelsRetired: 0,
+      keptRecords: 0,
+      pruned: false,
+    };
+    await withBusy(async () => {
+      summary = await api.pruneIntentHistory();
+      await refreshAll();
+    });
+    return summary;
   };
 
   /**
@@ -787,6 +850,20 @@ export function ChangesView({
     });
   }
 
+  function changeFilesLayout(next: FilesLayout) {
+    setFilesLayout(next);
+    localStorage.setItem(FILES_LAYOUT_KEY, next);
+  }
+
+  function toggleFolder(key: string) {
+    setCollapsedFolders((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
   /** Opening a file directly is not opening a card; drop any card selection. */
   function openFile(path: string) {
     setSelectedPath(path);
@@ -803,7 +880,17 @@ export function ChangesView({
     setHighlight([flag.index]);
   }
 
-  function renderFileRow(change: FileChange, section: FileSection) {
+  /**
+   * A file row. In the flat layout it shows the full path; in the tree layout
+   * `tree` carries the leaf name and nesting depth so the row indents under its
+   * folder and shows only the filename. Selection, risk emphasis and the
+   * right-click menu are identical either way.
+   */
+  function renderFileRow(
+    change: FileChange,
+    section: FileSection,
+    tree?: { depth: number; label: string },
+  ) {
     const { letter, className } = statusLetter(change, section.side);
     // Emphasis for a file the risk signals elevated; abstains (no class) for an
     // ordinary one. Same signals as the sort above.
@@ -814,6 +901,7 @@ export function ChangesView({
         className={`row ${change.path === selectedPath ? "selected" : ""}${
           risk ? ` risk-${risk.level}` : ""
         }`}
+        style={tree ? { paddingLeft: 6 + (tree.depth + 1) * 14 } : undefined}
         onClick={() => openFile(change.path)}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -823,9 +911,35 @@ export function ChangesView({
         title={`${change.path} — right-click to stage or group`}
       >
         <span className={`status ${className}`}>{letter}</span>
-        <span className="path">{change.path}</span>
+        <span className="path">{tree ? tree.label : change.path}</span>
       </button>
     );
+  }
+
+  /** The files of one section as a collapsible folder tree. */
+  function renderSectionTree(section: FileSection) {
+    const rows = flattenFileTree(buildFileTree(section.files), (folderPath) =>
+      collapsedFolders.has(`${section.key}:${folderPath}`),
+    );
+    return rows.map((row) => {
+      if (row.kind === "file") {
+        return renderFileRow(row.change, section, { depth: row.depth, label: row.label });
+      }
+      const key = `${section.key}:${row.path}`;
+      return (
+        <button
+          key={`folder:${key}`}
+          className="row folder-row"
+          style={{ paddingLeft: 6 + row.depth * 14 }}
+          onClick={() => toggleFolder(key)}
+          title={row.path}
+        >
+          <span className="twisty">{row.collapsed ? "▸" : "▾"}</span>
+          <span className="path">{row.label}</span>
+          <span className="badge">{row.fileCount}</span>
+        </button>
+      );
+    });
   }
 
   const groupingToggle = (
@@ -1000,6 +1114,31 @@ export function ChangesView({
 
         {groupingToggle}
 
+        {grouping === "files" && files.length > 0 && (
+          <div
+            className="group-label"
+            style={{ display: "flex", alignItems: "center", gap: 4 }}
+          >
+            <span style={{ flex: 1 }}>Layout</span>
+            <div className="segmented">
+              <button
+                className={filesLayout === "flat" ? "active" : ""}
+                onClick={() => changeFilesLayout("flat")}
+                title="List every changed file by its full path"
+              >
+                List
+              </button>
+              <button
+                className={filesLayout === "tree" ? "active" : ""}
+                onClick={() => changeFilesLayout("tree")}
+                title="Group the changed files into a collapsible folder tree"
+              >
+                Tree
+              </button>
+            </div>
+          </div>
+        )}
+
         {grouping === "intent" && (
           <>
             <IntentPanel
@@ -1023,8 +1162,11 @@ export function ChangesView({
               onEnable={enableCapture}
               onDisable={disableCapture}
               onImportHistory={importHistory}
+              onPreviewPrune={previewPrune}
+              onPrune={prune}
               onSetIntent={setCardIntent}
               onClearIntent={clearCardIntent}
+              onMoveEdits={moveCardEdits}
               behavioral={behavioral}
               erosionFlags={erosion?.flags}
               coverage={coverage}
@@ -1075,7 +1217,10 @@ export function ChangesView({
                 )}
               </div>
 
-              {!isCollapsed && section.files.map((change) => renderFileRow(change, section))}
+              {!isCollapsed &&
+                (filesLayout === "tree"
+                  ? renderSectionTree(section)
+                  : section.files.map((change) => renderFileRow(change, section)))}
 
               {!isCollapsed && section.files.length === 0 && section.keepWhenEmpty && (
                 <div className="muted" style={{ padding: "4px 8px 4px 22px", fontSize: 12 }}>
@@ -1130,6 +1275,7 @@ export function ChangesView({
             Amend previous commit
           </label>
           <button
+            data-command="changes.commit"
             className="primary"
             onClick={commit}
             disabled={busy || !message.trim()}
@@ -1256,16 +1402,17 @@ export function ChangesView({
 
           <span style={{ width: 12 }} />
 
-          <button onClick={() => stage(selectedLines)} disabled={busy || !selectedPath}>
+          <button data-command="changes.stage" onClick={() => stage(selectedLines)} disabled={busy || !selectedPath}>
             Stage{hasSelection ? " selected" : " file"}
           </button>
-          <button onClick={() => unstage(selectedLines)} disabled={busy || !selectedPath}>
+          <button data-command="changes.unstage" onClick={() => unstage(selectedLines)} disabled={busy || !selectedPath}>
             Unstage{hasSelection ? " selected" : " file"}
           </button>
 
           <span style={{ width: 12 }} />
 
           <button
+            data-command="change.previous"
             onClick={() => diffHandle.current?.goToChange(-1)}
             disabled={differences === 0}
             title="Previous change (Shift+F7)"
@@ -1274,6 +1421,7 @@ export function ChangesView({
             ↑
           </button>
           <button
+            data-command="change.next"
             onClick={() => diffHandle.current?.goToChange(1)}
             disabled={differences === 0}
             title="Next change (F7)"

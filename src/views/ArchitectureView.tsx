@@ -419,6 +419,7 @@ export function ArchitectureView({ workspace, onOpenFile }: ArchitectureViewProp
           {loading && <span className="spinner" />}
 
           <button
+            data-command="architecture.refresh"
             onClick={() => {
               if (selected) void load(selected);
               void refreshList();
@@ -431,6 +432,7 @@ export function ArchitectureView({ workspace, onOpenFile }: ArchitectureViewProp
 
           {selected?.source === "saved" && (
             <button
+              data-command="architecture.edit"
               onClick={() => {
                 // Closing destroys the buffer exactly as switching does, so it
                 // asks for the same reason: an edit is not something to lose to

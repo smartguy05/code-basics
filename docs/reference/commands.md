@@ -33,6 +33,10 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `fs_list_dir` | `path: String` | `DirEntry[]` | One directory per call (the tree expands lazily); directories first, sorted case-insensitively, `SKIP_DIRS` (`node_modules`, `bin`, `obj`, …) hidden |
 | `fs_read_file` | `path: String` | `String` | UTF-8 text only; binary or >5 MB files are a clear error |
 | `fs_write_file` | `path: String`, `content: String` | `()` | Saves the file editor's contents (Ctrl+S) |
+| `fs_create_file` | `path: String` | `()` | Create an empty file and any parent directories it needs. Refuses to overwrite an existing path, and refuses an empty name (which would name the workspace root) |
+| `fs_create_dir` | `path: String` | `()` | Create a directory and any parents it needs. Refuses an existing path |
+| `fs_rename` | `from: String`, `to: String` | `()` | Rename or move within the workspace. Both sides are resolved against the root, and an occupied destination is refused rather than replaced |
+| `fs_delete` | `path: String` | `()` | Delete a file, or a directory and everything under it. Permanent — no recycle bin. Refuses the workspace root |
 
 ## Enhancements (instructions + prompts)
 
@@ -61,6 +65,17 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `read_notes` | — | `NotesFile` | The global notes; a missing or unreadable file is an empty set, not an error |
 | `write_notes` | `file: NotesFile` | `()` | Overwrite the global notes file, creating its directory if absent |
 
+## Optional features
+
+`src-tauri/src/commands/features.rs` — which optional features are switched on. Like notes, the store is **user-global, not per-workspace** (`code-basics/features.json` under the user config directory; `CB_FEATURES_PATH` overrides the whole path), so neither command touches `AppState`.
+
+One binary ships every feature, so these decide only what is *shown*. An installer's checkbox page writes a seed file (`$INSTDIReatures.json` on Windows, `/usr/share/code-basics/features.json` from the `.deb`); the first `list_features` call adopts it and writes it through, and it is never consulted again — a reinstall cannot re-enable something the user turned off.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `list_features` | — | `FeatureInfo[]` | Every known feature with its resolved state. Also the first-run seed point; a missing or corrupt store yields the defaults rather than an error |
+| `set_feature` | `id: string`, `enabled: bool` | `FeatureInfo[]` | Switch one feature. Returns the whole list as persisted, so the caller renders what was written. An unknown id is an error naming it |
+
 ## .NET user secrets
 
 `src-tauri/src/commands/secrets.rs` — `project` is the workspace-relative `.csproj` path a .NET `RunConfig.project` holds. Secrets live in `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere), never in the repository.
@@ -76,8 +91,8 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `start_run` | `config_id: String`, `channel: Channel<ProcessEvent>`, `env: Map?` | `()` | Streams output; resolves on exit. `env` is layered over the config's own for this run only (the Run tab's environment picker) |
-| `build_project` | `config_id: String`, `action: "build" \| "rebuild" \| "clean"`, `channel: Channel<ProcessEvent>` | `()` | .NET only; runs `dotnet build` / `build --no-incremental` / `clean`, registered as `<config_id>:build` |
+| `start_run` | `config_id: String`, `channel: Channel<ProcessEvent>`, `env: Map?`, `build_configuration: String?` | `()` | Streams output; resolves on exit. `env` is layered over the config's own for this run only (the Run tab's environment picker), and `build_configuration` overrides `Debug`/`Release` the same way (the toolbar's picker). An empty string is ignored rather than emitting a bare `-c` |
+| `build_project` | `config_id: String`, `action: "build" \| "rebuild" \| "clean"`, `channel: Channel<ProcessEvent>`, `build_configuration: String?` | `()` | .NET only; runs `dotnet build` / `build --no-incremental` / `clean`, registered as `<config_id>:build`. Takes the same override as `start_run` so a build produces the binaries the next run will start |
 | `cancel_run` | `config_id: String`, `root?: String` | `bool` | Kills the process **tree**. `root` targets a specific (possibly background) workspace; defaults to the active one |
 | `running_ids` | `root?: String` | `String[]` | Config ids currently running in `root`'s workspace, or the active one |
 | `run_tests` | `config_id: String`, `only_failed: bool`, `channel: Channel<ProcessEvent>` | `TestRunOutcome` | Streams output, then parses the report; `only_failed` filters to the previous run's failures |
@@ -92,6 +107,7 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `review_agents` | – | `ReviewAgentInfo[]` | The agents whose CLI is installed (`claude`/`codex`), preference order, each with its offered model aliases (empty ⇒ the agent's own default) |
 | `start_review` | `prompt_id: String?`, `prompt_body: String?`, `agent_id: String`, `model: String?`, `mode: String?`, `context: String?`, `channel: Channel<ProcessEvent>` | `()` | Runs either a chosen library prompt (`prompt_id`) or an inline body (`prompt_body`, a Notes-panel note sent to the agent); the inline body wins when present, and with neither the run is refused rather than empty. `mode` picks the posture (default read-only): read-only is Claude `--permission-mode plan` / Codex `--sandbox read-only`; edit is Claude `--permission-mode bypassPermissions` / Codex `--sandbox workspace-write`. `context` (evidence, business-rule docs) is prepended so the agent reads it before the instruction; blank/absent leaves the prompt unchanged. Serves the adversarial Review, Run Agent, and Notes → Send to agent. Registered as `review:current`; an unknown model or mode is refused; a missing CLI surfaces as a `Failed` event |
 | `cancel_review` | – | `bool` | Kills the review process **tree** |
+| `agent_interactive_command` | `agent_id: String`, `model: String?`, `prompt: String` | `AgentCommand` (`program`, `args`) | The program and argv that start an **interactive** agent session already asked `prompt` — what "Ask the codebase" hands to `terminal_open`. The question crosses as one argv entry, never as typed keystrokes. Refuses an unknown agent id, a model the agent does not offer, and a blank question rather than substituting or starting an idle agent |
 
 ## Interactive terminals
 
@@ -99,12 +115,28 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `terminal_open` | `cwd: String?`, `cols: u16`, `rows: u16`, `label: String?`, `channel: Channel<TerminalEvent>` | `String` (session id) | Opens a shell (`default_shell`: `pwsh`→`powershell`→`cmd` on Windows, `$SHELL`→`bash`→`sh` on Unix) in `cwd` (defaults to the open workspace, else home). One merged output stream — no stdout/stderr split, no `started` banner. `label` is the initial title recorded for the Running panel |
+| `terminal_open` | `cwd: String?`, `cols: u16`, `rows: u16`, `label: String?`, `program: String?`, `args: String[]?`, `channel: Channel<TerminalEvent>` | `String` (session id) | Opens `program` with `args`, or a shell when no program is named (`default_shell`: `pwsh`→`powershell`→`cmd` on Windows, `$SHELL`→`bash`→`sh` on Unix), in `cwd` (defaults to the open workspace, else home). Args without a program are **dropped**, never attached to the shell. One merged output stream — no stdout/stderr split, no `started` banner. `label` is the initial title recorded for the Running panel |
 | `terminal_write` | `id: String`, `data: String` | `()` | Sends keystrokes (Enter is `\r`). Errors if the session is gone |
 | `terminal_resize` | `id: String`, `cols: u16`, `rows: u16` | `()` | Resizes the PTY; a no-op if the session is gone |
 | `terminal_close` | `id: String` | `bool` | Kills the process **tree** (so a shell's `claude`/`node` children die too); `false` if nothing was open |
 | `terminal_list` | – | `String[]` | Ids of every open terminal |
 | `terminal_set_label` | `id: String`, `root: String`, `label: String` | `()` | Updates a terminal's title in the running-process registry after a rename, so the Running panel shows it |
+
+## The app launcher
+
+`src-tauri/src/commands/launcher.rs` — arbitrary command lines the user runs beside the detected
+configurations. The store (`launcher::launchers_path`) is **user-global**, `<config>/code-basics/launchers.json`
+beside `notes.json` (`CB_LAUNCHERS_PATH` overrides), so the three store commands take no workspace.
+A launched app runs in the **global** supervisor and is recorded as `RunKind::External`, so closing
+the codebase it was started from does not stop it.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `list_launchables` | – | `LauncherGroups` | `{ thisCodebase, global }` — remembered commands, the open codebase's first (grouped by each entry's `cwd`); pinned first, then most recently run |
+| `launch_command` | `command: String`, `cwd: String?`, `shell: bool`, `label: String?`, `key: String?`, `channel: Channel<ProcessEvent>` | `LaunchedApp` | Splits the command line (`launcher::program_and_args`) and spawns it headless; resolves as soon as it is running, not at exit. An unquoted `\|`, `>`, `<`, `&` or `;` is **refused** unless `shell` is set — a bare argv would pass it to the program as an argument. `cwd` defaults to the open workspace, else home. `key` is normally supplied by the frontend so its console has a destination before this returns; a blank one is minted. Recorded into the recents only once it resolves to a real command |
+| `stop_command` | `key: String` | `bool` | Cancels a launched app through the global supervisor; the output tab and its exit line stay |
+| `save_launchable` | `id: String`, `label: String?`, `pinned: bool?` | `LauncherFile` | Rename (a blank name clears the rename) and/or pin. Pinned entries are exempt from the 30-entry recents cap |
+| `delete_launchable` | `id: String` | `LauncherFile` | Forgets one remembered command |
 
 ## Running processes
 
@@ -112,8 +144,8 @@ The Running panel: what the app has running now (across every open codebase) plu
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `list_running` | – | `RunningReport` | `{ live, orphans, warnings }` — the live set (runs, builds, terminals, review, behavioral), orphan candidates from a previous session, and any PID-reuse warnings. A cheap in-memory read |
-| `kill_running` | `pid: u32`, `kind: RunKind`, `root: String`, `key: String`, `orphan: bool` | `bool` | Routes the kill: a live run/build cancels via its codebase supervisor, a terminal closes via the PTY manager, review/behavioral via the global supervisor; an orphan is killed by pid **only after** an identity re-check (name + start time), refusing a reused pid |
+| `list_running` | – | `RunningReport` | `{ live, orphans, warnings }` — the live set (runs, builds, terminals, review, behavioral, launched apps), orphan candidates from a previous session, and any PID-reuse warnings. A cheap in-memory read |
+| `kill_running` | `pid: u32`, `kind: RunKind`, `root: String`, `key: String`, `orphan: bool` | `bool` | Routes the kill: a live run/build cancels via its codebase supervisor, a terminal closes via the PTY manager, review/behavioral/external via the global supervisor; an orphan is killed by pid **only after** an identity re-check (name + start time), refusing a reused pid |
 
 ## Git
 
@@ -172,9 +204,12 @@ The Running panel: what the app has running now (across every open codebase) plu
 | `intent_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change disabling that agent's capture would make. **Touches nothing.** An empty `writes` means there was nothing to remove. Removes only that provider's own hook entries; the shared commit hooks are removed only when no other agent is still capturing, and the instruction note is left in place |
 | `disable_intent_capture` | `provider: ProviderId, scope: InstallScope` | `ProviderStatus[]` | Perform a confirmed disable, backing the file up first. Returns the refreshed statuses |
 | `import_intent_history` | – | `usize` | Read what the agents already recorded, with no setup: edits, coarse labels, and the user prompts mined from session transcripts (keyed to the same turn id so they join). Returns the total record count afterwards |
-| `clear_intent_history` | – | `()` | Forget everything recorded for this workspace (agent history only; user notes survive) |
+| `intent_prune_preview` | – | `RetireSummary` | How many recorded intents this workspace's HEAD has already absorbed. **Touches nothing** — the counts the archive confirmation renders |
+| `prune_intent_history` | – | `RetireSummary` | Retire every intent HEAD has absorbed, so a reason that is now history stops labelling new work. Records move to `edits-archive.jsonl` and are tombstoned (never deleted, and never resurrected by `import_intent_history`). Also runs automatically whenever HEAD is seen to have moved; this is the manual form, which is the only way to clear a backlog recorded before pruning existed |
+| `clear_intent_history` | – | `()` | Forget everything recorded for this workspace (agent history only; user notes survive). Also drops the archive, tombstones and prune state, so a clear-then-import starts genuinely clean |
 | `set_card_intent` | `group: String, label: String, mode: ComparisonMode` | `()` | Write (or overwrite) the user's own intent for one card. Stored as the card's changed-line content plus the label, so it rebinds by content on the next refresh and titles the card — winning over any agent reason on those lines. Re-annotating the same change replaces the previous note |
 | `clear_card_intent` | `group: String, mode: ComparisonMode` | `bool` | Remove the user's note from one card, restoring the reason or title it had before. Returns whether a note was found |
+| `move_card_edits` | `group: String, paths: String[], destination: { group?: String, label?: String }, mode: ComparisonMode` | `()` | Move some of a card's changes into another card, or into a new one. `paths` empty moves the whole card. Stored like a hand-written note — as the moved lines' *content* — so it rebinds when the lines shift and outranks any agent reason on them. Moving into an ordinary card takes that card's own lines over with it, or the move would produce two cards with the same title. A move into the card the selection is already in is refused: it would silently replace the agent reason titling it |
 
 ## Quality-gate hook
 
@@ -264,7 +299,7 @@ Expanding a node past a cap is `inspect_capture` with `RootSpec::Address` and `w
 | `symbol_index_status` | – | `SymbolIndexStatus` | `ready` (there is an index to search) and `building` (one is being built) are independent — a rebuild runs over a usable index — plus the file and symbol counts and whether a cap clipped them |
 | `rebuild_symbol_index` | – | `()` | Discards `.code-basics/symbols.json` and re-reads the workspace from source, in the background. Returns as soon as the build starts; watch `symbol_index_status` for the finish. The old index stays in place until the new one lands |
 
-The index is built on a background thread by `open_workspace` and `rescan_workspace`, and by the app's `setup` hook for a workspace named on the command line. Nothing waits for it: a cold build is ~20 ms on this repository but 637 ms on a 2,864-file .NET solution and 9.4 s against a cold filesystem cache. A build whose root is no longer the open workspace is discarded rather than stored (`AppState::record_symbols`), so opening A then B cannot serve A's paths under B. `fs_write_file` and `git_write_file` re-index the single file they wrote, which is microseconds and is what keeps the palette from going stale on every edit.
+The index is built on a background thread by `open_workspace` and `rescan_workspace`, and by the app's `setup` hook for a workspace named on the command line. Nothing waits for it: a cold build is ~20 ms on this repository but 637 ms on a 2,864-file .NET solution and 9.4 s against a cold filesystem cache. A build whose root is no longer the open workspace is discarded rather than stored (`AppState::record_symbols`), so opening A then B cannot serve A's paths under B. `fs_write_file`, `fs_create_file` and `git_write_file` re-index the single file they wrote, and `fs_rename`/`fs_delete` drop the old key (`symbols::index::remove_file`) — though a deleted *directory*'s descendants keep their entries until the next rescan, because a prefix sweep of the index cannot tell `src/app` from `src/apple`. This is what keeps the palette from going stale on every edit.
 
 ## Language servers
 
@@ -303,8 +338,29 @@ Sessions are per workspace and are started by `open_workspace`, `rescan_workspac
 
 `Derivation` and `DiagramDerivation` are Rust enums with data, so serde tags them **externally**: `{"derived":{"scanner":1}}` and `{"inferred":{"agent":"claude"}}` are objects while `"user"` (and `DiagramDerivation`'s `"derived"`) is a bare string. `src/ipc/types.ts` mirrors both shapes; the pinning tests are `an_arch_graph_serialises_with_the_keys_the_ui_reads` (`architecture/graph_tests.rs`) and `a_diagram_file_serialises_with_the_keys_the_frontend_reads` (`architecture/store_tests.rs`).
 
+## SQL console
+
+`src-tauri/src/commands/sql.rs` over `cb_core::sql`. The connection store is **user-global, not per-workspace** — `<config>/code-basics/sql-connections.json` beside `notes.json` (`CB_SQL_CONNECTIONS_PATH` overrides) — because a connection string contains a password and `.code-basics/` is the directory the app deliberately shares with the team. The store commands therefore take no `AppState`; only `sql_execute`/`sql_cancel` do, for the in-flight registry (`AppState::sql`, global and cleared by nothing a tab does).
+
+**A connection string crosses IPC in one direction only.** No command returns one: a saved literal comes back as `SqlSecretView::Literal { display }`, the redacted `SqlConnectionDisplay`, and the other three sources are *references* naming a file and a key. Driver errors routinely embed the whole DSN, so every message passes through `sql::dsn::redact` before it becomes a `SqlEvent::Failed`.
+
+Phase 1 ships **SQLite only**. "The engine could not be determined" and "this build has no driver for that engine" are separate answers (`engineUnknown` / `engineUnsupported`) because one is fixed by picking an engine and the other by waiting for a release.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `sql_list_connections` | – | `SqlConnectionView[]` | Every saved profile, redacted. A missing or corrupt store is an empty list, not an error — a bad file must not stop the picker opening |
+| `sql_discover` | `root: String` | `SqlDiscovery` | The connections a workspace mentions (appsettings, .NET user secrets, `.env`). Reads files only: connects to nothing, saves nothing. Uses the already-scanned workspace when that root is open. Each candidate carries a *reference*, never a value, and a `state` of `ready` / `engineUnknown` / `unresolved` |
+| `sql_save_connection` | `connection: SqlConnectionProfile` | `SqlConnectionView[]` | Add or update. The incoming `allowWrites` is **ignored** and a new profile starts at `false`; an update also keeps the stored `createdAtMs`/`lastUsedMs` |
+| `sql_delete_connection` | `id: String` | `SqlConnectionView[]` | Forget one. An id naming nothing is an error, not a silent success |
+| `sql_set_allow_writes` | `id: String`, `allowWrites: bool` | `SqlConnectionView[]` | **The consent action, and the only thing that moves `allowWrites`.** Its own verb on purpose: burying it in `sql_save_connection` would let a form round-trip turn the read-only guard off without the user saying so. It lifts the guard for *recognised writes* only — a `Refused` verdict is never lifted — and gives up the driver's own read-only open mode |
+| `sql_test_connection` | `id: String` | `SqlTestOutcome` | Opens the handle the profile would actually get, reads a page to prove a database is behind it, asks the engine its version, and closes. A **variant enum, not a bool**: `ok` / `authFailed` / `unreachable` / `cannotOpenFile` / `notADatabase` / `tlsFailed` / `timeout` / `engineUnknown` / `engineUnsupported` / `secretUnresolved` / `failed`. `notADatabase` is why the probe exists — sqlite3 defers its header check to the first page read, so a handle over a `README.md` opens and answers `select sqlite_version()`, and "I connected" is not "this is a database". `cannotOpenFile` is a wrong path, deliberately not `unreachable`, which would send the reader to check a network. `failed` is the abstention for a driver message this build has no rule for; `timeout.afterMs` is `null` when the *driver* reported the timeout, since its duration is not ours to invent, and the app's own deadline covers the whole probe rather than only the connect |
+| `sql_execute` | `queryId: String`, `connectionId: String`, `sql: String`, `channel: Channel<SqlEvent>` | `()` | Guards the text (`sql::guard`), resolves the secret from wherever the profile says it lives, connects, and streams. Run as **one** statement at index 0 — there is no splitter, and cutting a script on `;` would split a string literal or a `BEGIN … END` block. The `rows` events are the rows: `completed` carries a `SqlCompletion` (count, cap, affected, elapsed) and **not** a second copy of the result set. A `notice` delivers the guard's sentence about an allowed write, which is neither a refusal nor a failure. `finished` is always the last event, after everything the driver produced |
+| `sql_cancel` | `queryId: String` | `SqlStopOutcome` | **Stopping is not cancelling**: it stops this side reading and drops the connection; the server may still be executing. `signalled` / `alreadyStopping` / `notFound` stay apart, so a Stop racing a statement that just finished does not look like a working stop |
+
+Rejections (an `Err`, not an event) are reserved for the caller getting it wrong: an id naming no connection, or a `queryId` already running on that connection. Everything the *database* did arrives as a `SqlEvent`, and `refused` (the guard, so nothing was sent) is never merged with `failed` (it reached the server, or the connection would not open).
+
 ## Streaming commands
 
-`start_run`, `run_tests`, `git_network`, and `inspect_capture` take a `Channel<ProcessEvent>` and push output events (stdout/stderr chunks, exit) while their promise stays pending. `terminal_open` is the bidirectional variant: it pushes `TerminalEvent`s over its channel (one merged stream) while keystrokes flow back through `terminal_write`. The `api.ts` wrappers hide the channel behind an `onEvent` callback.
+`start_run`, `run_tests`, `git_network`, and `inspect_capture` take a `Channel<ProcessEvent>` and push output events (stdout/stderr chunks, exit) while their promise stays pending. `sql_execute` is the same shape over `Channel<SqlEvent>`: rows arrive as they are read, and the promise resolves after the terminal `finished` event. `terminal_open` is the bidirectional variant: it pushes `TerminalEvent`s over its channel (one merged stream) while keystrokes flow back through `terminal_write`. The `api.ts` wrappers hide the channel behind an `onEvent` callback.
 
 Related: [Tauri shell](../architecture/tauri-shell.md) · [adding a command end-to-end](../guides/development.md#adding-a-tauri-command-end-to-end).

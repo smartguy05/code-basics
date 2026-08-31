@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArchitectureView } from "../views/ArchitectureView";
+import { AskPanel } from "./AskPanel";
 import { BehavioralPanel } from "./BehavioralPanel";
 import { ChangesView } from "../views/ChangesView";
 import { HistoryView } from "../views/HistoryView";
@@ -8,22 +9,31 @@ import { RunView } from "../views/RunView";
 import { ReviewPanel } from "./ReviewPanel";
 import { SearchEverywhere } from "./SearchEverywhere";
 import { SetupPrompt } from "./SetupPrompt";
+import { SqlView } from "../views/SqlView";
 import { shouldPrompt, setDismissed } from "./setupPromptLogic";
 import { TerminalPanel } from "./TerminalPanel";
 import { TestsView } from "../views/TestsView";
+import { terminalTitle } from "./askLogic";
 import {
+  makeAgentTerminal,
   makeTerminal,
+  raiseTerminal,
   recolorTerminal,
   renameTerminal,
+  stackOffset,
+  syncStackOrder,
   type TerminalDescriptor,
 } from "./terminalLogic";
 import { sendToAgentTitle } from "./notesLogic";
+import type { TabSignal } from "./workspaceTabsLogic";
 import * as api from "../ipc/api";
 import type { AgentMode } from "../ipc/api";
-import type { BehavioralReport, Note, Workspace } from "../ipc/types";
+import type { BehavioralReport, FeatureInfo, Note, Workspace } from "../ipc/types";
 import type { InspectRequest, OpenFileRequest, SelectConfigRequest } from "../App";
+import { featureEnabled, tabAfterDisable, visibleTabs, type FeatureKey } from "./featuresLogic";
+import { registerCommand } from "../shortcuts";
 
-type Tab = "tests" | "run" | "changes" | "history" | "architecture" | "inspect";
+type Tab = "tests" | "run" | "changes" | "history" | "architecture" | "inspect" | "sql";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "run", label: "Run" },
@@ -32,7 +42,17 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "history", label: "History" },
   { id: "architecture", label: "Architecture" },
   { id: "inspect", label: "Objects" },
+  { id: "sql", label: "SQL" },
 ];
+
+/**
+ * Which optional feature owns each tab. A tab absent from this map is core and
+ * cannot be switched off, which is why it is a partial map rather than a field
+ * on `TABS` — most tabs have no feature and should not have to say so.
+ */
+const FEATURE_BY_TAB: Partial<Record<Tab, FeatureKey>> = {
+  sql: "sqlConsole",
+};
 
 /**
  * The actions the titlebar (global chrome) and the global Notes panel route to
@@ -41,6 +61,13 @@ const TABS: { id: Tab; label: string }[] = [
  */
 export interface WorkspaceTabHandle {
   openTerminal(): void;
+  /**
+   * Open an interactive terminal in this codebase already asking `question` of
+   * `agentId`. Part of the handle rather than private to the tab because the
+   * question may come from outside it (the panel is rendered here, but the
+   * action is one the app routes to the foreground codebase, like the others).
+   */
+  openAskTerminal(question: string, agentId: string, model: string | undefined): void;
   openRunAgent(promptId: string): void;
   openReview(): void;
   openNoteInAgent(note: Note): void;
@@ -79,6 +106,8 @@ export function WorkspaceTab({
   onWorkspaceChange,
   onRegister,
   onAttentionChange,
+  onSignal,
+  features,
 }: {
   workspace: Workspace;
   /** Whether this is the foreground tab. Drives `hidden` and gates listeners. */
@@ -92,8 +121,57 @@ export function WorkspaceTab({
    * can flash this tab in the top strip when it is not the foreground one.
    */
   onAttentionChange: (root: string, hasAttention: boolean) => void;
+  /**
+   * Report a one-shot event worth showing on this codebase's tab while it is in
+   * the background: a build that succeeded or failed, or a minimized terminal
+   * that finished.
+   *
+   * Separate from {@link onAttentionChange} because the two have different
+   * lifetimes. Attention is *state* — a terminal is asking for you until it is
+   * restored — so it is pushed up as a boolean that can go back down. These are
+   * *events*: nothing about the codebase is still true afterwards, so `App`
+   * latches them and the user clears them by looking.
+   */
+  onSignal: (root: string, signal: TabSignal) => void;
+  /**
+   * The optional features that are switched on, or `null` while the startup load
+   * is in flight. Passed down rather than fetched here so every open codebase
+   * renders the same answer from one read, and so the strip never flickers.
+   */
+  features: FeatureInfo[] | null;
 }) {
   const [tab, setTab] = useState<Tab>("run");
+
+  /**
+   * The tabs this build actually shows, after the optional-feature gate.
+   * Recomputed from `features` rather than stored, so switching a feature off in
+   * the picker is reflected without a reopen.
+   */
+  const shownTabs = visibleTabs(TABS, features, FEATURE_BY_TAB);
+
+  /**
+   * Whether a tab survived the gate. Asked of `shownTabs` rather than of
+   * `featureEnabled` again so a gated body and the tab strip cannot disagree:
+   * there is one filtered list and both read it.
+   */
+  const tabShown = (id: Tab) => shownTabs.some((t) => t.id === id);
+
+  /**
+   * Keep the selected tab on something that still exists. Turning off the
+   * feature that owns the tab you are *looking at* would otherwise leave a tab
+   * strip with nothing beneath it; `tabAfterDisable` falls back to the first
+   * visible tab and leaves a still-visible selection alone.
+   */
+  useEffect(() => {
+    const next = tabAfterDisable(tab, shownTabs);
+    if (next !== null && next !== tab) setTab(next as Tab);
+  }, [tab, shownTabs]);
+
+  useEffect(() => {
+    if (!active) return;
+    const registrations = shownTabs.map(({ id }) => registerCommand(`view.${id}`, () => setTab(id)));
+    return () => registrations.forEach((unregister) => unregister());
+  }, [active, shownTabs]);
   const [showSetup, setShowSetup] = useState(false);
   const [inspectRequest, setInspectRequest] = useState<InspectRequest | null>(null);
   const [openRequest, setOpenRequest] = useState<OpenFileRequest | null>(null);
@@ -117,8 +195,31 @@ export function WorkspaceTab({
   } | null>(null);
   const [behavioralReport, setBehavioralReport] = useState<BehavioralReport | null>(null);
 
+  /**
+   * Why the last ask did not open a terminal, if it did not. Shown rather than
+   * swallowed: the command build can refuse (an agent that left PATH between the
+   * picker and the click, a model it no longer offers), and a click that silently
+   * does nothing is indistinguishable from the app being broken.
+   */
+  const [askError, setAskError] = useState<string | null>(null);
+
   const [terminals, setTerminals] = useState<TerminalDescriptor[]>([]);
   const terminalSeq = useRef(0);
+
+  // Which terminal is in front, bottom-most key first. Kept *beside* `terminals`
+  // rather than by reordering it: the array index places each pill and cascade
+  // offset, so raising by reordering would teleport pills and shift un-dragged
+  // panels. One reconciling effect keeps this in step with what is open, so it
+  // cannot drift the way separate edits in `openTerminal`/`closeTerminal` could.
+  const [stackOrder, setStackOrder] = useState<string[]>([]);
+  useEffect(() => {
+    setStackOrder((order) =>
+      syncStackOrder(
+        order,
+        terminals.map((t) => t.key),
+      ),
+    );
+  }, [terminals]);
 
   // Which of this codebase's terminals currently want attention (bell while
   // minimized). Aggregated so `App` flashes the tab while any of them does.
@@ -152,6 +253,49 @@ export function WorkspaceTab({
     terminalSeq.current += 1;
     setTerminals((open) => [...open, makeTerminal(terminalSeq.current, workspace.root)]);
   };
+  /**
+   * Open a terminal running an agent that has already been asked `question`.
+   *
+   * The command line is built by the **backend** (`agent_interactive_command`
+   * over `cb_core::review`), never assembled here: the argument order, the model
+   * validation and the three refusals are one decision and live in one place. A
+   * failure — an agent that vanished from PATH between the picker and the click,
+   * a model the agent does not offer — therefore surfaces as a message rather
+   * than as a terminal spawning something wrong.
+   *
+   * The question crosses as an **argv argument, never as typed keystrokes**.
+   * `PtyManager` spawns via `CommandBuilder` with the args as they stand, so
+   * nothing on this side joins or re-splits them. On Windows that is not the
+   * same as "no shell": an agent name can resolve to a `.cmd`/`.bat` shim, and
+   * `cmd.exe` re-parses the command line, so the backend refuses a question
+   * carrying `&`, `|`, `<`, `>`, `^`, `"` or `%` for such a target before
+   * spawning (the terminal then shows that reason). Through a real executable
+   * the guard does not apply and the question crosses verbatim. Typing a
+   * multi-line question into
+   * the agent's TUI would instead submit it at the first `
+`, asking only a
+   * fragment; and `TerminalPanel` resolves its session id asynchronously, so an
+   * early write would be dropped entirely.
+   */
+  const openAskTerminal = (question: string, agentId: string, model: string | undefined) => {
+    void api
+      .agentInteractiveCommand(agentId, model, question)
+      .then((command) => {
+        terminalSeq.current += 1;
+        setTerminals((open) => [
+          ...open,
+          makeAgentTerminal(
+            terminalSeq.current,
+            workspace.root,
+            command.program,
+            command.args,
+            terminalTitle(question),
+          ),
+        ]);
+      })
+      .catch((e) => setAskError(String(e)));
+  };
+
   const closeTerminal = (key: string) =>
     setTerminals((open) => open.filter((t) => t.key !== key));
   const renameTerminalTo = (key: string, title: string) =>
@@ -212,14 +356,17 @@ export function WorkspaceTab({
   // needs to re-register when a handler identity changes between renders.
   const handleRef = useRef<WorkspaceTabHandle>({
     openTerminal,
+    openAskTerminal,
     openRunAgent,
     openReview,
     openNoteInAgent,
   });
-  handleRef.current = { openTerminal, openRunAgent, openReview, openNoteInAgent };
+  handleRef.current = { openTerminal, openAskTerminal, openRunAgent, openReview, openNoteInAgent };
   useEffect(() => {
     const stable: WorkspaceTabHandle = {
       openTerminal: () => handleRef.current.openTerminal(),
+      openAskTerminal: (question, agentId, model) =>
+        handleRef.current.openAskTerminal(question, agentId, model),
       openRunAgent: (id) => handleRef.current.openRunAgent(id),
       openReview: () => handleRef.current.openReview(),
       openNoteInAgent: (note) => handleRef.current.openNoteInAgent(note),
@@ -247,7 +394,7 @@ export function WorkspaceTab({
   return (
     <div className="workspace-tab" hidden={!active}>
       <div className="tabs tabs-row">
-        {TABS.map(({ id, label }) => (
+        {shownTabs.map(({ id, label }) => (
           <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
             {label}
           </button>
@@ -268,12 +415,48 @@ export function WorkspaceTab({
           pendingSelect={selectRequest}
           onSelectConsumed={() => setSelectRequest(null)}
           onNavigate={requestOpenFile}
+          onProcessResult={(ok) => onSignal(workspace.root, ok ? "success" : "error")}
           active={active && tab === "run"}
         />
       </div>
       <div className="body" hidden={tab !== "tests"}>
-        <TestsView workspace={workspace} onInspect={requestInspect} />
+        <TestsView
+          workspace={workspace}
+          onInspect={requestInspect}
+          onResult={(success) => onSignal(workspace.root, success ? "success" : "error")}
+        />
       </div>
+      {/* Two different gates, and the distinction is the point.
+
+          *Hidden* (the feature is on, another tab is in front): stays mounted,
+          like Run/Tests/Objects and unlike the conditionally-mounted views,
+          because it owns live database connections and a query that may still
+          be streaming rows — none of which survives an unmount.
+
+          *Switched off* (the feature is off): unmounted. The mounted-while-
+          hidden convention is about a tab the user can still reach in one
+          click; a disabled feature is not that. Left mounted it would keep
+          calling `sql_list_connections` on mount, keep its CodeMirror instance
+          alive, and keep a query streaming against a live database with no
+          route to the rows and no route to Stop — the user turned the console
+          off and the console kept running.
+
+          Abandoning an in-flight query on unmount is bounded, not a leak:
+          `sql_execute` keeps draining its internal channel after `channel.send`
+          starts failing (a closed frontend channel stops the sending, not the
+          draining), calls `state.sql.finish`, and `run_plan` drops the driver
+          connection when the statement completes. Nothing waits on this side.
+          What is *not* claimed: this is not a server-side cancel, so a long
+          statement runs to completion on the server exactly as Stop would have
+          left it.
+
+          `tabAfterDisable` above has already moved the selection off the tab,
+          so `hidden` and the mount gate never contradict each other. */}
+      {tabShown("sql") && (
+        <div className="body" hidden={tab !== "sql"}>
+          <SqlView workspace={workspace} />
+        </div>
+      )}
       <div className="body" hidden={tab !== "inspect"}>
         <InspectView
           workspace={workspace}
@@ -309,6 +492,21 @@ export function WorkspaceTab({
         onOpenFile={requestOpenFile}
         onRunAction={requestSelectConfig}
       />
+
+      {/* Gated on the feature rather than mounted-and-inert: when `askCodebase`
+          is off `AskPanel` registers no key listener at all, so Ctrl+/ returns
+          cleanly to CodeMirror's comment toggle. */}
+      <AskPanel
+        active={active}
+        enabled={featureEnabled(features, "askCodebase")}
+        onAsk={openAskTerminal}
+      />
+
+      {askError !== null && (
+        <div className="ask-error-toast" onClick={() => setAskError(null)}>
+          {askError}
+        </div>
+      )}
 
       {showSetup && (
         <SetupPrompt
@@ -350,10 +548,15 @@ export function WorkspaceTab({
           key={t.key}
           title={t.title}
           cwd={t.cwd}
+          command={t.command}
           index={index}
+          stackOffset={stackOffset(stackOrder, t.key)}
           color={t.color}
+          workspaceActive={active}
           onClose={() => closeTerminal(t.key)}
+          onRaise={() => setStackOrder((order) => raiseTerminal(order, t.key))}
           onAttentionChange={(wants) => setTerminalAttention(t.key, wants)}
+          onCompleted={(success) => onSignal(workspace.root, success ? "done" : "error")}
           onRename={(title) => renameTerminalTo(t.key, title)}
           onRecolor={(color) => recolorTerminalTo(t.key, color)}
         />

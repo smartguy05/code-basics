@@ -2,6 +2,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  AgentCommand,
   AnchorResult,
   ArchGraph,
   AttachableList,
@@ -18,6 +19,7 @@ import type {
   ElidedReason,
   EnhancementInfo,
   ErosionReport,
+  FeatureInfo,
   FileContents,
   FileDiff,
   InspectGraph,
@@ -26,6 +28,9 @@ import type {
   InstallPlan,
   InstallScope,
   IntentReview,
+  LaunchedApp,
+  LauncherFile,
+  LauncherGroups,
   LaunchProfile,
   LineIntent,
   LspStatus,
@@ -39,6 +44,7 @@ import type {
   ProviderId,
   ProviderStatus,
   RejectSummary,
+  RetireSummary,
   ReviewAgentInfo,
   RiderImportPreview,
   RootSpec,
@@ -49,6 +55,12 @@ import type {
   RunningReport,
   SearchHit,
   SearchScope,
+  SqlConnectionProfile,
+  SqlConnectionView,
+  SqlDiscovery,
+  SqlEvent,
+  SqlStopOutcome,
+  SqlTestOutcome,
   StashEntry,
   SymbolIndexStatus,
   TerminalEvent,
@@ -149,6 +161,22 @@ export const fsReadFile = (path: string) =>
 export const fsWriteFile = (path: string, content: string) =>
   invoke<void>("fs_write_file", { path, content });
 
+/** Create an empty file, and any parent directories it needs. Never overwrites. */
+export const fsCreateFile = (path: string) =>
+  invoke<void>("fs_create_file", { path });
+
+/** Create a directory, and any parent directories it needs. */
+export const fsCreateDir = (path: string) =>
+  invoke<void>("fs_create_dir", { path });
+
+/** Rename or move a file or directory. Refuses an occupied destination. */
+export const fsRename = (from: string, to: string) =>
+  invoke<void>("fs_rename", { from, to });
+
+/** Delete a file, or a directory and everything under it. Permanent. */
+export const fsDelete = (path: string) =>
+  invoke<void>("fs_delete", { path });
+
 // ---------------------------------------------------------------------------
 // Enhancements (instruction templates for CLAUDE.md / AGENTS.md)
 // ---------------------------------------------------------------------------
@@ -183,6 +211,19 @@ export const saveNoteAsInstruction = (title: string, body: string) =>
 // Notes / scratchpad (user-global, not per-workspace)
 // ---------------------------------------------------------------------------
 
+/**
+ * Every optional feature with its current state. The first call also adopts an
+ * installer seed, if one is present and the user has no store yet.
+ */
+export const listFeatures = () => invoke<FeatureInfo[]>("list_features");
+
+/**
+ * Switch one feature on or off. Returns the whole list as persisted, so the
+ * caller re-renders from what was written rather than what it hoped to write.
+ */
+export const setFeature = (id: string, enabled: boolean) =>
+  invoke<FeatureInfo[]>("set_feature", { id, enabled });
+
 /** Read the global notes file. Missing/unreadable yields an empty set. */
 export const readNotes = () => invoke<NotesFile>("read_notes");
 
@@ -205,10 +246,15 @@ export function startRun(
   onEvent: (event: ProcessEvent) => void,
   /** Environment variables layered over the config's own, for this run only. */
   env?: Record<string, string>,
+  /**
+   * Debug / Release / whatever the project declares, for this run only. Omit
+   * to keep the configuration's own default.
+   */
+  buildConfiguration?: string,
 ): Promise<void> {
   const channel = new Channel<ProcessEvent>();
   channel.onmessage = onEvent;
-  return invoke<void>("start_run", { configId, channel, env });
+  return invoke<void>("start_run", { configId, channel, env, buildConfiguration });
 }
 
 /** Build / rebuild / clean the project behind a .NET configuration. */
@@ -216,10 +262,12 @@ export function buildProject(
   configId: string,
   action: BuildAction,
   onEvent: (event: ProcessEvent) => void,
+  /** The toolbar's build configuration, so a build matches the next run. */
+  buildConfiguration?: string,
 ): Promise<void> {
   const channel = new Channel<ProcessEvent>();
   channel.onmessage = onEvent;
-  return invoke<void>("build_project", { configId, action, channel });
+  return invoke<void>("build_project", { configId, action, channel, buildConfiguration });
 }
 
 export const cancelRun = (configId: string) =>
@@ -313,6 +361,18 @@ export const cancelReview = () => invoke<boolean>("cancel_review");
 /** The review agents whose CLI is installed, in preference order. */
 export const reviewAgents = () => invoke<ReviewAgentInfo[]>("review_agents");
 
+/**
+ * The program and argv that start an interactive agent session already asked
+ * `prompt` — the command line behind "Ask the codebase", handed straight to
+ * {@link terminalOpen}.
+ *
+ * Built in `cb_core::review` rather than here on purpose: the argument order,
+ * the model validation and the refusals are one decision and live in one place,
+ * so the frontend never assembles a command line of its own.
+ */
+export const agentInteractiveCommand = (agentId: string, model: string | undefined, prompt: string) =>
+  invoke<AgentCommand>("agent_interactive_command", { agentId, model, prompt });
+
 // ---------------------------------------------------------------------------
 // Interactive terminals
 // ---------------------------------------------------------------------------
@@ -326,6 +386,18 @@ export const reviewAgents = () => invoke<ReviewAgentInfo[]>("review_agents");
  *
  * `cols`/`rows` are the initial size; `cwd` defaults to the open workspace when
  * omitted.
+ *
+ * `program`/`args` run something other than the default shell — an interactive
+ * agent seeded with a question, for "Ask the codebase". They are **appended**
+ * and optional so every existing caller (a plain terminal) is untouched. The
+ * arguments reach `CommandBuilder` directly — nothing joins or re-splits them —
+ * so through a real executable a question containing a quote, a newline or a
+ * `&` crosses verbatim as one argv entry. Through a Windows `.cmd`/`.bat` shim
+ * it does not: `cmd.exe` re-parses the command line, so an argument carrying
+ * `&`, `|`, `<`, `>`, `^`, `"` or `%` is **rejected** by the backend before the
+ * spawn (this promise rejects with a reason naming the character) rather than
+ * running as something else. Args given without a program are dropped by the
+ * backend rather than handed to the shell.
  */
 export function terminalOpen(
   cols: number,
@@ -333,10 +405,12 @@ export function terminalOpen(
   onEvent: (event: TerminalEvent) => void,
   cwd?: string,
   label?: string,
+  program?: string,
+  args?: string[],
 ): Promise<string> {
   const channel = new Channel<TerminalEvent>();
   channel.onmessage = onEvent;
-  return invoke<string>("terminal_open", { cwd, cols, rows, label, channel });
+  return invoke<string>("terminal_open", { cwd, cols, rows, label, program, args, channel });
 }
 
 /**
@@ -360,6 +434,61 @@ export const terminalClose = (id: string) =>
 
 /** The ids of every open terminal. */
 export const terminalList = () => invoke<string[]>("terminal_list");
+
+// ---------------------------------------------------------------------------
+// The app launcher
+// ---------------------------------------------------------------------------
+
+/**
+ * The remembered command lines, grouped for the picker: the open codebase's
+ * first, then everything the user has run anywhere.
+ */
+export const listLaunchables = () =>
+  invoke<LauncherGroups>("list_launchables");
+
+/**
+ * Run a command line, streaming its output to `onEvent`.
+ *
+ * Unlike {@link startRun} this resolves as soon as the process is spawned — not
+ * when it exits — because a launched app is typically long-lived and the picker
+ * closes immediately. Watch `onEvent` for the exit. `cwd` defaults to the open
+ * workspace; `shell` hands the whole line to the default shell, which is
+ * required for anything using `|`, `>` or `&&` (an unquoted metacharacter is
+ * otherwise refused rather than passed through as an argument).
+ */
+export function launchCommand(
+  spec: {
+    command: string;
+    cwd?: string;
+    shell: boolean;
+    label?: string;
+    /**
+     * The key to address this launch by. Minted by the caller (not the backend)
+     * because output starts arriving the moment the process spawns — before this
+     * promise resolves — so the console needs its destination up front.
+     */
+    key: string;
+  },
+  onEvent: (event: ProcessEvent) => void,
+): Promise<LaunchedApp> {
+  const channel = new Channel<ProcessEvent>();
+  channel.onmessage = onEvent;
+  return invoke<LaunchedApp>("launch_command", { ...spec, channel });
+}
+
+/** Stop a launched app by the key {@link launchCommand} returned. */
+export const stopCommand = (key: string) =>
+  invoke<boolean>("stop_command", { key });
+
+/** Pin/unpin or rename a remembered command; resolves to the updated file. */
+export const saveLaunchable = (
+  id: string,
+  changes: { label?: string; pinned?: boolean },
+) => invoke<LauncherFile>("save_launchable", { id, ...changes });
+
+/** Forget a remembered command; resolves to the updated file. */
+export const deleteLaunchable = (id: string) =>
+  invoke<LauncherFile>("delete_launchable", { id });
 
 // ---------------------------------------------------------------------------
 // Running processes (the Running panel)
@@ -596,6 +725,20 @@ export const disableIntentCapture = (provider: ProviderId, scope: InstallScope) 
 export const importIntentHistory = () =>
   invoke<number>("import_intent_history");
 
+/**
+ * How much recorded history a prune would retire, changing nothing. The dry run
+ * shown before the archive action is confirmed.
+ */
+export const intentPrunePreview = () => invoke<RetireSummary>("intent_prune_preview");
+
+/**
+ * Archive every intent this workspace's HEAD has already absorbed. The only way
+ * to clear a backlog recorded before pruning existed: the automatic prune needs
+ * a baseline to notice HEAD moving against, so it never touches what was there
+ * already. Retired records are archived and tombstoned, never destroyed.
+ */
+export const pruneIntentHistory = () => invoke<RetireSummary>("prune_intent_history");
+
 export const clearIntentHistory = () => invoke<void>("clear_intent_history");
 
 /**
@@ -609,6 +752,27 @@ export const setCardIntent = (group: string, label: string, mode: ComparisonMode
 /** Remove the user's note from one card. Returns whether one was found. */
 export const clearCardIntent = (group: string, mode: ComparisonMode) =>
   invoke<boolean>("clear_card_intent", { group, mode });
+
+/** Where a move is going: an existing card, or a new one with this name. */
+export interface MoveDestination {
+  group?: string;
+  label?: string;
+}
+
+/**
+ * Move some of a card's changes into another card, or into a new one.
+ *
+ * `paths` narrows the move to those of the card's files; an empty array moves
+ * the whole card. Stored like a hand-written note — as the moved lines'
+ * *content* — so it rebinds when the lines shift and outranks any agent reason
+ * on them.
+ */
+export const moveCardEdits = (
+  group: string,
+  paths: string[],
+  destination: MoveDestination,
+  mode: ComparisonMode,
+) => invoke<void>("move_card_edits", { group, paths, destination, mode });
 
 // ---------------------------------------------------------------------------
 // Quality-gate Stop hook (`qgate/`) — installed the same way the intent hooks
@@ -873,6 +1037,9 @@ export const archValidate = (source: string) =>
  */
 export const lspStatus = () => invoke<LspStatus>("lsp_status");
 
+/** Tear down this workspace's language-server session and start a fresh one. */
+export const lspRestart = () => invoke<LspStatus>("lsp_restart");
+
 /**
  * Tell the servers the editor now holds `text` for `path`.
  *
@@ -933,6 +1100,119 @@ export const lspGotoDefinition = (
  */
 export const lspDeclarationAnchors = (path: string) =>
   invoke<AnchorResult>("lsp_declaration_anchors", { path });
+
+// ---------------------------------------------------------------------------
+// The SQL console
+// ---------------------------------------------------------------------------
+
+/**
+ * Every saved connection, redacted.
+ *
+ * No command in this section ever returns a connection string: a saved literal
+ * comes back only as the redacted `display` on its {@link SqlSecretView}. The
+ * store is user-global, not per-workspace, because a connection string is a
+ * password and `.code-basics/` is the directory this app shares with the team.
+ */
+export const sqlListConnections = () =>
+  invoke<SqlConnectionView[]>("sql_list_connections");
+
+/**
+ * The connections a workspace mentions — appsettings, user secrets, `.env`.
+ *
+ * Reads files and nothing else: it connects to nothing and saves nothing, and a
+ * candidate carries a *reference* to where its connection string lives rather
+ * than the string. Read `state` before offering to connect: `unresolved` means
+ * the value is still a variable reference, which is not the same as an engine
+ * nobody could determine.
+ */
+export const sqlDiscover = (root: string) =>
+  invoke<SqlDiscovery>("sql_discover", { root });
+
+/**
+ * Add or update a saved connection; returns the redacted list.
+ *
+ * `allowWrites` on the payload is **ignored**. Consent moves only through
+ * {@link sqlSetAllowWrites}, so no form round-trip can turn the read-only guard
+ * off, and a newly saved profile always starts with writes disallowed.
+ */
+export const sqlSaveConnection = (connection: SqlConnectionProfile) =>
+  invoke<SqlConnectionView[]>("sql_save_connection", { connection });
+
+/** Forget a saved connection. Rejects when the id names nothing. */
+export const sqlDeleteConnection = (id: string) =>
+  invoke<SqlConnectionView[]>("sql_delete_connection", { id });
+
+/**
+ * Allow or disallow writes on one connection — the consent action.
+ *
+ * Its own verb on purpose. Enabling writes both lifts the read-only guard for
+ * recognised writes (it never lifts a *refusal*, which is a different verdict)
+ * and, on an engine whose driver has a read-only open mode, gives up that
+ * protection: SQLite is then opened without `SQLITE_OPEN_READONLY`.
+ */
+export const sqlSetAllowWrites = (id: string, allowWrites: boolean) =>
+  invoke<SqlConnectionView[]>("sql_set_allow_writes", { id, allowWrites });
+
+/**
+ * Open the connection, prove a database is behind it, ask its version, and
+ * close it.
+ *
+ * The outcome is a variant and not a boolean, and the variants are the point: a
+ * timeout, a wrong password, an unresolvable secret and an engine this build
+ * has no driver for are four things the user does four different things about.
+ * `failed` is the honest fallback for a driver message the backend has no rule
+ * for — do not present it as "unreachable".
+ *
+ * Two of them are easy to merge and must not be. `notADatabase` means the
+ * handle opened and what is behind it is not a database (SQLite opens any file
+ * and only fails when a page is read, so this is *not* an `ok`), and
+ * `cannotOpenFile` means the path itself would not open — which is a wrong
+ * path, not an `unreachable` host.
+ */
+export const sqlTestConnection = (id: string) =>
+  invoke<SqlTestOutcome>("sql_test_connection", { id });
+
+/**
+ * Run SQL, streaming its rows to `onEvent`.
+ *
+ * `queryId` is minted by the caller — it is the handle {@link sqlCancel} stops
+ * the statement by, and it must be unique among the statements running on this
+ * connection. The promise resolves once the run is over; the last event is
+ * always `finished`, and everything the driver produced has already been
+ * delivered before it arrives.
+ *
+ * **The `rows` events are the rows.** `completed` carries a {@link
+ * SqlCompletion} — the counts, the cap and the elapsed time — and not the
+ * result set, so a grid must accumulate what it is streamed rather than waiting
+ * for a copy at the end. A `notice` is neither a refusal nor a failure: it is
+ * the guard saying what it thinks this statement is (an allowed write, for
+ * instance) while the statement runs.
+ *
+ * The submitted text is guarded and run as **one** statement at index 0: there
+ * is no splitter, because cutting a script on `;` would split a string literal
+ * or a `BEGIN … END` block and send the pieces.
+ */
+export function sqlExecute(
+  queryId: string,
+  connectionId: string,
+  sql: string,
+  onEvent: (event: SqlEvent) => void,
+): Promise<void> {
+  const channel = new Channel<SqlEvent>();
+  channel.onmessage = onEvent;
+  return invoke<void>("sql_execute", { queryId, connectionId, sql, channel });
+}
+
+/**
+ * Ask a running statement to stop reading.
+ *
+ * **Not a server-side cancel.** It stops this side reading and drops the
+ * connection; the server may still be executing the statement. `notFound` means
+ * nothing is running under that id — ordinary when a Stop click races a
+ * statement that has just finished, and not an error.
+ */
+export const sqlCancel = (queryId: string) =>
+  invoke<SqlStopOutcome>("sql_cancel", { queryId });
 
 /** Tauri returns command errors as plain strings. */
 export function errorMessage(error: unknown): string {

@@ -186,9 +186,18 @@ const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 /// costs a wasted read per VB file and nothing else, which is the cheaper half
 /// of the trade: dropping it would mean silently re-adding it the day VB gets
 /// rules, while leaving it means only the rules have to be written.
+///
+/// `razor` and `cshtml` are the ASP.NET view formats: HTML markup interleaved
+/// with C# in `@code` / `@functions` blocks and `@{ … }` expressions. They are
+/// listed because that embedded C# is real, jump-worthy source, and the C#
+/// rules in `declarations` scan it line by line and extract it. The surrounding
+/// markup and the `@page` / `@inject` / `@using` directives carry no lowercase
+/// declaring keyword, so — exactly like a `.vb` line — they abstain rather than
+/// fabricate a symbol, which is why listing the extension adds signal and not
+/// noise.
 const PARSABLE_EXTENSIONS: &[&str] = &[
     "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "cs", "fs", "vb", "py", "go", "java", "kt", "rb",
-    "php", "c", "h", "cpp", "hpp", "swift", "scala", "sql",
+    "php", "c", "h", "cpp", "hpp", "swift", "scala", "sql", "razor", "cshtml",
 ];
 
 /// The caps a build runs under.
@@ -382,6 +391,34 @@ pub fn replace_file(index: &mut SymbolIndex, relative: &Path, symbols: Vec<Symbo
     }
     if let Err(position) = index.files.binary_search(&relative) {
         index.files.insert(position, relative);
+    }
+}
+
+/// Drop a file from the index entirely: its symbols and its own entry.
+///
+/// [`replace_file`] deliberately cannot do this. It re-checks the path on disk
+/// and *keeps* the [`SymbolIndex::files`] entry when the file is not there,
+/// because the file being momentarily unreadable — mid-save, locked by another
+/// process — is not evidence that it is gone. Deleting or renaming one is
+/// evidence, and it is the only thing that is, so the caller who performed the
+/// deletion is the only one who can say so.
+///
+/// Without this, a deleted file goes on being offered by the search palette
+/// until the next full rebuild, and opening it fails on a path that no longer
+/// names anything.
+///
+/// Removing something the index never held is a no-op rather than an error:
+/// a file below the size or extension cut, or under build output, was never
+/// indexed, and its deletion is still a perfectly ordinary thing to report.
+pub fn remove_file(index: &mut SymbolIndex, relative: &Path) {
+    let relative = normalise(relative);
+
+    let start = index.symbols.partition_point(|s| s.path < relative);
+    let end = index.symbols.partition_point(|s| s.path <= relative);
+    index.symbols.drain(start..end);
+
+    if let Ok(position) = index.files.binary_search(&relative) {
+        index.files.remove(position);
     }
 }
 

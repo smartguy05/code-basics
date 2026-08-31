@@ -54,6 +54,17 @@ fn run_kind_is_camel_case() {
 }
 
 #[test]
+fn an_external_app_is_its_own_kind() {
+    // The launcher's processes must be distinguishable from configuration runs:
+    // the panel labels them differently and a kill routes to the global
+    // supervisor rather than a codebase's.
+    assert_eq!(
+        serde_json::to_value(RunKind::External).unwrap(),
+        serde_json::json!("external")
+    );
+}
+
+#[test]
 fn record_round_trips_through_json() {
     let rec = sample();
     let json = serde_json::to_string(&rec).unwrap();

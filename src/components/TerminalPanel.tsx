@@ -30,10 +30,15 @@ import { PillColorMenu } from "./PillColorMenu";
 export function TerminalPanel({
   title,
   cwd,
+  command,
   index,
+  stackOffset,
   color,
+  workspaceActive,
   onClose,
+  onRaise,
   onAttentionChange,
+  onCompleted,
   onRename,
   onRecolor,
 }: {
@@ -44,17 +49,61 @@ export function TerminalPanel({
    * repository even after its tab is backgrounded.
    */
   cwd: string;
+  /**
+   * What to run instead of the default shell — an interactive agent seeded with
+   * a question, for "Ask the codebase". Omitted for an ordinary terminal.
+   *
+   * Passed as a program plus an argv, never as a command line to be parsed: the
+   * PTY spawns through `CommandBuilder` with these arguments as they stand, so
+   * through a real executable a question with a quote, a newline or a `&` in it
+   * arrives intact. A Windows `.cmd`/`.bat` shim is the exception — `cmd.exe`
+   * re-parses the command line there, so the backend refuses an argument
+   * carrying `&`, `|`, `<`, `>`, `^`, `"` or `%` before spawning and the open
+   * fails with that reason (surfaced by the open effect below).
+   *
+   * The question is an **argument, not typed keystrokes**, for two further
+   * reasons. Typing a multi-line question into an agent's TUI would submit it at
+   * the first ``, asking a fragment; and this panel resolves its session id
+   * asynchronously (see `sessionRef`), so anything written before
+   * `terminal_open` resolves is dropped on the floor.
+   *
+   * Read once, by the mount-once open effect below — changing it later has no
+   * effect, which is why the host mints a new terminal per ask rather than
+   * re-pointing an existing one.
+   */
+  command?: { program: string; args: string[] };
   /** Position among the currently open terminals, for the cascade offset. */
   index: number;
+  /**
+   * This terminal's step within the terminal stacking band — how far in front of
+   * the other terminals it sits. Separate from `index` on purpose: `index` is
+   * positional (it places the pill and the cascade) and this is temporal (it
+   * records what was clicked last). See `terminalLogic.stackOffset`.
+   */
+  stackOffset: number;
   /** User-chosen minimized-pill background, or undefined for the theme default. */
   color?: string;
+  /** Whether this terminal's workspace is currently in the foreground. */
+  workspaceActive: boolean;
   onClose: () => void;
+  /** Bring this terminal in front of the others. Idempotent when already top. */
+  onRaise?: () => void;
   /**
    * Report this terminal's attention flag upward so its (possibly hidden)
    * workspace tab can flash. Fired whenever the flag changes, and cleared to
    * `false` when the terminal closes.
    */
   onAttentionChange?: (attention: boolean) => void;
+  /**
+   * Report how this terminal's process finished while it was out of sight.
+   *
+   * Minimized only, for the same reason the bell is: a terminal you are looking
+   * at has already told you it finished, in words, on its own last line. And
+   * unlike the bell this is a one-shot — "it finished" is a fact about a moment,
+   * not a state the terminal is in, so there is nothing to clear and the tab
+   * signal it raises expires on its own.
+   */
+  onCompleted?: (success: boolean) => void;
   /** Commit a new title (the host applies the blank-title guard). */
   onRename?: (title: string) => void;
   /** Set/clear the minimized-pill colour. */
@@ -75,6 +124,7 @@ export function TerminalPanel({
   const sizeRef = useRef<{ cols: number; rows: number }>({ cols: 80, rows: 24 });
   // Read inside the stable output handler without re-subscribing.
   const minimizedRef = useRef(false);
+  const workspaceActiveRef = useRef(workspaceActive);
 
   const [pos, setPos] = useState<PanelLayout | undefined>(() => {
     const saved = loadPanelLayout(localStorage, layoutKey);
@@ -94,6 +144,15 @@ export function TerminalPanel({
   const [editing, setEditing] = useState(false);
 
   minimizedRef.current = minimized;
+  workspaceActiveRef.current = workspaceActive;
+
+  // A workspace switch hides an otherwise-visible terminal. If its bell rang
+  // while hidden, returning to the workspace acknowledges it immediately when
+  // the panel itself is visible; a manually minimized terminal remains pending
+  // until its pill is restored.
+  useEffect(() => {
+    if (workspaceActive && !minimized) setAttention(false);
+  }, [workspaceActive, minimized]);
 
   // Report the attention flag up so this terminal's workspace tab can flash
   // even while the whole tab (and this pill) is hidden in the background.
@@ -123,6 +182,8 @@ export function TerminalPanel({
         },
         cwd,
         title,
+        command?.program,
+        command?.args,
       )
       .then((id) => {
         if (!alive) {
@@ -134,7 +195,10 @@ export function TerminalPanel({
         viewRef.current?.focus();
       })
       .catch((e) => {
-        if (alive) setError(String(e));
+        if (alive) {
+          setError(String(e));
+          if (minimizedRef.current || !workspaceActiveRef.current) onCompleted?.(false);
+        }
       });
 
     return () => {
@@ -149,7 +213,9 @@ export function TerminalPanel({
     switch (event.type) {
       case "output":
         viewRef.current?.write(event.text);
-        if (outputNeedsAttention(minimizedRef.current, event.text)) setAttention(true);
+        if (outputNeedsAttention(minimizedRef.current || !workspaceActiveRef.current, event.text)) {
+          setAttention(true);
+        }
         break;
       case "exited": {
         const note =
@@ -158,13 +224,18 @@ export function TerminalPanel({
             : `\r\n\x1b[${event.success ? 32 : 31}m[terminal exited: ${event.code}]\x1b[0m\r\n`;
         viewRef.current?.write(note);
         setExited(true);
-        // Exit/failure update the status line but do not flash: only the bell
-        // (handled in the output case) counts as the terminal asking for you.
+        // Exit does not flash *this* panel: only the bell (handled in the output
+        // case) counts as the terminal asking for you, and a finished terminal
+        // is not asking for anything. It is still worth saying one floor up,
+        // where a whole codebase is out of sight — hence the one-shot upward
+        // report, which the tab renders as a signal that expires by itself.
+        if (minimizedRef.current || !workspaceActiveRef.current) onCompleted?.(event.success);
         break;
       }
       case "failed":
         viewRef.current?.write(`\r\n\x1b[31m${event.message}\x1b[0m\r\n`);
         setError(event.message);
+        if (minimizedRef.current || !workspaceActiveRef.current) onCompleted?.(false);
         break;
     }
   }
@@ -211,6 +282,9 @@ export function TerminalPanel({
   // Restoring the panel acknowledges the flash, and re-fits the terminal to the
   // size it now has.
   const restore = () => {
+    // Restoring is an explicit "I want this one now". The pill is a sibling of
+    // the panel, so the panel's own pointer handler never sees this click.
+    onRaise?.();
     setMinimized(false);
     setAttention(false);
     // The fit must wait for the panel to become visible again this frame.
@@ -308,7 +382,14 @@ export function TerminalPanel({
         className="review-panel terminal-panel"
         hidden={minimized}
         ref={panelRef}
+        // Capture phase, on the root rather than the header, so clicking into the
+        // terminal *body* raises it too — and so this runs before the header's
+        // drag handler and before xterm sees the press. It deliberately neither
+        // preventDefaults nor stops propagation, which is what leaves xterm's
+        // text selection, the drag, and the header buttons untouched.
+        onPointerDownCapture={() => onRaise?.()}
         style={{
+          ...({ "--cb-stack": stackOffset } as React.CSSProperties),
           ...(pos
             ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" }
             : shift

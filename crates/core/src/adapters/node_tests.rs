@@ -185,11 +185,13 @@ fn build(
 ) -> crate::model::Invocation {
     test_invocation(
         &test_config(),
-        Path::new("/repo"),
-        Path::new("/repo/apps/web"),
-        manager,
-        runner,
-        Path::new("/repo/.code-basics/results"),
+        TestInvocationContext {
+            workspace_root: Path::new("/repo"),
+            project_dir: Path::new("/repo/apps/web"),
+            manager,
+            runner,
+            results_dir: Path::new("/repo/.code-basics/results"),
+        },
         filter,
         false,
     )
@@ -199,11 +201,13 @@ fn build(
 fn build_coverage(runner: TestRunner, manager: PackageManager) -> crate::model::Invocation {
     test_invocation(
         &test_config(),
-        Path::new("/repo"),
-        Path::new("/repo/apps/web"),
-        manager,
-        runner,
-        Path::new("/repo/.code-basics/results"),
+        TestInvocationContext {
+            workspace_root: Path::new("/repo"),
+            project_dir: Path::new("/repo/apps/web"),
+            manager,
+            runner,
+            results_dir: Path::new("/repo/.code-basics/results"),
+        },
         None,
         true,
     )

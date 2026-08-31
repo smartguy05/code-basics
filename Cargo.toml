@@ -3,9 +3,28 @@ members = ["crates/core", "src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
-rust-version = "1.82"
+# Measured, not guessed, on 2026-08-30 — and this line replaces a false one.
+#
+# The previous value, `"1.82"`, could not build this workspace and had not been
+# able to for some time: `cargo +1.82 check --workspace` dies before compiling a
+# single line of this repository, because `time-core 0.1.9` and
+# `hashbrown 0.17.1` in `Cargo.lock` declare `edition = "2024"`, which cargo
+# 1.82 does not stabilise and therefore cannot even parse. Across the 553
+# registry packages then locked, 33 use edition 2024 and 61 declare an MSRV
+# above 1.82; the highest declared is 1.88.0 (`time`, `plist`, `psm`,
+# `darling*`, `serde_with*`). Direct dependencies are among them —
+# `globset 0.4.19` (edition 2024), `uuid 1.24.0` (1.85), `reqwest 0.13.4`
+# (1.85). So 1.88 is the effective floor of the lockfile, and raising the line
+# to it restricts nothing that previously worked, because 1.82 did not work.
+#
+# To re-measure after a dependency change:
+#   rustup toolchain install <version>
+#   cargo +<version> check --workspace --all-targets
+# and read the *first* failure: a manifest that cannot be parsed is a cargo
+# floor, a `rustc` error is a language floor, and they move independently.
+rust-version = "1.88"
 license = "MIT"
 
 [workspace.dependencies]
@@ -22,6 +41,53 @@ globset = "0.4"
 walkdir = "2"
 toml = "0.8"
 regex = "1"
+# SQL statement parsing behind the SQL console's read-only guard. Pinned to an
+# exact minor: sqlparser is pre-1.0 and reshapes its AST between minors, and the
+# guard matches on that AST, so a float would let a patch upgrade silently change
+# which statements are classified as reads. 0.62 is the latest and declares no
+# rust-version, so nothing here raises the workspace 1.88 floor.
+sqlparser = "0.62.0"
+# The SQL console's database driver. Pinned to an exact patch, and `0.9` is
+# deliberately refused: sqlx 0.9.0 declares `rust-version = "1.94"`, far above
+# anything this workspace could promise. `default-features = false` is mandatory
+# and not a size optimisation — the default set includes `macros`, whose
+# `query!` forms resolve their SQL against a live `DATABASE_URL` **at compile
+# time**, which would make `cargo build` depend on a reachable database.
+# `postgres` is sqlx's own driver; SQL Server is not a sqlx engine at all and
+# arrives through `tiberius` below.
+# The `Stream` trait alone, so the SQL driver can poll `sqlx`'s row stream
+# without pulling in all of `futures-util`. Already in the tree as one of
+# sqlx's own dependencies.
+futures-core = "0.3"
+
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres"] }
+
+# The SQL console's SQL Server driver. sqlx has no SQL Server engine, so this is
+# a second, unrelated database stack rather than one more sqlx feature — which
+# is why `driver/mod.rs` is a trait seam and not a thin wrapper over sqlx.
+#
+# `default-features = false` drops all three defaults deliberately:
+#   * `native-tls` would build against the platform TLS stack; `rustls` is
+#     already in this tree twice over (reqwest and sqlx both use it), so
+#     reusing it costs nothing new and keeps Windows free of an OpenSSL build.
+#   * `winauth` is **Windows-only** — the `winauth` crate it enables does not
+#     compile on Linux — so it is re-enabled below under
+#     `[target.'cfg(windows)'.dependencies]` instead. Cargo unions features per
+#     target, so a Windows build gets integrated authentication and a Linux
+#     build still builds.
+#   * `tds73` is re-enabled here because it is not optional in practice: it is
+#     the TDS 7.3 protocol level, and without it `datetime2`, `date`, `time`
+#     and `datetimeoffset` columns cannot be read from any modern SQL Server.
+# `sql-browser-tokio` resolves a named instance (`Server=host\SQLEXPRESS`) over
+# the SQL Browser's UDP port, which is the ordinary shape of a local developer
+# install; without it only a host:port connection can be opened.
+tiberius = { version = "0.12.3", default-features = false, features = ["tds73", "rustls", "sql-browser-tokio"] }
+
+# tiberius is futures-io based and takes an `AsyncRead + AsyncWrite` from the
+# `futures` traits, while everything else here is tokio. `compat` is the adapter
+# that wraps a `tokio::net::TcpStream` into one, and it is the only reason this
+# is a direct dependency — tiberius already pulls tokio-util in transitively.
+tokio-util = { version = "0.7", features = ["compat"] }
 specta = { version = "2.0.0-rc.20", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
 yaml-rust2 = "0.10"

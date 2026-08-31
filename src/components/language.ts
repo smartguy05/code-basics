@@ -24,30 +24,30 @@ import { cpp } from "@codemirror/lang-cpp";
  * follows VS Code's dark theme, familiar enough to read at a glance.
  */
 const highlightStyle = HighlightStyle.define([
-  { tag: [tags.keyword, tags.modifier, tags.controlKeyword], color: "#c586c0" },
-  { tag: [tags.string, tags.special(tags.string)], color: "#ce9178" },
-  { tag: [tags.comment, tags.blockComment, tags.lineComment], color: "#6a9955", fontStyle: "italic" },
-  { tag: [tags.number, tags.integer, tags.float], color: "#b5cea8" },
-  { tag: [tags.bool, tags.atom, tags.null, tags.self], color: "#569cd6" },
-  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "#dcdcaa" },
-  { tag: [tags.typeName, tags.className, tags.namespace], color: "#4ec9b0" },
-  { tag: [tags.propertyName, tags.attributeName], color: "#9cdcfe" },
-  { tag: [tags.definition(tags.variableName), tags.local(tags.variableName)], color: "#9cdcfe" },
-  { tag: [tags.tagName], color: "#569cd6" },
-  { tag: [tags.operator, tags.operatorKeyword], color: "#d4d4d4" },
-  { tag: [tags.bracket, tags.paren, tags.squareBracket, tags.brace], color: "#f2c55c" },
+  { tag: [tags.keyword, tags.modifier, tags.controlKeyword], color: "var(--syntax-keyword)" },
+  { tag: [tags.string, tags.special(tags.string)], color: "var(--syntax-string)" },
+  { tag: [tags.comment, tags.blockComment, tags.lineComment], color: "var(--syntax-comment)", fontStyle: "italic" },
+  { tag: [tags.number, tags.integer, tags.float], color: "var(--syntax-number)" },
+  { tag: [tags.bool, tags.atom, tags.null, tags.self], color: "var(--syntax-literal)" },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "var(--syntax-function)" },
+  { tag: [tags.typeName, tags.className, tags.namespace], color: "var(--syntax-type)" },
+  { tag: [tags.propertyName, tags.attributeName], color: "var(--syntax-property)" },
+  { tag: [tags.definition(tags.variableName), tags.local(tags.variableName)], color: "var(--syntax-property)" },
+  { tag: [tags.tagName], color: "var(--syntax-tag)" },
+  { tag: [tags.operator, tags.operatorKeyword], color: "var(--syntax-operator)" },
+  { tag: [tags.bracket, tags.paren, tags.squareBracket, tags.brace], color: "var(--syntax-bracket)" },
   { tag: [tags.angleBracket], color: "#808080" },
-  { tag: [tags.regexp, tags.escape], color: "#d16969" },
-  { tag: [tags.meta, tags.processingInstruction], color: "#8b93a3" },
-  { tag: tags.invalid, color: "#e05561" },
+  { tag: [tags.regexp, tags.escape], color: "var(--syntax-regexp)" },
+  { tag: [tags.meta, tags.processingInstruction], color: "var(--syntax-meta)" },
+  { tag: tags.invalid, color: "var(--syntax-invalid)" },
   { tag: tags.strong, fontWeight: "bold" },
   { tag: tags.emphasis, fontStyle: "italic" },
-  { tag: tags.link, color: "#5a78dc", textDecoration: "underline" },
-  { tag: tags.heading, color: "#569cd6", fontWeight: "bold" },
+  { tag: tags.link, color: "var(--syntax-link)", textDecoration: "underline" },
+  { tag: tags.heading, color: "var(--syntax-tag)", fontWeight: "bold" },
   { tag: tags.strikethrough, textDecoration: "line-through" },
-  { tag: tags.monospace, color: "#ce9178" },
-  { tag: tags.quote, color: "#6a9955", fontStyle: "italic" },
-  { tag: tags.contentSeparator, color: "#f2c55c" },
+  { tag: tags.monospace, color: "var(--syntax-string)" },
+  { tag: tags.quote, color: "var(--syntax-comment)", fontStyle: "italic" },
+  { tag: tags.contentSeparator, color: "var(--syntax-bracket)" },
 ]);
 
 /**
@@ -88,6 +88,12 @@ export function languageFor(path: string): Extension[] {
     case "scss":
       return [css()];
     case "html":
+    // ASP.NET razor / cshtml views: HTML markup with C# interleaved in
+    // `@code` / `@{ … }` blocks. No razor mode ships with CodeMirror, so the
+    // HTML mode is the close-enough approximation — it highlights the markup
+    // and leaves the C# as plain text (the same trade cpp makes for C#).
+    case "razor":
+    case "cshtml":
       return [html()];
     case "py":
       return [python()];

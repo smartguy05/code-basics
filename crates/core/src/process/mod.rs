@@ -94,6 +94,10 @@ struct Running {
     /// Set before killing so the exit is reported as a cancellation rather
     /// than a failure.
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// Distinguishes this run from a later run that reused the same id. A
+    /// superseded run's exit must not evict the run that replaced it, so the
+    /// exit removes the map entry only while this token still owns it.
+    token: u64,
 }
 
 /// Owns every process the app has started.
@@ -107,6 +111,8 @@ pub struct Supervisor {
     /// Running panel and crash-orphan file. `None` for the plain [`Supervisor`]
     /// the process tests use, which record nothing.
     store: Option<crate::running::RunningStore>,
+    /// Monotonic source of per-run ownership tokens (see [`Running::token`]).
+    next_token: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Supervisor {
@@ -119,13 +125,16 @@ impl Supervisor {
         Self {
             running: Arc::new(Mutex::new(HashMap::new())),
             store: Some(store),
+            next_token: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
     /// Run `invocation` to completion, streaming events to `events`.
     ///
-    /// `id` names the process for later [`Supervisor::cancel`] calls; reusing an
-    /// id replaces the previous entry, which is what a "restart" does.
+    /// `id` names the process for later [`Supervisor::cancel`] calls. Reusing an
+    /// id restarts: the process already running under it is stopped and awaited
+    /// (freeing its port) before the replacement spawns, and the registry then
+    /// tracks the replacement.
     ///
     /// Returns the exit code, or `None` if the process was signalled or
     /// cancelled.
@@ -169,7 +178,13 @@ impl Supervisor {
             .current_dir(&invocation.cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            // Safety net for a runtime teardown that drops this future without
+            // going through `cancel` (e.g. the process is left holding the
+            // `Child` when the app's Tokio runtime shuts down). This reaps only
+            // the direct child, not its tree — the app's exit sweep is what
+            // kills grandchildren like `dotnet run`'s built assembly.
+            .kill_on_drop(true);
 
         for (k, v) in &invocation.env {
             cmd.env(k, v);
@@ -196,6 +211,13 @@ impl Supervisor {
 
         kill::configure_process_group(&mut cmd);
 
+        // Restart safety: if this id is already running, stop the old process
+        // and wait for the tree-kill to complete before spawning the new one.
+        // Otherwise the replacement races the original for its port and the
+        // original is orphaned. `cancel` is a no-op returning `false` when
+        // nothing is registered under `id`, so a first run pays nothing.
+        self.cancel(id).await;
+
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -215,11 +237,15 @@ impl Supervisor {
 
         let pid = child.id();
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let token = self
+            .next_token
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.running.lock().await.insert(
             id.to_string(),
             Running {
                 pid,
                 cancel: cancel.clone(),
+                token,
             },
         );
 
@@ -256,11 +282,21 @@ impl Supervisor {
         let _ = out_task.await;
         let _ = err_task.await;
 
-        self.running.lock().await.remove(id);
-        // Deregister from the running-process registry on the same reap, so the
-        // panel and the crash-orphan file stop showing it the moment it ends.
-        if let (Some(store), Some(meta)) = (&self.store, &meta) {
-            store.remove(&meta.root, id);
+        // Remove only while this run still owns the id. A restart cancels this
+        // run and installs a replacement under the same id; when this (now
+        // superseded) run finally reaps, the entry belongs to the replacement
+        // and must be left alone — both in the map and in the registry.
+        {
+            let mut guard = self.running.lock().await;
+            if guard.get(id).map(|r| r.token) == Some(token) {
+                guard.remove(id);
+                // Deregister from the running-process registry on the same reap,
+                // so the panel and the crash-orphan file stop showing it the
+                // moment it ends.
+                if let (Some(store), Some(meta)) = (&self.store, &meta) {
+                    store.remove(&meta.root, id);
+                }
+            }
         }
 
         let cancelled = cancel.load(std::sync::atomic::Ordering::SeqCst);
@@ -296,19 +332,39 @@ impl Supervisor {
     /// Returns `false` when no process is registered under `id` — normally
     /// because it already exited.
     pub async fn cancel(&self, id: &str) -> bool {
-        let target = {
+        let (target, token) = {
             let guard = self.running.lock().await;
             match guard.get(id) {
                 Some(r) => {
                     r.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
-                    r.pid
+                    (r.pid, r.token)
                 }
                 None => return false,
             }
         };
 
         match target {
-            Some(pid) => kill::kill_tree_async(pid).await,
+            Some(pid) => {
+                if kill::kill_tree_async(pid).await {
+                    return true;
+                }
+
+                // A process can be reaped between the registry lookup above
+                // and `taskkill` reaching it. In that race the cancellation
+                // request still succeeded; do not report failure merely
+                // because the target disappeared first. Give the waiter a
+                // bounded chance to remove this exact run, while preserving a
+                // real kill failure when it continues to own the id.
+                for _ in 0..50 {
+                    let still_owns_id =
+                        self.running.lock().await.get(id).map(|r| r.token) == Some(token);
+                    if !still_owns_id {
+                        return true;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                false
+            }
             // Spawned but no pid means it already exited.
             None => false,
         }
@@ -658,6 +714,77 @@ mod tests {
         // send a capture at a pid the OS may since have reused.
         assert_eq!(sup.pid("app").await, None);
         assert!(sup.running().await.is_empty());
+    }
+
+    async fn wait_running(sup: &Supervisor, id: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                if sup.is_running(id).await {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("process never started - is sh on PATH? (run cargo test from Git Bash)");
+    }
+
+    #[tokio::test]
+    async fn restarting_an_id_stops_the_old_process_and_keeps_the_new_cancellable() {
+        // Reproduction for the restart bug: reusing an id must (a) stop the old
+        // process so it stops holding its port, and (b) leave the registry
+        // pointing at the NEW process — the old run's late exit must not evict
+        // the entry that replaced it, or the new run becomes uncancellable.
+        let sup = Supervisor::new();
+
+        let (tx1, _rx1) = mpsc::channel(64);
+        let run1 = {
+            let sup = sup.clone();
+            let inv = invocation("sh", &["-c", "sleep 60"]);
+            tokio::spawn(async move { sup.run("svc", &inv, tx1).await })
+        };
+        wait_running(&sup, "svc").await;
+        let pid1 = sup.pid("svc").await.expect("first run has a pid");
+
+        // Restart under the same id.
+        let (tx2, _rx2) = mpsc::channel(64);
+        let run2 = {
+            let sup = sup.clone();
+            let inv = invocation("sh", &["-c", "sleep 60"]);
+            tokio::spawn(async move { sup.run("svc", &inv, tx2).await })
+        };
+
+        // The registry must move to a *different* pid — proving the old process
+        // was stopped and the new one recorded in its place.
+        let pid2 = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                if let Some(p) = sup.pid("svc").await {
+                    if p != pid1 {
+                        break p;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("restart never produced a new pid");
+        assert_ne!(pid1, pid2);
+
+        // The first run's task ends because its process was killed.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), run1)
+            .await
+            .expect("old run should end after being superseded");
+
+        // Only the new process is registered, and it is still cancellable.
+        assert_eq!(sup.pid("svc").await, Some(pid2));
+        assert!(
+            sup.cancel("svc").await,
+            "the new run must still be cancellable after the old one exited"
+        );
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), run2)
+            .await
+            .expect("new run should end when cancelled");
+        assert!(!sup.is_running("svc").await);
     }
 
     #[tokio::test]

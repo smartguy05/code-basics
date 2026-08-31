@@ -5,10 +5,15 @@ import {
   cardCandidates,
   cardHeadline,
   cardTitle,
+  canMove,
   intentEditPlan,
+  moveDescription,
+  moveTargets,
   isAmbiguousIntent,
   groupStagedState,
   importFeedback,
+  pruneFeedback,
+  prunePrompt,
   intentDataHint,
   rejectFeedback,
   rejectReasonError,
@@ -536,5 +541,104 @@ describe("intentEditPlan", () => {
       expect(plan.initial, kind).toBe("");
       expect(plan.hasUserNote, kind).toBe(false);
     }
+  });
+});
+
+describe("prunePrompt", () => {
+  it("offers nothing when nothing has been absorbed", () => {
+    expect(prunePrompt({ recordsRetired: 0, labelsRetired: 0, keptRecords: 12 })).toBeNull();
+  });
+
+  it("says how many go, that they are archived rather than deleted, and what stays", () => {
+    const prompt = prunePrompt({ recordsRetired: 3, labelsRetired: 1, keptRecords: 2 });
+    expect(prompt).toContain("3 recorded edits");
+    expect(prompt).toContain("not the bin");
+    expect(prompt).toContain("2 still explain");
+  });
+
+  it("uses the singular for one record", () => {
+    expect(prunePrompt({ recordsRetired: 1, labelsRetired: 0, keptRecords: 1 })).toContain(
+      "1 recorded edit ",
+    );
+  });
+});
+
+describe("pruneFeedback", () => {
+  it("says plainly when there was nothing to archive", () => {
+    expect(pruneFeedback({ recordsRetired: 0, labelsRetired: 0, keptRecords: 4 })).toContain(
+      "Nothing to archive",
+    );
+  });
+
+  it("names where the archived records went, so they can be recovered", () => {
+    const text = pruneFeedback({ recordsRetired: 5, labelsRetired: 2, keptRecords: 0 });
+    expect(text).toContain("Archived 5 recorded edits");
+    expect(text).toContain("edits-archive.jsonl");
+  });
+});
+
+describe("moveTargets", () => {
+  const cards: IntentGroup[] = [
+    { ...group("intent"), id: "a", label: "first" },
+    { ...group("intent"), id: "b", label: "second" },
+    { ...group("modifiedSymbol"), id: "c", label: "handleRequest" },
+  ];
+
+  it("offers every other card", () => {
+    expect(moveTargets(cards, "a")).toEqual([
+      { id: "b", label: "second" },
+      { id: "c", label: "handleRequest" },
+    ]);
+  });
+
+  it("never offers the card the selection is already in", () => {
+    expect(moveTargets(cards, "b").map((t) => t.id)).toEqual(["a", "c"]);
+  });
+
+  it("offers a card the tooling titled itself — overriding those is the point", () => {
+    expect(moveTargets(cards, "a").some((t) => t.id === "c")).toBe(true);
+  });
+
+  it("does not offer an ambiguous card, which has no name to pick it by", () => {
+    const ambiguous = { ...group("intent"), id: "amb", label: "", candidates: ["x", "y"] };
+    expect(moveTargets([...cards, ambiguous], "a").some((t) => t.id === "amb")).toBe(false);
+  });
+
+  it("offers nothing when there is only the one card", () => {
+    expect(moveTargets([cards[0]!], "a")).toEqual([]);
+  });
+});
+
+describe("moveDescription", () => {
+  const target = { id: "b", label: "second" };
+
+  it("says the whole card when no files are named", () => {
+    expect(moveDescription([], null, false)).toContain("every change in this card");
+  });
+
+  it("names the single file being moved", () => {
+    expect(moveDescription(["src/a.ts"], null, false)).toContain("src/a.ts");
+  });
+
+  it("counts several files rather than listing them", () => {
+    expect(moveDescription(["a", "b", "c"], null, false)).toContain("3 files");
+  });
+
+  it("warns that an agent's reason stops titling the destination", () => {
+    expect(moveDescription([], target, false)).toContain("stops titling it");
+  });
+
+  it("does not warn when the destination is already the user's own note", () => {
+    expect(moveDescription([], target, true)).not.toContain("stops titling it");
+  });
+});
+
+describe("canMove", () => {
+  it("is false for a card with no files to move", () => {
+    expect(canMove({ ...group("intent"), id: "a", files: [] })).toBe(false);
+  });
+
+  it("is true for an ordinary card", () => {
+    expect(canMove(group("intent"))).toBe(true);
   });
 });

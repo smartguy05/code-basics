@@ -5,7 +5,8 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 ## Getting started
 
 - [Installation](getting-started/installation.md) — prerequisites, first run, building a distributable
-- [Using the app](getting-started/using-the-app.md) — opening workspaces, a tour of the six views, and the floating terminals
+- [Using the app](getting-started/using-the-app.md) — opening workspaces, a tour of the six views, the floating terminals, and launching other apps
+- [Customizing the app](getting-started/customizing.md) — themes, fonts, font sizes, shortcuts, and project attention signals
 
 ## Architecture
 
@@ -29,7 +30,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 ## Reference
 
 - [Tauri command surface](reference/commands.md) — every IPC command with parameters and return types
-- [Configuration](reference/configuration.md) — `.code-basics/` layout, `config.json`, and `RunConfig` fields
+- [Configuration](reference/configuration.md) — `.code-basics/` layout, `config.json`, `RunConfig` fields, and the user-global stores
 - [Test report formats](reference/test-reports.md) — TRX, Jest/Vitest JSON, and JUnit XML
 
 ## Index

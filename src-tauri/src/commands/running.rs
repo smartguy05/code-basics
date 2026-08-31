@@ -53,8 +53,12 @@ pub async fn kill_running(
         // A terminal closes through the PTY manager (tree-kills its shell's
         // children — a `claude`/`node` under it — the same as the close button).
         RunKind::Terminal => Ok(state.pty.close(&key).await),
-        // Review and behavioral runs live in the global supervisor.
-        RunKind::Review | RunKind::Behavioral => Ok(state.supervisor.cancel(&key).await),
+        // Review, behavioral and launched apps live in the global supervisor —
+        // an app the user launched is not owned by whichever codebase tab was in
+        // front when they started it.
+        RunKind::Review | RunKind::Behavioral | RunKind::External => {
+            Ok(state.supervisor.cancel(&key).await)
+        }
     }
 }
 

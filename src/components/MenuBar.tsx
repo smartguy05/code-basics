@@ -37,6 +37,8 @@ export function MenuBar({
   onRescan,
   onRunAgent,
   onOpenReview,
+  onOpenFeatures,
+  onOpenSettings,
 }: {
   onOpen: () => void;
   onRescan: () => void;
@@ -44,6 +46,10 @@ export function MenuBar({
   onRunAgent: (promptId: string) => void;
   /** Open the agent panel as an adversarial review (mirrors the Changes tab). */
   onOpenReview: () => void;
+  /** Open the optional-features picker. */
+  onOpenFeatures: () => void;
+  /** Open user-global appearance and keyboard settings. */
+  onOpenSettings: () => void;
 }) {
   const [menu, setMenu] = useState<TopMenu | null>(null);
   const [sub, setSub] = useState<Submenu | null>(null);
@@ -175,6 +181,25 @@ export function MenuBar({
               }}
             >
               Rescan
+            </div>
+            <div className="dropdown-separator" />
+            <div
+              className="dropdown-item"
+              onClick={() => {
+                close();
+                onOpenFeatures();
+              }}
+            >
+              Optional features…
+            </div>
+            <div
+              className="dropdown-item"
+              onClick={() => {
+                close();
+                onOpenSettings();
+              }}
+            >
+              Settings…
             </div>
             <div className="dropdown-separator" />
             <div

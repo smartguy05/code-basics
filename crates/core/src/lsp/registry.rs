@@ -655,7 +655,7 @@ const ROSLYN_ENV: &str = "CB_ROSLYN_PATH";
 ///
 /// `ms-dotnettools.csdevkit` is a different, proprietary extension and is never
 /// reached into; the prefix ends with `csharp-` so it cannot match.
-const CSHARP_EXTENSION_PREFIX: &str = "ms-dotnettools.csharp-";
+pub(crate) const CSHARP_EXTENSION_PREFIX: &str = "ms-dotnettools.csharp-";
 
 /// The editor extension roots, in the order they are preferred.
 ///
@@ -664,7 +664,7 @@ const CSHARP_EXTENSION_PREFIX: &str = "ms-dotnettools.csharp-";
 /// alternative — highest version across all editors — would launch a
 /// Windsurf-installed server for somebody working in VS Code, which is
 /// unpredictable in a way a user cannot see.
-const EDITOR_DIRS: &[&str] = &[
+pub(crate) const EDITOR_DIRS: &[&str] = &[
     ".vscode",
     ".vscode-insiders",
     ".vscode-server",
@@ -867,7 +867,7 @@ fn best_roslyn_in(
 /// `None` for anything that does not parse, including a component too large for
 /// a `u64`: a marketplace directory name is not a contract, and a name we cannot
 /// read must not be ranked as though we could.
-fn parse_extension_version(dir_name: &str) -> Option<Vec<u64>> {
+pub(crate) fn parse_extension_version(dir_name: &str) -> Option<Vec<u64>> {
     let rest = dir_name.strip_prefix(CSHARP_EXTENSION_PREFIX)?;
     // The platform triple (`-win32-x64`) and any pre-release suffix follow the
     // first `-`; only the dotted numeric part before it is a version.

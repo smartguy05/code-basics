@@ -11,6 +11,11 @@ import type { InstallScope, ProviderStatus } from "../ipc/types";
  *   any repo with the right tooling and does not depend on an agent.
  * - Intent capture only warrants it when an agent is actually detected; there is
  *   nothing to install for an agent that is not present.
+ * - Intent capture counts only at **project** scope. It is a team-shared hook
+ *   that writes into the repository, so a global user-scope install does not
+ *   set it up for a given project — the project still needs its own. Without
+ *   this, a developer with the hooks installed globally would never be prompted
+ *   in any repository.
  */
 export function needsSetup(
   providers: ProviderStatus[],
@@ -18,7 +23,7 @@ export function needsSetup(
 ): boolean {
   const gateInstalled = gateScope !== null;
   const detected = providers.filter((p) => p.detected);
-  const intentInstalled = detected.some((p) => p.capture != null);
+  const intentInstalled = detected.some((p) => p.capture === "project");
   return !gateInstalled || (detected.length > 0 && !intentInstalled);
 }
 

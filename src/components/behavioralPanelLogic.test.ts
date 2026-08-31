@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   behavioralBadge,
   behavioralScoreLine,
+  deltaConfidenceNote,
+  deltaDetail,
+  EVIDENCE_LINE_CAP,
+  testCaseRows,
+  unattributedReason,
   httpFileCandidates,
   httpStatusTone,
   pickBehavioralConfig,
@@ -251,5 +256,170 @@ describe("pickBehavioralConfig", () => {
 
   it("returns null when there are no configs", () => {
     expect(pickBehavioralConfig([])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The evidence detail: what the panel and the verify-claims prompt both render
+// under a one-line delta summary.
+// ---------------------------------------------------------------------------
+
+describe("deltaDetail", () => {
+  it("renders console removals before additions, each prefixed", () => {
+    const rows = deltaDetail({
+      kind: "console",
+      addedLines: ["now this"],
+      removedLines: ["was this"],
+      normalized: false,
+      confidence: "medium",
+    });
+    expect(rows.map((r) => r.text)).toEqual(["- was this", "+ now this"]);
+    expect(rows.map((r) => r.kind)).toEqual(["removed", "added"]);
+  });
+
+  it("notes masking only when the run actually normalised something", () => {
+    const masked = deltaDetail({
+      kind: "console",
+      addedLines: ["a"],
+      removedLines: [],
+      normalized: true,
+      confidence: "low",
+    });
+    expect(masked.at(-1)?.kind).toBe("note");
+    expect(masked.at(-1)?.text).toMatch(/masked/i);
+
+    const raw = deltaDetail({
+      kind: "console",
+      addedLines: ["a"],
+      removedLines: [],
+      normalized: false,
+      confidence: "low",
+    });
+    expect(raw.every((r) => r.kind !== "note")).toBe(true);
+  });
+
+  it("caps each side and says how many it withheld", () => {
+    const many = Array.from({ length: EVIDENCE_LINE_CAP + 3 }, (_, i) => `line ${i}`);
+    const rows = deltaDetail({
+      kind: "console",
+      addedLines: many,
+      removedLines: [],
+      normalized: false,
+      confidence: "medium",
+    });
+    expect(rows.filter((r) => r.kind === "added")).toHaveLength(EVIDENCE_LINE_CAP);
+    expect(rows.at(-1)).toEqual({ text: "+3 more", tone: "neutral", kind: "note" });
+  });
+
+  it("renders an http status, its header changes and its body lines", () => {
+    const rows = deltaDetail({
+      kind: "http",
+      name: "GET /orders",
+      status: [200, 500],
+      headerChanges: [
+        { name: "x-total", before: "3", after: "4" },
+        { name: "x-new", before: null, after: "1" },
+        { name: "x-gone", before: "1", after: null },
+      ],
+      body: { addedLines: ["}"], removedLines: ["{"], normalized: true },
+      confidence: "medium",
+    });
+    expect(rows.map((r) => r.text)).toEqual([
+      "status 200 → 500",
+      "x-total: 3 → 4",
+      "x-new: absent → 1",
+      "x-gone: 1 → absent",
+      "- {",
+      "+ }",
+      "timestamps and ids were masked before comparing",
+    ]);
+    expect(rows[0]?.tone).toBe("warning");
+  });
+
+  it("says a response changed even with no status, header or body detail", () => {
+    const rows = deltaDetail({
+      kind: "http",
+      name: "GET /orders",
+      status: null,
+      headerChanges: [],
+      body: null,
+      confidence: "high",
+    });
+    expect(rows).toEqual([
+      { text: "the response differed, but no status, header or body detail was recorded", tone: "neutral", kind: "note" },
+    ]);
+  });
+
+  it("spells a test case's before and after outcome, absent sides included", () => {
+    expect(
+      deltaDetail({
+        kind: "test",
+        fullName: "Ns.Case",
+        base: "failed",
+        work: "passed",
+        transition: "fixed",
+        filesHint: [],
+      }),
+    ).toEqual([{ text: "failed → passed", tone: "positive", kind: "note" }]);
+
+    expect(
+      deltaDetail({
+        kind: "test",
+        fullName: "Ns.Case",
+        base: null,
+        work: "passed",
+        transition: "added",
+        filesHint: [],
+      })[0]?.text,
+    ).toBe("absent → passed");
+  });
+});
+
+describe("deltaConfidenceNote", () => {
+  it("reports the confidence console and http deltas carry", () => {
+    expect(deltaConfidenceNote(consoleDelta())).toBe("medium confidence");
+    expect(deltaConfidenceNote(httpDelta(null))).toBe("high confidence");
+  });
+
+  it("has nothing to report for a test delta, which carries none of its own", () => {
+    expect(deltaConfidenceNote(testDelta("fixed"))).toBeNull();
+  });
+});
+
+describe("unattributedReason", () => {
+  it("names the rule that kept each kind off a card", () => {
+    expect(unattributedReason(testDelta("regressed"))).toMatch(/not mapped to a source file/);
+    expect(unattributedReason(httpDelta([200, 500]))).toMatch(/handler is not derivable/);
+    expect(unattributedReason(consoleDelta())).toMatch(/no single intent card/);
+  });
+});
+
+describe("testCaseRows", () => {
+  const summary = { total: 1, passed: 1, failed: 0, skipped: 0, other: 0 };
+
+  it("lists each changed case with its transition and outcome pair", () => {
+    const rows = testCaseRows({
+      cases: [
+        {
+          fullName: "Ns.Broke",
+          base: "passed",
+          work: "failed",
+          transition: "regressed",
+          filesHint: [],
+        },
+      ],
+      summaryBefore: summary,
+      summaryAfter: summary,
+    });
+    expect(rows).toEqual([
+      { text: "regressed: Ns.Broke (passed → failed)", tone: "warning", kind: "note" },
+    ]);
+  });
+
+  it("says so plainly when nothing moved, rather than rendering nothing", () => {
+    const rows = testCaseRows({ cases: [], summaryBefore: summary, summaryAfter: summary });
+    expect(rows).toEqual([
+      { text: "no test case changed outcome", tone: "neutral", kind: "note" },
+    ]);
   });
 });

@@ -29,7 +29,7 @@ Both paths emit TRX, so one parser serves both — pinned by fixtures from each 
 
 Also parses `launchSettings.json` profiles for application launches and handles multi-target frameworks and build configurations. Profiles describing a hosting model this app cannot start (IIS Express, Docker) are returned marked `launchable: false` rather than dropped, so a project whose only profile is one of those can explain itself instead of appearing to have none.
 
-Application launches follow `dotnet run`'s own defaults: no named profile means the first `Project` profile applies (environment and `applicationUrl` included); `RunConfig.ignore_launch_settings` is the explicit `--no-launch-profile` opt-out, and warns when it strips `ASPNETCORE_ENVIRONMENT` (which silently disables user secrets). Detected test configurations are Debug-only — `#if !DEBUG` code paths make an auto-offered Release test run a trap — though the editor offers every configuration a project declares in `<Configurations>`. A multi-targeted project gets one configuration per framework, since neither `dotnet run` nor `dotnet test` will guess. `BuildAction` / `build_action_invocation` produce the `dotnet build` / `build --no-incremental` / `clean` command lines behind the UI's build buttons.
+Application launches follow `dotnet run`'s own defaults: no named profile means the first `Project` profile applies (environment and `applicationUrl` included); `RunConfig.ignore_launch_settings` is the explicit `--no-launch-profile` opt-out, and warns when it strips `ASPNETCORE_ENVIRONMENT` (which silently disables user secrets). Detected test configurations are Debug-only — `#if !DEBUG` code paths make an auto-offered Release test run a trap — though the editor offers every configuration a project declares in `<Configurations>`. A multi-targeted project gets one configuration per framework, since neither `dotnet run` nor `dotnet test` will guess — but **not** one per build configuration. Fanning `<Configurations>` out that way put one project in the list two or three times over (`App (Debug)`, `App (Release)`, `App (Staging)`), which is a list of build flags wearing the costume of a list of things to run. Debug versus Release is a property of *this* launch, the way the environment is, so `configs_for_project` emits one plain entry defaulted to `debug_configuration` and the Run toolbar overrides `build_configuration` per run. The entry keeps its `:run:debug` id so an existing favourite still names it; the ids that stopped existing need no migration, because `config::sort_configs` looks each `favorites`/`order` id up and an unmatched one simply never applies. A migration would in fact have been *dangerous*: a launch profile's id is also `:run:{sanitised name}`, so a rule rewriting `:run:<anything>` would have destroyed the profile configurations too. `BuildAction` / `build_action_invocation` produce the `dotnet build` / `build --no-incremental` / `clean` command lines behind the UI's build buttons.
 
 Project classification reads `<OutputType>` (including from an inherited `Directory.Build.props`), falling back to SDK defaults for the SDKs that imply an executable, and to the `<UseMaui>` / `<IsAspireHost>` / `Aspire.AppHost.Sdk` workload markers for app types that leave `<OutputType>` to the workload. `Microsoft.NET.Sdk.Razor` is deliberately *not* treated as an executable: it builds Razor class libraries.
 
@@ -152,6 +152,24 @@ Only the last three own a process, and their mistakes are invisible rather than 
 
 The abstain rule in this subsystem's terms: a timeout, a dead server, a server still loading its projects and a server that genuinely found nothing are **four different answers** and must never collapse into "0 usages". Capability negotiation is a gate rather than a formality — a missing `implementationProvider` produces "this server does not provide implementations", not an empty group that reads as "there are none" — and a server whose `textDocumentSync` is `None`, or which insists on a position encoding other than UTF-16, is refused outright rather than queried with columns we would compute wrongly. `documentSymbol` is the one request that also refuses when *we* are at fault: it is a question about an open buffer, so a file that could not be read to open it fails with that reason rather than answering "this file declares nothing".
 
+## `dap`
+
+Debugging — breakpoints, stepping and a call stack — over the Debug Adapter Protocol. **Only the pure layers exist today**: `protocol`, `sequence`, `positions`, `breakpoints`, `registry` and `model`, tested (104 tests) with no debugger installed. There is no transport, no session and no UI, so **nothing can start a debug session yet**; what is here is the foundation those need, and the module is documented now so the rules it encodes are not rediscovered later.
+
+It sits beside [`inspect`](#inspect) and is not a version of it. `inspect` reads an **unsuspended** heap through ClrMD, calls no method and evaluates no property — a photograph. `dap` stops the process and asks the runtime's own debugger, which is the thing the Objects tab's documentation keeps saying it is not.
+
+Two pieces are **reused rather than rewritten**. DAP frames messages exactly as LSP does — `Content-Length` then JSON — so [`lsp::framing`](#lsp) is used unchanged; a second copy would be a second place for the fail-closed rule to drift. Adapter discovery reuses `lsp::registry`'s `Probe` (both modules ask a machine the same four questions), along with its editor-directory list and numeric extension-version parsing, so `2.140.9` beats `2.9.0` here too.
+
+The **envelope is not JSON-RPC**, and treating it as one produces a bug nobody can see: a response points back with `request_seq` while carrying a `seq` of its own, so matching on `seq` — the field JSON-RPC would have used — pairs every response with the wrong request. `request_seq` is also spelled in *snake case*, alone among the base protocol's fields, so `Response` carries no `rename_all` and a test pins the exact keys; camel-casing it decodes every response with `request_seq: 0` and the debugger appears to hang on its first request. `sequence::needs_reply` states the other trap in one place: an adapter may send a **request** to the client (`runInTerminal`, `startDebugging`) and blocks until it is answered.
+
+The governing rule is the sharpest in the crate, because a debugger that is subtly wrong is worse than none — the user acts on what it shows them:
+
+- **Six states, never one.** `model::DebugState` distinguishes *not running*, *starting*, *running*, *paused*, *exited* and *no adapter installed*. Each licenses something different: only `Paused` licenses a call stack, `Exited` carries a code `NotRunning` has no business inventing, and `NotInstalled` is the only one the user can act on — so it carries every path that was searched and how to install one, and is **never** degraded into starting the process without a debugger.
+- **A breakpoint set and a breakpoint bound are different facts.** `breakpoints::BindState` keeps them apart and splits *pending* from *rejected* on top of that: unverified with no message is normal before the module loads and resolves itself, unverified *with* one is a refusal that will not. A `setBreakpoints` response shorter than what was sent applies its prefix and reports how far it got, rather than zipping a binding onto the wrong line.
+- **Nothing corrects an adapter's line numbers.** `positions` declares 1-based lines and columns in `initialize` and clamps the impossible, but does not shift a 0-based stream: the only evidence is a number consistent with both conventions, and a "correction" is indistinguishable from undoing an adapter's legitimate move of a breakpoint to the next executable line. Where it says it put one is shown instead.
+
+**.NET is supported; Node is deliberately not, and says so.** `vsdbg` ships inside the VS Code C# extension (`.vscode/extensions/ms-dotnettools.csharp-<version>/.debugger/<arch>/vsdbg-ui.exe`, verified on a real install) and `netcoredbg` is a drop-in alternative on `PATH`; both speak DAP over stdio with `--interpreter=vscode`, and `CB_DAP_DOTNET` pins one explicitly. For Node, the js-debug bundled with VS Code has **no standalone entry point** — it is compiled into the extension host — and the standalone build serves DAP over a **TCP port**, which this app has no transport for. `resolve` returns `NotFound` saying exactly that rather than inventing a path that would fail at spawn time with less information available.
+
 ## `architecture`
 
 The derived project graph: what the workspace is made of, and what points at what. Every other view answers a question about one project; this one answers the question with no single owner — how the projects relate — assembled only from evidence already on disk (`<ProjectReference>` items, `package.json` dependency names, `.sln` grouping and `workspaces` globs) and never from anything the tool was told.
@@ -206,9 +224,49 @@ Best-effort conversion of JetBrains Rider `.run/*.xml` files. JetBrains publishe
 
 Workspace file access for the Run tab's directory tree and editor. `list_dir` lists one directory per call (the tree expands lazily), directories first, filtered by the same `SKIP_DIRS` the scanner uses; `read_file`/`write_file` move file contents in and out of the editor. All paths are workspace-relative, and anything that could escape the root (absolute paths, `..`) is rejected. Reads refuse binary content and files over 5 MB with a clear error rather than garbage.
 
+`create_file`, `create_dir`, `rename` and `delete` back the tree's right-click menu. They go through `resolve_new` rather than `resolve`: creating something needs more than staying inside the root, so the **empty path is refused explicitly** (it resolves to the workspace root itself, which is what a blank name in a *New file* box would otherwise target) and an **existing path is an error rather than a silent truncation** — this is reached from a menu where clobbering the user's work would be unrecoverable. `rename` resolves both sides against the root and refuses an occupied destination; `delete` refuses the root and removes a directory recursively.
+
+Keeping the symbol index honest is the caller's job, and the two verbs are not symmetric. `symbols::index::replace_file` re-checks the path on disk and **keeps** the `files` entry when it is missing, because a file that is momentarily unreadable — mid-save, locked by another process — is not a deleted one. Only the caller who performed the deletion knows otherwise, which is why `symbols::index::remove_file` exists and why `fs_rename`/`fs_delete` call it. See [the Tauri shell](tauri-shell.md) for what those commands do with it, including the one case they deliberately get wrong: a deleted *directory*'s descendants keep their entries until the next rescan, because a prefix sweep of the index cannot tell `src/app` from `src/apple`, and a wrongly swept entry is invisible where a stale one is not.
+
 ## `secrets`
 
-.NET user secrets, the way `dotnet user-secrets` and Rider manage them: a project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere) — secrets never touch the workspace. `read` returns id/path/content; `write` validates against the same JSON dialect .NET's configuration loader accepts (comments and trailing commas included) and adds a `<UserSecretsId>` to the project file first when missing, like `dotnet user-secrets init`.
+.NET user secrets, the way `dotnet user-secrets` and Rider manage them: a project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere) — secrets never touch the workspace. `read` returns id/path/content; `write` validates against the same JSON dialect .NET's configuration loader accepts and adds a `<UserSecretsId>` to the project file first when missing, like `dotnet user-secrets init`.
+
+`strip_jsonc` is what defines that dialect: `//` and `/* */` comments and trailing commas become spaces (never disappear, so a position serde reports still points at the right place in what the user wrote), and a leading **UTF-8 byte-order mark** is tolerated. The mark is not a detail — .NET's reader skips it, `serde_json` refuses it, and `dotnet user-secrets` and Rider both write one, so a file this app never created is quite likely to start with something invisible that makes it unsaveable. Only a *leading* mark is stripped: one mid-file is a real error and one inside a string is data the user typed. Rejecting the comments and marks your own .NET tooling writes would be worse than a late failure, which is why the dialect is matched rather than narrowed. When a file really is malformed, `jsonc_error` reports the line number **and quotes the line**, because the invisible causes are otherwise indistinguishable from whatever else is unusual in the file.
+
+## `launcher`
+
+The [app launcher](../getting-started/using-the-app.md#running-other-apps): arbitrary command lines the user
+wants to run beside the detected configurations, and the memory of what they have run.
+
+This exists **next to** `config`/`invocation`, not inside them. A `RunConfig` has no program of its own —
+every path resolves one through an ecosystem adapter, and an adapter only speaks for a project it detected —
+so a local Redis, a Python script or `docker compose up` could only be given a `RunConfig` by inventing a
+fake ecosystem or letting a free-form program into the model everything holds. A launchable is instead its
+own small thing that resolves *directly* into an `Invocation`, which `process::Supervisor` already runs
+headlessly and tracks in the Running panel (as the `RunKind::External` kind).
+
+The store is **user-global, not per-workspace**: `store::launchers_path()` resolves
+`code-basics/launchers.json` beside `notes.json` (`CB_LAUNCHERS_PATH` overrides the whole path), with the
+same tolerant `load` (a missing or corrupt file is an empty store, never an error) and the same atomic
+crash-safe `save` (temp + rename, `.bak` before an empty overwrite). "The commands I run" is a property of
+the person, not of a repository, and writing them into a checked-in `.code-basics/config.json` would share
+one developer's local shortcuts with their whole team. Each entry records the `cwd` it ran in, which is what
+lets `recents::group` show the open codebase's commands first without a second per-repository store.
+
+`parse` is the abstain rule at its sharpest, because this is the one place free text the user typed becomes
+a process and every plausible-but-wrong reading is silent. Only `"` groups and only `\"` escapes (a Windows
+path is full of backslashes that are not escapes); an empty line and an unbalanced quote are **errors that
+name the problem**; and an unquoted shell metacharacter (`|`, `>`, `<`, `&`, `;`) is **refused with the fix**
+rather than run as a bare argv, where `echo hi | findstr hi` would "work" while printing `hi | findstr hi`.
+Nothing here interprets those characters — a `shell` flag hands the whole line to `pty::default_shell()`
+with `/C` or `-c` and lets the shell mean what it means.
+
+`recents` is the whole policy, pure so the clock is an argument: identity is `(command, cwd)`, a re-run
+updates its entry (bumping the clock and count, adopting the `shell` flag that actually ran) while
+preserving the two things only the user sets — the pin and the rename — and unpinned entries are capped at
+30, oldest first. **Pinned entries are never evicted**: a cap that could drop one would make pinning a
+suggestion rather than a promise.
 
 ## `notes`
 

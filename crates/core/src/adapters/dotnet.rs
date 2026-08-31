@@ -1098,28 +1098,45 @@ pub fn configs_for_project(
                 }
             }
 
-            for configuration in configurations {
-                for framework in &targets {
-                    let label = match framework {
-                        Some(f) => format!("{project_name} ({configuration}, {f})"),
-                        None => format!("{project_name} ({configuration})"),
-                    };
-                    let mut config = RunConfig::new(
-                        format!(
-                            "{project_id}:run:{}{}",
-                            configuration.to_lowercase(),
-                            id_suffix(framework)
-                        ),
-                        label,
-                        RunKind::App,
-                        "dotnet",
-                        ConfigSource::Detected,
-                    );
-                    config.project = Some(relative_path.to_path_buf());
-                    config.build_configuration = Some(configuration.clone());
-                    config.framework = framework.clone();
-                    out.push(config);
-                }
+            // One plain configuration per framework, *not* one per build
+            // configuration.
+            //
+            // Fanning `<Configurations>` out into separate entries put the same
+            // project in the list two or three times over — `App (Debug)`,
+            // `App (Release)`, `App (Staging)` — which is a list of build
+            // flags wearing the costume of a list of things to run. Debug
+            // versus Release is a property of *this* launch, the way the
+            // environment is, so it belongs in the toolbar beside the
+            // environment picker and not in the configuration list. The
+            // toolbar overrides `build_configuration` per run; the value here
+            // is the default that override starts from.
+            //
+            // The id keeps its `:run:debug` spelling rather than becoming a
+            // bare `:run`, so a saved favourite or ordering still names this
+            // configuration. The ids of the entries that no longer exist —
+            // `:run:release` and friends — simply stop matching, which
+            // `config::sort_configs` already tolerates: an unrecognised id in
+            // `favorites` or `order` has never applied to anything.
+            for framework in &targets {
+                let label = match framework {
+                    Some(f) => format!("{project_name} ({f})"),
+                    None => project_name.to_string(),
+                };
+                let mut config = RunConfig::new(
+                    format!(
+                        "{project_id}:run:{}{}",
+                        debug.to_lowercase(),
+                        id_suffix(framework)
+                    ),
+                    label,
+                    RunKind::App,
+                    "dotnet",
+                    ConfigSource::Detected,
+                );
+                config.project = Some(relative_path.to_path_buf());
+                config.build_configuration = Some(debug.clone());
+                config.framework = framework.clone();
+                out.push(config);
             }
         }
         // Libraries cannot be launched and have no tests to run.

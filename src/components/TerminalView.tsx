@@ -4,6 +4,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { terminalKeyAction } from "./terminalLogic";
+import { onAppearanceChange, terminalAppearance } from "../appearance";
 
 /** Imperative surface the hosting panel drives. */
 export interface TerminalViewHandle {
@@ -53,17 +54,11 @@ export const TerminalView = forwardRef<
     if (!hostRef.current) return;
 
     const term = new Terminal({
-      fontFamily:
-        '"JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 12,
+      ...terminalAppearance(),
       scrollback: 20000,
       allowProposedApi: true,
       // A block cursor that blinks, as an interactive shell expects.
       cursorBlink: true,
-      theme: {
-        background: "#12141a",
-        foreground: "#d6dae2",
-      },
     });
 
     const fit = new FitAddon();
@@ -124,9 +119,17 @@ export const TerminalView = forwardRef<
       }
     });
     observer.observe(hostRef.current);
+    const stopAppearance = onAppearanceChange(() => {
+      const appearance = terminalAppearance();
+      term.options.fontFamily = appearance.fontFamily;
+      term.options.fontSize = appearance.fontSize;
+      term.options.theme = appearance.theme;
+      try { fit.fit(); } catch { /* hidden */ }
+    });
 
     return () => {
       observer.disconnect();
+      stopAppearance();
       dataSub.dispose();
       term.dispose();
       termRef.current = null;

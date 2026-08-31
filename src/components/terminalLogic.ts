@@ -25,6 +25,26 @@ export interface TerminalDescriptor {
    * descriptor — terminals do not survive a restart, so neither does the colour.
    */
   color?: string;
+  /**
+   * What this terminal runs instead of the default shell: an interactive agent
+   * seeded with a question ("Ask the codebase"). `undefined` is a plain shell,
+   * which is what every terminal opened from the titlebar is.
+   *
+   * A program **and** its arguments, never a command string. The PTY spawns
+   * through `CommandBuilder` with these arguments as they stand, so nothing on
+   * this side joins or re-splits them — assembling a string here and
+   * re-splitting it in the backend is the bug this shape exists to make
+   * impossible.
+   *
+   * That is not the same as "there is no shell". On Windows a program name can
+   * resolve to a `.cmd`/`.bat` shim, and `cmd.exe` then re-parses the command
+   * line: `&`, `|`, `<`, `>`, `^`, `"` and `%` change its meaning. The backend
+   * (`cb_core::pty::argv`) refuses such an argument for a batch target before
+   * spawning, so `terminalOpen` rejects rather than running something else. For
+   * a real executable the guard does not apply and a question containing a
+   * quote, a newline or a `&` crosses verbatim as one argv entry.
+   */
+  command?: { program: string; args: string[] };
 }
 
 /**
@@ -36,6 +56,42 @@ export interface TerminalDescriptor {
  */
 export function makeTerminal(seq: number, cwd: string): TerminalDescriptor {
   return { key: `term-${seq}`, title: `Terminal ${seq}`, cwd };
+}
+
+/**
+ * Build the descriptor for a terminal running an **agent** rather than a shell —
+ * the "Ask the codebase" terminal, opened already asking its question.
+ *
+ * A sibling of {@link makeTerminal} rather than an extra parameter on it,
+ * because the two differ in more than the command: this one is titled after the
+ * question (a strip of "Terminal 4"s would tell two asks apart not at all),
+ * while a plain terminal is titled after its sequence number. They share the
+ * *sequence*, and so the key space, deliberately: one monotonic counter in the
+ * host means two terminals can never mint the same `term-N` and have React
+ * reuse a live xterm for a different session.
+ *
+ * `args` is **copied**, not aliased: the caller assembled it from an IPC result
+ * and a later mutation of that array must not rewrite what a running terminal
+ * was spawned with.
+ *
+ * A blank `title` falls back to the plain terminal name. `terminalTitle` in
+ * `askLogic` never returns blank, so this is defensive — but an unlabelled
+ * panel is indistinguishable from a broken one, and the fallback costs nothing.
+ */
+export function makeAgentTerminal(
+  seq: number,
+  cwd: string,
+  program: string,
+  args: readonly string[],
+  title: string,
+): TerminalDescriptor {
+  const clean = title.trim();
+  return {
+    key: `term-${seq}`,
+    title: clean === "" ? `Terminal ${seq}` : clean,
+    cwd,
+    command: { program, args: [...args] },
+  };
 }
 
 /**
@@ -153,4 +209,75 @@ export function terminalKeyAction(e: TerminalKeyEvent, hasSelection: boolean): T
   if (e.ctrlKey && !e.shiftKey && key === "insert") return hasSelection ? "copy" : "passthrough";
   if (e.shiftKey && !e.ctrlKey && key === "insert") return "paste";
   return "passthrough";
+}
+
+// --- Which terminal is in front -------------------------------------------
+
+/**
+ * How many raise steps the stylesheet reserves for the terminal band.
+ *
+ * Pinned by a test against `--z-panel-stack-span` in `styles.css`, which is the
+ * only other place this number appears: CSS owns the band bases and this owns
+ * the ordinal within them, so no z-index integer is ever written in TypeScript.
+ * The clamp lives here because it is a decision, and decisions are tested.
+ */
+export const TERMINAL_STACK_SPAN = 100;
+
+/**
+ * Bring one terminal to the front of the stacking order.
+ *
+ * The order is a list of terminal keys, bottom-most first, kept **separately**
+ * from the `terminals` array. That separation is the point: the array index
+ * drives `pillBottom` and `cascadeShift`, which are positional identity, while
+ * this is temporal recency. Reordering the array to raise a panel would
+ * teleport its minimized pill to another slot and shift every un-dragged panel
+ * diagonally, so the two facts never share a representation.
+ *
+ * Returns the **same array** when the key is already top, so the caller's
+ * `setState` bails out and clicking the front terminal — much the commonest
+ * case — costs no render at all.
+ */
+export function raiseTerminal(order: string[], key: string): string[] {
+  if (order.length > 0 && order[order.length - 1] === key) return order;
+  return [...order.filter((k) => k !== key), key];
+}
+
+/**
+ * Reconcile the stacking order against the terminals that are actually open:
+ * drop closed keys, append newly opened ones (so a fresh terminal starts on
+ * top), and otherwise **leave the order alone**.
+ *
+ * Never reordering to match `open` is the contract that keeps stacking
+ * independent of the array order. Returns the same array when nothing changed,
+ * which is what stops the effect that calls it from looping.
+ *
+ * Deliberately not persisted across restarts: terminals do not survive one, and
+ * keys are `term-${seq}` from a counter that restarts at 1 each session, so a
+ * remembered order would either match nothing or silently apply a previous
+ * session's stacking to unrelated terminals.
+ */
+export function syncStackOrder(order: string[], open: string[]): string[] {
+  const live = new Set(open);
+  const kept = order.filter((k) => live.has(k));
+  const known = new Set(kept);
+  const added = open.filter((k) => !known.has(k));
+
+  if (added.length === 0 && kept.length === order.length) return order;
+  return [...kept, ...added];
+}
+
+/**
+ * The raise step a terminal renders at: 0 for the bottom of the stack, rising
+ * to the top. Clamped into `TERMINAL_STACK_SPAN` so a very long-lived session
+ * can never climb a terminal out of its band and over the Notes panel; the
+ * clamp collapses the *bottom* of an absurd stack, never the top.
+ *
+ * A key the order has not seen yet — a terminal rendered in the commit before
+ * the reconciling effect runs — sits at the bottom rather than yielding `NaN`.
+ */
+export function stackOffset(order: string[], key: string): number {
+  const index = order.indexOf(key);
+  if (index < 0) return 0;
+  const excess = Math.max(0, order.length - TERMINAL_STACK_SPAN);
+  return Math.max(0, index - excess);
 }

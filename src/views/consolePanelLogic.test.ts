@@ -11,6 +11,9 @@ import {
   saveCollapsed,
   saveSplit,
   splitKey,
+  isBuildSession,
+  shouldCloseBuildSession,
+  shouldForceExpand,
 } from "./consolePanelLogic";
 
 /** A `Storage` slice backed by a plain map, so nothing here needs a browser. */
@@ -174,5 +177,52 @@ describe("saveSplit", () => {
 
   it("does not throw when the quota is exhausted", () => {
     expect(() => saveSplit(hostile, ROOT, 0.5)).not.toThrow();
+  });
+});
+
+describe("shouldForceExpand", () => {
+  it("forces the panel open when the last file closes while it is collapsed", () => {
+    // The trap: the collapse control is only rendered with a file open, so a
+    // collapsed panel with no files is hidden and has no way back.
+    expect(shouldForceExpand(0, true)).toBe(true);
+  });
+
+  it("leaves an expanded panel alone", () => {
+    expect(shouldForceExpand(0, false)).toBe(false);
+  });
+
+  it("leaves a collapsed panel alone while a file is open", () => {
+    // There the toggle is on screen, so collapsed is a state the user can leave.
+    expect(shouldForceExpand(1, true)).toBe(false);
+    expect(shouldForceExpand(5, true)).toBe(false);
+  });
+});
+
+describe("isBuildSession", () => {
+  it("recognises the id RunView mints for a build", () => {
+    expect(isBuildSession("MyApi:build")).toBe(true);
+    expect(isBuildSession("MyApi")).toBe(false);
+    expect(isBuildSession("build")).toBe(false);
+    expect(isBuildSession("MyApi:build:extra")).toBe(false);
+  });
+});
+
+describe("shouldCloseBuildSession", () => {
+  it("closes a build that succeeded", () => {
+    expect(shouldCloseBuildSession("MyApi:build", true, false)).toBe(true);
+  });
+
+  it("keeps a failed build's tab — the errors are why it ran", () => {
+    expect(shouldCloseBuildSession("MyApi:build", false, false)).toBe(false);
+  });
+
+  it("keeps a cancelled build's tab", () => {
+    // Stopping a build is the user reporting something, not the build.
+    expect(shouldCloseBuildSession("MyApi:build", false, true)).toBe(false);
+    expect(shouldCloseBuildSession("MyApi:build", true, true)).toBe(false);
+  });
+
+  it("never closes a run session, however it ended", () => {
+    expect(shouldCloseBuildSession("MyApi", true, false)).toBe(false);
   });
 });

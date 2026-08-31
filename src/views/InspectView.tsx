@@ -789,6 +789,7 @@ export function InspectView({
           Clear
         </button>
         <button
+          data-command="inspect.refresh"
           onClick={() => {
             void refreshStatus();
             void refreshAttachable();

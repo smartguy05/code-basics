@@ -14,6 +14,7 @@ import type {
   Workspace,
 } from "../ipc/types";
 import { applyLiveOutcomes, classifyLine } from "./testsLogic";
+import { runningConfigIdsOfKind } from "./runControlLogic";
 
 const OUTCOME_FILTERS: TestOutcome[] = ["passed", "failed", "skipped", "other"];
 
@@ -27,9 +28,11 @@ interface LiveCounts {
 export function TestsView({
   workspace,
   onInspect,
+  onResult,
 }: {
   workspace: Workspace;
   onInspect: (request: InspectRequest) => void;
+  onResult?: (success: boolean) => void;
 }) {
   const testConfigs = workspace.configs.filter((c) => c.kind === "test");
 
@@ -49,6 +52,7 @@ export function TestsView({
   const [runDump, setRunDump] = useState<RunDump | null>(null);
 
   const consoleRef = useRef<ConsoleHandle>(null);
+  const cancelling = useRef(false);
   /** Output chunks split lines anywhere; the tail carries over. */
   const partialLine = useRef("");
 
@@ -143,6 +147,7 @@ export function TestsView({
     if (!selectedConfig || running) return;
 
     setRunning(true);
+    cancelling.current = false;
     setError(null);
     // Show the console: a selected failure would otherwise cover it just as
     // the new activity starts.
@@ -167,17 +172,25 @@ export function TestsView({
       );
       setOutcome(result);
       setSelectedNode(null);
+      if (!cancelling.current) onResult?.(result.result.summary.failed === 0);
       if (result.result.summary.failed > 0) void findRunDump(startedAt);
     } catch (e) {
       setError(api.errorMessage(e));
+      if (!cancelling.current) onResult?.(false);
     } finally {
       setRunning(false);
       setLive(null);
+      cancelling.current = false;
     }
   }
 
+  // Stop every running test configuration, not just the selected one — a test
+  // run can also be started from the Run tab or the search palette. The live
+  // ids come from the supervisor, so this is authoritative.
   async function cancel() {
-    if (selectedConfig) await api.cancelRun(selectedConfig);
+    cancelling.current = true;
+    const ids = runningConfigIdsOfKind(workspace.configs, await api.runningIds(), "test");
+    await Promise.all(ids.map((id) => api.cancelRun(id)));
   }
 
   const failedCount = outcome?.result.summary.failed ?? 0;
@@ -209,10 +222,11 @@ export function TestsView({
           ))}
         </select>
 
-        <button className="primary" onClick={() => run(false)} disabled={running}>
+        <button data-command="tests.all" className="primary" onClick={() => run(false)} disabled={running}>
           Run
         </button>
         <button
+          data-command="tests.coverage"
           onClick={() => run(false, true)}
           disabled={running}
           title="Run the tests collecting code coverage, then map it onto your current diff — the Changes tab tints changed lines the tests never ran and badges each intent card with its uncovered count"
@@ -220,6 +234,7 @@ export function TestsView({
           Run with coverage
         </button>
         <button
+          data-command="tests.failed"
           onClick={() => run(true)}
           disabled={running || failedCount === 0}
           title={
@@ -230,8 +245,8 @@ export function TestsView({
         >
           Re-run failed{failedCount > 0 ? ` (${failedCount})` : ""}
         </button>
-        <button onClick={cancel} disabled={!running}>
-          Stop
+        <button data-command="tests.stop" onClick={cancel} disabled={!running} title="Stop all running tests">
+          Stop Tests
         </button>
         <button
           onClick={() => consoleRef.current?.clear()}

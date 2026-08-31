@@ -45,7 +45,10 @@ function summary(path, text) {
         if (body) return body;
       }
     }
-    if (t !== "") break; // first line is code — no summary comment
+    // A bare `/**` opener carries no text of its own; the summary is on the line
+    // after it, so only *code* ends the search.
+    const isComment = ["//!", "/**", "*/", "*", "//", "#"].some((p) => t.startsWith(p));
+    if (t !== "" && !isComment) break; // first line is code — no summary comment
   }
   return "";
 }
