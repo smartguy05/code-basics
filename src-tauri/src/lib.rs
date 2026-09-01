@@ -185,6 +185,7 @@ pub fn run() {
             commands::git::git_commit_file_contents,
             commands::git::git_commit_file_why,
             commands::git::git_stash_save,
+            commands::git::git_stash_paths,
             commands::git::git_stash_list,
             commands::git::git_stash_pop,
             commands::git::git_stash_apply,

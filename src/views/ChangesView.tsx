@@ -29,6 +29,15 @@ import { ErosionPanel } from "../components/ErosionPanel";
 import { badgeCount } from "../components/erosionLogic";
 import { uncoveredIndicesForPath } from "../components/coverageOfChangeLogic";
 import { StashPanel } from "../components/StashPanel";
+import { ContextMenu } from "../components/ContextMenu";
+import {
+  clickModifier,
+  contextSelection,
+  defaultStashMessage,
+  stashMenuLabel,
+  stashablePaths,
+  toggleSelection,
+} from "./changesSelectionLogic";
 import * as api from "../ipc/api";
 import { applyEditorFontSize, loadEditorFontSize, onEditorFontSizeChange } from "../editorFontSize";
 import {
@@ -163,6 +172,16 @@ export function ChangesView({
   const [status, setStatus] = useState<WorkingStatus | null>(null);
   const [mode, setMode] = useState<ComparisonMode>("workingToHead");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  /**
+   * Files ticked for a bulk action, keyed by path.
+   *
+   * Deliberately separate from `selectedPath`, which means "the file the diff
+   * pane is showing": the same path can appear in a Staged and an Unstaged
+   * section, and the actions here act on it once either way.
+   */
+  const [checked, setChecked] = useState<Set<string>>(() => new Set());
+  /** Where a Shift-click extends from. */
+  const [anchor, setAnchor] = useState<string | null>(null);
   const [contents, setContents] = useState<FileContents | null>(null);
   const [diff, setDiff] = useState<FileDiff | null>(null);
   const [selectedLines, setSelectedLines] = useState<number[]>([]);
@@ -176,9 +195,12 @@ export function ChangesView({
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(loadIgnoreWhitespace);
   const [groups, setGroups] = useState<Changelist[]>([]);
   /** Right-click target: where the menu sits and which file it acts on. */
-  const [context, setContext] = useState<{ x: number; y: number; change: FileChange } | null>(
-    null,
-  );
+  const [context, setContext] = useState<{
+    x: number;
+    y: number;
+    change: FileChange;
+    paths: string[];
+  } | null>(null);
   /** Sections the user folded away, by section key. */
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   /** Flat path list vs. a collapsible folder tree, in the Files view. */
@@ -842,6 +864,24 @@ export function ChangesView({
   const sections = sortFilesByRisk(buildSections(files, groups), (path) =>
     fileRisk(path, erosion?.flags ?? [], intentGroups),
   );
+  /**
+   * Every file row in the order it is drawn — what a Shift-click ranges over.
+   *
+   * The tree layout reorders and hides rows, so it is flattened exactly the
+   * way it is rendered; ranging over the flat order there would select files
+   * the user cannot see.
+   */
+  const orderedPaths =
+    filesLayout === "tree"
+      ? sections.flatMap((section) =>
+          flattenFileTree(buildFileTree(section.files), (folderPath) =>
+            collapsedFolders.has(`${section.key}:${folderPath}`),
+          )
+            .filter((row) => row.kind === "file")
+            .map((row) => row.change.path),
+        )
+      : sections.flatMap((section) => section.files.map((file) => file.path));
+
   /** What the marker strip marks and what F7 steps through. */
   const differences = shownDiff?.hunks.length ?? 0;
 
@@ -876,6 +916,43 @@ export function ChangesView({
     setGroupHunks(null);
   }
 
+  /**
+   * Click a file row: show it, and update the tick selection the right-click
+   * actions work over. Plain clicks keep the old behaviour of selecting just
+   * the one row.
+   */
+  function selectRow(path: string, modifier: ReturnType<typeof clickModifier>) {
+    const next = toggleSelection(checked, path, modifier, orderedPaths, anchor);
+    setChecked(next.selected);
+    setAnchor(next.anchor);
+    openFile(path);
+  }
+
+  /**
+   * Set the selected files aside as a stash, leaving every other change in the
+   * working tree.
+   */
+  function stashSelected(paths: string[]) {
+    // On the next frame, so the right-click menu has actually gone: a native
+    // prompt blocks rendering, and closing it in the same handler would leave
+    // the menu painted behind the dialog until the user answered.
+    requestAnimationFrame(() => promptAndStash(paths));
+  }
+
+  function promptAndStash(paths: string[]) {
+    const note = window.prompt("Stash message", defaultStashMessage(paths));
+    // Cancel is not the same as an empty message: an empty one is allowed, and
+    // the backend falls back to git's own "WIP on <branch>" wording.
+    if (note == null) return;
+    void withBusy(async () => {
+      await api.gitStashPaths(note, paths);
+      setChecked(new Set());
+      setAnchor(null);
+      if (selectedPath != null && paths.includes(selectedPath)) setSelectedPath(null);
+      await refreshAll();
+    });
+  }
+
   /** Open an erosion flag: show its file and highlight the offending line. */
   function openErosionFlag(flag: ErosionFlag) {
     setSelectedPath(flag.path);
@@ -903,16 +980,20 @@ export function ChangesView({
       <button
         key={`${section.key}:${change.path}`}
         className={`row ${change.path === selectedPath ? "selected" : ""}${
-          risk ? ` risk-${risk.level}` : ""
-        }`}
+          // Only once a real multi-selection exists: a plain click already
+          // paints the row as selected, and marking it twice reads as noise.
+          checked.size > 1 && checked.has(change.path) ? " checked" : ""
+        }${risk ? ` risk-${risk.level}` : ""}`}
         style={tree ? { paddingLeft: 6 + (tree.depth + 1) * 14 } : undefined}
-        onClick={() => openFile(change.path)}
+        onClick={(e) => selectRow(change.path, clickModifier(e))}
         onContextMenu={(e) => {
           e.preventDefault();
+          const paths = contextSelection(checked, change.path);
+          setChecked(paths);
           openFile(change.path);
-          setContext({ x: e.clientX, y: e.clientY, change });
+          setContext({ x: e.clientX, y: e.clientY, change, paths: [...paths] });
         }}
-        title={`${change.path} — right-click to stage or group`}
+        title={`${change.path} — right-click to stage, stash or group`}
       >
         <span className={`status ${className}`}>{letter}</span>
         <span className="path">{tree ? tree.label : change.path}</span>
@@ -1291,87 +1372,93 @@ export function ChangesView({
       </Sidebar>
 
       {context && (
-        <>
-          <div className="dropdown-backdrop" onClick={() => setContext(null)} />
-          <div
-            className="dropdown-menu"
-            style={{ position: "fixed", left: context.x, top: context.y, zIndex: 46 }}
-          >
-            {(() => {
-              const change = context.change;
-              const currentGroup =
-                groups.find((g) => g.paths.includes(change.path))?.name ?? null;
-              const close = () => setContext(null);
+        <ContextMenu x={context.x} y={context.y} onClose={() => setContext(null)}>
+          {(() => {
+            const change = context.change;
+            const currentGroup = groups.find((g) => g.paths.includes(change.path))?.name ?? null;
+            const close = () => setContext(null);
+            const stashable = stashablePaths(new Set(context.paths), files);
 
-              return (
-                <>
-                  {change.unstaged != null && (
-                    <div
-                      className="dropdown-item"
-                      onClick={() => {
-                        close();
-                        void stageFile(change.path, false);
-                      }}
-                    >
-                      Stage file
-                    </div>
-                  )}
-                  {change.staged != null && (
-                    <div
-                      className="dropdown-item"
-                      onClick={() => {
-                        close();
-                        void stageFile(change.path, true);
-                      }}
-                    >
-                      Unstage file
-                    </div>
-                  )}
-
-                  <div className="dropdown-separator" />
-                  <div className="group-label">Move to group</div>
-
-                  {groups
-                    .filter((group) => group.name !== currentGroup)
-                    .map((group) => (
-                      <div
-                        key={group.name}
-                        className="dropdown-item"
-                        onClick={() => {
-                          close();
-                          void moveToGroup(change.path, group.name);
-                        }}
-                      >
-                        {group.name}
-                      </div>
-                    ))}
-
-                  {currentGroup && (
-                    <div
-                      className="dropdown-item"
-                      onClick={() => {
-                        close();
-                        void moveToGroup(change.path, null);
-                      }}
-                    >
-                      Remove from “{currentGroup}”
-                    </div>
-                  )}
-
+            return (
+              <>
+                {change.unstaged != null && (
                   <div
                     className="dropdown-item"
                     onClick={() => {
                       close();
-                      setNewGroup({ name: "", pendingPath: change.path });
+                      void stageFile(change.path, false);
                     }}
                   >
-                    New group…
+                    Stage file
                   </div>
-                </>
-              );
-            })()}
-          </div>
-        </>
+                )}
+                {change.staged != null && (
+                  <div
+                    className="dropdown-item"
+                    onClick={() => {
+                      close();
+                      void stageFile(change.path, true);
+                    }}
+                  >
+                    Unstage file
+                  </div>
+                )}
+
+                {stashable.length > 0 && (
+                  <div
+                    className="dropdown-item"
+                    onClick={() => {
+                      close();
+                      stashSelected(stashable);
+                    }}
+                  >
+                    {stashMenuLabel(stashable.length)}
+                  </div>
+                )}
+
+                <div className="dropdown-separator" />
+                <div className="group-label">Move to group</div>
+
+                {groups
+                  .filter((group) => group.name !== currentGroup)
+                  .map((group) => (
+                    <div
+                      key={group.name}
+                      className="dropdown-item"
+                      onClick={() => {
+                        close();
+                        void moveToGroup(change.path, group.name);
+                      }}
+                    >
+                      {group.name}
+                    </div>
+                  ))}
+
+                {currentGroup && (
+                  <div
+                    className="dropdown-item"
+                    onClick={() => {
+                      close();
+                      void moveToGroup(change.path, null);
+                    }}
+                  >
+                    Remove from “{currentGroup}”
+                  </div>
+                )}
+
+                <div
+                  className="dropdown-item"
+                  onClick={() => {
+                    close();
+                    setNewGroup({ name: "", pendingPath: change.path });
+                  }}
+                >
+                  New group…
+                </div>
+              </>
+            );
+          })()}
+        </ContextMenu>
       )}
 
       <div className="main">

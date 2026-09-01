@@ -100,7 +100,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/git/grouping_tests.rs` | 1616 | Tests for collapsing hunks into cards. |
 | `crates/core/src/git/mod.rs` | 34 | Git operations. |
 | `crates/core/src/git/patch.rs` | 487 | Building unified diff patches restricted to a selection of lines. |
-| `crates/core/src/git/repo.rs` | 1794 | Repository reads and mutations. |
+| `crates/core/src/git/repo.rs` | 2285 | Repository reads and mutations. |
 | `crates/core/src/git/why.rs` | 260 | Intent that survives the commit. |
 | `crates/core/src/git/why_tests.rs` | 324 | Tests for the pure durable-why build and resolve logic. |
 | `crates/core/src/importers/mod.rs` | 7 | Importing configurations from other tools. |
@@ -217,8 +217,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/secrets.rs` | 755 | .NET user secrets: per-project secrets stored *outside* the repository. |
 | `crates/core/src/setup.rs` | 104 | First-open setup: one combined plan that installs the agent hooks a fresh |
 | `crates/core/src/setup_tests.rs` | 197 | Tests for the combined first-open setup plan. The point that matters: the |
-| `crates/core/src/sql/discover.rs` | 877 | Finding the database connections a workspace already talks about. |
-| `crates/core/src/sql/discover_tests.rs` | 650 | Tests for [`super::discover`]. |
+| `crates/core/src/sql/discover.rs` | 938 | Finding the database connections a workspace already talks about. |
+| `crates/core/src/sql/discover_tests.rs` | 773 | Tests for [`super::discover`]. |
 | `crates/core/src/sql/dotenv.rs` | 447 | Reading connection strings out of environment files (`.env` and friends) and |
 | `crates/core/src/sql/dotenv_tests.rs` | 300 | Tests for [`super`]: the shapes a `.env` line comes in, and the two ways one |
 | `crates/core/src/sql/driver/caps.rs` | 268 | The two ceilings a result set is read under, and the arithmetic that decides |
@@ -227,14 +227,14 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/sql/driver/mod_tests.rs` | 416 |  |
 | `crates/core/src/sql/driver/mssql.rs` | 1122 | The SQL Server driver, over `tiberius`. |
 | `crates/core/src/sql/driver/mssql_tests.rs` | 730 |  |
-| `crates/core/src/sql/driver/postgres.rs` | 1342 | The PostgreSQL driver, over `sqlx`. |
-| `crates/core/src/sql/driver/postgres_tests.rs` | 914 |  |
+| `crates/core/src/sql/driver/postgres.rs` | 1339 | The PostgreSQL driver, over `sqlx`. |
+| `crates/core/src/sql/driver/postgres_tests.rs` | 922 |  |
 | `crates/core/src/sql/driver/sqlite.rs` | 607 | The SQLite driver, over `sqlx`. |
 | `crates/core/src/sql/driver/sqlite_tests.rs` | 277 |  |
 | `crates/core/src/sql/driver/value.rs` | 41 | The one-to-one relabelling from what [`crate::sql::format`] renders to what |
 | `crates/core/src/sql/driver/value_tests.rs` | 84 |  |
-| `crates/core/src/sql/dsn.rs` | 846 | Parsing a connection string into the parts a driver needs, and — just as |
-| `crates/core/src/sql/dsn_tests.rs` | 387 |  |
+| `crates/core/src/sql/dsn.rs` | 854 | Parsing a connection string into the parts a driver needs, and — just as |
+| `crates/core/src/sql/dsn_tests.rs` | 397 |  |
 | `crates/core/src/sql/format.rs` | 259 | Rendering database values as display strings for the results grid. |
 | `crates/core/src/sql/format_tests.rs` | 187 | Tests for [`super`]: the six ways a cell can be wrong on the way to the grid. |
 | `crates/core/src/sql/guard.rs` | 640 | The read-only guard: parse a statement with `sqlparser` and decide whether it |
@@ -269,7 +269,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/workspace.rs` | 2088 | Scanning a workspace for projects and building the configurations that can |
 | `crates/core/tests/behavioral_replay.rs` | 104 | A real-network smoke test for [`cb_core::behavioral::replay`]. |
 | `crates/core/tests/durable_why.rs` | 202 | End-to-end tests for durable intent: writing a git note at commit and |
-| `crates/core/tests/git_operations.rs` | 1085 | End-to-end git tests against real repositories on disk. |
+| `crates/core/tests/git_operations.rs` | 1481 | End-to-end git tests against real repositories on disk. |
 | `crates/core/tests/intent_attribution.rs` | 282 | Attribution measured against a real repository, rather than a fixture. |
 | `crates/core/tests/intent_retirement.rs` | 358 | End-to-end tests for retiring intents a commit has absorbed. |
 | `crates/core/tests/lsp_client.rs` | 1325 | One language server, from handshake to shutdown, against `cb-fake-lsp`. |
@@ -291,7 +291,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/BehavioralPanel.tsx` | 402 |  |
 | `src/components/BranchMenu.tsx` | 386 |  |
 | `src/components/ConfigEditor.tsx` | 313 |  |
-| `src/components/ContextMenu.tsx` | 90 |  |
+| `src/components/ContextMenu.tsx` | 94 |  |
 | `src/components/DiffView.tsx` | 967 |  |
 | `src/components/EnvironmentPicker.tsx` | 107 |  |
 | `src/components/ErosionPanel.tsx` | 101 |  |
@@ -316,13 +316,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/SettingsDialog.tsx` | 128 |  |
 | `src/components/SetupPrompt.tsx` | 115 |  |
 | `src/components/Sidebar.tsx` | 50 |  |
-| `src/components/SqlConnectionPicker.tsx` | 324 |  |
+| `src/components/SqlConnectionPicker.tsx` | 495 |  |
 | `src/components/SqlResultGrid.tsx` | 217 |  |
 | `src/components/StashPanel.tsx` | 288 |  |
 | `src/components/TerminalPanel.tsx` | 451 |  |
 | `src/components/TerminalView.tsx` | 159 |  |
 | `src/components/TestTree.tsx` | 125 |  |
-| `src/components/WorkspaceTab.tsx` | 566 |  |
+| `src/components/WorkspaceTab.tsx` | 573 |  |
 | `src/components/appOutputLogic.test.ts` | 193 |  |
 | `src/components/appOutputLogic.ts` | 171 | Pure decisions for the launched-apps output panel — the tab list, which tab |
 | `src/components/askLogic.test.ts` | 254 |  |
@@ -377,12 +377,12 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/searchLogic.ts` | 439 | The search palette's decisions, with no React and no DOM in sight. |
 | `src/components/setupPromptLogic.test.ts` | 110 |  |
 | `src/components/setupPromptLogic.ts` | 62 | Decision logic for the first-open setup prompt. Pure so it can be unit-tested |
-| `src/components/sqlPickerLogic.test.ts` | 188 |  |
-| `src/components/sqlPickerLogic.ts` | 137 |  |
+| `src/components/sqlPickerLogic.test.ts` | 272 |  |
+| `src/components/sqlPickerLogic.ts` | 216 |  |
 | `src/components/stashLogic.test.ts` | 33 |  |
 | `src/components/stashLogic.ts` | 21 |  |
-| `src/components/terminalLogic.test.ts` | 317 |  |
-| `src/components/terminalLogic.ts` | 283 | Pure decisions for the floating terminals — naming, cascade staggering, |
+| `src/components/terminalLogic.test.ts` | 347 |  |
+| `src/components/terminalLogic.ts` | 293 | Pure decisions for the floating terminals — naming, cascade staggering, |
 | `src/components/treeLogic.test.ts` | 383 |  |
 | `src/components/treeLogic.ts` | 148 |  |
 | `src/components/usagesExtension.ts` | 469 | The CodeMirror half of Find Usages / Go To Definition: decorations, a widget, |
@@ -393,8 +393,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/editorFontSize.ts` | 52 | Applying the editor font size, and telling live editors it moved. |
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 | The one font size every CodeMirror editor in the app reads. |
-| `src/ipc/api.ts` | 1222 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 2212 | TypeScript mirrors of the `cb-core` model types. |
+| `src/ipc/api.ts` | 1243 | Typed wrappers over the Tauri command surface. |
+| `src/ipc/types.ts` | 2235 | TypeScript mirrors of the `cb-core` model types. |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
@@ -403,11 +403,11 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/shortcutLogic.ts` | 135 |  |
 | `src/shortcuts.ts` | 40 |  |
 | `src/views/ArchitectureView.tsx` | 679 |  |
-| `src/views/ChangesView.tsx` | 1544 |  |
+| `src/views/ChangesView.tsx` | 1631 |  |
 | `src/views/HistoryView.tsx` | 542 |  |
 | `src/views/InspectView.tsx` | 1086 |  |
 | `src/views/RunView.tsx` | 1840 |  |
-| `src/views/SqlView.tsx` | 649 |  |
+| `src/views/SqlView.tsx` | 917 |  |
 | `src/views/TestsView.tsx` | 426 |  |
 | `src/views/architecture/DiagramCanvas.tsx` | 760 |  |
 | `src/views/architecture/DiagramEditor.tsx` | 324 |  |
@@ -427,6 +427,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/architecture/viewportLogic.ts` | 117 | Where the user had panned and zoomed each diagram to, kept across a remount. |
 | `src/views/changesLogic.test.ts` | 222 |  |
 | `src/views/changesLogic.ts` | 115 |  |
+| `src/views/changesSelectionLogic.test.ts` | 127 |  |
+| `src/views/changesSelectionLogic.ts` | 110 |  |
 | `src/views/consolePanelLogic.test.ts` | 228 |  |
 | `src/views/consolePanelLogic.ts` | 205 | Whether the Run tab's console panel is put away, and how tall it is when it |
 | `src/views/editorNavLogic.test.ts` | 160 |  |
@@ -441,8 +443,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/runControlLogic.ts` | 23 | Decision logic for the bulk stop controls (Run tab "Stop All", Tests tab |
 | `src/views/sqlLogic.test.ts` | 653 |  |
 | `src/views/sqlLogic.ts` | 671 | Pure decisions for the SQL console — the streaming reducer, the cell |
-| `src/views/sqlViewLogic.test.ts` | 344 |  |
-| `src/views/sqlViewLogic.ts` | 417 | The decisions `SqlView` would otherwise make inline. |
+| `src/views/sqlViewLogic.test.ts` | 386 |  |
+| `src/views/sqlViewLogic.ts` | 449 | The decisions `SqlView` would otherwise make inline. |
 | `src/views/testsLogic.test.ts` | 279 |  |
 | `src/views/testsLogic.ts` | 89 |  |
 | `src-tauri/src/commands/architecture.rs` | 219 | Architecture-diagram commands. |
@@ -452,7 +454,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/erosion.rs` | 32 | Erosion-detector command. |
 | `src-tauri/src/commands/features.rs` | 53 | Optional-feature commands. |
 | `src-tauri/src/commands/files.rs` | 328 | Workspace file commands, for the Run tab's directory tree and file editor. |
-| `src-tauri/src/commands/git.rs` | 375 | Git commands. |
+| `src-tauri/src/commands/git.rs` | 387 | Git commands. |
 | `src-tauri/src/commands/inspect.rs` | 352 | Object-inspection commands. |
 | `src-tauri/src/commands/intents.rs` | 832 | Agent-intent commands. |
 | `src-tauri/src/commands/launcher.rs` | 367 | The app launcher's bridge: run an arbitrary command line, and manage the |
@@ -465,11 +467,11 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/running.rs` | 96 | The Running panel's bridge: list every process the app has running (across |
 | `src-tauri/src/commands/secrets.rs` | 43 | .NET user secrets commands. |
 | `src-tauri/src/commands/setup.rs` | 57 | First-open setup: preview and apply the combined agent-hook install (intent |
-| `src-tauri/src/commands/sql.rs` | 1941 | The SQL console's bridge: list and save connection profiles, discover the |
+| `src-tauri/src/commands/sql.rs` | 2303 | The SQL console's bridge: list and save connection profiles, discover the |
 | `src-tauri/src/commands/symbols.rs` | 234 | The command palette's surface: searching the workspace, and asking after |
 | `src-tauri/src/commands/terminal.rs` | 259 | Interactive floating terminals. |
 | `src-tauri/src/commands/workspace.rs` | 255 | Workspace and configuration commands. |
-| `src-tauri/src/lib.rs` | 280 | The Tauri shell. |
+| `src-tauri/src/lib.rs` | 284 | The Tauri shell. |
 | `src-tauri/src/main.rs` | 6 | Suppress the extra console window on Windows in release builds. |
 | `src-tauri/src/qgate_run.rs` | 216 | The `quality-gate` mode: deterministic checks when an agent turn ends. |
 | `src-tauri/src/recorder.rs` | 139 | The `record-intent` mode, which is what the installed hooks actually run. |
@@ -495,7 +497,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **secrets** (`src-tauri/src/commands/secrets.rs`): `read_project_secrets`, `write_project_secrets`
 - **run** (`src-tauri/src/commands/run.rs`): `start_run`, `build_project`, `cancel_run`, `running_ids`, `run_tests`, `last_test_run`, `coverage_of_change`
 - **review** (`src-tauri/src/commands/review.rs`): `start_review`, `cancel_review`, `review_agents`, `agent_interactive_command`
-- **git** (`src-tauri/src/commands/git.rs`): `git_status`, `git_file_diff`, `git_file_contents`, `git_write_file`, `git_stage_file`, `git_unstage_file`, `git_stage_lines`, `git_unstage_lines`, `git_revert_lines`, `git_discard_file`, `git_commit`, `git_branches`, `git_create_branch`, `git_checkout_branch`, `git_checkout_remote_branch`, `git_delete_branch`, `git_merge_branch`, `git_abort_merge`, `git_history`, `git_commit_diff`, `git_commit_file_contents`, `git_commit_file_why`, `git_stash_save`, `git_stash_list`, `git_stash_pop`, `git_stash_apply`, `git_stash_drop`, `git_stash_clear`, `git_network`
+- **git** (`src-tauri/src/commands/git.rs`): `git_status`, `git_file_diff`, `git_file_contents`, `git_write_file`, `git_stage_file`, `git_unstage_file`, `git_stage_lines`, `git_unstage_lines`, `git_revert_lines`, `git_discard_file`, `git_commit`, `git_branches`, `git_create_branch`, `git_checkout_branch`, `git_checkout_remote_branch`, `git_delete_branch`, `git_merge_branch`, `git_abort_merge`, `git_history`, `git_commit_diff`, `git_commit_file_contents`, `git_commit_file_why`, `git_stash_save`, `git_stash_paths`, `git_stash_list`, `git_stash_pop`, `git_stash_apply`, `git_stash_drop`, `git_stash_clear`, `git_network`
 - **changelists** (`src-tauri/src/commands/changelists.rs`): `git_changelists`, `git_create_changelist`, `git_delete_changelist`, `git_rename_changelist`, `git_assign_to_changelist`
 - **intents** (`src-tauri/src/commands/intents.rs`): `intent_groups`, `stage_intent_group`, `revert_intent_group`, `reject_intent_group`, `intent_capture_status`, `intent_install_plan`, `enable_intent_capture`, `intent_uninstall_plan`, `disable_intent_capture`, `import_intent_history`, `intent_prune_preview`, `prune_intent_history`, `clear_intent_history`, `set_card_intent`, `clear_card_intent`, `move_card_edits`
 - **qgate** (`src-tauri/src/commands/qgate.rs`): `quality_gate_status`, `quality_gate_install_plan`, `install_quality_gate`, `quality_gate_uninstall_plan`, `uninstall_quality_gate`
@@ -509,11 +511,11 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **lsp** (`src-tauri/src/commands/lsp.rs`): `lsp_status`, `lsp_restart`, `lsp_open_document`, `lsp_change_document`, `lsp_close_document`, `lsp_find_usages`, `lsp_goto_definition`, `lsp_declaration_anchors`
 - **terminal** (`src-tauri/src/commands/terminal.rs`): `terminal_open`, `terminal_write`, `terminal_resize`, `terminal_close`, `terminal_list`, `terminal_set_label`
 - **running** (`src-tauri/src/commands/running.rs`): `list_running`, `kill_running`
-- **sql** (`src-tauri/src/commands/sql.rs`): `sql_list_connections`, `sql_discover`, `sql_save_connection`, `sql_delete_connection`, `sql_set_allow_writes`, `sql_test_connection`, `sql_execute`, `sql_cancel`
+- **sql** (`src-tauri/src/commands/sql.rs`): `sql_list_connections`, `sql_discover`, `sql_save_connection`, `sql_delete_connection`, `sql_set_allow_writes`, `sql_test_connection`, `sql_test_connection_string`, `sql_list_objects`, `sql_list_columns`, `sql_execute`, `sql_cancel`
 
 ## Frontend IPC wrappers (`src/ipc/api.ts`)
 
-`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `fsCreateFile`, `fsCreateDir`, `fsRename`, `fsDelete`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `listFeatures`, `setFeature`, `readNotes`, `writeNotes`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `agentInteractiveCommand`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listLaunchables`, `launchCommand`, `stopCommand`, `saveLaunchable`, `deleteLaunchable`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `intentPrunePreview`, `pruneIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `moveCardEdits`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspRestart`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `sqlListConnections`, `sqlDiscover`, `sqlSaveConnection`, `sqlDeleteConnection`, `sqlSetAllowWrites`, `sqlTestConnection`, `sqlExecute`, `sqlCancel`, `errorMessage`
+`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `fsCreateFile`, `fsCreateDir`, `fsRename`, `fsDelete`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `listFeatures`, `setFeature`, `readNotes`, `writeNotes`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `agentInteractiveCommand`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listLaunchables`, `launchCommand`, `stopCommand`, `saveLaunchable`, `deleteLaunchable`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashPaths`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `intentPrunePreview`, `pruneIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `moveCardEdits`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspRestart`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `sqlListConnections`, `sqlDiscover`, `sqlSaveConnection`, `sqlDeleteConnection`, `sqlSetAllowWrites`, `sqlTestConnection`, `sqlTestConnectionString`, `sqlListObjects`, `sqlListColumns`, `sqlExecute`, `sqlCancel`, `errorMessage`
 
 ## Public core API (`cb-core`)
 
@@ -560,7 +562,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/git/coverage.rs`: `UnfulfilledClaim`, `Scorecard`, `IntentReview`, `review()`
 - `crates/core/src/git/grouping.rs`: `GroupKind`, `GroupFile`, `IntentGroup`, `hunk_count()`, `is_formatting_only()`, `enclosing_symbol()`, `changed_content()`, `group()`
 - `crates/core/src/git/patch.rs`: `LineOrigin`, `DiffLine`, `Hunk`, `FileDiff`, `changed_line_indices()`, `hunk_line_indices()`, `Direction`, `build_patch()`
-- `crates/core/src/git/repo.rs`: `clear_readonly_directories()`, `clear_readonly_directories()`, `ComparisonMode`, `ChangeKind`, `FileContents`, `FileChange`, `is_conflicted()`, `WorkingStatus`, `Branch`, `Commit`, `StashEntry`, `MergeOutcome`, `MergeReport`, `StageTarget`, `Repo`, `open()`, `workdir()`, `head_oid()`, `hooks_dir()`, `status()`, `file_diff()`, `diff_all()`, `baseline_content()`, `working_content()`, `write_working_file()`, `stage_file()`, `unstage_file()`, `stage_lines()`, `unstage_lines()`, `revert_lines()`, `discard_file()`, `commit()`, `merge_branch()`, `abort_merge()`, `branches()`, `create_branch()`, `checkout_branch()`, `create_branch_from()`, `checkout_remote_branch()`, `delete_branch()`, `history()`, `commit_diff()`, `commit_file_contents()`, `write_why_note()`, `read_why_note()`, `why_for_file()`, `stash_save()`, `stash_list()`, `stash_pop()`, `stash_apply()`, `stash_drop()`, `stash_clear()`, `network_command()`, `NetworkOperation`, `NetworkKind`, `resolve_network()`
+- `crates/core/src/git/repo.rs`: `clear_readonly_directories()`, `clear_readonly_directories()`, `ComparisonMode`, `ChangeKind`, `FileContents`, `FileChange`, `is_conflicted()`, `WorkingStatus`, `Branch`, `Commit`, `StashEntry`, `MergeOutcome`, `MergeReport`, `StageTarget`, `Repo`, `open()`, `workdir()`, `head_oid()`, `hooks_dir()`, `status()`, `file_diff()`, `diff_all()`, `baseline_content()`, `working_content()`, `write_working_file()`, `stage_file()`, `unstage_file()`, `stage_lines()`, `unstage_lines()`, `revert_lines()`, `discard_file()`, `commit()`, `merge_branch()`, `abort_merge()`, `branches()`, `create_branch()`, `checkout_branch()`, `create_branch_from()`, `checkout_remote_branch()`, `delete_branch()`, `history()`, `commit_diff()`, `commit_file_contents()`, `write_why_note()`, `read_why_note()`, `why_for_file()`, `stash_save()`, `stash_paths()`, `stash_list()`, `stash_pop()`, `stash_apply()`, `stash_drop()`, `stash_clear()`, `network_command()`, `NetworkOperation`, `NetworkKind`, `resolve_network()`
 - `crates/core/src/git/why.rs`: `WhyEntry`, `FileWhy`, `DurableWhy`, `is_empty()`, `LineIntent`, `content_hash()`, `build_for_commit()`, `resolve_lines()`, `file_in()`, `record_note()`
 - `crates/core/src/importers/rider.rs`: `RiderConfiguration`, `parse()`, `expand_macros()`, `convert()`, `resolve_compounds()`, `ImportResult`, `import()`
 - `crates/core/src/inspect/dumps.rs`: `dumps_dir()`, `ParsedDumpName`, `dump_env()`, `parse_dump_name()`, `list()`, `newest_for()`, `prune()`, `prune_unnamed()`

@@ -513,6 +513,14 @@ textarea:focus {
   background: var(--accent-dim);
 }
 
+/* Ticked for a bulk action (stash, for now), which is a different fact from
+   `.selected` — that one means "the diff pane is showing this file". A marker
+   down the leading edge rather than a fill, so a row can carry both without
+   either becoming unreadable. */
+.row.checked {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 /* A project the scan listed but could not read: present, and plainly inert.
    `.row` is a clickable shape, so both halves of that are undone here — no
    pointer, no hover — because there is nothing to select and offering the

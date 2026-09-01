@@ -828,6 +828,402 @@ fn listing_stashes_on_a_clean_repo_is_empty_not_an_error() {
 }
 
 // ---------------------------------------------------------------------------
+// Path-scoped stash (`git stash push -- <paths>`)
+//
+// libgit2 has no *usable* pathspec stash, so `stash_paths` builds the stash
+// commit by hand. These tests exist to prove the hand-built commit is
+// indistinguishable from the real thing — to our own reader and to git itself.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stashing_one_path_leaves_every_other_change_alone() {
+    // The headline behaviour, and the one libgit2's own pathspec stash gets
+    // wrong: it reverts the whole working tree and keeps only the pathspec.
+    let dir = init_repo(&[("a.txt", "a original\n"), ("b.txt", "b original\n")]);
+    let path = dir.path();
+    write(path, "a.txt", "a changed\n");
+    write(path, "b.txt", "b changed\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("just a", &["a.txt".to_string()]).unwrap();
+
+    assert_eq!(read(path, "a.txt"), "a original\n");
+    assert_eq!(read(path, "b.txt"), "b changed\n");
+
+    let still_dirty: Vec<String> = repo
+        .status()
+        .unwrap()
+        .files
+        .into_iter()
+        .map(|f| f.path)
+        .collect();
+    assert_eq!(still_dirty, vec!["b.txt".to_string()]);
+}
+
+#[test]
+fn a_path_scoped_stash_pops_back_only_what_it_took() {
+    let dir = init_repo(&[("a.txt", "a original\n"), ("b.txt", "b original\n")]);
+    let path = dir.path();
+    write(path, "a.txt", "a changed\n");
+    write(path, "b.txt", "b changed\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("just a", &["a.txt".to_string()]).unwrap();
+    repo.stash_pop(0).unwrap();
+
+    assert_eq!(read(path, "a.txt"), "a changed\n");
+    assert_eq!(read(path, "b.txt"), "b changed\n");
+    assert!(repo.stash_list().unwrap().is_empty());
+}
+
+#[test]
+fn multiple_paths_go_into_one_stash() {
+    let dir = init_repo(&[
+        ("a.txt", "a original\n"),
+        ("b.txt", "b original\n"),
+        ("c.txt", "c original\n"),
+    ]);
+    let path = dir.path();
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        write(path, name, "changed\n");
+    }
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("a and c", &["a.txt".to_string(), "c.txt".to_string()])
+        .unwrap();
+
+    assert_eq!(read(path, "a.txt"), "a original\n");
+    assert_eq!(read(path, "b.txt"), "changed\n");
+    assert_eq!(read(path, "c.txt"), "c original\n");
+    assert_eq!(repo.stash_list().unwrap().len(), 1);
+}
+
+#[test]
+fn both_staged_and_unstaged_changes_for_a_path_are_stashed_and_reset() {
+    // git captures the index state and the working state as two trees. Both
+    // have to reset, or "stash this file" leaves half of it behind.
+    let dir = init_repo(&[("a.txt", "original\n")]);
+    let path = dir.path();
+
+    write(path, "a.txt", "staged\n");
+    run(path, &["add", "a.txt"]);
+    write(path, "a.txt", "staged then edited\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("both halves", &["a.txt".to_string()])
+        .unwrap();
+
+    assert_eq!(read(path, "a.txt"), "original\n");
+    assert!(
+        repo.status().unwrap().files.is_empty(),
+        "nothing may be left staged or unstaged"
+    );
+
+    repo.stash_pop(0).unwrap();
+    assert_eq!(read(path, "a.txt"), "staged then edited\n");
+}
+
+#[test]
+fn an_untracked_selected_file_is_stashed_and_removed_from_disk() {
+    let dir = init_repo(&[("kept.txt", "kept\n")]);
+    let path = dir.path();
+    write(path, "new.txt", "brand new\n");
+    write(path, "other.txt", "also new\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("the new file", &["new.txt".to_string()])
+        .unwrap();
+
+    assert!(!path.join("new.txt").exists(), "the stashed file must go");
+    assert_eq!(read(path, "other.txt"), "also new\n");
+}
+
+#[test]
+fn popping_a_path_scoped_stash_restores_the_untracked_file() {
+    let dir = init_repo(&[("kept.txt", "kept\n")]);
+    let path = dir.path();
+    write(path, "new.txt", "brand new\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("the new file", &["new.txt".to_string()])
+        .unwrap();
+    repo.stash_pop(0).unwrap();
+
+    assert_eq!(read(path, "new.txt"), "brand new\n");
+}
+
+#[test]
+fn a_deleted_selected_file_is_stashed_and_restored_from_head() {
+    let dir = init_repo(&[("gone.txt", "here\n"), ("other.txt", "other\n")]);
+    let path = dir.path();
+    std::fs::remove_file(path.join("gone.txt")).unwrap();
+    write(path, "other.txt", "edited\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("the deletion", &["gone.txt".to_string()])
+        .unwrap();
+
+    assert_eq!(read(path, "gone.txt"), "here\n");
+    assert_eq!(read(path, "other.txt"), "edited\n");
+
+    repo.stash_pop(0).unwrap();
+    assert!(!path.join("gone.txt").exists());
+}
+
+#[test]
+fn a_staged_new_file_is_stashed_and_the_index_entry_goes_with_it() {
+    let dir = init_repo(&[("kept.txt", "kept\n")]);
+    let path = dir.path();
+    write(path, "added.txt", "added\n");
+    run(path, &["add", "added.txt"]);
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("the addition", &["added.txt".to_string()])
+        .unwrap();
+
+    assert!(!path.join("added.txt").exists());
+    assert!(repo.status().unwrap().files.is_empty());
+
+    repo.stash_pop(0).unwrap();
+    assert_eq!(read(path, "added.txt"), "added\n");
+}
+
+#[test]
+fn the_stash_reads_back_through_the_existing_list_and_diff_path() {
+    // The compatibility contract with `stash_list` and the panel's preview,
+    // which reads a stash through the ordinary commit-diff path.
+    let dir = init_repo(&[("a.txt", "a original\n"), ("b.txt", "b original\n")]);
+    let path = dir.path();
+    write(path, "a.txt", "a changed\n");
+    write(path, "b.txt", "b changed\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("readable", &["a.txt".to_string()])
+        .unwrap();
+
+    let stashes = repo.stash_list().unwrap();
+    assert_eq!(stashes.len(), 1);
+    assert_eq!(stashes[0].index, 0);
+    assert_eq!(stashes[0].branch.as_deref(), Some("main"));
+    assert!(stashes[0].message.contains("readable"));
+    assert!(!stashes[0].id.is_empty());
+
+    let touched: BTreeSet<String> = repo
+        .commit_diff(&stashes[0].id)
+        .unwrap()
+        .into_iter()
+        .map(|d| d.path)
+        .collect();
+    assert!(touched.contains("a.txt"));
+    assert!(
+        !touched.contains("b.txt"),
+        "the stash must not carry the file it was not given: {touched:?}"
+    );
+}
+
+#[test]
+fn the_first_path_stash_in_a_repo_is_listed() {
+    // `refs/stash` is not a ref git logs automatically, so it has to be given a
+    // reflog before it is written. Without that the very first stash in a
+    // repository is created and then invisible — every later one works, because
+    // by then the log file exists.
+    let dir = init_repo(&[("a.txt", "original\n")]);
+    let path = dir.path();
+    // Belt and braces: even with ref logging switched off entirely, a stash
+    // must still be findable, exactly as it is under the git CLI.
+    run(path, &["config", "core.logAllRefUpdates", "false"]);
+    write(path, "a.txt", "changed\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("the very first", &["a.txt".to_string()])
+        .unwrap();
+
+    let stashes = repo.stash_list().unwrap();
+    assert_eq!(stashes.len(), 1, "the first stash must be listed");
+    assert!(stashes[0].message.contains("the very first"));
+}
+
+#[test]
+fn the_stash_commit_has_the_shape_git_expects() {
+    let dir = init_repo(&[("a.txt", "original\n")]);
+    let path = dir.path();
+    write(path, "a.txt", "changed\n");
+    write(path, "new.txt", "untracked\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("shaped", &["a.txt".to_string(), "new.txt".to_string()])
+        .unwrap();
+
+    // Three parents when untracked files are included: base, index, untracked.
+    let raw = run(path, &["cat-file", "-p", "refs/stash"]);
+    assert_eq!(
+        raw.lines().filter(|l| l.starts_with("parent ")).count(),
+        3,
+        "expected base + index + untracked parents:\n{raw}"
+    );
+    assert!(raw.contains("On main: shaped"), "{raw}");
+
+    assert!(run(path, &["log", "-1", "--format=%s", "refs/stash^2"]).starts_with("index on main:"));
+    let untracked = run(path, &["log", "-1", "--format=%s", "refs/stash^3"]);
+    assert!(
+        untracked.starts_with("untracked files on main:"),
+        "{untracked}"
+    );
+    // The untracked commit is a root commit — it has no parents at all.
+    assert!(run(path, &["rev-list", "--count", "refs/stash^3"]).trim() == "1");
+}
+
+#[test]
+fn the_git_cli_reads_the_stash_this_app_wrote() {
+    // The strongest evidence the hand-built commit is right: git lists it and
+    // pops it, restoring exactly what was taken and nothing else.
+    let dir = init_repo(&[("a.txt", "a original\n"), ("b.txt", "b original\n")]);
+    let path = dir.path();
+    write(path, "a.txt", "a changed\n");
+    write(path, "b.txt", "b changed\n");
+    write(path, "new.txt", "untracked\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("for git", &["a.txt".to_string(), "new.txt".to_string()])
+        .unwrap();
+
+    let listed = run(path, &["stash", "list"]);
+    assert!(listed.contains("for git"), "git stash list said: {listed}");
+
+    let shown = run(
+        path,
+        &[
+            "stash",
+            "show",
+            "--include-untracked",
+            "--name-only",
+            "stash@{0}",
+        ],
+    );
+    assert!(shown.contains("a.txt"), "{shown}");
+    assert!(shown.contains("new.txt"), "{shown}");
+    assert!(!shown.contains("b.txt"), "{shown}");
+
+    run(path, &["stash", "pop"]);
+    assert_eq!(read(path, "a.txt"), "a changed\n");
+    assert_eq!(read(path, "b.txt"), "b changed\n");
+    assert_eq!(read(path, "new.txt"), "untracked\n");
+}
+
+#[test]
+fn a_crlf_working_file_round_trips_through_a_path_scoped_stash() {
+    // The blob written into the stash tree must go through the same filters as
+    // any other blob. Storing the file's raw bytes would put CRLF where every
+    // other tree in the repository holds LF, so the stash would show the whole
+    // file as changed and popping it would dirty every line.
+    let dir = init_repo(&[("a.txt", "one\ntwo\n"), ("b.txt", "b\n")]);
+    let path = dir.path();
+    run(path, &["config", "core.autocrlf", "true"]);
+    std::fs::write(path.join("a.txt"), "one\r\ntwo changed\r\n").unwrap();
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("crlf", &["a.txt".to_string()]).unwrap();
+
+    let stashes = repo.stash_list().unwrap();
+    let diff = repo.commit_diff(&stashes[0].id).unwrap();
+    let file = diff.iter().find(|d| d.path == "a.txt").unwrap();
+    assert_eq!(
+        file.changed_line_indices().len(),
+        2,
+        "only the edited line should differ, not the whole file"
+    );
+}
+
+#[test]
+fn a_detached_head_stash_records_no_branch() {
+    let dir = init_repo(&[("a.txt", "original\n")]);
+    let path = dir.path();
+    run(path, &["checkout", "--detach"]);
+    write(path, "a.txt", "changed\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    repo.stash_paths("detached", &["a.txt".to_string()])
+        .unwrap();
+
+    let stashes = repo.stash_list().unwrap();
+    assert_eq!(stashes[0].branch.as_deref(), Some("(no branch)"));
+}
+
+#[test]
+fn stashing_a_path_with_no_changes_is_refused_by_name() {
+    // Silently writing an empty stash would look like it worked. The user asked
+    // for a change to be set aside; naming the wrong file has to say so.
+    let dir = init_repo(&[("a.txt", "original\n"), ("b.txt", "b\n")]);
+    let path = dir.path();
+    write(path, "a.txt", "changed\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    let err = repo
+        .stash_paths("nothing here", &["b.txt".to_string()])
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("b.txt"), "the error must name the path: {err}");
+    assert!(repo.stash_list().unwrap().is_empty());
+    assert_eq!(read(path, "a.txt"), "changed\n");
+}
+
+#[test]
+fn stashing_nothing_is_refused() {
+    let dir = init_repo(&[("a.txt", "original\n")]);
+    let path = dir.path();
+    write(path, "a.txt", "changed\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    assert!(repo.stash_paths("empty", &[]).is_err());
+    assert_eq!(read(path, "a.txt"), "changed\n");
+}
+
+#[test]
+fn stashing_an_unknown_path_is_refused_by_name() {
+    let dir = init_repo(&[("a.txt", "original\n")]);
+    let path = dir.path();
+    write(path, "a.txt", "changed\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    let err = repo
+        .stash_paths("ghost", &["nope.txt".to_string()])
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("nope.txt"), "{err}");
+}
+
+#[test]
+fn stashing_an_escaping_path_is_refused() {
+    // The path comes from the UI, but a stash must never reach outside the
+    // workspace even if something upstream sends a traversal.
+    let dir = init_repo(&[("a.txt", "original\n")]);
+    let path = dir.path();
+    write(path, "a.txt", "changed\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    assert!(repo
+        .stash_paths("escape", &["../outside.txt".to_string()])
+        .is_err());
+    assert!(repo
+        .stash_paths("absolute", &["/etc/passwd".to_string()])
+        .is_err());
+}
+
+#[test]
+fn stashing_before_the_first_commit_is_refused() {
+    // A stash commit needs a base commit to hang off; git refuses too.
+    let dir = init_repo(&[]);
+    let path = dir.path();
+    write(path, "a.txt", "brand new\n");
+
+    let mut repo = Repo::open(path).unwrap();
+    assert!(repo
+        .stash_paths("too early", &["a.txt".to_string()])
+        .is_err());
+    assert_eq!(read(path, "a.txt"), "brand new\n");
+}
+
+// ---------------------------------------------------------------------------
 // Network commands
 // ---------------------------------------------------------------------------
 

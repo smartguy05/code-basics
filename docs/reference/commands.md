@@ -181,6 +181,7 @@ The Running panel: what the app has running now (across every open codebase) plu
 | `git_commit_file_contents` | `id: String, path: String` | `FileContents` | Both sides of one file as a commit changed it, for the History diff viewer. Either side is null when the file did not exist there (added, deleted, or a root commit) |
 | `git_commit_file_why` | `id: String, path: String` | `LineIntent[]` | The recorded reason behind each line of a file as a past commit left it, resolved from the durable git note. Content-keyed, so it survives reformatting/rebase; empty when the commit has no note or no line matches (never a guessed reason) |
 | `git_stash_save` | `message: String` | `()` | Stash the working tree (including untracked) under a message |
+| `git_stash_paths` | `message: String`, `paths: string[]` | `string` | Stash only the named files, leaving every other change in place; returns the stash commit id |
 | `git_stash_list` | – | `StashEntry[]` | Every stash, newest first; `id` is the stash commit for previewing via `git_commit_diff` |
 | `git_stash_pop` | `index: usize` | `()` | Apply `stash@{index}` and remove it |
 | `git_stash_apply` | `index: usize` | `()` | Apply `stash@{index}`, keeping it in the list |

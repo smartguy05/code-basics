@@ -621,6 +621,9 @@ export const gitCommitFileWhy = (id: string, path: string) =>
 export const gitStashSave = (message: string) =>
   invoke<void>("git_stash_save", { message });
 
+export const gitStashPaths = (message: string, paths: string[]) =>
+  invoke<string>("git_stash_paths", { message, paths });
+
 export const gitStashList = () => invoke<StashEntry[]>("git_stash_list");
 
 export const gitStashPop = (index = 0) => invoke<void>("git_stash_pop", { index });

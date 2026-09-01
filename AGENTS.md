@@ -75,3 +75,10 @@ Intent load, including the first.
 Notes colors belong to individual note records in the versioned global schema,
 not to the Notes window. The titlebar Notes action must restore a mounted,
 minimized panel.
+
+The Changes file list carries a multi-selection that is separate from the file
+shown in the diff pane. A right-click inside the selection acts on the whole
+selection; a right-click outside it acts on that single row. A Shift-range
+follows the rendered row order, not the flat order. Stashing selected files must
+stash only those paths and leave every other change, staged or not, in the
+working tree; conflicted files are never offered.
