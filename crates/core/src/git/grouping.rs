@@ -476,7 +476,7 @@ pub fn group(
                         lines.sort_unstable();
                         lines.dedup();
                         let self_confidence = confidence_for(&turn, &label);
-                        let key = format!("intent:{turn}:{label}");
+                        let key = intent_key(&turn, &label);
                         let bucket = buckets.entry(key.clone()).or_insert_with(|| Bucket {
                             id: key,
                             kind: GroupKind::Intent,
@@ -591,7 +591,7 @@ pub fn group(
                     let declaring_turn = label_turn.unwrap_or(turn);
                     let self_confidence = confidence_for(&declaring_turn, &label);
                     (
-                        format!("intent:{declaring_turn}:{label}"),
+                        intent_key(&declaring_turn, &label),
                         GroupKind::Intent,
                         label,
                         None,
@@ -674,6 +674,39 @@ pub fn group(
             // one reason titles the card, several become candidates rather than
             // being dropped to a bare symbol name. Confidence is Low — the
             // reason is stated, not corroborated by matched geometry.
+            if !matches!(kind, GroupKind::Intent | GroupKind::Formatting) && covering.len() > 1 {
+                // Several real intents can plausibly own the same changed
+                // lines. Keep one card per intent and repeat only those
+                // genuinely ambiguous lines in each card; a synthetic
+                // multi-intent card makes the reviewer decode several goals at
+                // once and defeats the intent-first review model.
+                for (turn_id, reason) in &covering {
+                    let key = intent_key(turn_id, reason);
+                    let bucket = buckets.entry(key.clone()).or_insert_with(|| Bucket {
+                        id: key,
+                        kind: GroupKind::Intent,
+                        label: reason.clone(),
+                        candidates: Vec::new(),
+                        symbol: None,
+                        confidence: Confidence::Low,
+                        self_confidence: confidence_for(turn_id, reason),
+                        files: BTreeMap::new(),
+                        needs_title: false,
+                        symbols: BTreeSet::new(),
+                    });
+                    bucket.symbols.insert(String::new());
+                    let entry = bucket
+                        .files
+                        .entry(diff.path.clone())
+                        .or_insert_with(|| (Vec::new(), Vec::new()));
+                    entry.0.extend(changed.iter().copied());
+                    if !entry.1.contains(&hunk_index) {
+                        entry.1.push(hunk_index);
+                    }
+                }
+                continue;
+            }
+
             let (key, kind, label, symbol, confidence, candidates, self_confidence) =
                 if matches!(kind, GroupKind::Intent | GroupKind::Formatting) || covering.is_empty()
                 {
@@ -689,7 +722,7 @@ pub fn group(
                 } else if covering.len() == 1 {
                     let (turn_id, reason) = &covering[0];
                     (
-                        format!("intent:{turn_id}:{reason}"),
+                        intent_key(turn_id, reason),
                         GroupKind::Intent,
                         reason.clone(),
                         None,
@@ -867,6 +900,18 @@ fn absorb(into: &mut IntentGroup, other: IntentGroup) {
 /// which is exactly what a reviewer must not skim past — so it leads. A stated
 /// intent, having been explained, comes next, and formatting, which changed no
 /// code, trails as the one kind that is safe to skim.
+/// Agent turns that repeat the exact same declared intent describe one review
+/// goal, even when the work spans several turns. User notes retain their own
+/// stable identity because two deliberate cards may intentionally share a
+/// title without being the same group.
+fn intent_key(turn: &str, label: &str) -> String {
+    if turn.starts_with("usernote:") {
+        format!("intent:{turn}:{label}")
+    } else {
+        format!("intent:label:{label}")
+    }
+}
+
 fn kind_order(kind: GroupKind) -> u8 {
     match kind {
         GroupKind::Other => 0,

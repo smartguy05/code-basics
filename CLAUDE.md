@@ -243,7 +243,21 @@ Three layers with a strict dependency rule:
   dispatched through `src/shortcuts.ts`. Settings must not advertise a command
   without a registered handler or stable `data-command` target. Native
   CodeMirror/xterm bindings are reference-only. Search All defaults to Ctrl+N;
-  Search Symbols is deliberately unbound.
+  Search Symbols is deliberately unbound. Search All reserves result capacity
+  across files, symbols, and actions so a symbol-heavy workspace cannot hide a
+  matching file such as a `.razor` view.
+- The Run toolbar's Stop control is one split button. Its caret lists only
+  `ProcessKind::Run` records (including Run orphans) across workspaces; terminals,
+  builds, launched commands, reviews, and behavioral runs stay out because they
+  have their own lifecycle controls.
+- An Intent card is one declared intent. Exact identical agent labels merge
+  across turns, user-authored cards keep their identity, uniquely evidenced
+  lines belong only to their card, and only genuinely ambiguous lines repeat
+  across plausible intent cards. Conservative retirement runs on every Intent
+  load, including the first, and archive UI must expose progress and failures.
+- Notes use the versioned global Rust/TypeScript schema. Color is optional state
+  on each `Note`, never window-level UI state; version-1 data migrates with no
+  color. Re-invoking the titlebar Notes command restores a minimized panel.
 - Background workspace events merge through `workspaceTabsLogic.ts`: failure
   persists, terminal attention remains until acknowledged, success expires,
   cancellation is quiet, and an event already visible in the active workspace

@@ -252,6 +252,8 @@ export interface IntentPanelProps {
   /** Which view is displayed — rejecting is only possible in a working-tree one. */
   mode: ComparisonMode;
   busy: boolean;
+  /** The intent attribution scan is currently reading and grouping changes. */
+  loading: boolean;
   onSelect: (group: IntentGroup) => void;
   /** Open one file of the group, scoped to the group's hunks in it. */
   onSelectFile: (group: IntentGroup, file: GroupFile) => void;
@@ -328,6 +330,7 @@ export function IntentPanel({
   statusFiles,
   mode,
   busy,
+  loading,
   onSelect,
   onSelectFile,
   onStage,
@@ -376,6 +379,7 @@ export function IntentPanel({
   }, [capturing]);
 
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [archiving, setArchiving] = useState(false);
   // The scorecard, scope check and unfulfilled-claim list answer "did the agent
   // stay on task" — worth having, but not what this view is for. They fold away
   // behind the group count so the cards themselves are what the tab shows.
@@ -430,15 +434,22 @@ export function IntentPanel({
 
   const runPrune = async () => {
     setFeedback(null);
-    const preview = await onPreviewPrune();
-    const prompt = prunePrompt(preview);
-    // Nothing absorbed: say so rather than opening a confirm over an empty action.
-    if (!prompt) {
-      setFeedback(pruneFeedback(preview));
-      return;
+    setArchiving(true);
+    try {
+      const preview = await onPreviewPrune();
+      const prompt = prunePrompt(preview);
+      // Nothing absorbed: say so rather than opening a confirm over an empty action.
+      if (!prompt) {
+        setFeedback(pruneFeedback(preview));
+        return;
+      }
+      if (!window.confirm(prompt)) return;
+      setFeedback(pruneFeedback(await onPrune()));
+    } catch (error) {
+      setFeedback(`Could not archive absorbed intents: ${api.errorMessage(error)}`);
+    } finally {
+      setArchiving(false);
     }
-    if (!window.confirm(prompt)) return;
-    setFeedback(pruneFeedback(await onPrune()));
   };
 
   const runReject = async (group: IntentGroup, reason: string, file?: GroupFile) => {
@@ -465,11 +476,12 @@ export function IntentPanel({
         <>
           <CaptureSetup
             providers={providers}
-            busy={busy}
+            busy={busy || archiving}
             onEnable={onEnable}
             onDisable={onDisable}
             onImportHistory={runImport}
             onPrune={runPrune}
+            archiving={archiving}
           />
           <QualityGateSetup providers={providers} busy={busy} />
         </>
@@ -478,6 +490,12 @@ export function IntentPanel({
       {feedback && (
         <div className="muted" style={{ padding: "6px 8px", fontSize: 11 }}>
           {feedback}
+        </div>
+      )}
+
+      {loading && (
+        <div className="muted" style={{ display: "flex", gap: 6, padding: "6px 8px" }}>
+          <span className="spinner" aria-hidden /> Loading intents…
         </div>
       )}
 
@@ -1148,6 +1166,7 @@ function CaptureSetup({
   onDisable,
   onImportHistory,
   onPrune,
+  archiving,
 }: {
   providers: ProviderStatus[];
   busy: boolean;
@@ -1155,6 +1174,7 @@ function CaptureSetup({
   onDisable: (provider: ProviderId, scope: InstallScope) => Promise<void>;
   onImportHistory: () => Promise<void>;
   onPrune: () => Promise<void>;
+  archiving: boolean;
 }) {
   // A pending preview is either an install or an uninstall; the confirm applies
   // whichever kind was previewed. An empty uninstall plan (nothing to remove)
@@ -1289,7 +1309,8 @@ function CaptureSetup({
         onClick={() => void onPrune()}
         title="Move intents your commits have already absorbed into an archive file, so an old reason stops labelling new work. Nothing is deleted."
       >
-        Archive absorbed intents…
+        {archiving && <span className="spinner" aria-hidden style={{ marginRight: 6 }} />}
+        {archiving ? "Archiving absorbed intents…" : "Archive absorbed intents…"}
       </button>
 
       {error && <div className="error" style={{ fontSize: 11 }}>{error}</div>}

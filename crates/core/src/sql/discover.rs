@@ -157,7 +157,15 @@ impl Default for DiscoveryOptions<'static> {
 
 /// The real user-secrets reader, over [`crate::secrets::read`].
 fn default_user_secrets_reader(project: &Path) -> Result<Option<(PathBuf, String)>, String> {
-    let secrets = secrets::read(project).map_err(|e| format!("{e:#}"))?;
+    let mut secrets = secrets::read(project).map_err(|e| format!("{e:#}"))?;
+    if secrets.secrets_id.is_none() {
+        if let Some(id) = crate::adapters::msbuild::evaluate(project)
+            .and_then(|properties| properties.get("UserSecretsId").cloned())
+            .filter(|id| !id.trim().is_empty())
+        {
+            secrets = secrets::read_with_id(&id).map_err(|e| format!("{e:#}"))?;
+        }
+    }
     Ok(match (secrets.path, secrets.content) {
         (Some(path), Some(content)) => Some((path, content)),
         _ => None,

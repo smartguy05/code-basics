@@ -1331,21 +1331,24 @@ export function RunView({
           >
             Run
           </button>
-          <button
-            data-command="run.stop"
-            onClick={() => selected && stop(selected)}
-            disabled={!selected || !running.has(selected.id)}
-            title="Stop the selected configuration"
-          >
-            Stop
-          </button>
-          <button
-            onClick={(e) => void openStopMenu(e)}
-            title="Choose what to stop — every process this app is running"
-            aria-label="Choose what to stop"
-          >
-            ▾
-          </button>
+          <span className="split-button">
+            <button
+              data-command="run.stop"
+              onClick={() => selected && stop(selected)}
+              disabled={!selected || !running.has(selected.id)}
+              title="Stop the selected configuration"
+            >
+              Stop
+            </button>
+            <button
+              className="split-button-arrow"
+              onClick={(e) => void openStopMenu(e)}
+              title="Choose a running configuration to stop"
+              aria-label="Choose a running configuration to stop"
+            >
+              ▾
+            </button>
+          </span>
           <button
             data-command="run.restart"
             onClick={() => selected && start(selected)}

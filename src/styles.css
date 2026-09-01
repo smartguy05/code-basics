@@ -387,6 +387,29 @@ textarea:focus {
   flex-wrap: wrap;
 }
 
+.split-button {
+  display: inline-flex;
+}
+
+.split-button > button {
+  border-radius: 0;
+}
+
+.split-button > button:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.split-button > button:last-child {
+  border-left: 0;
+  border-radius: 0 3px 3px 0;
+}
+
+.split-button-arrow {
+  min-width: 24px;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+
 .content {
   flex: 1;
   min-height: 0;

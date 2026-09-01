@@ -15,13 +15,11 @@ import {
   deleteNote,
   flushDelay,
   loadActiveId,
-  loadPillColor,
   nextActiveAfterDelete,
   NOTES_LAYOUT_KEY,
   renameNote,
   resolveActiveId,
   saveActiveId,
-  savePillColor,
   updateBody,
 } from "./notesLogic";
 import { PillColorMenu } from "./PillColorMenu";
@@ -63,10 +61,13 @@ function nextSeq(notes: Note[]): number {
 export function NotesPanel({
   onClose,
   onSendToAgent,
+  restoreRequest,
 }: {
   onClose: () => void;
   /** Run the active note's text as an agent prompt (opens the Review panel). */
   onSendToAgent: (note: Note) => void;
+  /** Changes whenever the title-bar Notes button is clicked. */
+  restoreRequest: number;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -75,14 +76,8 @@ export function NotesPanel({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [minimized, setMinimized] = useState(false);
-  // The minimized-bar colour, persisted (the Notes panel is long-lived, unlike
-  // an ephemeral terminal). Undefined is the theme default.
-  const [pillColor, setPillColor] = useState<string | undefined>(() => loadPillColor(localStorage));
 
-  const recolor = (color: string | undefined) => {
-    setPillColor(color);
-    savePillColor(localStorage, color);
-  };
+  useEffect(() => setMinimized(false), [restoreRequest]);
 
   const seqRef = useRef(1);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -125,7 +120,7 @@ export function NotesPanel({
       // Flush any pending write so a close does not lose the last keystrokes.
       if (saveTimer.current) {
         clearTimeout(saveTimer.current);
-        void api.writeNotes({ version: 1, notes: latestRef.current }).catch(() => {});
+        void api.writeNotes({ version: 2, notes: latestRef.current }).catch(() => {});
       }
     };
   }, []);
@@ -140,7 +135,7 @@ export function NotesPanel({
       clearTimeout(saveTimer.current);
       saveTimer.current = undefined;
       pendingSince.current = null;
-      void api.writeNotes({ version: 1, notes: latestRef.current }).catch(() => {});
+      void api.writeNotes({ version: 2, notes: latestRef.current }).catch(() => {});
     };
     window.addEventListener("pagehide", flush);
     window.addEventListener("beforeunload", flush);
@@ -185,7 +180,7 @@ export function NotesPanel({
     saveTimer.current = setTimeout(() => {
       saveTimer.current = undefined;
       pendingSince.current = null;
-      void api.writeNotes({ version: 1, notes: next }).catch(() => {});
+      void api.writeNotes({ version: 2, notes: next }).catch(() => {});
     }, delay);
   };
 
@@ -222,6 +217,11 @@ export function NotesPanel({
   const onBody = (body: string) => {
     if (!active) return;
     commit(updateBody(notes, active.id, body, Date.now()));
+  };
+
+  const recolorActive = (color: string | undefined) => {
+    if (!active) return;
+    commit(notes.map((note) => note.id === active.id ? { ...note, color } : note));
   };
 
   const onSaveInstruction = () => {
@@ -272,7 +272,7 @@ export function NotesPanel({
           className="review-pill notes-pill"
           onClick={() => setMinimized(false)}
           title="Restore notes"
-          style={pillColor ? { background: pillColor } : undefined}
+          style={active?.color ? { background: active.color } : undefined}
         >
           <span>Notes</span>
         </button>
@@ -290,7 +290,11 @@ export function NotesPanel({
         <div className="review-header" onPointerDown={onHeaderPointerDown}>
           <strong>Notes</strong>
           <span style={{ flex: 1 }} />
-          <PillColorMenu color={pillColor} onPick={recolor} title="Set the minimized bar colour" />
+          <PillColorMenu
+            color={active?.color}
+            onPick={recolorActive}
+            title="Set the active note tab colour"
+          />
           <button onClick={() => setMinimized(true)} title="Minimize (keeps your notes)">
             —
           </button>
@@ -324,6 +328,7 @@ export function NotesPanel({
               <span
                 key={n.id}
                 className={`notes-tab${n.id === activeId ? " active" : ""}`}
+                style={n.color ? { background: n.color } : undefined}
                 onClick={() => chooseActive(n.id)}
                 onDoubleClick={() => setRenamingId(n.id)}
                 title="Click to open, double-click to rename"

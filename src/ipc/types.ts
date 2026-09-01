@@ -501,6 +501,8 @@ export interface Note {
   id: string;
   title: string;
   body: string;
+  /** Optional colour belonging to this tab, not to the Notes window. */
+  color?: string;
   /** When the note was created, milliseconds since the Unix epoch. */
   createdAtMs: number;
   /** When the note was last edited, milliseconds since the Unix epoch. */
@@ -509,7 +511,7 @@ export interface Note {
 
 /** The whole global notes file (`notes::NotesFile`). */
 export interface NotesFile {
-  /** Schema version (currently 1), so the format can migrate. */
+  /** Schema version (currently 2), so the format can migrate. */
   version: number;
   /** The notes, in the order the panel shows their tabs. */
   notes: Note[];

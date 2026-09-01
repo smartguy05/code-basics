@@ -116,20 +116,8 @@ export function killRequest(record: RunningRecord, orphan: boolean): KillRequest
 // The Stop button's menu (Run tab)
 // ---------------------------------------------------------------------------
 
-/**
- * The order the Stop menu lists kinds in: what the user most likely came to
- * stop, first. Runs and launched apps are the two things people start and
- * forget; a build finishes on its own; a terminal, review or behavioral run is
- * somewhere the user can already see and stop it.
- */
-const KIND_ORDER: ProcessKind[] = [
-  "run",
-  "external",
-  "build",
-  "terminal",
-  "review",
-  "behavioral",
-];
+/** The Stop split-button manages only configurations launched by Run. */
+const STOP_MENU_KIND: ProcessKind = "run";
 
 /** One stoppable process in the Stop menu. */
 export interface StopMenuRow {
@@ -168,16 +156,16 @@ export function sameRoot(a: string, b: string): boolean {
 }
 
 /**
- * Everything the Stop menu lists, grouped by kind and ordered so the open
- * codebase's processes come first inside each group.
+ * Everything the Stop menu lists: Run-launched configurations, ordered so the
+ * open codebase's processes come first.
  *
- * The whole report is shown, not just this codebase's: the Stop button exists
+ * Runs from every codebase are shown: the Stop button exists
  * because a process the user has lost track of is hard to find, and the ones
  * hardest to find are precisely the ones started from a tab that is no longer
  * in front of them. Rows from elsewhere are marked (`here: false`) so the UI can
  * say where they came from rather than presenting them as local.
  *
- * Orphans — processes the app started and can no longer address normally — are
+ * Run orphans — processes the app started and can no longer address normally — are
  * a group of their own at the end rather than being mixed in, because killing
  * one is a different action with a different confirmation.
  */
@@ -204,14 +192,16 @@ export function stopMenuGroups(
     );
 
   const groups: StopMenuGroup[] = [];
-  for (const kind of KIND_ORDER) {
-    const rows = order(report.live.filter((r) => r.kind === kind).map((r) => row(r, false)));
-    if (rows.length > 0) {
-      groups.push({ key: kind, label: kindLabel(kind), rows });
-    }
+  const rows = order(
+    report.live.filter((r) => r.kind === STOP_MENU_KIND).map((r) => row(r, false)),
+  );
+  if (rows.length > 0) {
+    groups.push({ key: STOP_MENU_KIND, label: kindLabel(STOP_MENU_KIND), rows });
   }
 
-  const orphans = order(report.orphans.map((r) => row(r, true)));
+  const orphans = order(
+    report.orphans.filter((r) => r.kind === STOP_MENU_KIND).map((r) => row(r, true)),
+  );
   if (orphans.length > 0) {
     groups.push({ key: "orphans", label: "Left over", rows: orphans });
   }

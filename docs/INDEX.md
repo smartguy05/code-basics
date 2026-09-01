@@ -19,15 +19,15 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/adapters/mod.rs` | 28 | Ecosystem adapters. |
 | `crates/core/src/adapters/msbuild.rs` | 157 | Optional, accurate MSBuild evaluation. |
 | `crates/core/src/adapters/msbuild_tests.rs` | 213 | Tests for optional MSBuild evaluation. |
-| `crates/core/src/adapters/node.rs` | 422 | The JavaScript / TypeScript ecosystem adapter. |
-| `crates/core/src/adapters/node_tests.rs` | 485 | Tests for the JS/TS adapter. |
+| `crates/core/src/adapters/node.rs` | 433 | The JavaScript / TypeScript ecosystem adapter. |
+| `crates/core/src/adapters/node_tests.rs` | 489 | Tests for the JS/TS adapter. |
 | `crates/core/src/adapters/solution.rs` | 316 | Reading .NET solution files. |
 | `crates/core/src/adapters/solution_tests.rs` | 139 | Tests for solution parsing. Included by `solution.rs` under `#[cfg(test)]`. |
 | `crates/core/src/architecture/components.rs` | 469 | The component map: which services this workspace runs, which data stores |
 | `crates/core/src/architecture/components_tests.rs` | 997 | Tests for [`super::components`]. |
 | `crates/core/src/architecture/graph.rs` | 1782 | The derived project graph: nodes, edges, and the rules that produce them. |
 | `crates/core/src/architecture/graph_tests.rs` | 2112 | Tests for [`super::graph`]. |
-| `crates/core/src/architecture/mermaid.rs` | 1329 | Rendering an [`ArchGraph`](super::graph::ArchGraph) to Mermaid source, and |
+| `crates/core/src/architecture/mermaid.rs` | 1332 | Rendering an [`ArchGraph`](super::graph::ArchGraph) to Mermaid source, and |
 | `crates/core/src/architecture/mermaid_tests.rs` | 1534 | Tests for [`super::mermaid`]. |
 | `crates/core/src/architecture/mod.rs` | 77 | The derived project graph: what this workspace is made of, and what points |
 | `crates/core/src/architecture/signals/dotnet.rs` | 1387 | Component signals read out of .NET manifests, configuration and source. |
@@ -90,21 +90,21 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/features/features_tests.rs` | 93 |  |
 | `crates/core/src/features/mod.rs` | 162 | Optional features: which of the app's non-core capabilities are switched on. |
 | `crates/core/src/features/store.rs` | 198 | Reading and writing `code-basics/features.json`, and the installer seed. |
-| `crates/core/src/features/store_tests.rs` | 570 |  |
+| `crates/core/src/features/store_tests.rs` | 571 |  |
 | `crates/core/src/files.rs` | 432 | Workspace file access for the directory tree and file editor. |
 | `crates/core/src/git/attribution.rs` | 844 | Deciding which recorded edit produced which line of a diff. |
 | `crates/core/src/git/attribution_tests.rs` | 1045 | Tests for attributing diff lines to recorded edits. |
 | `crates/core/src/git/coverage.rs` | 355 | Auditing the agent's own story about its work. |
 | `crates/core/src/git/coverage_tests.rs` | 917 | Tests for the intent-coverage reverse pass and scorecard. |
-| `crates/core/src/git/grouping.rs` | 991 | Turning hunks into a handful of decisions. |
-| `crates/core/src/git/grouping_tests.rs` | 1597 | Tests for collapsing hunks into cards. |
+| `crates/core/src/git/grouping.rs` | 1036 | Turning hunks into a handful of decisions. |
+| `crates/core/src/git/grouping_tests.rs` | 1616 | Tests for collapsing hunks into cards. |
 | `crates/core/src/git/mod.rs` | 34 | Git operations. |
 | `crates/core/src/git/patch.rs` | 487 | Building unified diff patches restricted to a selection of lines. |
 | `crates/core/src/git/repo.rs` | 1794 | Repository reads and mutations. |
 | `crates/core/src/git/why.rs` | 260 | Intent that survives the commit. |
 | `crates/core/src/git/why_tests.rs` | 324 | Tests for the pure durable-why build and resolve logic. |
 | `crates/core/src/importers/mod.rs` | 7 | Importing configurations from other tools. |
-| `crates/core/src/importers/rider.rs` | 516 | Importing JetBrains Rider run configurations. |
+| `crates/core/src/importers/rider.rs` | 511 | Importing JetBrains Rider run configurations. |
 | `crates/core/src/importers/rider_tests.rs` | 625 | Tests for the Rider importer. |
 | `crates/core/src/inspect/dumps.rs` | 376 | Crash dumps on disk: arming them, recognising them, matching them, pruning |
 | `crates/core/src/inspect/dumps_tests.rs` | 297 |  |
@@ -140,13 +140,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/providers/settings_merge.rs` | 158 | Generic marker-based merging of hook entries into a `settings.json`-shaped |
 | `crates/core/src/intents/reject.rs` | 572 | Rejecting a change: undoing it and leaving the reason where it was. |
 | `crates/core/src/intents/reject_tests.rs` | 483 | Tests for rejecting a change — the marker comment left where code was. |
-| `crates/core/src/intents/retire.rs` | 777 | Retiring the intents a commit has absorbed. |
+| `crates/core/src/intents/retire.rs` | 750 | Retiring the intents a commit has absorbed. |
 | `crates/core/src/intents/retire_tests.rs` | 262 | Tests for retiring intents a commit has absorbed. Included by `retire.rs` |
 | `crates/core/src/intents/user.rs` | 401 | User-authored intents: a note the user writes on a card when no agent hook |
 | `crates/core/src/intents/user_tests.rs` | 497 |  |
 | `crates/core/src/intents/whyhook.rs` | 166 | The `post-commit` hook that persists durable intent for external commits. |
 | `crates/core/src/intents/whyhook_tests.rs` | 86 | Tests for the durable-why post-commit hook installer. |
-| `crates/core/src/invocation.rs` | 369 | Turning a run configuration into a command line. |
+| `crates/core/src/invocation.rs` | 371 | Turning a run configuration into a command line. |
 | `crates/core/src/invocation_tests.rs` | 531 | Tests for dispatching a configuration to the adapter that owns it. |
 | `crates/core/src/launcher/mod.rs` | 39 | The app launcher: arbitrary command lines the user wants to run beside the |
 | `crates/core/src/launcher/model.rs` | 85 | What a launchable is, and the shape of the file that stores them. |
@@ -186,11 +186,11 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/lsp/uri.rs` | 186 | Paths in, `file:` URIs out, and back again. |
 | `crates/core/src/lsp/uri_tests.rs` | 254 |  |
 | `crates/core/src/model.rs` | 689 | Types shared between the Rust core and the TypeScript frontend. |
-| `crates/core/src/notes.rs` | 145 | The global notes / scratchpad store, `code-basics/notes.json`. |
-| `crates/core/src/notes_tests.rs` | 169 |  |
+| `crates/core/src/notes.rs` | 148 | The global notes / scratchpad store, `code-basics/notes.json`. |
+| `crates/core/src/notes_tests.rs` | 183 |  |
 | `crates/core/src/process/chunker.rs` | 188 | Incremental UTF-8 decoding for streamed process output. |
 | `crates/core/src/process/kill.rs` | 239 | Platform-specific process *tree* termination. |
-| `crates/core/src/process/mod.rs` | 782 | Process supervision: spawn, stream, cancel. |
+| `crates/core/src/process/mod.rs` | 802 | Process supervision: spawn, stream, cancel. |
 | `crates/core/src/process/resolve.rs` | 200 | Windows program-name resolution. |
 | `crates/core/src/pty/argv.rs` | 145 | Refusing arguments a Windows batch shim would re-interpret. |
 | `crates/core/src/pty/argv_tests.rs` | 267 |  |
@@ -214,10 +214,10 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/running/record_tests.rs` | 92 |  |
 | `crates/core/src/running/store.rs` | 227 | The registry itself: a clone-cheap handle over the live process set and the |
 | `crates/core/src/running/store_tests.rs` | 126 |  |
-| `crates/core/src/secrets.rs` | 749 | .NET user secrets: per-project secrets stored *outside* the repository. |
+| `crates/core/src/secrets.rs` | 755 | .NET user secrets: per-project secrets stored *outside* the repository. |
 | `crates/core/src/setup.rs` | 104 | First-open setup: one combined plan that installs the agent hooks a fresh |
 | `crates/core/src/setup_tests.rs` | 197 | Tests for the combined first-open setup plan. The point that matters: the |
-| `crates/core/src/sql/discover.rs` | 869 | Finding the database connections a workspace already talks about. |
+| `crates/core/src/sql/discover.rs` | 877 | Finding the database connections a workspace already talks about. |
 | `crates/core/src/sql/discover_tests.rs` | 650 | Tests for [`super::discover`]. |
 | `crates/core/src/sql/dotenv.rs` | 447 | Reading connection strings out of environment files (`.env` and friends) and |
 | `crates/core/src/sql/dotenv_tests.rs` | 300 | Tests for [`super`]: the shapes a `.env` line comes in, and the two ways one |
@@ -255,8 +255,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/symbols/index.rs` | 792 | Building the symbol index: walking a workspace's source files and recording |
 | `crates/core/src/symbols/index_tests.rs` | 936 | Tests for building the index of what a workspace declares. |
 | `crates/core/src/symbols/mod.rs` | 51 | Knowing what a workspace declares, and finding it fast. |
-| `crates/core/src/symbols/search.rs` | 425 | Querying the index: the layer a symbol palette actually talks to. |
-| `crates/core/src/symbols/search_tests.rs` | 362 | Tests for querying the index behind a symbol palette. |
+| `crates/core/src/symbols/search.rs` | 499 | Querying the index: the layer a symbol palette actually talks to. |
+| `crates/core/src/symbols/search_tests.rs` | 381 | Tests for querying the index behind a symbol palette. |
 | `crates/core/src/testing/changecov.rs` | 169 | Mapping a coverage report onto the current diff — "coverage of change". |
 | `crates/core/src/testing/changecov_tests.rs` | 139 | Tests for mapping coverage onto the diff. |
 | `crates/core/src/testing/coverage.rs` | 280 | Parsing code-coverage reports into a per-file line→hit map. |
@@ -270,8 +270,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/behavioral_replay.rs` | 104 | A real-network smoke test for [`cb_core::behavioral::replay`]. |
 | `crates/core/tests/durable_why.rs` | 202 | End-to-end tests for durable intent: writing a git note at commit and |
 | `crates/core/tests/git_operations.rs` | 1085 | End-to-end git tests against real repositories on disk. |
-| `crates/core/tests/intent_attribution.rs` | 281 | Attribution measured against a real repository, rather than a fixture. |
-| `crates/core/tests/intent_retirement.rs` | 372 | End-to-end tests for retiring intents a commit has absorbed. |
+| `crates/core/tests/intent_attribution.rs` | 282 | Attribution measured against a real repository, rather than a fixture. |
+| `crates/core/tests/intent_retirement.rs` | 358 | End-to-end tests for retiring intents a commit has absorbed. |
 | `crates/core/tests/lsp_client.rs` | 1325 | One language server, from handshake to shutdown, against `cb-fake-lsp`. |
 | `crates/core/tests/lsp_oracle.rs` | 838 | The answers a **real** language server gives, for the languages this machine |
 | `crates/core/tests/lsp_session.rs` | 962 | Every language server for one workspace, behind one actor, against `cb-fake-lsp`. |
@@ -281,7 +281,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/sql_mssql.rs` | 733 | The SQL Server half of the SQL console, against a real server. |
 | `crates/core/tests/sql_postgres.rs` | 811 | The PostgreSQL half of the SQL subsystem's end-to-end proof. |
 | `crates/core/tests/sql_sqlite.rs` | 1006 | The first test in the SQL subsystem that touches a real database. |
-| `src/App.tsx` | 765 |  |
+| `src/App.tsx` | 771 |  |
 | `src/appearance.ts` | 68 |  |
 | `src/appearanceLogic.test.ts` | 21 |  |
 | `src/appearanceLogic.ts` | 131 |  |
@@ -299,11 +299,11 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/FeaturesPicker.tsx` | 96 |  |
 | `src/components/FileEditor.tsx` | 1036 |  |
 | `src/components/FileTree.tsx` | 379 |  |
-| `src/components/IntentPanel.tsx` | 1509 |  |
+| `src/components/IntentPanel.tsx` | 1530 |  |
 | `src/components/LauncherPicker.tsx` | 248 |  |
 | `src/components/LspStatus.tsx` | 155 |  |
 | `src/components/MenuBar.tsx` | 406 |  |
-| `src/components/NotesPanel.tsx` | 380 |  |
+| `src/components/NotesPanel.tsx` | 385 |  |
 | `src/components/ObjectTree.tsx` | 357 |  |
 | `src/components/OutputConsole.tsx` | 484 |  |
 | `src/components/PillColorMenu.tsx` | 84 |  |
@@ -362,7 +362,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/lspStatusLogic.test.ts` | 319 |  |
 | `src/components/lspStatusLogic.ts` | 238 |  |
 | `src/components/notesLogic.test.ts` | 219 |  |
-| `src/components/notesLogic.ts` | 177 | Pure decisions for the Notes / scratchpad panel — creating, renaming, |
+| `src/components/notesLogic.ts` | 178 | Pure decisions for the Notes / scratchpad panel — creating, renaming, |
 | `src/components/reviewLayoutLogic.test.ts` | 174 |  |
 | `src/components/reviewLayoutLogic.ts` | 172 | Pure decisions for positioning the floating agent panel — the clamp |
 | `src/components/reviewLogic.test.ts` | 182 |  |
@@ -371,8 +371,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/reviewStreamLogic.ts` | 145 | Rendering Claude Code's `--output-format stream-json` NDJSON into readable |
 | `src/components/riskLogic.test.ts` | 216 |  |
 | `src/components/riskLogic.ts` | 189 |  |
-| `src/components/runningLogic.test.ts` | 236 |  |
-| `src/components/runningLogic.ts` | 236 | Pure decisions for the Running panel — the per-kind label/icon, the codebase |
+| `src/components/runningLogic.test.ts` | 239 |  |
+| `src/components/runningLogic.ts` | 226 | Pure decisions for the Running panel — the per-kind label/icon, the codebase |
 | `src/components/searchLogic.test.ts` | 439 |  |
 | `src/components/searchLogic.ts` | 439 | The search palette's decisions, with no React and no DOM in sight. |
 | `src/components/setupPromptLogic.test.ts` | 110 |  |
@@ -394,7 +394,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 | The one font size every CodeMirror editor in the app reads. |
 | `src/ipc/api.ts` | 1222 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 2210 | TypeScript mirrors of the `cb-core` model types. |
+| `src/ipc/types.ts` | 2212 | TypeScript mirrors of the `cb-core` model types. |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
@@ -403,10 +403,10 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/shortcutLogic.ts` | 135 |  |
 | `src/shortcuts.ts` | 40 |  |
 | `src/views/ArchitectureView.tsx` | 679 |  |
-| `src/views/ChangesView.tsx` | 1539 |  |
+| `src/views/ChangesView.tsx` | 1544 |  |
 | `src/views/HistoryView.tsx` | 542 |  |
 | `src/views/InspectView.tsx` | 1086 |  |
-| `src/views/RunView.tsx` | 1837 |  |
+| `src/views/RunView.tsx` | 1840 |  |
 | `src/views/SqlView.tsx` | 649 |  |
 | `src/views/TestsView.tsx` | 426 |  |
 | `src/views/architecture/DiagramCanvas.tsx` | 760 |  |
@@ -459,7 +459,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/lsp.rs` | 459 | Asking this workspace's language servers something, and saying what they do. |
 | `src-tauri/src/commands/notes.rs` | 21 | Notes / scratchpad commands. |
 | `src-tauri/src/commands/qgate.rs` | 78 | Commands behind the installable quality-gate Stop hook. |
-| `src-tauri/src/commands/review.rs` | 366 | Launching an in-app adversarial review. |
+| `src-tauri/src/commands/review.rs` | 369 | Launching an in-app adversarial review. |
 | `src-tauri/src/commands/rules.rs` | 22 | Business-rule-doc command. |
 | `src-tauri/src/commands/run.rs` | 468 | Running applications and tests. |
 | `src-tauri/src/commands/running.rs` | 96 | The Running panel's bridge: list every process the app has running (across |
@@ -521,7 +521,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/adapters/dotnet.rs`: `ProjectFile`, `references()`, `references_prefix()`, `parse_project_file()`, `ConfiguredRunner`, `parse_dotnet_config()`, `is_test_project()`, `classify_runner()`, `has_trx_extension()`, `project_kind()`, `configurations()`, `LaunchProfile`, `is_launchable()`, `parse_launch_settings()`, `split_args()`, `BuildContext`, `test_invocation()`, `run_invocation()`, `BuildAction`, `build_action_invocation()`, `configs_for_project()`
 - `crates/core/src/adapters/manifest.rs`: `AdapterManifest`, `CommandTemplate`, `parse()`, `load_dir()`, `matches()`, `matched_file()`, `build_invocation()`, `configs_for_project()`, `manifest_dir()`
 - `crates/core/src/adapters/msbuild.rs`: `command_args()`, `parse_output()`, `apply()`, `evaluate()`
-- `crates/core/src/adapters/node.rs`: `PackageJson`, `depends_on()`, `parse_package_json()`, `PackageManager`, `program()`, `run_script_args()`, `exec_args()`, `script_arg_separator()`, `detect_package_manager()`, `detect_runner()`, `is_workspace_root()`, `workspace_globs()`, `project_kind()`, `test_invocation()`, `script_invocation()`, `configs_for_project()`, `project_dir()`
+- `crates/core/src/adapters/node.rs`: `PackageJson`, `depends_on()`, `parse_package_json()`, `PackageManager`, `program()`, `run_script_args()`, `exec_args()`, `script_arg_separator()`, `detect_package_manager()`, `detect_runner()`, `is_workspace_root()`, `workspace_globs()`, `project_kind()`, `TestInvocationContext`, `test_invocation()`, `script_invocation()`, `configs_for_project()`, `project_dir()`
 - `crates/core/src/adapters/solution.rs`: `Solution`, `SolutionProject`, `is_solution_file()`, `parse()`
 - `crates/core/src/architecture/components.rs`: `component_graph()`
 - `crates/core/src/architecture/graph.rs`: `ArchKind`, `EdgeKind`, `Derivation`, `ArchNode`, `ArchEdge`, `ArchGraph`, `project_graph()`
@@ -621,7 +621,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/running/probe.rs`: `probe()`
 - `crates/core/src/running/record.rs`: `RunKind`, `RunningRecord`, `RunningReport`, `RunningFile`
 - `crates/core/src/running/store.rs`: `RunningStore`, `new()`, `load_orphans()`, `record()`, `remove()`, `update_label()`, `resolve_orphan()`, `live()`, `orphans()`, `warnings()`, `load()`, `save()`, `running_path()`
-- `crates/core/src/secrets.rs`: `ProjectSecrets`, `resolve_project_path()`, `secrets_path()`, `user_secrets_id()`, `read()`, `ensure_id()`, `strip_jsonc()`, `write()`
+- `crates/core/src/secrets.rs`: `ProjectSecrets`, `resolve_project_path()`, `secrets_path()`, `user_secrets_id()`, `read()`, `read_with_id()`, `ensure_id()`, `strip_jsonc()`, `write()`
 - `crates/core/src/setup.rs`: `setup_plan()`
 - `crates/core/src/sql/discover.rs`: `DiscoveryOptions`, `CandidateState`, `is_connectable()`, `SqlCandidate`, `Discovery`, `EngineChoice`, `engine()`, `resolve_engine()`, `engine_from_packages()`, `ConfigEntry`, `SkippedKey`, `ConfigRead`, `read_dotnet_config()`, `discover()`, `read_value()`
 - `crates/core/src/sql/dotenv.rs`: `EnvValue`, `is_usable()`, `as_written()`, `EnvEntry`, `EnvProblemKind`, `EnvProblem`, `EnvFile`, `get()`, `parse()`, `classify_value()`

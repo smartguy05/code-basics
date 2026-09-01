@@ -145,7 +145,7 @@ describe("stopMenuGroups", () => {
     expect(stopMenuCount(stopMenuGroups(null, "/home/me/proj"))).toBe(0);
   });
 
-  it("groups by kind, runs and launched apps first", () => {
+  it("shows only configurations launched by Run", () => {
     const groups = stopMenuGroups(
       report({
         live: [
@@ -158,7 +158,7 @@ describe("stopMenuGroups", () => {
       "/home/me/proj",
     );
 
-    expect(groups.map((g) => g.key)).toEqual(["run", "external", "build", "terminal"]);
+    expect(groups.map((g) => g.key)).toEqual(["run"]);
   });
 
   it("omits a kind that has nothing running", () => {
@@ -202,7 +202,10 @@ describe("stopMenuGroups", () => {
 
   it("keeps orphans in a group of their own, last, flagged for the extra confirm", () => {
     const groups = stopMenuGroups(
-      report({ live: [rec()], orphans: [rec({ pid: 7, key: "o" })] }),
+      report({
+        live: [rec()],
+        orphans: [rec({ pid: 7, key: "o" }), rec({ kind: "terminal", key: "terminal" })],
+      }),
       "/home/me/proj",
     );
 
@@ -216,7 +219,7 @@ describe("stopMenuGroups", () => {
       report({ live: [rec({ key: "a" }), rec({ kind: "build", key: "b" })], orphans: [rec({ key: "c" })] }),
       "/home/me/proj",
     );
-    expect(stopMenuCount(groups)).toBe(3);
+    expect(stopMenuCount(groups)).toBe(2);
   });
 });
 

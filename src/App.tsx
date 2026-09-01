@@ -104,6 +104,11 @@ export function App() {
   const [recents, setRecents] = useState<string[]>(() => loadRecents(localStorage));
   const [loading, setLoading] = useState(true);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [notesRestoreRequest, setNotesRestoreRequest] = useState(0);
+  const showNotes = () => {
+    setNotesOpen(true);
+    setNotesRestoreRequest((request) => request + 1);
+  };
   const [settingsOpen, setSettingsOpen] = useState(false);
   /**
    * Which optional features are on. Loaded once at startup — before any
@@ -403,7 +408,7 @@ export function App() {
       registerCommand("file.open", pickFolder),
       registerCommand("file.rescan", () => void rescan()),
       registerCommand("file.settings", () => setSettingsOpen(true)),
-      registerCommand("panel.notes", () => setNotesOpen(true)),
+      registerCommand("panel.notes", showNotes),
       registerCommand("panel.launch", () => setLauncherOpen(true)),
       registerCommand("panel.apps", () => setAppOutputOpen(true)),
       registerCommand("panel.running", () => setRunningOpen(true)),
@@ -592,7 +597,7 @@ export function App() {
             {activeWorkspace.projects.length === 1 ? "" : "s"}
           </span>
         )}
-        <button onClick={() => setNotesOpen(true)} title="Open the notes / scratchpad panel">
+        <button onClick={showNotes} title="Open or restore the notes / scratchpad panel">
           Notes
         </button>
         <button
@@ -703,6 +708,7 @@ export function App() {
 
       {notesOpen && (
         <NotesPanel
+          restoreRequest={notesRestoreRequest}
           onClose={() => setNotesOpen(false)}
           onSendToAgent={(note) => activeHandle()?.openNoteInAgent(note)}
         />

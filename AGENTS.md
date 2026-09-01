@@ -62,3 +62,16 @@ Background project signals are merged by severity in
 `src/components/workspaceTabsLogic.ts`. Failures persist, successful completion
 expires, cancellation is quiet, and events already visible in the active
 workspace must not be latched for later.
+
+Search All must reserve room for files, symbols, and actions; a large symbol
+population must never crowd matching files (including `.razor`) out of Ctrl+N.
+
+An Intent card represents one declared intent. Merge exact identical agent
+labels across turns, preserve user-authored card identity, assign uniquely
+evidenced lines only to their intent, and duplicate only genuinely ambiguous
+lines into each plausible intent card. Retirement runs conservatively on every
+Intent load, including the first.
+
+Notes colors belong to individual note records in the versioned global schema,
+not to the Notes window. The titlebar Notes action must restore a mounted,
+minimized panel.

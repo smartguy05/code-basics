@@ -121,6 +121,8 @@ The same abstain rule applies here as to the cards: the banner stays silent when
 
 **Only a declared `Intent:` line earns the Stated badge.** Anything the app had to mine out of prose — the first sentence of a closing message, or a sentence lifted from session history — becomes a **One turn** card instead. The sentence is still shown when there is one, because it is the best description available, but the badge says where it came from. When there is no usable sentence at all the card is titled from its own contents: the enclosing symbol if every hunk shares one, otherwise "N files changed together". That title is a description and is never presented as a reason.
 
+Each Stated card represents **one intent**, not one agent turn and not a roll-up of every intent that touched the same files. Exact identical declared text from several agent turns merges into one card because it describes one review goal; user-authored cards retain their separate identity even when their titles match. If attribution can assign lines uniquely, each card contains only its own lines. If a line is genuinely ambiguous between several intents, it is repeated in each plausible intent card instead of creating a synthetic multi-intent card.
+
 Mined sentences are also filtered before they are kept. Prose written for a human reading a chat is full of things that are not labels — status about the tooling or the model, pleasantries, and announcements of what the agent is *about to* do — and a card once ended up titled *"The workflow is running with Opus"* over three files. Those shapes are now refused outright, on the standing rule that no label is better than a wrong one. A declared `Intent:` line is never filtered: it is the agent's own words for the card.
 
 A symbol card is titled with the **bare symbol name** — `EstimateCost`, not "New method EstimateCost()". The badge beside it already says New or Changed, and a declaration that names both a type and a binding is read as the binding: `let total: usize` is `total`, `static COUNTER: AtomicU64` is `COUNTER`, `const cache: Map<…>` is `cache`.
@@ -131,7 +133,7 @@ Lines that name no symbol never become a title. A hunk header that is an import 
 
 Naming each hunk after its enclosing symbol is right when a symbol collects several hunks, and wrong when one file is touched in a dozen unrelated places: that produces one card per hunk, which is the pile the grouping exists to remove. So when a single file yields **two or more** cards that are each one hunk of one symbol, they merge into a single **Several changes in `<file>`** card, together with that file's Unexplained bucket if it has one.
 
-Deliberately untouched: a card with several hunks, a card spanning several files (a symbol touched in two places is a real grouping), and a file's lone symbol card — its name is a better title than the file's. Nothing is ever merged across files, and Stated and Formatting cards are never merged at all.
+Deliberately untouched: a card with several hunks, a card spanning several files (a symbol touched in two places is a real grouping), and a file's lone symbol card — its name is a better title than the file's. Location cards are never merged across files. Stated cards merge only when their exact declared intent text is identical; Formatting cards remain separate from every other kind.
 
 The dots are confidence. Only a verbatim match against distinctive text reads ●●●; text that matches apart from formatting reads ●●○, because something has been through the file since the agent wrote it.
 
@@ -149,7 +151,7 @@ Both open the same menu: every other card by name, then **New card…**, which a
 Three things it does that are worth knowing:
 
 - **Moving into an ordinary card takes that card's own changes with it.** Otherwise the destination's hunks would stay attributed to the agent while the moved ones became a *second* card with the same title — a duplicate rather than a move. The consequence is that the destination becomes your card, and whatever reason was recorded there stops titling it. The menu says so in the tooltip.
-- **A card the tooling titled itself is offered like any other**, because overriding exactly those is the point. A card with no name (an ambiguous intent, whose reasons are listed as candidates) is not offered — there is nothing to pick it out by.
+- **A card the tooling titled itself is offered like any other**, because overriding exactly those is the point.
 - **A move into the card the changes are already in is refused.** It reads as a no-op but would quietly replace the recorded reason with your own copy of the same words.
 
 An override is stored exactly like a hand-written note — as the moved lines' *content*, in `.code-basics/intents/user-intents.json` — so it survives the lines moving, and it outranks every agent record on those lines. It also means an override retires the same way a note does: once HEAD accounts for the lines it names, the record is archived (see [Retiring what a commit has absorbed](#retiring-what-a-commit-has-absorbed)). That is deliberate — a reason with no timestamp and no commit would otherwise re-title unrelated code the moment its text reappeared — but it does mean a grouping you arranged before a commit is not still arranged after it.
@@ -214,12 +216,12 @@ deliberately — the symptom being fixed is committed text reappearing as an
 addition, so a "still in the diff" test would keep precisely the records that
 need retiring.
 
-It runs whenever HEAD is seen to have moved, which covers a commit typed in a
-floating terminal, an amend, and a rebase as well as a commit made in the app. It
-needs a baseline to notice movement against, so it never prunes on the first look
-at a workspace — use **Archive absorbed intents…** in the capture setup pane to
-clear a backlog recorded before any of this existed. It previews the counts
-first.
+The conservative content verdict runs whenever the Intent view loads, including
+the first look at a workspace and refreshes where HEAD itself did not move. That
+covers a commit typed in a floating terminal, an amend, a rebase, and stale
+records imported after the baseline was established. **Archive absorbed
+intents…** remains available for an explicit preview and confirmation; both its
+preview and archive phases show progress, and the result reports what was moved.
 
 ## When it will not label something
 

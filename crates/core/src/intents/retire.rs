@@ -542,12 +542,12 @@ pub fn snapshot(repo: &Repo, _root: &Path, paths: &BTreeSet<String>) -> Result<V
     Ok(out)
 }
 
-/// Prune only if HEAD has moved since the last look.
+/// Conservatively prune absorbed records during an Intent refresh.
 ///
 /// The catch-all that makes a commit typed in a floating terminal, an amend, or
-/// a rebase behave the same as one made through the app. On the very first run
-/// there is no baseline, so "HEAD moved" is unknowable: record it and prune
-/// nothing.
+/// a rebase behave the same as one made through the app. The first run also
+/// performs the conservative content check: this cleans a backlog left by an
+/// older app version without retiring records whose edits are still present.
 pub fn run_if_head_moved(repo: &Repo, root: &Path) -> Result<RetireSummary> {
     // A half-applied tree is not evidence of anything.
     let conflicted = repo
@@ -563,27 +563,9 @@ pub fn run_if_head_moved(repo: &Repo, root: &Path) -> Result<RetireSummary> {
         return Ok(RetireSummary::default());
     };
 
-    let state = load_state(root);
-    if state.last_head.as_deref() == Some(head.as_str()) {
-        return Ok(RetireSummary {
-            head: Some(head),
-            ..Default::default()
-        });
-    }
-
-    if state.last_head.is_none() {
-        // First look. Establish the baseline and touch nothing: the backlog is
-        // cleaned by the explicit, previewed action instead.
-        let mut next = state;
-        next.last_head = Some(head.clone());
-        next.high_seq = next.high_seq.max(intents::next_seq(root).saturating_sub(1));
-        save_state(root, &next)?;
-        return Ok(RetireSummary {
-            head: Some(head),
-            ..Default::default()
-        });
-    }
-
+    // Run the conservative content verdict on every Intent load. This also
+    // catches stale records imported after the HEAD baseline was established;
+    // an unchanged ref alone cannot prove the live store is unchanged.
     execute(repo, root, Some(head))
 }
 
@@ -626,7 +608,6 @@ fn execute(repo: &Repo, root: &Path, head: Option<String>) -> Result<RetireSumma
     };
 
     let edits = intents::edits_path(root);
-    let size_before = std::fs::metadata(&edits).map(|m| m.len()).unwrap_or(0);
 
     // Load unfiltered by branch: the archive is written from what is on disk, so
     // a branch filter here would rewrite the file without records it never saw.
@@ -690,18 +671,10 @@ fn execute(repo: &Repo, root: &Path, head: Option<String>) -> Result<RetireSumma
     let retired_ids: HashSet<&str> = retiring.iter().map(|r| r.tool_use_id.as_str()).collect();
     let retired_turns: HashSet<&str> = retiring_labels.iter().map(|l| l.turn_id.as_str()).collect();
 
-    // If the hook appended while we were deciding, abandon: the next run redoes
-    // the same work against a file we have actually read.
-    let size_now = std::fs::metadata(&edits).map(|m| m.len()).unwrap_or(0);
-    if size_now != size_before {
-        return Ok(RetireSummary {
-            kept_records: outcome.kept,
-            head,
-            pruned: false,
-            ..Default::default()
-        });
-    }
-
+    // Re-read during each rewrite. A hook append that landed after planning is
+    // retained because only the exact planned ids/turns are removed; unlike a
+    // file-size abort, this completes the archive transaction after its archive
+    // and tombstone records have already been written.
     rewrite_jsonl(&edits, |line: &IntentRecord| {
         !retired_ids.contains(line.tool_use_id.as_str())
     })?;

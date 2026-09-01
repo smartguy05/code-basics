@@ -170,6 +170,7 @@ export function ChangesView({
   const [message, setMessage] = useState("");
   const [amend, setAmend] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [intentLoading, setIntentLoading] = useState(loadGrouping() === "intent");
   const [diffLayout, setDiffLayout] = useState<DiffLayout>(loadDiffLayout);
   const [collapseUnchanged, setCollapseUnchanged] = useState(loadCollapse);
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(loadIgnoreWhitespace);
@@ -366,6 +367,7 @@ export function ChangesView({
    */
   const refreshIntent = useCallback(async () => {
     if (grouping !== "intent") return;
+    setIntentLoading(true);
     try {
       const [review, status] = await Promise.all([
         api.intentGroups(mode),
@@ -385,6 +387,8 @@ export function ChangesView({
       }
     } catch (e) {
       setError(api.errorMessage(e));
+    } finally {
+      setIntentLoading(false);
     }
   }, [grouping, mode]);
 
@@ -1152,6 +1156,7 @@ export function ChangesView({
               statusFiles={files}
               mode={mode}
               busy={busy}
+              loading={intentLoading}
               onSelect={selectGroup}
               onSelectFile={selectGroupFile}
               onStage={stageGroup}
