@@ -5,12 +5,18 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { editorColors } from "../components/language";
 import { SqlConnectionPicker } from "../components/SqlConnectionPicker";
+import {
+  savedConnectionLabel,
+  type ManualConnectionDraft,
+} from "../components/sqlPickerLogic";
 import { SqlResultGrid } from "../components/SqlResultGrid";
 import * as api from "../ipc/api";
 import type {
   SqlCandidate,
+  SqlColumnView,
   SqlConnectionView,
   SqlDiscovery,
+  SqlObjectView,
   SqlTestOutcome,
   Workspace,
 } from "../ipc/types";
@@ -28,6 +34,7 @@ import {
   mintQueryId,
   phaseLine,
   profileFromCandidate,
+  profileFromManual,
   runTarget,
   selectedConnection,
   statementTitle,
@@ -84,6 +91,15 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
     next: boolean;
     copy: WritesConfirm;
   } | null>(null);
+  const [objects, setObjects] = useState<SqlObjectView[]>([]);
+  const [objectsLoading, setObjectsLoading] = useState(false);
+  const [objectsError, setObjectsError] = useState<string | null>(null);
+  const [explorerOpen, setExplorerOpen] = useState(true);
+  const [explorerWidth, setExplorerWidth] = useState(250);
+  const explorerDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const [tableColumns, setTableColumns] = useState<
+    Record<string, { expanded: boolean; loading: boolean; error: string | null; columns: SqlColumnView[]; openColumns: string[] }>
+  >({});
 
   const [state, setState] = useState<SqlState>(initialSqlState);
   /**
@@ -96,6 +112,79 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
 
   const connection = selectedConnection(connections, selectedId);
   const badge = enforcementBadge(connection);
+
+  const loadObjects = (connectionId: string) => {
+    setObjectsLoading(true);
+    setObjectsError(null);
+    setTableColumns({});
+    return api
+      .sqlListObjects(connectionId)
+      .then(setObjects)
+      .catch((e) => {
+        setObjects([]);
+        setObjectsError(api.errorMessage(e));
+      })
+      .finally(() => setObjectsLoading(false));
+  };
+
+  const tableKey = (object: SqlObjectView) =>
+    `${object.kind}:${object.schema ?? ""}:${object.name}`;
+
+  const toggleTable = (object: SqlObjectView) => {
+    if (connection === null) return;
+    const key = tableKey(object);
+    const current = tableColumns[key];
+    if (current !== undefined) {
+      setTableColumns((all) => ({ ...all, [key]: { ...current, expanded: !current.expanded } }));
+      return;
+    }
+    setTableColumns((all) => ({
+      ...all,
+      [key]: { expanded: true, loading: true, error: null, columns: [], openColumns: [] },
+    }));
+    api
+      .sqlListColumns(connection.id, object.schema, object.name)
+      .then((columns) =>
+        setTableColumns((all) => ({
+          ...all,
+          [key]: { expanded: true, loading: false, error: null, columns, openColumns: [] },
+        })),
+      )
+      .catch((e) =>
+        setTableColumns((all) => ({
+          ...all,
+          [key]: {
+            expanded: true,
+            loading: false,
+            error: api.errorMessage(e),
+            columns: [],
+            openColumns: [],
+          },
+        })),
+      );
+  };
+
+  const toggleColumn = (key: string, name: string) => {
+    setTableColumns((all) => {
+      const table = all[key];
+      if (table === undefined) return all;
+      const openColumns = table.openColumns.includes(name)
+        ? table.openColumns.filter((column) => column !== name)
+        : [...table.openColumns, name];
+      return { ...all, [key]: { ...table, openColumns } };
+    });
+  };
+
+  useEffect(() => {
+    if (selectedId === null) {
+      setObjects([]);
+      setObjectsError(null);
+      return;
+    }
+    void loadObjects(selectedId);
+    // Loading is intentionally keyed only by the saved profile identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
   // ------------------------------------------------------------------
   // The editor
@@ -225,12 +314,13 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickerOpen]);
 
-  const adopt = (candidate: SqlCandidate) => {
+  const adopt = (candidate: SqlCandidate, engineOverride?: NonNullable<SqlConnectionView["engine"]>) => {
     const profile = profileFromCandidate(
       candidate,
       workspace.root,
       connections.map((c) => c.id),
       Date.now(),
+      engineOverride,
     );
     api
       .sqlSaveConnection(profile)
@@ -240,6 +330,34 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
         setError(null);
       })
       .catch((e) => setError(api.errorMessage(e)));
+  };
+
+  const addManual = async (draft: ManualConnectionDraft): Promise<SqlTestOutcome> => {
+    if (draft.engine === null) {
+      throw new Error("Choose a database engine.");
+    }
+    try {
+      const outcome = await api.sqlTestConnectionString(draft.engine, draft.connectionString);
+      if (outcome.kind !== "ok") {
+        setError(null);
+        return outcome;
+      }
+      const profile = profileFromManual(
+        { ...draft, engine: draft.engine },
+        workspace.root,
+        connections.map((connection) => connection.id),
+        Date.now(),
+      );
+      const rows = await api.sqlSaveConnection(profile);
+      setConnections(rows);
+      setSelectedId(profile.id);
+      setPickerOpen(false);
+      setError(null);
+      return outcome;
+    } catch (cause) {
+      setError(api.errorMessage(cause));
+      throw cause;
+    }
   };
 
   const test = (target: SqlConnectionView) =>
@@ -376,7 +494,7 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
     <div className="sql-view">
       <div className="sql-bar">
         <button data-command="sql.connections" className="sql-conn-button" onClick={() => setPickerOpen(true)}>
-          {connection === null ? "Choose a connection…" : connection.name}
+          {connection === null ? "Choose a connection…" : savedConnectionLabel(connection)}
         </button>
 
         {connection !== null && connection.engine !== null && (
@@ -413,6 +531,14 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
             Test
           </button>
         )}
+
+        <button
+          onClick={() => setExplorerOpen((open) => !open)}
+          disabled={connection === null}
+          title="Show or hide database objects"
+        >
+          {explorerOpen ? "Hide objects" : "Objects"}
+        </button>
 
         <span className="sql-bar-spacer" />
 
@@ -452,9 +578,129 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
 
       {error !== null && <div className="sql-bar-detail sql-tone-error">{error}</div>}
 
-      <div className="sql-editor" ref={hostRef} />
+      <div className="sql-work-area">
+        {explorerOpen && connection !== null && (
+          <aside
+            className="sql-object-explorer"
+            aria-label="Database object explorer"
+            style={{ width: explorerWidth }}
+          >
+            <div className="sql-object-header">
+              <div className="sql-object-title">
+                <span className="sql-object-title-icon" aria-hidden="true" />
+                <div>
+                  <strong>Database objects</strong>
+                  <span>{connection.name}</span>
+                </div>
+              </div>
+              <button
+                className="sql-object-refresh"
+                onClick={() => void loadObjects(connection.id)}
+                disabled={objectsLoading}
+                title="Refresh database objects"
+              >
+                <span aria-hidden="true">&#8635;</span>
+                <span>{objectsLoading ? "Loading..." : "Refresh"}</span>
+              </button>
+            </div>
+            <div className="sql-object-kind">
+              <span>Tables</span>
+              {!objectsLoading && objectsError === null && <span className="sql-object-count">{objects.length}</span>}
+            </div>
+            {objectsError !== null && <div className="sql-object-error">{objectsError}</div>}
+            {!objectsLoading && objectsError === null && objects.length === 0 && (
+              <div className="sql-object-empty">No tables found.</div>
+            )}
+            <div className="sql-object-list">
+              {objects.map((object) => {
+                const qualified = object.schema === null ? object.name : `${object.schema}.${object.name}`;
+                const key = tableKey(object);
+                const table = tableColumns[key];
+                return (
+                  <div className="sql-object-node" key={key}>
+                    <button
+                      className="sql-object-row"
+                      title={qualified}
+                      aria-expanded={table?.expanded === true}
+                      onClick={() => toggleTable(object)}
+                    >
+                      <span className="sql-object-chevron" data-open={table?.expanded === true} aria-hidden="true" />
+                      <span className="sql-object-icon" aria-hidden="true" />
+                      <span className="sql-object-label">
+                        {object.schema !== null && <span className="sql-object-schema">{object.schema}.</span>}
+                        <span>{object.name}</span>
+                      </span>
+                    </button>
+                    {table?.expanded && (
+                      <div className="sql-column-list">
+                        {table.loading && <div className="sql-object-empty">Loading columns...</div>}
+                        {table.error !== null && <div className="sql-object-error">{table.error}</div>}
+                        {!table.loading && table.error === null && table.columns.length === 0 && (
+                          <div className="sql-object-empty">No columns found.</div>
+                        )}
+                        {table.columns.map((column) => {
+                          const open = table.openColumns.includes(column.name);
+                          return (
+                            <div className="sql-column-node" key={`${column.ordinal}:${column.name}`}>
+                              <button
+                                className="sql-column-row"
+                                aria-expanded={open}
+                                onClick={() => toggleColumn(key, column.name)}
+                              >
+                                <span className="sql-object-chevron" data-open={open} aria-hidden="true" />
+                                <span className="sql-column-icon" aria-hidden="true" />
+                                <span className="sql-column-name">{column.name}</span>
+                              </button>
+                              {open && <ColumnDetails column={column} />}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div
+              className="sql-object-resizer"
+              role="separator"
+              aria-label="Resize database object explorer"
+              aria-orientation="vertical"
+              aria-valuemin={170}
+              aria-valuemax={600}
+              aria-valuenow={explorerWidth}
+              tabIndex={0}
+              onPointerDown={(event) => {
+                explorerDragRef.current = { startX: event.clientX, startWidth: explorerWidth };
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                const drag = explorerDragRef.current;
+                if (drag === null) return;
+                setExplorerWidth(Math.min(600, Math.max(170, drag.startWidth + event.clientX - drag.startX)));
+              }}
+              onPointerUp={(event) => {
+                explorerDragRef.current = null;
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }}
+              onPointerCancel={() => {
+                explorerDragRef.current = null;
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                setExplorerWidth((width) =>
+                  Math.min(600, Math.max(170, width + (event.key === "ArrowLeft" ? -16 : 16))),
+                );
+              }}
+            />
+          </aside>
+        )}
 
-      <div className="sql-results">
+        <div className="sql-console-main">
+          <div className="sql-editor" ref={hostRef} />
+
+          <div className="sql-results">
         <div className="sql-results-bar">
           <span className={`sql-phase sql-tone-${phase.tone}`}>{phase.text}</span>
           {notice !== null && (
@@ -489,6 +735,8 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
             )}
           />
         ))}
+          </div>
+        </div>
       </div>
 
       {pickerOpen && (
@@ -503,6 +751,7 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
             setPickerOpen(false);
           }}
           onAdopt={adopt}
+          onAddManual={addManual}
           onTest={(target) => void test(target)}
           onDelete={(target) => void remove(target)}
           onSetAllowWrites={requestAllowWrites}
@@ -524,6 +773,25 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
         />
       )}
     </div>
+  );
+}
+
+function ColumnDetails({ column }: { column: SqlColumnView }) {
+  const size =
+    column.maxLength !== null
+      ? `length ${column.maxLength}`
+      : column.numericPrecision !== null
+        ? `precision ${column.numericPrecision}${column.numericScale === null ? "" : `, scale ${column.numericScale}`}`
+        : null;
+  return (
+    <dl className="sql-column-details">
+      <div><dt>Type</dt><dd><code>{column.dataType}</code></dd></div>
+      <div><dt>Nullable</dt><dd><span className={`sql-column-badge ${column.nullable ? "is-nullable" : ""}`}>{column.nullable === null ? "Not reported" : column.nullable ? "Yes" : "No"}</span></dd></div>
+      <div><dt>Position</dt><dd>{column.ordinal}</dd></div>
+      {size !== null && <div><dt>Size</dt><dd>{size}</dd></div>}
+      {column.primaryKey !== null && <div><dt>Primary key</dt><dd><span className={`sql-column-badge ${column.primaryKey ? "is-key" : ""}`}>{column.primaryKey ? "Yes" : "No"}</span></dd></div>}
+      {column.defaultValue !== null && <div><dt>Default</dt><dd><code>{column.defaultValue}</code></dd></div>}
+    </dl>
   );
 }
 

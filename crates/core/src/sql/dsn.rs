@@ -192,8 +192,16 @@ pub fn sniff_engine(s: &str) -> Option<SqlEngine> {
                 .map(|(_, v)| v.as_str())
         };
 
-        // Npgsql's canonical spelling.
-        if get("host").is_some() {
+        // Npgsql accepts `Server=`/`Data Source=` as aliases for `Host=`. Those
+        // aliases overlap SqlClient, so require an Npgsql-specific companion
+        // keyword before treating them as PostgreSQL.
+        let npgsql_alias = (get("server").is_some() || get("data source").is_some())
+            && (get("port").is_some()
+                || get("ssl mode").is_some()
+                || get("sslmode").is_some()
+                || get("include error detail").is_some()
+                || get("search path").is_some());
+        if get("host").is_some() || npgsql_alias {
             found.push(SqlEngine::Postgres);
         }
         // SqlClient-only keywords.
@@ -202,7 +210,7 @@ pub fn sniff_engine(s: &str) -> Option<SqlEngine> {
         }
         // `Server=` alone is spoken by several drivers; paired with `Database=`
         // it is the ordinary SqlClient form.
-        if get("server").is_some() && get("database").is_some() {
+        if get("server").is_some() && get("database").is_some() && !npgsql_alias {
             found.push(SqlEngine::SqlServer);
         }
         // SQL Server also uses `Data Source=`, so only a recognised SQLite file

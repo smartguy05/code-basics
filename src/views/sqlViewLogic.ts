@@ -27,6 +27,10 @@ import type {
   SqlConnectionView,
   SqlStopOutcome,
 } from "../ipc/types";
+import {
+  candidateConnectionLabel,
+  type ManualConnectionDraft,
+} from "../components/sqlPickerLogic";
 import type { SqlRunPhase } from "./sqlLogic";
 
 // ---------------------------------------------------------------------------
@@ -346,6 +350,7 @@ export function profileFromCandidate(
   workspaceRoot: string | null,
   existingIds: readonly string[],
   nowMs: number,
+  engineOverride?: NonNullable<SqlConnectionProfile["engine"]>,
 ): SqlConnectionProfile {
   const taken = new Set(existingIds);
   let id = candidate.id;
@@ -356,10 +361,37 @@ export function profileFromCandidate(
   }
   return {
     id,
-    name: candidate.name,
-    engine: candidate.engine,
+    name: candidateConnectionLabel(candidate),
+    engine: engineOverride ?? candidate.engine,
     secret: candidate.source,
     workspaceRoot,
+    allowWrites: false,
+    createdAtMs: nowMs,
+    lastUsedMs: null,
+  };
+}
+
+/** Build a collision-free, read-only profile after a manual draft tests OK. */
+export function profileFromManual(
+  draft: ManualConnectionDraft & { engine: NonNullable<ManualConnectionDraft["engine"]> },
+  workspaceRoot: string,
+  existingIds: readonly string[],
+  nowMs: number,
+): SqlConnectionProfile {
+  const taken = new Set(existingIds);
+  const stem = `manual:${nowMs}`;
+  let id = stem;
+  let suffix = 2;
+  while (taken.has(id)) {
+    id = `${stem}-${suffix}`;
+    suffix += 1;
+  }
+  return {
+    id,
+    name: draft.name.trim(),
+    engine: draft.engine,
+    secret: { kind: "literal", connectionString: draft.connectionString },
+    workspaceRoot: draft.global ? null : workspaceRoot,
     allowWrites: false,
     createdAtMs: nowMs,
     lastUsedMs: null,

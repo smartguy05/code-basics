@@ -1,9 +1,88 @@
 import type {
   SqlAuthMode,
+  SqlCandidate,
   SqlCandidateState,
   SqlConnectionDisplay,
+  SqlConnectionView,
+  SqlEngine,
   SqlSecretView,
 } from "../ipc/types";
+
+function pathParts(path: string): string[] {
+  return path.split(/[\\/]/).filter(Boolean);
+}
+
+function sourceContext(source: string): string {
+  if (source.toLowerCase().startsWith("user secrets")) return "User secrets";
+  const file = pathParts(source)[pathParts(source).length - 1] ?? source;
+  const appsettings = /^appsettings(?:\.([^.]+))?\.json$/i.exec(file);
+  if (appsettings !== null) return appsettings[1] ?? "Default";
+  return file;
+}
+
+/** A stable, human identity that distinguishes the same key across projects and environments. */
+export function candidateConnectionLabel(candidate: SqlCandidate): string {
+  return [candidate.project, sourceContext(candidate.origin), candidate.name]
+    .filter((part): part is string => part !== null && part.trim() !== "")
+    .join(" · ");
+}
+
+/** The exact location and configuration key shown beneath a candidate label. */
+export function candidateSourceDetail(candidate: SqlCandidate): string {
+  switch (candidate.source.kind) {
+    case "literal":
+      return candidate.origin;
+    case "appSettings":
+    case "userSecrets":
+    case "dotEnv":
+      return `${candidate.origin} → ${candidate.source.key}`;
+  }
+}
+
+/** Display identity for saved references, including profiles saved before composite names existed. */
+export function savedConnectionLabel(connection: SqlConnectionView): string {
+  if (connection.name.includes(" · ")) return connection.name;
+  switch (connection.secret.kind) {
+    case "literal":
+      return connection.name;
+    case "appSettings": {
+      const parts = pathParts(connection.secret.path);
+      const project = parts.at(-2) ?? null;
+      return [project, sourceContext(connection.secret.path), connection.name]
+        .filter((part): part is string => part !== null && part.trim() !== "")
+        .join(" · ");
+    }
+    case "userSecrets": {
+      const parts = pathParts(connection.secret.project);
+      const projectFile = parts.at(-1) ?? "";
+      const project = projectFile.replace(/\.csproj$/i, "");
+      return [project, "User secrets", connection.name].filter(Boolean).join(" · ");
+    }
+    case "dotEnv": {
+      const parts = pathParts(connection.secret.path);
+      const project = parts.at(-2) ?? null;
+      return [project, sourceContext(connection.secret.path), connection.name]
+        .filter((part): part is string => part !== null && part.trim() !== "")
+        .join(" · ");
+    }
+  }
+}
+
+/** Values collected before a literal connection has passed its required test. */
+export interface ManualConnectionDraft {
+  name: string;
+  engine: SqlEngine | null;
+  connectionString: string;
+  global: boolean;
+}
+
+/** The first reason a manual connection cannot be tested and added. */
+export function manualConnectionError(draft: ManualConnectionDraft): string | null {
+  if (draft.name.trim() === "") return "Enter a connection name.";
+  if (draft.engine === null) return "Choose a database engine.";
+  if (draft.connectionString.trim() === "") return "Enter a connection string.";
+  return null;
+}
 
 /**
  * The decisions behind `SqlConnectionPicker`.

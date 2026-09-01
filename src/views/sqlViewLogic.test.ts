@@ -7,6 +7,7 @@ import {
   mintQueryId,
   phaseLine,
   profileFromCandidate,
+  profileFromManual,
   runTarget,
   selectedConnection,
   statementTitle,
@@ -296,6 +297,47 @@ describe("profileFromCandidate", () => {
     // a connection the user set up rather than adding the one they clicked.
     expect(profileFromCandidate(candidate, null, ["env:DB"], 5).id).toBe("env:DB-2");
     expect(profileFromCandidate(candidate, null, ["env:DB", "env:DB-2"], 5).id).toBe("env:DB-3");
+  });
+
+  it("uses an explicit engine for a candidate whose DSN was ambiguous", () => {
+    const unknown = {
+      ...candidate,
+      engine: null,
+      state: { kind: "engineUnknown", reason: "" } as const,
+    };
+    expect(profileFromCandidate(unknown, "C:/repo", [], 5, "postgres").engine).toBe("postgres");
+  });
+});
+
+describe("profileFromManual", () => {
+  const draft = {
+    name: "  Orders  ",
+    engine: "postgres" as const,
+    connectionString: " Host=localhost;Database=orders ",
+    global: false,
+  };
+
+  it("stores the exact literal under the current codebase and starts read-only", () => {
+    const profile = profileFromManual(draft, "C:/repo", [], 50);
+    expect(profile).toMatchObject({
+      id: "manual:50",
+      name: "Orders",
+      engine: "postgres",
+      workspaceRoot: "C:/repo",
+      allowWrites: false,
+      secret: { kind: "literal", connectionString: draft.connectionString },
+    });
+  });
+
+  it("can be global and avoids existing ids", () => {
+    const profile = profileFromManual(
+      { ...draft, global: true },
+      "C:/repo",
+      ["manual:50", "manual:50-2"],
+      50,
+    );
+    expect(profile.id).toBe("manual:50-3");
+    expect(profile.workspaceRoot).toBe(null);
   });
 });
 

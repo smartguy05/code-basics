@@ -37,22 +37,20 @@
 //!
 //! # Abstain rules
 //!
-//! * **An engine needs two agreeing signals** — the packages the project
-//!   references *and* the connection string's own shape. Disagreement, or
-//!   either signal missing, yields [`EngineChoice::NotDetermined`] /
-//!   [`EngineChoice::Disagreed`] and `engine: None`: the connection is listed
-//!   and not connectable until the user picks. Never a default. The two are
-//!   separate variants because *"nothing said which"* and *"two things said
-//!   different"* are different answers the user acts on differently.
+//! * **The connection string is the primary engine signal.** An unambiguous DSN
+//!   is sufficient even when direct package references say nothing (central and
+//!   transitive packages are common). A package/DSN disagreement remains
+//!   blocked, as does a DSN that identifies no supported SQL engine. Never a
+//!   default.
 //! * **The same logical name in two files does not collapse.**
 //!   `appsettings.json`, `appsettings.Development.json` and user secrets each
 //!   yield their own labelled candidate, because which one actually wins
 //!   depends on `ASPNETCORE_ENVIRONMENT` at run time — something this module
 //!   cannot see. Merging them would pick one and be silently wrong.
-//! * **Nothing is skipped silently.** A value that is not a string, a file that
-//!   will not parse and a `.env` line that cannot be read each become a warning
-//!   in [`Discovery::warnings`], because a shorter list is indistinguishable
-//!   from a correct one.
+//! * **Unreadable candidates are reported.** A non-string in .NET's top-level
+//!   `ConnectionStrings`, a file that will not parse, and a `.env` line that
+//!   cannot be read each become a warning. Structured objects under a custom
+//!   nested section are not candidates and are ignored.
 //! * **A warning may name a file, a project, a package or a key, and may never
 //!   contain text read out of a value.** This is `DotnetSignals::warnings`'
 //!   rule verbatim, and it matters more here, because this is the module that
@@ -225,7 +223,8 @@ pub struct SqlCandidate {
     /// which nothing currently produces but which is a different fact from a
     /// project named `""`.
     pub project: Option<String>,
-    /// [`None`] whenever the two signals did not agree — never a default.
+    /// [`None`] when the DSN is unknown or package evidence contradicts it —
+    /// never a default.
     pub engine: Option<SqlEngine>,
     /// Where the connection string is, to be re-read at connect time.
     pub source: SecretSource,
@@ -251,22 +250,24 @@ pub struct Discovery {
 /// What the two engine signals jointly said.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineChoice {
-    /// Both signals were present and named the same engine.
-    Agreed(SqlEngine),
+    /// The connection string named an engine and package evidence did not
+    /// contradict it.
+    Determined(SqlEngine),
     /// Both were present and named different engines.
     Disagreed {
         packages: SqlEngine,
         connection_string: SqlEngine,
     },
-    /// At least one signal had nothing to say.
+    /// The connection string did not identify a supported SQL engine.
     NotDetermined,
 }
 
 impl EngineChoice {
-    /// The engine, which only an agreement produces.
+    /// The engine, which a recognisable DSN without contradictory evidence
+    /// produces.
     pub fn engine(self) -> Option<SqlEngine> {
         match self {
-            EngineChoice::Agreed(engine) => Some(engine),
+            EngineChoice::Determined(engine) => Some(engine),
             _ => None,
         }
     }
@@ -276,7 +277,7 @@ impl EngineChoice {
     /// text read out of one — and never appears in [`Discovery::warnings`].
     fn reason(self) -> Option<String> {
         match self {
-            EngineChoice::Agreed(_) => None,
+            EngineChoice::Determined(_) => None,
             EngineChoice::Disagreed {
                 packages,
                 connection_string,
@@ -287,9 +288,8 @@ impl EngineChoice {
                 label(connection_string)
             )),
             EngineChoice::NotDetermined => Some(
-                "an engine is only taken when the project's package references and the \
-                 connection string agree, and here they do not both say. Pick the engine before \
-                 connecting."
+                "the connection string does not identify a supported SQL engine. Pick the engine \
+                 before connecting."
                     .to_string(),
             ),
         }
@@ -306,22 +306,21 @@ fn label(engine: SqlEngine) -> &'static str {
 
 /// Combine the two engine signals.
 ///
-/// **Two agreeing signals or nothing.** One signal alone is not enough in
-/// either direction: a project referencing `Npgsql` may well hold a SQL Server
-/// connection string for a legacy store, and `Server=x;Database=y` is spoken by
-/// several drivers. Connecting to the wrong engine is not a cosmetic error —
-/// it is a failed handshake at best and a query run against the wrong server at
-/// worst — so the user is asked instead.
+/// A recognisable connection string is the primary signal. Package references
+/// are supporting evidence when present and a hard contradiction when they
+/// name a different engine. Package evidence alone remains insufficient: one
+/// project can legitimately hold connection strings for several engines.
 pub fn resolve_engine(
     from_packages: Option<SqlEngine>,
     from_connection_string: Option<SqlEngine>,
 ) -> EngineChoice {
     match (from_packages, from_connection_string) {
-        (Some(a), Some(b)) if a == b => EngineChoice::Agreed(a),
+        (Some(a), Some(b)) if a == b => EngineChoice::Determined(b),
         (Some(packages), Some(connection_string)) => EngineChoice::Disagreed {
             packages,
             connection_string,
         },
+        (None, Some(connection_string)) => EngineChoice::Determined(connection_string),
         _ => EngineChoice::NotDetermined,
     }
 }
@@ -394,7 +393,8 @@ pub struct ConfigRead {
     pub skipped: Vec<SkippedKey>,
 }
 
-/// The `ConnectionStrings` of one `appsettings*.json` or `secrets.json`.
+/// The `ConnectionStrings` sections of one `appsettings*.json` or
+/// `secrets.json`, including sections nested below an application options key.
 ///
 /// Both spellings .NET accepts are read: the nested `ConnectionStrings` object
 /// and the flat `ConnectionStrings:Name` / `ConnectionStrings__Name` keys that
@@ -420,8 +420,13 @@ pub fn read_dotnet_config(text: &str) -> Result<ConfigRead, String> {
     let mut out = ConfigRead::default();
     let mut seen: BTreeSet<String> = BTreeSet::new();
 
-    let mut take = |name: &str, value: &serde_json::Value, out: &mut ConfigRead| {
-        let key = format!("ConnectionStrings:{name}");
+    fn take(
+        name: String,
+        key: String,
+        value: &serde_json::Value,
+        seen: &mut BTreeSet<String>,
+        out: &mut ConfigRead,
+    ) {
         if !seen.insert(key.to_ascii_lowercase()) {
             out.skipped.push(SkippedKey {
                 key: key.clone(),
@@ -434,7 +439,7 @@ pub fn read_dotnet_config(text: &str) -> Result<ConfigRead, String> {
         }
         match value.as_str() {
             Some(text) => out.entries.push(ConfigEntry {
-                name: name.to_string(),
+                name,
                 key,
                 value: text.to_string(),
             }),
@@ -446,35 +451,88 @@ pub fn read_dotnet_config(text: &str) -> Result<ConfigRead, String> {
                 ),
             }),
         }
-    };
+    }
 
-    if let Some((_, section)) = root
-        .iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case("ConnectionStrings"))
-    {
-        match section.as_object() {
-            Some(map) => {
-                for (name, value) in map {
-                    take(name, value, &mut out);
+    fn walk(
+        map: &serde_json::Map<String, serde_json::Value>,
+        prefix: &[String],
+        seen: &mut BTreeSet<String>,
+        out: &mut ConfigRead,
+    ) {
+        for (raw_key, value) in map {
+            let mut path = prefix.to_vec();
+            path.extend(config_key_segments(raw_key));
+
+            if path
+                .last()
+                .is_some_and(|part| part.eq_ignore_ascii_case("ConnectionStrings"))
+            {
+                let section_key = path.join(":");
+                match value.as_object() {
+                    Some(section) => {
+                        for (raw_name, connection) in section {
+                            // Custom options objects sometimes group provider
+                            // settings under a nested `ConnectionStrings`
+                            // section. An object is plainly not a DSN and is
+                            // ignored here rather than reported as a broken SQL
+                            // connection. The top-level .NET section keeps its
+                            // stricter warning contract.
+                            if path.len() > 1 && connection.is_object() {
+                                continue;
+                            }
+                            let name_parts = config_key_segments(raw_name);
+                            let name = name_parts.join(":");
+                            let mut connection_path = path.clone();
+                            connection_path.extend(name_parts);
+                            take(name, connection_path.join(":"), connection, seen, out);
+                        }
+                    }
+                    None => out.skipped.push(SkippedKey {
+                        key: section_key.clone(),
+                        reason: format!(
+                            "`{section_key}` is {}, not a section of connection strings",
+                            json_type_name(value)
+                        ),
+                    }),
+                }
+                continue;
+            }
+
+            if let Some(index) = path
+                .iter()
+                .position(|part| part.eq_ignore_ascii_case("ConnectionStrings"))
+            {
+                if index + 1 < path.len() {
+                    take(
+                        path[index + 1..].join(":"),
+                        path.join(":"),
+                        value,
+                        seen,
+                        out,
+                    );
+                    continue;
                 }
             }
-            None => out.skipped.push(SkippedKey {
-                key: "ConnectionStrings".to_string(),
-                reason: format!(
-                    "`ConnectionStrings` is {}, not a section of connection strings",
-                    json_type_name(section)
-                ),
-            }),
+
+            if let Some(child) = value.as_object() {
+                walk(child, &path, seen, out);
+            }
         }
     }
 
-    for (key, value) in root {
-        if let Some(name) = connection_key_name(key) {
-            take(&name, value, &mut out);
-        }
-    }
+    walk(root, &[], &mut seen, &mut out);
 
     Ok(out)
+}
+
+/// Split the two path spellings accepted by .NET configuration and discard
+/// empty pieces, producing the canonical colon-addressed path we persist.
+fn config_key_segments(key: &str) -> Vec<String> {
+    key.replace("__", ":")
+        .split(':')
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// The logical name in a flat connection-string key, or [`None`].
@@ -763,6 +821,9 @@ fn candidate(
     let state = match &value {
         EnvValue::Unresolved { reason, .. } => CandidateState::Unresolved {
             reason: reason.clone(),
+        },
+        EnvValue::Literal { text } if text.trim().is_empty() => CandidateState::Unresolved {
+            reason: "the configured value is empty".to_string(),
         },
         EnvValue::Literal { .. } => match choice.reason() {
             Some(reason) => CandidateState::EngineUnknown { reason },

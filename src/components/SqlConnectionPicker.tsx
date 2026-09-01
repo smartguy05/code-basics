@@ -3,11 +3,21 @@ import type {
   SqlCandidate,
   SqlConnectionView,
   SqlDiscovery,
+  SqlEngine,
   SqlTestOutcome,
 } from "../ipc/types";
 import { groupConnections, statusLine } from "../views/sqlLogic";
 import { ContextMenu } from "./ContextMenu";
-import { candidateBlocker, describeDisplay, secretOrigin } from "./sqlPickerLogic";
+import {
+  candidateBlocker,
+  candidateConnectionLabel,
+  candidateSourceDetail,
+  describeDisplay,
+  manualConnectionError,
+  secretOrigin,
+  savedConnectionLabel,
+  type ManualConnectionDraft,
+} from "./sqlPickerLogic";
 
 /**
  * Pick a database to run against, or adopt one the workspace already mentions.
@@ -45,7 +55,9 @@ export interface SqlConnectionPickerProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   /** Save a discovered candidate as a connection. Only ever offered for a connectable one. */
-  onAdopt: (candidate: SqlCandidate) => void;
+  onAdopt: (candidate: SqlCandidate, engineOverride?: SqlEngine) => void;
+  /** Test and, only on success, save a manually entered connection. */
+  onAddManual: (draft: ManualConnectionDraft) => Promise<SqlTestOutcome>;
   onTest: (connection: SqlConnectionView) => void;
   onDelete: (connection: SqlConnectionView) => void;
   /**
@@ -76,6 +88,7 @@ export function SqlConnectionPicker({
   selectedId,
   onSelect,
   onAdopt,
+  onAddManual,
   onTest,
   onDelete,
   onSetAllowWrites,
@@ -85,8 +98,45 @@ export function SqlConnectionPicker({
   onClose,
 }: SqlConnectionPickerProps) {
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualDraft, setManualDraft] = useState<ManualConnectionDraft>({
+    name: "",
+    engine: null,
+    connectionString: "",
+    global: false,
+  });
+  const [showConnectionString, setShowConnectionString] = useState(false);
+  const [addingManual, setAddingManual] = useState(false);
+  const [manualOutcome, setManualOutcome] = useState<SqlTestOutcome | null>(null);
+  const [candidateEngines, setCandidateEngines] = useState<Record<string, SqlEngine | "">>({});
 
   const groups = groupConnections(connections, root);
+  const manualError = manualConnectionError(manualDraft);
+  const manualStatus = manualOutcome === null ? null : statusLine(manualOutcome);
+
+  const updateManual = (patch: Partial<ManualConnectionDraft>) => {
+    setManualDraft((draft) => ({ ...draft, ...patch }));
+    setManualOutcome(null);
+  };
+
+  const toggleManual = () => {
+    if (manualOpen) {
+      setManualDraft({ name: "", engine: null, connectionString: "", global: false });
+      setShowConnectionString(false);
+      setManualOutcome(null);
+    }
+    setManualOpen((open) => !open);
+  };
+
+  const submitManual = () => {
+    if (manualError !== null || addingManual) return;
+    setAddingManual(true);
+    setManualOutcome(null);
+    void onAddManual(manualDraft)
+      .then(setManualOutcome)
+      .catch(() => {})
+      .finally(() => setAddingManual(false));
+  };
 
   const savedRow = (connection: SqlConnectionView) => {
     const origin = secretOrigin(connection.secret);
@@ -104,7 +154,16 @@ export function SqlConnectionPicker({
           setMenu({ connection, x: e.clientX, y: e.clientY });
         }}
       >
-        <span className="sql-conn-name">{connection.name}</span>
+        <span className="sql-conn-identity">
+          <span className="sql-conn-name" title={savedConnectionLabel(connection)}>
+            {savedConnectionLabel(connection)}
+          </span>
+          {origin !== null && (
+            <span className="sql-conn-meta" title={origin}>
+              {origin}
+            </span>
+          )}
+        </span>
 
         {connection.engine === null ? (
           <span className="sql-conn-meta sql-conn-unknown" title="No engine was determined for this connection.">
@@ -112,14 +171,6 @@ export function SqlConnectionPicker({
           </span>
         ) : (
           <span className="badge">{connection.engine}</span>
-        )}
-
-        {/* Where the string is defined — a file and a key, which is not a
-            secret, and is the only thing that can be said about a reference. */}
-        {origin !== null && (
-          <span className="sql-conn-meta" title={origin}>
-            {origin}
-          </span>
         )}
 
         {connection.holdsASecret && (
@@ -145,7 +196,8 @@ export function SqlConnectionPicker({
             className={`sql-conn-test${tested.tone === "ok" ? " ok" : " bad"}`}
             title={tested.detail ?? undefined}
           >
-            {tested.text}
+            <span>{tested.text}</span>
+            {tested.detail !== null && <span className="sql-conn-test-detail">{tested.detail}</span>}
           </span>
         )}
 
@@ -179,48 +231,65 @@ export function SqlConnectionPicker({
   const candidateRow = (candidate: SqlCandidate) => {
     const blocker = candidateBlocker(candidate.state);
     const described = describeDisplay(candidate.display);
+    const chosenEngine = candidateEngines[candidate.id] ?? "";
+    const effectiveEngine = candidate.engine ?? (chosenEngine === "" ? null : chosenEngine);
     return (
-      <div
-        className={`sql-cand-row${blocker === null ? "" : " blocked"}`}
-        key={candidate.id}
-      >
-        <span className="sql-cand-name">{candidate.name}</span>
-
-        {/* The source file and key. This is what makes a discovered row
-            checkable by the person reading it. */}
-        <span className="sql-cand-origin" title={candidate.origin}>
-          {candidate.origin}
-        </span>
-        {candidate.project !== null && (
-          <span className="sql-cand-meta">{candidate.project}</span>
-        )}
-
-        {candidate.engine !== null && <span className="badge">{candidate.engine}</span>}
-
-        {/* Never the connection string — only the redacted description, and
-            only when the backend was willing to describe it. */}
-        <span
-          className={`sql-cand-display${described.refused ? " refused" : ""}`}
-          title={described.text}
-        >
-          {described.text}
-        </span>
-
-        {blocker === null ? (
-          <button
-            className="sql-cand-action"
-            title="Save this as a connection"
-            onClick={() => onAdopt(candidate)}
-          >
-            Add
-          </button>
-        ) : (
-          // Not a disabled Add button: there is nothing to connect *to* yet, and
-          // saying why is the whole content of the row.
-          <span className="sql-cand-blocked" title={blocker}>
-            {blocker}
+      <div className="sql-cand-row" key={candidate.id}>
+        <span className="sql-cand-identity">
+          <span className="sql-cand-name" title={candidateConnectionLabel(candidate)}>
+            {candidateConnectionLabel(candidate)}
           </span>
+          <span className="sql-cand-origin" title={candidateSourceDetail(candidate)}>
+            {candidateSourceDetail(candidate)}
+          </span>
+          <span
+            className={`sql-cand-display${described.refused ? " refused" : ""}`}
+            title={described.text}
+          >
+            {described.text}
+          </span>
+          {blocker !== null && (
+            <span className="sql-cand-blocked" title={blocker}>
+              {blocker}
+            </span>
+          )}
+        </span>
+
+        {candidate.engine !== null ? (
+          <span className="badge">{candidate.engine}</span>
+        ) : (
+          <select
+            className="sql-cand-engine"
+            value={chosenEngine}
+            title={blocker ?? undefined}
+            aria-label={`Database engine for ${candidate.name}`}
+            onChange={(event) =>
+              setCandidateEngines((choices) => ({
+                ...choices,
+                [candidate.id]: event.target.value as SqlEngine | "",
+              }))
+            }
+          >
+            <option value="">Choose engine…</option>
+            <option value="postgres">PostgreSQL</option>
+            <option value="sqlServer">SQL Server</option>
+            <option value="sqlite">SQLite</option>
+          </select>
         )}
+        <button
+          className="sql-cand-action"
+          title={
+            candidate.state.kind === "ready"
+              ? "Save this as a connection"
+              : "Save this reference; it cannot connect until its value is populated"
+          }
+          disabled={effectiveEngine === null}
+          onClick={() => {
+            if (effectiveEngine !== null) onAdopt(candidate, effectiveEngine);
+          }}
+        >
+          Add
+        </button>
       </div>
     );
   };
@@ -232,8 +301,15 @@ export function SqlConnectionPicker({
           <div className="sql-conn-header">
             <strong>Connections</strong>
             <span style={{ flex: 1 }} />
-            <button onClick={onRefreshDiscovery} title="Scan this codebase again">
-              ↻ Rescan
+            <button onClick={toggleManual}>
+              {manualOpen ? "Cancel add" : "+ Add connection"}
+            </button>
+            <button
+              onClick={onRefreshDiscovery}
+              title="Scan this codebase again"
+              disabled={discovering}
+            >
+              {discovering ? "Scanning…" : "↻ Rescan"}
             </button>
             <button onClick={onClose} title="Close">
               ✕
@@ -241,6 +317,96 @@ export function SqlConnectionPicker({
           </div>
 
           {error !== null && <div className="sql-conn-error">{error}</div>}
+
+          {manualOpen && (
+            <form
+              className="sql-manual-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitManual();
+              }}
+            >
+              <div className="sql-conn-section-title">Add a connection manually</div>
+              <label>
+                Name
+                <input
+                  value={manualDraft.name}
+                  onChange={(event) => updateManual({ name: event.target.value })}
+                  autoFocus
+                />
+              </label>
+              <label>
+                Database engine
+                <select
+                  value={manualDraft.engine ?? ""}
+                  onChange={(event) =>
+                    updateManual({
+                      engine:
+                        event.target.value === ""
+                          ? null
+                          : (event.target.value as ManualConnectionDraft["engine"]),
+                    })
+                  }
+                >
+                  <option value="">Choose an engine…</option>
+                  <option value="postgres">PostgreSQL</option>
+                  <option value="sqlServer">SQL Server</option>
+                  <option value="sqlite">SQLite</option>
+                </select>
+              </label>
+              <label>
+                Connection string
+                <span className="sql-manual-secret">
+                  <input
+                    type={showConnectionString ? "text" : "password"}
+                    value={manualDraft.connectionString}
+                    onChange={(event) => updateManual({ connectionString: event.target.value })}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConnectionString((shown) => !shown)}
+                  >
+                    {showConnectionString ? "Hide" : "Show"}
+                  </button>
+                </span>
+              </label>
+              <label className="sql-manual-scope">
+                <input
+                  type="checkbox"
+                  checked={manualDraft.global}
+                  onChange={(event) => updateManual({ global: event.target.checked })}
+                />
+                Make available to all codebases
+              </label>
+              <div className="sql-cand-note">
+                The connection string is stored in your user configuration outside this codebase
+                and is never displayed after saving. Writes start disabled.
+              </div>
+              {manualStatus !== null && (
+                <div
+                  className={`sql-conn-test${manualStatus.tone === "ok" ? " ok" : " bad"}`}
+                  title={manualStatus.detail ?? undefined}
+                >
+                  <span>{manualStatus.text}</span>
+                  {manualStatus.detail !== null && (
+                    <span className="sql-conn-test-detail">{manualStatus.detail}</span>
+                  )}
+                </div>
+              )}
+              <div className="sql-manual-actions">
+                <span>{manualError}</span>
+                <button
+                  type="submit"
+                  className="primary"
+                  disabled={manualError !== null || addingManual}
+                >
+                  {addingManual ? "Testing…" : "Test and add"}
+                </button>
+              </div>
+            </form>
+          )}
 
           <div className="sql-conn-body">
             {connections.length === 0 ? (
@@ -261,6 +427,11 @@ export function SqlConnectionPicker({
                 Read out of files in this workspace. Nothing here is selected, and nothing is
                 connected to, until you add it.
               </div>
+              {discovery !== null && !discovering && (
+                <div className="sql-cand-note">
+                  Latest scan found {candidates.length} candidate{candidates.length === 1 ? "" : "s"}.
+                </div>
+              )}
 
               {discovery === null ? (
                 <div className="sql-cand-empty">
@@ -289,7 +460,7 @@ export function SqlConnectionPicker({
       </div>
 
       {menu !== null && (
-        <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
+        <ContextMenu x={menu.x} y={menu.y} zIndex={302} onClose={() => setMenu(null)}>
           <div
             className="dropdown-item"
             onClick={() => {

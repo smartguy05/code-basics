@@ -313,6 +313,76 @@ fn user_secrets_yield_their_own_candidate() {
 }
 
 #[test]
+fn nested_user_secrets_preserve_the_full_configuration_key() {
+    fn reader(_project: &Path) -> Result<Option<(PathBuf, String)>, String> {
+        Ok(Some((
+            PathBuf::from("C:/secrets/id/secrets.json"),
+            r#"{
+              "AppConfiguration": {
+                "ConnectionStrings": {
+                  "DatabaseConnection": "Host=secret-host;Database=app",
+                  "CosmosDbConnection": "AccountEndpoint=https://example.invalid"
+                }
+              }
+            }"#
+            .to_string(),
+        )))
+    }
+
+    let (_dir, ws) = scanned(&[("src/Api/Api.csproj", &csproj(&["Npgsql"]))]);
+    let options = DiscoveryOptions {
+        read_user_secrets: reader,
+        ..DiscoveryOptions::default()
+    };
+    let out = discover(&ws, &options);
+
+    let database = out
+        .candidates
+        .iter()
+        .find(|candidate| candidate.name == "DatabaseConnection")
+        .expect("the nested PostgreSQL connection should be discovered");
+    assert_eq!(database.engine, Some(SqlEngine::Postgres));
+    assert!(matches!(
+        &database.source,
+        SecretSource::UserSecrets { key, .. }
+            if key == "AppConfiguration:ConnectionStrings:DatabaseConnection"
+    ));
+    assert!(matches!(
+        read_value(&database.source, &options),
+        Ok(EnvValue::Literal { text }) if text == "Host=secret-host;Database=app"
+    ));
+
+    let cosmos = out
+        .candidates
+        .iter()
+        .find(|candidate| candidate.name == "CosmosDbConnection")
+        .expect("non-SQL entries remain visible but blocked");
+    assert!(cosmos.engine.is_none());
+    assert!(matches!(cosmos.state, CandidateState::EngineUnknown { .. }));
+}
+
+#[test]
+fn nested_flat_spellings_are_canonicalised_and_deduplicated() {
+    let read = read_dotnet_config(
+        r#"{
+          "AppConfiguration": {
+            "ConnectionStrings": { "Orders": "Host=h;Database=d" }
+          },
+          "AppConfiguration__ConnectionStrings__Orders": "Host=other;Database=d"
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(read.entries.len(), 1);
+    assert_eq!(
+        read.entries[0].key,
+        "AppConfiguration:ConnectionStrings:Orders"
+    );
+    assert_eq!(read.skipped.len(), 1);
+    assert!(read.skipped[0].reason.contains("is spelled more than once"));
+}
+
+#[test]
 fn a_user_secrets_read_failure_is_a_warning_naming_the_project() {
     fn reader(_project: &Path) -> Result<Option<(PathBuf, String)>, String> {
         Err("the id is not usable".to_string())
@@ -461,21 +531,39 @@ fn an_unresolved_placeholder_is_listed_but_not_connectable() {
 }
 
 // ---------------------------------------------------------------------------
-// Engine guessing: two agreeing signals or nothing
+// Engine selection: the DSN, unless package evidence contradicts it
 // ---------------------------------------------------------------------------
 
 #[test]
 fn two_agreeing_signals_name_the_engine() {
     assert_eq!(
         resolve_engine(Some(SqlEngine::Postgres), Some(SqlEngine::Postgres)),
-        EngineChoice::Agreed(SqlEngine::Postgres)
+        EngineChoice::Determined(SqlEngine::Postgres)
     );
 }
 
 #[test]
-fn disagreeing_signals_and_a_missing_signal_are_different_answers() {
-    // Both end in `engine: None`, but they are not the same fact and the
-    // sentence shown to the user differs.
+fn an_empty_connection_placeholder_is_listed_but_cannot_be_adopted() {
+    let (_dir, out) = found(&[
+        ("src/Api/Api.csproj", &csproj(&["Npgsql"])),
+        (
+            "src/Api/appsettings.json",
+            &appsettings_with("DatabaseConnection", ""),
+        ),
+    ]);
+
+    let candidate = one(&out);
+    assert_eq!(candidate.engine, None);
+    assert!(matches!(
+        &candidate.state,
+        CandidateState::Unresolved { reason } if reason.contains("empty")
+    ));
+}
+
+#[test]
+fn disagreement_and_missing_dsn_are_different_answers() {
+    // A contradiction is different from a package reference with no usable
+    // DSN, while a usable DSN needs no package reference to repeat its answer.
     assert_eq!(
         resolve_engine(Some(SqlEngine::Postgres), Some(SqlEngine::SqlServer)),
         EngineChoice::Disagreed {
@@ -489,7 +577,7 @@ fn disagreeing_signals_and_a_missing_signal_are_different_answers() {
     );
     assert_eq!(
         resolve_engine(None, Some(SqlEngine::Postgres)),
-        EngineChoice::NotDetermined
+        EngineChoice::Determined(SqlEngine::Postgres)
     );
     assert_eq!(resolve_engine(None, None), EngineChoice::NotDetermined);
     assert_eq!(resolve_engine(None, None).engine(), None);
@@ -501,7 +589,7 @@ fn disagreeing_signals_and_a_missing_signal_are_different_answers() {
 }
 
 #[test]
-fn a_project_declaring_two_clients_yields_no_engine_but_still_lists_the_connection() {
+fn an_unambiguous_dsn_survives_ambiguous_package_references() {
     let (_dir, out) = found(&[
         (
             "src/Api/Api.csproj",
@@ -514,18 +602,12 @@ fn a_project_declaring_two_clients_yields_no_engine_but_still_lists_the_connecti
     ]);
 
     let candidate = one(&out);
-    assert_eq!(candidate.engine, None, "ambiguous packages name no engine");
-    assert!(!candidate.state.is_connectable());
-    assert!(matches!(
-        candidate.state,
-        CandidateState::EngineUnknown { .. }
-    ));
+    assert_eq!(candidate.engine, Some(SqlEngine::Postgres));
+    assert!(candidate.state.is_connectable());
 }
 
 #[test]
-fn the_string_alone_is_not_enough_to_name_an_engine() {
-    // No package reference at all: the connection string sniffs as PostgreSQL,
-    // and one signal is not two.
+fn an_unambiguous_string_is_enough_to_name_an_engine() {
     let (_dir, out) = found(&[
         ("src/Api/Api.csproj", &csproj(&[])),
         (
@@ -535,11 +617,52 @@ fn the_string_alone_is_not_enough_to_name_an_engine() {
     ]);
 
     let candidate = one(&out);
-    assert_eq!(candidate.engine, None);
-    assert!(matches!(
-        candidate.state,
-        CandidateState::EngineUnknown { .. }
-    ));
+    assert_eq!(candidate.engine, Some(SqlEngine::Postgres));
+    assert!(candidate.state.is_connectable());
+}
+
+#[test]
+fn structured_entries_in_a_custom_nested_section_are_ignored() {
+    let read = read_dotnet_config(
+        r#"{
+          "AppConfiguration": {
+            "ConnectionStrings": {
+              "DatabaseConnection": "Host=h;Database=d",
+              "TransientConnection": { "RetryCount": 3 }
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(read.entries.len(), 1);
+    assert_eq!(read.entries[0].name, "DatabaseConnection");
+    assert!(read.skipped.is_empty());
+}
+
+#[test]
+fn jsonc_user_secret_layout_keeps_active_strings_and_ignores_objects() {
+    let read = read_dotnet_config(
+        r#"{
+          "AppConfiguration": {
+            "ConnectionStrings": {
+              // Active developer database
+              "DatabaseConnection": "Server=pg.internal;Database=app;Port=5432;User Id=svc;Password=not-real;Ssl Mode=Require;Include Error Detail=True;",
+              // "DatabaseConnection": "Server=commented-out;Database=other;",
+              "TransientConnection": {
+                "Database": "cache",
+                "DefaultTimeToLive": 3600,
+              },
+            },
+          },
+        }"#,
+    )
+    .expect("comments and trailing commas are accepted");
+
+    assert_eq!(read.entries.len(), 1);
+    assert_eq!(read.entries[0].name, "DatabaseConnection");
+    assert!(read.entries[0].value.contains("Server=pg.internal"));
+    assert!(read.skipped.is_empty());
 }
 
 #[test]

@@ -17,6 +17,7 @@ import { terminalTitle } from "./askLogic";
 import {
   makeAgentTerminal,
   makeTerminal,
+  nextTerminalNumber,
   raiseTerminal,
   recolorTerminal,
   renameTerminal,
@@ -251,7 +252,11 @@ export function WorkspaceTab({
 
   const openTerminal = () => {
     terminalSeq.current += 1;
-    setTerminals((open) => [...open, makeTerminal(terminalSeq.current, workspace.root)]);
+    const seq = terminalSeq.current;
+    setTerminals((open) => [
+      ...open,
+      makeTerminal(seq, nextTerminalNumber(open), workspace.root),
+    ]);
   };
   /**
    * Open a terminal running an agent that has already been asked `question`.
@@ -282,10 +287,12 @@ export function WorkspaceTab({
       .agentInteractiveCommand(agentId, model, question)
       .then((command) => {
         terminalSeq.current += 1;
+        const seq = terminalSeq.current;
         setTerminals((open) => [
           ...open,
           makeAgentTerminal(
-            terminalSeq.current,
+            seq,
+            nextTerminalNumber(open),
             workspace.root,
             command.program,
             command.args,

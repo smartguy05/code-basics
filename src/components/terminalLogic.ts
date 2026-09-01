@@ -9,6 +9,8 @@
 export interface TerminalDescriptor {
   /** Stable across re-renders; the React key and layout scoping id. */
   key: string;
+  /** Reusable, workspace-local number reserved while this window is open. */
+  number: number;
   /** Shown in the header and the minimized pill, e.g. "Terminal 3". */
   title: string;
   /**
@@ -48,14 +50,20 @@ export interface TerminalDescriptor {
 }
 
 /**
- * Build the descriptor for a newly opened terminal from a monotonic sequence
- * number the host keeps and the workspace root it belongs to. Monotonic rather
- * than "lowest unused" on purpose: closing Terminal 2 and opening another gives
- * Terminal 4, not a recycled 2, so a title never refers to two different
- * sessions across a session's life.
+ * Build a newly opened terminal from a monotonic identity and a reusable
+ * display number. Keeping those separate lets React/session identity remain
+ * unique while the title uses the lowest slot not occupied in this workspace.
  */
-export function makeTerminal(seq: number, cwd: string): TerminalDescriptor {
-  return { key: `term-${seq}`, title: `Terminal ${seq}`, cwd };
+export function makeTerminal(seq: number, number: number, cwd: string): TerminalDescriptor {
+  return { key: `term-${seq}`, number, title: `Terminal ${number}`, cwd };
+}
+
+/** The lowest positive terminal number not reserved by an open window. */
+export function nextTerminalNumber(open: readonly TerminalDescriptor[]): number {
+  const used = new Set(open.map((terminal) => terminal.number));
+  let number = 1;
+  while (used.has(number)) number += 1;
+  return number;
 }
 
 /**
@@ -80,6 +88,7 @@ export function makeTerminal(seq: number, cwd: string): TerminalDescriptor {
  */
 export function makeAgentTerminal(
   seq: number,
+  number: number,
   cwd: string,
   program: string,
   args: readonly string[],
@@ -88,7 +97,8 @@ export function makeAgentTerminal(
   const clean = title.trim();
   return {
     key: `term-${seq}`,
-    title: clean === "" ? `Terminal ${seq}` : clean,
+    number,
+    title: clean === "" ? `Terminal ${number}` : clean,
     cwd,
     command: { program, args: [...args] },
   };

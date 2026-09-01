@@ -4,7 +4,91 @@ import type {
   SqlConnectionDisplay,
   SqlSecretView,
 } from "../ipc/types";
-import { candidateBlocker, describeDisplay, secretOrigin } from "./sqlPickerLogic";
+import {
+  candidateBlocker,
+  candidateConnectionLabel,
+  candidateSourceDetail,
+  describeDisplay,
+  manualConnectionError,
+  secretOrigin,
+  savedConnectionLabel,
+} from "./sqlPickerLogic";
+
+describe("connection labels", () => {
+  const candidate = {
+    id: "appsettings:api:db",
+    name: "DatabaseConnection",
+    origin: "ONEflight.Server.Api/appsettings.Development.json",
+    project: "ONEflight.Server.Api",
+    engine: "postgres" as const,
+    source: {
+      kind: "appSettings" as const,
+      path: "C:/repo/ONEflight.Server.Api/appsettings.Development.json",
+      key: "AppConfiguration:ConnectionStrings:DatabaseConnection",
+    },
+    display: {
+      engine: "postgres" as const,
+      server: "db.example:5432",
+      database: "orders",
+      authMode: "password" as const,
+      confidence: "described" as const,
+    },
+    state: { kind: "ready" as const },
+  };
+
+  it("puts project and environment ahead of a generic candidate key", () => {
+    expect(candidateConnectionLabel(candidate)).toBe(
+      "ONEflight.Server.Api · Development · DatabaseConnection",
+    );
+  });
+
+  it("shows the exact origin and configuration key separately", () => {
+    expect(candidateSourceDetail(candidate)).toContain("appsettings.Development.json");
+    expect(candidateSourceDetail(candidate)).toContain(
+      "AppConfiguration:ConnectionStrings:DatabaseConnection",
+    );
+  });
+
+  it("upgrades the display label of an older generically named saved reference", () => {
+    expect(
+      savedConnectionLabel({
+        id: "saved",
+        name: "DatabaseConnection",
+        engine: "postgres",
+        secret: {
+          kind: "appSettings",
+          path: "C:/repo/ONEflight.Server.Api/appsettings.Staging.json",
+          key: "AppConfiguration:ConnectionStrings:DatabaseConnection",
+        },
+        holdsASecret: false,
+        workspaceRoot: "C:/repo",
+        allowWrites: false,
+        createdAtMs: 0,
+        lastUsedMs: null,
+      }),
+    ).toBe("ONEflight.Server.Api · Staging · DatabaseConnection");
+  });
+});
+
+describe("manualConnectionError", () => {
+  const valid = {
+    name: "Orders",
+    engine: "postgres" as const,
+    connectionString: "Host=localhost;Database=orders",
+    global: false,
+  };
+
+  it("requires a name, engine, and connection string", () => {
+    expect(manualConnectionError({ ...valid, name: "  " })).toMatch(/name/i);
+    expect(manualConnectionError({ ...valid, engine: null })).toMatch(/engine/i);
+    expect(manualConnectionError({ ...valid, connectionString: "  " })).toMatch(/string/i);
+  });
+
+  it("accepts either codebase or global scope without rewriting the string", () => {
+    expect(manualConnectionError(valid)).toBe(null);
+    expect(manualConnectionError({ ...valid, global: true })).toBe(null);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // candidateBlocker

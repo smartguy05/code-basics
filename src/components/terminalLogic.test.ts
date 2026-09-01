@@ -3,6 +3,7 @@ import {
   cascadeShift,
   makeAgentTerminal,
   makeTerminal,
+  nextTerminalNumber,
   outputNeedsAttention,
   pillBottom,
   raiseTerminal,
@@ -17,21 +18,47 @@ import {
 
 describe("makeTerminal", () => {
   it("derives a stable key, a human title, and carries the workspace cwd", () => {
-    expect(makeTerminal(1, "/ws")).toEqual({ key: "term-1", title: "Terminal 1", cwd: "/ws" });
-    expect(makeTerminal(42, "/other")).toEqual({
+    expect(makeTerminal(1, 1, "/ws")).toEqual({
+      key: "term-1",
+      number: 1,
+      title: "Terminal 1",
+      cwd: "/ws",
+    });
+    expect(makeTerminal(42, 3, "/other")).toEqual({
       key: "term-42",
-      title: "Terminal 42",
+      number: 3,
+      title: "Terminal 3",
       cwd: "/other",
     });
   });
 
   it("gives distinct keys to distinct sequence numbers", () => {
-    expect(makeTerminal(2, "/ws").key).not.toBe(makeTerminal(3, "/ws").key);
+    expect(makeTerminal(2, 1, "/ws").key).not.toBe(makeTerminal(3, 1, "/ws").key);
+  });
+});
+
+describe("nextTerminalNumber", () => {
+  it("uses one when no terminal is open", () => {
+    expect(nextTerminalNumber([])).toBe(1);
+  });
+
+  it("fills the lowest gap among all terminal windows", () => {
+    const open = [
+      makeTerminal(7, 1, "/ws"),
+      makeAgentTerminal(8, 3, "/ws", "codex", ["q"], "question"),
+    ];
+    expect(nextTerminalNumber(open)).toBe(2);
+  });
+
+  it("restarts at one after every terminal closes", () => {
+    const open = [makeTerminal(1, 1, "/ws")];
+    const afterClose = open.filter((terminal) => terminal.key !== "term-1");
+    expect(nextTerminalNumber(afterClose)).toBe(1);
   });
 });
 
 describe("renameTerminal", () => {
-  const list = [makeTerminal(1, "/ws"), makeTerminal(2, "/ws")];
+  const list = [makeTerminal(1, 1, "/ws"), makeTerminal(2, 2, "/ws")];
   const titleOf = (l: ReturnType<typeof renameTerminal>, key: string) =>
     l.find((t) => t.key === key)?.title;
 
@@ -56,7 +83,7 @@ describe("renameTerminal", () => {
 });
 
 describe("recolorTerminal", () => {
-  const list = [makeTerminal(1, "/ws"), makeTerminal(2, "/ws")];
+  const list = [makeTerminal(1, 1, "/ws"), makeTerminal(2, 2, "/ws")];
   const colorOf = (l: ReturnType<typeof recolorTerminal>, key: string) =>
     l.find((t) => t.key === key)?.color;
 
@@ -281,9 +308,10 @@ describe("stackOffset", () => {
 
 describe("makeAgentTerminal", () => {
   it("keys off the same sequence but carries the command and its own title", () => {
-    const t = makeAgentTerminal(3, "/ws", "claude", ["--model", "opus", "why?"], "why?");
+    const t = makeAgentTerminal(3, 2, "/ws", "claude", ["--model", "opus", "why?"], "why?");
     expect(t).toEqual({
       key: "term-3",
+      number: 2,
       title: "why?",
       cwd: "/ws",
       command: { program: "claude", args: ["--model", "opus", "why?"] },
@@ -293,18 +321,20 @@ describe("makeAgentTerminal", () => {
   it("shares one sequence with makeTerminal so two terminals never share a key", () => {
     // The host keeps a single monotonic counter for both kinds; a separate one
     // would eventually mint `term-2` twice and React would reuse a live xterm.
-    expect(makeAgentTerminal(2, "/ws", "codex", ["q"], "q").key).toBe(makeTerminal(2, "/ws").key);
+    expect(makeAgentTerminal(2, 1, "/ws", "codex", ["q"], "q").key).toBe(
+      makeTerminal(2, 1, "/ws").key,
+    );
   });
 
   it("falls back to a plain terminal title rather than an empty header", () => {
     // `terminalTitle` never returns blank, so this is defensive — but an
     // unlabelled panel is indistinguishable from a broken one.
-    expect(makeAgentTerminal(5, "/ws", "claude", ["q"], "   ").title).toBe("Terminal 5");
+    expect(makeAgentTerminal(5, 2, "/ws", "claude", ["q"], "   ").title).toBe("Terminal 2");
   });
 
   it("copies the argument list, so a later mutation cannot rewrite the command", () => {
     const args = ["--model", "opus", "why?"];
-    const t = makeAgentTerminal(1, "/ws", "claude", args, "why?");
+    const t = makeAgentTerminal(1, 1, "/ws", "claude", args, "why?");
     args.push("--dangerously-skip-permissions");
     expect(t.command?.args).toEqual(["--model", "opus", "why?"]);
   });
@@ -312,6 +342,6 @@ describe("makeAgentTerminal", () => {
   it("leaves a plain terminal with no command at all", () => {
     // `undefined` rather than an empty command: `TerminalPanel` passes it
     // through to `terminal_open`, where a blank program means "the shell".
-    expect(makeTerminal(1, "/ws").command).toBeUndefined();
+    expect(makeTerminal(1, 1, "/ws").command).toBeUndefined();
   });
 });

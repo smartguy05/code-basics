@@ -57,7 +57,10 @@ import type {
   SearchScope,
   SqlConnectionProfile,
   SqlConnectionView,
+  SqlColumnView,
+  SqlObjectView,
   SqlDiscovery,
+  SqlEngine,
   SqlEvent,
   SqlStopOutcome,
   SqlTestOutcome,
@@ -1171,6 +1174,21 @@ export const sqlSetAllowWrites = (id: string, allowWrites: boolean) =>
  */
 export const sqlTestConnection = (id: string) =>
   invoke<SqlTestOutcome>("sql_test_connection", { id });
+
+/**
+ * Test a manually entered connection without saving it. The string travels
+ * only toward the backend and no response type has a field that can echo it.
+ */
+export const sqlTestConnectionString = (engine: SqlEngine, connectionString: string) =>
+  invoke<SqlTestOutcome>("sql_test_connection_string", { engine, connectionString });
+
+/** List the selected database's objects. Tables are the first supported kind. */
+export const sqlListObjects = (connectionId: string) =>
+  invoke<SqlObjectView[]>("sql_list_objects", { connectionId });
+
+/** Lazily load one table's column definitions. */
+export const sqlListColumns = (connectionId: string, schema: string | null, table: string) =>
+  invoke<SqlColumnView[]>("sql_list_columns", { connectionId, schema, table });
 
 /**
  * Run SQL, streaming its rows to `onEvent`.

@@ -2045,6 +2045,29 @@ export interface SqlConnectionView {
   lastUsedMs: number | null;
 }
 
+/** Extensible object-explorer category. Tables are the first supported kind. */
+export type SqlObjectKind = "table";
+
+/** One database catalog object; schema stays separate for future object kinds. */
+export interface SqlObjectView {
+  kind: SqlObjectKind;
+  schema: string | null;
+  name: string;
+}
+
+/** Normalized column metadata loaded when a table node is expanded. */
+export interface SqlColumnView {
+  name: string;
+  dataType: string;
+  nullable: boolean | null;
+  defaultValue: string | null;
+  ordinal: number;
+  maxLength: number | null;
+  numericPrecision: number | null;
+  numericScale: number | null;
+  primaryKey: boolean | null;
+}
+
 /**
  * Why a discovered candidate cannot simply be connected to, or that it can.
  * `unresolved` means the value is still a variable reference — there is nothing

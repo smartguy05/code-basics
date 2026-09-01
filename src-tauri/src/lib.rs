@@ -257,6 +257,9 @@ pub fn run() {
             commands::sql::sql_delete_connection,
             commands::sql::sql_set_allow_writes,
             commands::sql::sql_test_connection,
+            commands::sql::sql_test_connection_string,
+            commands::sql::sql_list_objects,
+            commands::sql::sql_list_columns,
             commands::sql::sql_execute,
             commands::sql::sql_cancel,
         ])

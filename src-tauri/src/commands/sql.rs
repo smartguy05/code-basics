@@ -87,6 +87,40 @@ use tokio::sync::mpsc;
 
 use crate::state::AppState;
 
+/// A database object category. The wire shape is deliberately broader than
+/// today's explorer so procedures, views, and functions can be added later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SqlObjectKind {
+    Table,
+}
+
+/// One entry in the object explorer. The schema remains separate because
+/// engines quote and qualify identifiers differently.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlObjectView {
+    pub kind: SqlObjectKind,
+    pub schema: Option<String>,
+    pub name: String,
+}
+
+/// Normalized column metadata. Optional fields mean the engine did not report
+/// that fact, not that the fact is false.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlColumnView {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: Option<bool>,
+    pub default_value: Option<String>,
+    pub ordinal: u32,
+    pub max_length: Option<u64>,
+    pub numeric_precision: Option<u64>,
+    pub numeric_scale: Option<u64>,
+    pub primary_key: Option<bool>,
+}
+
 // ---------------------------------------------------------------------------
 // The redacted view of a saved profile
 // ---------------------------------------------------------------------------
@@ -266,6 +300,9 @@ pub(crate) fn guard_engine(engine: SqlEngine) -> guard::Engine {
 /// read, and it is redacted on the way out anyway.
 pub(crate) fn resolve_dsn(source: &SecretSource) -> Result<String, String> {
     match discover::read_value(source, &DiscoveryOptions::default()) {
+        Ok(EnvValue::Literal { text }) if text.trim().is_empty() => {
+            Err("the configured connection string is empty".to_string())
+        }
         Ok(EnvValue::Literal { text }) => Ok(text),
         // The value is still a `${...}` reference: there is nothing to connect
         // *to* yet, which is not the same as a connection that failed.
@@ -713,18 +750,11 @@ pub async fn sql_list_connections() -> Result<Vec<SqlConnectionView>, String> {
 /// The connections a workspace mentions. Reads files; connects to nothing and
 /// saves nothing.
 #[tauri::command]
-pub async fn sql_discover(state: State<'_, AppState>, root: String) -> Result<Discovery, String> {
+pub async fn sql_discover(root: String) -> Result<Discovery, String> {
     let path = PathBuf::from(&root);
-    // The scanned copy when that root is open — the same projects, without
-    // re-walking the tree. Otherwise scan it, so a root that is not open (or a
-    // path that was just typed) still answers.
-    let workspace = match state
-        .slot(&path)
-        .or_else(|| dunce::canonicalize(&path).ok().and_then(|c| state.slot(&c)))
-    {
-        Some(slot) => slot.workspace(),
-        None => cb_core::workspace::workspace_from_dir(&path).map_err(|e| format!("{e:#}"))?,
-    };
+    // Rescan means a fresh walk: the open workspace snapshot cannot know about
+    // a project added since the tab opened.
+    let workspace = cb_core::workspace::workspace_from_dir(&path).map_err(|e| format!("{e:#}"))?;
     Ok(discover::discover(&workspace, &DiscoveryOptions::default()))
 }
 
@@ -892,6 +922,225 @@ pub async fn sql_test_connection(id: String) -> Result<SqlTestOutcome, String> {
     Ok(test_outcome(connection, TEST_TIMEOUT_MS).await)
 }
 
+/// Test a literal connection before it is saved. The temporary profile exists
+/// only for this call; no store is read or written, and the result cannot carry
+/// the connection string back to the frontend.
+#[tauri::command]
+pub async fn sql_test_connection_string(
+    engine: SqlEngine,
+    connection_string: String,
+) -> Result<SqlTestOutcome, String> {
+    let connection = StoredConnection {
+        id: String::new(),
+        name: String::new(),
+        engine: Some(engine),
+        secret: SecretSource::Literal { connection_string },
+        workspace_root: None,
+        allow_writes: false,
+        created_at_ms: 0,
+        last_used_ms: None,
+    };
+    Ok(test_outcome(&connection, TEST_TIMEOUT_MS).await)
+}
+
+fn object_catalog_query(engine: SqlEngine) -> &'static str {
+    match engine {
+        SqlEngine::Postgres => {
+            "SELECT table_schema, table_name FROM information_schema.tables \
+             WHERE table_type = 'BASE TABLE' \
+             AND table_schema NOT IN ('pg_catalog', 'information_schema') \
+             ORDER BY table_schema, table_name"
+        }
+        SqlEngine::SqlServer => {
+            "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES \
+             WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_SCHEMA, TABLE_NAME"
+        }
+        SqlEngine::Sqlite => {
+            "SELECT 'main' AS table_schema, name AS table_name FROM sqlite_schema \
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        }
+    }
+}
+
+fn sql_literal(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn column_catalog_query(engine: SqlEngine, schema: Option<&str>, table: &str) -> String {
+    let schema = sql_literal(schema.unwrap_or(""));
+    let table = sql_literal(table);
+    match engine {
+        SqlEngine::Postgres => format!(
+            "SELECT column_name, data_type, is_nullable, column_default, \
+             ordinal_position::text, COALESCE(character_maximum_length::text, ''), \
+             COALESCE(numeric_precision::text, ''), COALESCE(numeric_scale::text, ''), '' \
+             FROM information_schema.columns WHERE table_schema = '{schema}' \
+             AND table_name = '{table}' ORDER BY ordinal_position"
+        ),
+        SqlEngine::SqlServer => format!(
+            "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, \
+             CAST(ORDINAL_POSITION AS varchar(20)), COALESCE(CAST(CHARACTER_MAXIMUM_LENGTH AS varchar(20)), ''), \
+             COALESCE(CAST(NUMERIC_PRECISION AS varchar(20)), ''), COALESCE(CAST(NUMERIC_SCALE AS varchar(20)), ''), '' \
+             FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{schema}' \
+             AND TABLE_NAME = '{table}' ORDER BY ORDINAL_POSITION"
+        ),
+        SqlEngine::Sqlite => format!(
+            "SELECT name, type, CASE WHEN notnull = 0 THEN 'YES' ELSE 'NO' END, dflt_value, \
+             CAST(cid + 1 AS TEXT), '', '', '', CASE WHEN pk = 0 THEN 'NO' ELSE 'YES' END \
+             FROM pragma_table_info('{table}') ORDER BY cid"
+        ),
+    }
+}
+
+fn object_text(value: &SqlValue) -> Option<&str> {
+    match value {
+        SqlValue::Text {
+            text,
+            truncated: false,
+        } => Some(text),
+        _ => None,
+    }
+}
+
+fn table_objects(result: &SqlResultSet) -> Result<Vec<SqlObjectView>, String> {
+    if result.row_cap.is_some() {
+        return Err("the table catalog exceeded the explorer's result limit".to_string());
+    }
+    result
+        .rows
+        .iter()
+        .map(|row| {
+            let schema = row.first().and_then(object_text).filter(|s| !s.is_empty());
+            let name = row
+                .get(1)
+                .and_then(object_text)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "the database returned a table without a name".to_string())?;
+            Ok(SqlObjectView {
+                kind: SqlObjectKind::Table,
+                schema: schema.map(str::to_string),
+                name: name.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn optional_number(value: Option<&SqlValue>) -> Option<u64> {
+    value
+        .and_then(object_text)
+        .filter(|text| !text.is_empty())
+        .and_then(|text| text.parse().ok())
+}
+
+fn yes_no(value: Option<&SqlValue>) -> Option<bool> {
+    match value
+        .and_then(object_text)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("yes" | "true" | "1") => Some(true),
+        Some("no" | "false" | "0") => Some(false),
+        _ => None,
+    }
+}
+
+fn table_columns(result: &SqlResultSet) -> Result<Vec<SqlColumnView>, String> {
+    if result.row_cap.is_some() {
+        return Err("the column catalog exceeded the explorer's result limit".to_string());
+    }
+    result
+        .rows
+        .iter()
+        .map(|row| {
+            let required = |index, label| {
+                row.get(index)
+                    .and_then(object_text)
+                    .filter(|text| !text.is_empty())
+                    .ok_or_else(|| format!("the database returned a column without {label}"))
+            };
+            Ok(SqlColumnView {
+                name: required(0, "a name")?.to_string(),
+                data_type: required(1, "a type")?.to_string(),
+                nullable: yes_no(row.get(2)),
+                default_value: row
+                    .get(3)
+                    .and_then(object_text)
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_string),
+                ordinal: required(4, "an ordinal position")?
+                    .parse()
+                    .map_err(|_| "the database returned an invalid column position".to_string())?,
+                max_length: optional_number(row.get(5)),
+                numeric_precision: optional_number(row.get(6)),
+                numeric_scale: optional_number(row.get(7)),
+                primary_key: yes_no(row.get(8)),
+            })
+        })
+        .collect()
+}
+
+/// List objects for the explorer. Tables are the first supported category;
+/// adding another category does not require replacing this command's shape.
+#[tauri::command]
+pub async fn sql_list_objects(connection_id: String) -> Result<Vec<SqlObjectView>, String> {
+    let file = store::load(&store::sql_connections_path());
+    let connection = file
+        .connections
+        .iter()
+        .find(|c| c.id == connection_id)
+        .ok_or_else(|| format!("no connection named {connection_id}"))?;
+    let engine = connection
+        .engine
+        .ok_or_else(|| "the connection's engine has not been determined".to_string())?;
+    let driver = driver_for(engine)
+        .ok_or_else(|| format!("this build has no driver for {}", engine_name(engine)))?;
+    let dsn = resolve_dsn(&connection.secret)?;
+    let mut live = driver
+        .connect(&ConnectSpec {
+            dsn,
+            writes_allowed: false,
+        })
+        .await
+        .map_err(|error| dsn::redact(&error.message))?;
+    let outcome = run_discarding_rows(live.as_mut(), object_catalog_query(engine))
+        .await
+        .map_err(|error| dsn::redact(&error.message))?;
+    table_objects(outcome.result())
+}
+
+/// Lazily load a table's columns when its explorer node is opened.
+#[tauri::command]
+pub async fn sql_list_columns(
+    connection_id: String,
+    schema: Option<String>,
+    table: String,
+) -> Result<Vec<SqlColumnView>, String> {
+    let file = store::load(&store::sql_connections_path());
+    let connection = file
+        .connections
+        .iter()
+        .find(|c| c.id == connection_id)
+        .ok_or_else(|| format!("no connection named {connection_id}"))?;
+    let engine = connection
+        .engine
+        .ok_or_else(|| "the connection's engine has not been determined".to_string())?;
+    let driver = driver_for(engine)
+        .ok_or_else(|| format!("this build has no driver for {}", engine_name(engine)))?;
+    let dsn = resolve_dsn(&connection.secret)?;
+    let mut live = driver
+        .connect(&ConnectSpec {
+            dsn,
+            writes_allowed: false,
+        })
+        .await
+        .map_err(|error| dsn::redact(&error.message))?;
+    let query = column_catalog_query(engine, schema.as_deref(), &table);
+    let outcome = run_discarding_rows(live.as_mut(), &query)
+        .await
+        .map_err(|error| dsn::redact(&error.message))?;
+    table_columns(outcome.result())
+}
+
 /// Run a statement, streaming its rows to `channel`.
 #[tauri::command]
 pub async fn sql_execute(
@@ -1049,6 +1298,110 @@ mod tests {
             elapsed_ms: 1,
             statement_index: 0,
         }
+    }
+
+    #[test]
+    fn table_catalog_rows_keep_schema_and_name_separate() {
+        let result = SqlResultSet {
+            columns: vec![
+                SqlColumn {
+                    name: "table_schema".into(),
+                    type_name: None,
+                },
+                SqlColumn {
+                    name: "table_name".into(),
+                    type_name: None,
+                },
+            ],
+            rows: vec![vec![
+                SqlValue::Text {
+                    text: "sales".into(),
+                    truncated: false,
+                },
+                SqlValue::Text {
+                    text: "orders".into(),
+                    truncated: false,
+                },
+            ]],
+            row_cap: None,
+            rows_affected: None,
+            elapsed_ms: 1,
+            statement_index: 0,
+        };
+
+        assert_eq!(
+            table_objects(&result).unwrap(),
+            vec![SqlObjectView {
+                kind: SqlObjectKind::Table,
+                schema: Some("sales".into()),
+                name: "orders".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn every_engine_has_a_table_catalog_query() {
+        for engine in [SqlEngine::Postgres, SqlEngine::SqlServer, SqlEngine::Sqlite] {
+            let query = object_catalog_query(engine);
+            assert!(
+                query.to_ascii_lowercase().contains("table"),
+                "{engine:?}: {query}"
+            );
+            assert!(
+                query.to_ascii_lowercase().starts_with("select"),
+                "{engine:?}: {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn column_catalog_literals_are_escaped_for_every_engine() {
+        for engine in [SqlEngine::Postgres, SqlEngine::SqlServer, SqlEngine::Sqlite] {
+            let query = column_catalog_query(engine, Some("odd'schema"), "order'items");
+            assert!(query.contains("order''items"), "{engine:?}: {query}");
+            assert!(!query.contains("order'items"), "{engine:?}: {query}");
+        }
+    }
+
+    #[test]
+    fn column_catalog_rows_normalize_details() {
+        let text = |value: &str| SqlValue::Text {
+            text: value.into(),
+            truncated: false,
+        };
+        let result = SqlResultSet {
+            columns: Vec::new(),
+            rows: vec![vec![
+                text("amount"),
+                text("numeric"),
+                text("NO"),
+                SqlValue::Null,
+                text("3"),
+                text(""),
+                text("18"),
+                text("2"),
+                text("YES"),
+            ]],
+            row_cap: None,
+            rows_affected: None,
+            elapsed_ms: 1,
+            statement_index: 0,
+        };
+
+        assert_eq!(
+            table_columns(&result).unwrap(),
+            vec![SqlColumnView {
+                name: "amount".into(),
+                data_type: "numeric".into(),
+                nullable: Some(false),
+                default_value: None,
+                ordinal: 3,
+                max_length: None,
+                numeric_precision: Some(18),
+                numeric_scale: Some(2),
+                primary_key: Some(true),
+            }]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1310,6 +1663,15 @@ mod tests {
             .unwrap(),
             "Data Source=app.db"
         );
+    }
+
+    #[test]
+    fn an_empty_literal_is_unresolved_before_any_driver_is_opened() {
+        let error = resolve_dsn(&SecretSource::Literal {
+            connection_string: "   ".into(),
+        })
+        .unwrap_err();
+        assert!(error.contains("empty"), "{error}");
     }
 
     #[test]

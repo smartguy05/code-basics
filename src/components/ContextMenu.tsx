@@ -19,11 +19,14 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 export function ContextMenu({
   x,
   y,
+  zIndex = 46,
   onClose,
   children,
 }: {
   x: number;
   y: number;
+  /** Stacking level; overlay-hosted menus must sit above their host overlay. */
+  zIndex?: number;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -62,6 +65,7 @@ export function ContextMenu({
     <>
       <div
         className="dropdown-backdrop"
+        style={{ zIndex: zIndex - 1 }}
         onClick={onClose}
         // A right-click on the backdrop closes the menu rather than opening the
         // webview's own; without this the two menus stack.
@@ -77,7 +81,7 @@ export function ContextMenu({
           position: "fixed",
           left: x + (shift?.dx ?? 0),
           top: y + (shift?.dy ?? 0),
-          zIndex: 46,
+          zIndex,
           // Invisible for the one frame between being drawn and being measured,
           // so a menu near an edge is never seen in the wrong place first.
           visibility: shift === null ? "hidden" : "visible",
