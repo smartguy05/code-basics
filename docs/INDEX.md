@@ -67,7 +67,9 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/config.rs` | 1072 | The workspace configuration file, `.code-basics/config.json`. |
 | `crates/core/src/dap/breakpoints.rs` | 268 | The breakpoint model: what the user asked for, what the adapter agreed to, |
 | `crates/core/src/dap/breakpoints_tests.rs` | 292 | Tests for the breakpoint model. Included by `breakpoints.rs`. |
-| `crates/core/src/dap/mod.rs` | 55 | Debugging: breakpoints, stepping and a call stack, over the Debug Adapter |
+| `crates/core/src/dap/coalesce.rs` | 126 | Merging a burst of debuggee output into as few console messages as possible. |
+| `crates/core/src/dap/coalesce_tests.rs` | 131 | Tests for [`super`]: what may be merged into one console message, and what |
+| `crates/core/src/dap/mod.rs` | 57 | Debugging: breakpoints, stepping and a call stack, over the Debug Adapter |
 | `crates/core/src/dap/model.rs` | 199 | The debug-session types that cross IPC, and the distinctions they exist to |
 | `crates/core/src/dap/model_tests.rs` | 247 | Key-pinning for the debug wire types, and the state distinctions. |
 | `crates/core/src/dap/positions.rs` | 75 | Line and column conventions, and the one thing this app refuses to let an |
@@ -452,7 +454,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/architecture.rs` | 219 | Architecture-diagram commands. |
 | `src-tauri/src/commands/behavioral.rs` | 485 | Behavioral before/after testing — running the same configuration against |
 | `src-tauri/src/commands/changelists.rs` | 57 | Change-group commands. |
-| `src-tauri/src/commands/debug.rs` | 869 | Launching applications under a Debug Adapter Protocol adapter. |
+| `src-tauri/src/commands/debug.rs` | 986 | Launching applications under a Debug Adapter Protocol adapter. |
 | `src-tauri/src/commands/enhancements.rs` | 136 | Instruction-template commands. |
 | `src-tauri/src/commands/erosion.rs` | 32 | Erosion-detector command. |
 | `src-tauri/src/commands/features.rs` | 53 | Optional-feature commands. |
@@ -551,6 +553,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/changelists.rs`: `Changelist`, `Changelists`, `group_of()`, `changelists_path()`, `load()`, `save()`, `create()`, `remove()`, `rename()`, `assign()`
 - `crates/core/src/config.rs`: `WorkspaceConfig`, `dump_capture_enabled()`, `inspector_caps()`, `keep_dumps()`, `max_dump_megabytes()`, `config_dir()`, `config_path()`, `results_dir()`, `lsp_log_dir()`, `load()`, `rider_config_id()`, `ensure_gitignore()`, `save()`, `merge()`, `apply()`, `sort_configs()`, `set_favorite()`, `set_order()`, `upsert()`, `remove()`
 - `crates/core/src/dap/breakpoints.rs`: `BindState`, `from_body()`, `is_verified()`, `Breakpoint`, `new()`, `apply()`, `effective_line()`, `detach()`, `BreakpointSet`, `toggle()`, `in_file()`, `lines_in_file()`, `files()`, `is_empty()`, `total()`, `apply_response()`, `apply_event()`, `detach_all()`
+- `crates/core/src/dap/coalesce.rs`: `OutputBatch`, `Coalescer`, `new()`, `pending()`, `push()`, `take()`
 - `crates/core/src/dap/model.rs`: `DebugEvent`, `DebugState`, `is_paused()`, `is_live()`, `StackFrame`, `Variable`, `is_expandable()`, `Scope`, `Thread`, `DebugStatus`, `idle()`
 - `crates/core/src/dap/positions.rs`: `line_from_adapter()`, `column_from_adapter()`, `line_to_adapter()`
 - `crates/core/src/dap/protocol.rs`: `Message`, `seq()`, `Request`, `Response`, `failure_text()`, `Event`, `Stopped`, `from_body()`, `Output`, `from_body()`, `exited_code()`, `Capabilities`, `initialize_arguments()`, `set_breakpoints_arguments()`

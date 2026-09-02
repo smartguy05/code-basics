@@ -89,6 +89,17 @@ pinned versions and SHA-256 verification. Resolution order is environment pin,
 then bundle, then `PATH`; an absent bundle is an ordinary answer, and a missing
 adapter is always reported rather than degraded into an ordinary run.
 
+Reading a debug adapter's protocol stream must stay decoupled from emitting to
+the UI, and the queue between them must stay unbounded. A client that stops
+draining the adapter's stdout deadlocks the debuggee: the pipe fills, the adapter
+blocks writing from inside a runtime debug callback that holds every debuggee
+thread suspended, and the application freezes with no output, no error and no
+exit — looking exactly like one that is merely quiet. Cost is bounded by merging
+output (`dap::coalesce`), never by making the reader wait. Merging must not
+combine `stdout` with `stderr`, must not split a chunk over the byte cap, and
+must not withhold: flush before blocking, and flush before any non-output event,
+so nothing overtakes output still held back.
+
 The Changes file list carries a multi-selection that is separate from the file
 shown in the diff pane. A right-click inside the selection acts on the whole
 selection; a right-click outside it acts on that single row. A Shift-range

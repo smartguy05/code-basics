@@ -156,13 +156,27 @@ The abstain rule in this subsystem's terms: a timeout, a dead server, a server s
 
 ## `dap`
 
-Debugging over the Debug Adapter Protocol. The core crate owns the pure `protocol`, `sequence`, `positions`, `breakpoints`, `registry`, and `model` layers; the Tauri command owns live stdio/TCP transport and launch lifecycle. The current UI intentionally stops at launch-attached debugging—console output, state, and Stop—with no breakpoint, stack, or stepping surface yet.
+Debugging over the Debug Adapter Protocol. The core crate owns the pure `protocol`, `sequence`, `positions`, `breakpoints`, `registry`, `model`, and `coalesce` layers; the Tauri command owns live stdio/TCP transport and launch lifecycle. The current UI intentionally stops at launch-attached debugging—console output, state, and Stop—with no breakpoint, stack, or stepping surface yet.
 
 It sits beside [`inspect`](#inspect) and is not a version of it. `inspect` reads an **unsuspended** heap through ClrMD, calls no method and evaluates no property — a photograph. `dap` stops the process and asks the runtime's own debugger, which is the thing the Objects tab's documentation keeps saying it is not.
 
 Two pieces are **reused rather than rewritten**. DAP frames messages exactly as LSP does — `Content-Length` then JSON — so [`lsp::framing`](#lsp) is used unchanged; a second copy would be a second place for the fail-closed rule to drift. Adapter discovery reuses `lsp::registry`'s `Probe`, because both modules ask a machine the same questions about environment variables and `PATH`.
 
 The **envelope is not JSON-RPC**, and treating it as one produces a bug nobody can see: a response points back with `request_seq` while carrying a `seq` of its own, so matching on `seq` — the field JSON-RPC would have used — pairs every response with the wrong request. `request_seq` is also spelled in *snake case*, alone among the base protocol's fields, so `Response` carries no `rename_all` and a test pins the exact keys; camel-casing it decodes every response with `request_seq: 0` and the debugger appears to hang on its first request. `sequence::needs_reply` states the other trap in one place: an adapter may send a **request** to the client (`runInTerminal`, `startDebugging`) and blocks until it is answered.
+
+### A client that stops reading deadlocks the debuggee
+
+This is the failure `coalesce` exists to prevent, and it is worth stating plainly because the symptom points nowhere near the cause.
+
+An adapter writes its `output` events to a pipe. If the client stops draining that pipe, the buffer fills and the adapter blocks trying to write — and it is writing from inside a runtime debug callback, which holds **every debuggee thread suspended**. The application never resumes. It freezes with no output, no error and no exit code, which from the outside is indistinguishable from an application that is simply quiet. Confirmed by stalling a client's reader deliberately: the debuggee stopped accumulating CPU entirely, every thread parked in `Wait, UserRequest`, and it never bound its port.
+
+So the read loop must never be the slow part, and it no longer is: `pump_protocol` does nothing but read, decode and forward into an **unbounded** queue, and `run_protocol` consumes from that. Unbounded is the fix rather than an oversight — a bounded queue makes the reader wait on the consumer, which is precisely the property that deadlocks the debuggee. What bounds the cost is not the queue's depth but `coalesce`, which merges a backlog of output into a single message; NetCoreDbg makes that necessary by emitting **two** `output` events per logged line, one raw and one carrying its `source`, so a real ASP.NET startup produces the better part of a thousand events in its first half minute.
+
+Merging is itself a claim that two chunks are one message, and the console cannot un-merge it, so the module abstains in three ways:
+
+- **`stdout` and `stderr` never merge**, in either direction. The console falls back to a line's *stream* when the line carries no severity marker of its own, so a cross-stream merge would silently re-rank real output.
+- **A chunk larger than `MAX_BATCH_BYTES` is never split.** The cap bounds what *accumulates*, not what one chunk may be: a cut could land inside a multi-byte character, and would hand the console half a line to rank on its own.
+- **Batching may never withhold.** The flush happens on the one path that is about to block — an empty queue means this end has drawn level with the adapter and the next message may be minutes away, or never. Flushing *after* the wait would leave a quiet application's last and most interesting line (`Now listening on …`) sitting in the buffer. For the same reason anything that is not an output event flushes first, so an `exited` line cannot print above the output that explains it.
 
 The governing rule is the sharpest in the crate, because a debugger that is subtly wrong is worse than none — the user acts on what it shows them:
 

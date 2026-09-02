@@ -25,6 +25,7 @@
 //! | [`breakpoints`] | Requested versus bound, and where it really landed | no |
 //! | [`registry`] | Which adapter to run, or exactly what was looked for | no |
 //! | [`model`] | The six states that must never collapse into one | no |
+//! | [`coalesce`] | What may be merged into one console message | no |
 //!
 //! **Framing is not in this list because it is not written twice.** DAP frames
 //! messages exactly as LSP does, so [`crate::lsp::framing`] is used unchanged.
@@ -48,6 +49,7 @@
 //!   see [`positions`].
 
 pub mod breakpoints;
+pub mod coalesce;
 pub mod model;
 pub mod positions;
 pub mod protocol;

@@ -1,10 +1,11 @@
 //! Launching applications under a Debug Adapter Protocol adapter.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use cb_core::dap::coalesce::Coalescer;
 use cb_core::dap::model::{DebugEvent, DebugState};
 use cb_core::dap::protocol::{self, Capabilities, Message, Request, Response};
 use cb_core::dap::registry::{self, AdapterSpec, Debuggee, Resolution};
@@ -24,7 +25,11 @@ type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 
 struct Adapter {
     child: tokio::process::Child,
-    reader: Reader,
+    /// Taken by [`run_protocol`], which hands it to a reader task of its own.
+    /// An `Option` because the reader is *moved* rather than borrowed: nothing
+    /// may hold the protocol stream while the session is live except the task
+    /// whose only job is to drain it — see [`pump_protocol`].
+    reader: Option<Reader>,
     writer: Writer,
     pid: u32,
     program: String,
@@ -150,7 +155,11 @@ async fn build_dotnet_target(
     if let Some(framework) = &config.framework {
         command.arg(format!("-property:TargetFramework={framework}"));
     }
-    configure_process_group(&mut command);
+    // `no_window` only, and deliberately *not* `configure_process_group`: this
+    // is an auxiliary SDK evaluation that must not join a supervised child's
+    // process group. The two must never both be applied — `creation_flags`
+    // *replaces* the flag word rather than OR-ing into it, so the second call
+    // silently discards the first one's `CREATE_NEW_PROCESS_GROUP`.
     #[cfg(windows)]
     cb_core::process::no_window(command.as_std_mut());
     let result = command
@@ -292,9 +301,11 @@ async fn spawn_adapter(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // `configure_process_group` alone: it already sets `CREATE_NO_WINDOW`
+    // alongside `CREATE_NEW_PROCESS_GROUP`, and adding a `no_window` call after
+    // it would *replace* that flag word and drop the group — which is the one
+    // flag `kill_tree` needs, since NetCoreDbg has a debuggee child of its own.
     configure_process_group(&mut command);
-    #[cfg(windows)]
-    cb_core::process::no_window(command.as_std_mut());
     let mut child = command
         .spawn()
         .map_err(|e| format!("failed to start {}: {e}", spec.description))?;
@@ -329,7 +340,7 @@ async fn spawn_adapter(
             .ok_or_else(|| "debug adapter has no stdin".to_string())?;
         return Ok(Adapter {
             child,
-            reader: Box::new(reader),
+            reader: Some(Box::new(reader)),
             writer: Box::new(writer),
             pid,
             program: program_name,
@@ -365,7 +376,7 @@ async fn spawn_adapter(
     let (reader, writer) = socket.into_split();
     Ok(Adapter {
         child,
-        reader: Box::new(reader),
+        reader: Some(Box::new(reader)),
         writer: Box::new(writer),
         pid,
         program: program_name,
@@ -381,25 +392,104 @@ async fn send(writer: &mut Writer, message: &Message) -> Result<(), String> {
     writer.flush().await.map_err(|e| e.to_string())
 }
 
-async fn receive(
-    reader: &mut Reader,
-    decoder: &mut Decoder,
-    queued: &mut VecDeque<Message>,
-) -> Result<Message, String> {
+/// One decoded message, or the reason the protocol stream ended.
+type Incoming = Result<Message, String>;
+
+/// Drain the adapter's protocol stream into `tx`, and stop.
+///
+/// # This task must never wait for anything but the pipe
+///
+/// **A client that stops draining a debug adapter's stdout deadlocks the
+/// debuggee.** The pipe buffer fills, the adapter blocks writing to it, and
+/// because the adapter writes from inside a runtime debug callback — which holds
+/// every debuggee thread suspended — the application never resumes. It freezes
+/// with no output, no error and no exit code, which is indistinguishable from an
+/// application that is merely quiet.
+///
+/// That is not a hypothetical: it is the bug this function exists to prevent,
+/// and it was reproduced by stalling a client's reader deliberately (the
+/// debuggee stopped accumulating CPU entirely, every thread parked in
+/// `Wait, UserRequest`, and it never bound its port). The previous shape read
+/// the pipe and emitted to the webview in the *same* loop, so the IPC cost of
+/// every message was charged directly to the read rate — and NetCoreDbg emits
+/// two `output` events per logged line, so a real ASP.NET startup outran it.
+///
+/// So reading is decoupled from emitting, and the queue between them is
+/// **unbounded on purpose**: a bounded one would make this task wait on the
+/// consumer, which is exactly the property that deadlocks the debuggee. The
+/// consumer bounds the *cost* instead of the depth, by merging the backlog with
+/// [`Coalescer`] — hundreds of queued events collapse into one IPC message, so
+/// the queue drains far faster than it fills.
+async fn pump_protocol(mut reader: Reader, tx: tokio::sync::mpsc::UnboundedSender<Incoming>) {
+    let mut decoder = Decoder::new();
+    let mut chunk = [0_u8; 8192];
     loop {
-        if let Some(message) = queued.pop_front() {
-            return Ok(message);
+        let count = match reader.read(&mut chunk).await {
+            Ok(0) => {
+                let _ = tx.send(Err("debug adapter closed its protocol stream".to_string()));
+                return;
+            }
+            Ok(count) => count,
+            Err(e) => {
+                let _ = tx.send(Err(format!("failed to read debug adapter: {e}")));
+                return;
+            }
+        };
+        let frames = match decoder.push(&chunk[..count]) {
+            Ok(frames) => frames,
+            Err(e) => {
+                let _ = tx.send(Err(e.to_string()));
+                return;
+            }
+        };
+        for frame in frames {
+            let message = serde_json::from_slice(&frame).map_err(|e| e.to_string());
+            let failed = message.is_err();
+            // A closed receiver means the session ended; stop reading so the
+            // adapter's stdout handle drops with this task.
+            if tx.send(message).is_err() || failed {
+                return;
+            }
         }
-        let mut chunk = [0_u8; 8192];
-        let count = reader
-            .read(&mut chunk)
-            .await
-            .map_err(|e| format!("failed to read debug adapter: {e}"))?;
-        if count == 0 {
-            return Err("debug adapter closed its protocol stream".to_string());
-        }
-        for frame in decoder.push(&chunk[..count]).map_err(|e| e.to_string())? {
-            queued.push_back(serde_json::from_slice(&frame).map_err(|e| e.to_string())?);
+    }
+}
+
+/// Whether this message is more debuggee output, and so may join a batch.
+///
+/// Everything else must flush first. A state change that overtook output still
+/// held back would put the console out of order — an `exited` line printed
+/// above the very output that explains the exit.
+fn is_output_event(message: &Message) -> bool {
+    matches!(message, Message::Event(event) if event.event == "output")
+}
+
+/// Emit whatever output has been held back, if any.
+fn flush_output(channel: &Channel<DebugEvent>, pending: &mut Coalescer) {
+    if let Some(batch) = pending.take() {
+        output(channel, batch.stream, batch.text);
+    }
+}
+
+/// The next message, blocking only when the adapter has genuinely gone quiet.
+///
+/// Batching output is only safe if it can never *withhold* it, so the flush
+/// belongs here, on the one path that is about to wait: an empty queue means
+/// this end has drawn level with the adapter, and the next message may be
+/// minutes away or may never come. Flushing after the wait instead would leave
+/// a debuggee's last line — `Now listening on …`, the interesting one — sitting
+/// in the buffer for as long as the application stayed quiet.
+async fn receive(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<Incoming>,
+    channel: &Channel<DebugEvent>,
+    pending: &mut Coalescer,
+) -> Incoming {
+    match rx.try_recv() {
+        Ok(message) => message,
+        Err(_) => {
+            flush_output(channel, pending);
+            rx.recv()
+                .await
+                .unwrap_or_else(|| Err("debug adapter closed its protocol stream".to_string()))
         }
     }
 }
@@ -411,8 +501,16 @@ async fn run_protocol(
     channel: &Channel<DebugEvent>,
 ) -> Result<Option<i64>, String> {
     let mut next_seq = 1_i64;
-    let mut decoder = Decoder::new();
-    let mut queued = VecDeque::new();
+    let reader = adapter
+        .reader
+        .take()
+        .ok_or_else(|| "debug adapter protocol stream already consumed".to_string())?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(pump_protocol(reader, tx));
+    // Pending debuggee output, held only for as long as the adapter is ahead of
+    // us. Flushed the instant we catch up, and before any state change, so the
+    // console's ordering is never the batching's business.
+    let mut pending = Coalescer::new();
     let initialize_seq = next_seq;
     next_seq += 1;
     send(
@@ -428,7 +526,7 @@ async fn run_protocol(
     )
     .await?;
     let capabilities: Capabilities = loop {
-        match receive(&mut adapter.reader, &mut decoder, &mut queued).await? {
+        match receive(&mut rx, channel, &mut pending).await? {
             Message::Response(response) if response.request_seq == initialize_seq => {
                 if !response.success {
                     return Err(response.failure_text());
@@ -461,7 +559,19 @@ async fn run_protocol(
     let mut configuration_seq = None;
     let mut exit_code = None;
     loop {
-        match receive(&mut adapter.reader, &mut decoder, &mut queued).await? {
+        let message = match receive(&mut rx, channel, &mut pending).await {
+            Ok(message) => message,
+            Err(error) => {
+                // The debuggee's last words are the most useful ones when the
+                // stream dies; they must not be dropped with it.
+                flush_output(channel, &mut pending);
+                return Err(error);
+            }
+        };
+        if !is_output_event(&message) {
+            flush_output(channel, &mut pending);
+        }
+        match message {
             Message::Response(response) => {
                 if !response.success {
                     return Err(response.failure_text());
@@ -497,7 +607,13 @@ async fn run_protocol(
                     } else {
                         Stream::Stdout
                     };
-                    output(channel, stream, body.output);
+                    // Into the batch, not straight out: see `pump_protocol`
+                    // for why the emitting cost must not be charged to the
+                    // read rate. `receive` flushes the moment the adapter
+                    // stops being ahead of us.
+                    if let Some(batch) = pending.push(stream, &body.output) {
+                        output(channel, batch.stream, batch.text);
+                    }
                 }
             }
             Message::Event(event) if event.event == "process" => {
@@ -528,6 +644,7 @@ async fn run_protocol(
             _ => {}
         }
     }
+    flush_output(channel, &mut pending);
     Ok(exit_code)
 }
 
