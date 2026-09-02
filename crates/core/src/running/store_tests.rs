@@ -42,6 +42,19 @@ fn remove_drops_the_matching_entry_only() {
 }
 
 #[test]
+fn remove_if_pid_cannot_remove_a_replacement_generation() {
+    let (_dir, path) = temp_path();
+    let store = RunningStore::new(path);
+    store.record(rec("/ws", "cfg", 10, "Old"));
+    store.record(rec("/ws", "cfg", 11, "New"));
+
+    assert!(!store.remove_if_pid("/ws", "cfg", 10));
+    assert_eq!(store.live()[0].pid, 11);
+    assert!(store.remove_if_pid("/ws", "cfg", 11));
+    assert!(store.live().is_empty());
+}
+
+#[test]
 fn the_same_key_under_two_roots_does_not_collide() {
     let (_dir, path) = temp_path();
     let store = RunningStore::new(path);

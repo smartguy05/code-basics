@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm debuggers:fetch && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -29,6 +29,7 @@
     "targets": "all",
     "resources": {
       "resources/inspector/": "inspector/",
+      "resources/debuggers/": "debuggers/",
       "resources/instructions/": "instructions/",
       "resources/prompts/": "prompts/"
     },

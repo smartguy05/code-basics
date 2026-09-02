@@ -98,6 +98,20 @@ One binary ships every feature, so these decide only what is *shown*. An install
 | `run_tests` | `config_id: String`, `only_failed: bool`, `channel: Channel<ProcessEvent>` | `TestRunOutcome` | Streams output, then parses the report; `only_failed` filters to the previous run's failures |
 | `last_test_run` | `config_id: String` | `TestRunOutcome \| null` | Most recent result for this config |
 
+## Debug launches
+
+`src-tauri/src/commands/debug.rs`
+
+Launch-attached debugging only: console output, lifecycle state and Stop. There is no breakpoint, stack or stepping surface yet. A missing adapter is **reported, never worked around** — the application is not started as an ordinary run, because a debugger changes observable behaviour the user is launching Debug to get.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `start_debug` | `config_id: String`, `channel: Channel<DebugEvent>`, `env: Map?`, `build_configuration: String?` | `()` | App configurations only. `.NET` builds first and asks MSBuild for the real `TargetPath`, then launches it under `netcoredbg` over stdio; Node translates its package-manager invocation into a `pwa-node` launch against the standalone js-debug server over loopback TCP. `env`/`build_configuration` layer exactly as in `start_run`. A compound resolves and prepares **every** member before any adapter starts, so one unsupported member launches nothing |
+| `stop_debug` | `config_id: String` | `bool` | Kills the adapter's process **tree** (which takes the debuggee with it) and any in-flight `<id>:debug-build`. For a compound, does the same for every member |
+| `debug_ids` | `root?: String` | `String[]` | Config ids currently under a debug adapter in `root`'s workspace, or the active one. A compound whose members are debugging is listed alongside them |
+
+Both adapters are **bundled with the installer** (`pnpm debuggers:fetch` vendors them into `resources/debuggers/`). Resolution order is `CB_DAP_DOTNET`/`CB_DAP_NODE`, then the bundle, then `PATH`. Node debugging additionally needs `node` on `PATH`, and its absence is reported at resolution rather than left to fail at spawn. See [`dap`](../architecture/core-crate.md#dap).
+
 ## Adversarial review
 
 `src-tauri/src/commands/review.rs` — runs a coding-agent CLI (Claude Code or Codex) read-only against the open workspace and streams its output. Every decision (which agents exist, allowed models, argument order) lives in `cb_core::review`.
@@ -362,6 +376,6 @@ Rejections (an `Err`, not an event) are reserved for the caller getting it wrong
 
 ## Streaming commands
 
-`start_run`, `run_tests`, `git_network`, and `inspect_capture` take a `Channel<ProcessEvent>` and push output events (stdout/stderr chunks, exit) while their promise stays pending. `sql_execute` is the same shape over `Channel<SqlEvent>`: rows arrive as they are read, and the promise resolves after the terminal `finished` event. `terminal_open` is the bidirectional variant: it pushes `TerminalEvent`s over its channel (one merged stream) while keystrokes flow back through `terminal_write`. The `api.ts` wrappers hide the channel behind an `onEvent` callback.
+`start_run`, `run_tests`, `git_network`, and `inspect_capture` take a `Channel<ProcessEvent>` and push output events (stdout/stderr chunks, exit) while their promise stays pending. `sql_execute` is the same shape over `Channel<SqlEvent>`: rows arrive as they are read, and the promise resolves after the terminal `finished` event. `terminal_open` is the bidirectional variant: it pushes `TerminalEvent`s over its channel (one merged stream) while keystrokes flow back through `terminal_write`. `start_debug` is the same shape over `Channel<DebugEvent>`: adapter output and the six `DebugState` variants arrive on one channel while the promise stays pending until the session ends. The `api.ts` wrappers hide the channel behind an `onEvent` callback.
 
 Related: [Tauri shell](../architecture/tauri-shell.md) · [adding a command end-to-end](../guides/development.md#adding-a-tauri-command-end-to-end).

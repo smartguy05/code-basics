@@ -2045,6 +2045,11 @@ export interface SqlConnectionView {
   lastUsedMs: number | null;
 }
 
+/** Streamed lifecycle and console events for one attached debug launch. */
+export type DebugEvent =
+  | { type: "state"; state: DebugState }
+  | { type: "output"; stream: "stdout" | "stderr"; text: string };
+
 /** Extensible object-explorer category. Tables are the first supported kind. */
 export type SqlObjectKind = "table";
 

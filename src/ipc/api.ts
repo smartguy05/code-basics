@@ -14,6 +14,7 @@ import type {
   Commit,
   ComparisonMode,
   DefinitionResult,
+  DebugEvent,
   DiagramFile,
   DirEntry,
   ElidedReason,
@@ -277,6 +278,23 @@ export const cancelRun = (configId: string) =>
   invoke<boolean>("cancel_run", { configId });
 
 export const runningIds = () => invoke<string[]>("running_ids");
+
+/** Launch a configuration under its ecosystem's debug adapter. */
+export function startDebug(
+  configId: string,
+  onEvent: (event: DebugEvent) => void,
+  env?: Record<string, string>,
+  buildConfiguration?: string,
+): Promise<void> {
+  const channel = new Channel<DebugEvent>();
+  channel.onmessage = onEvent;
+  return invoke<void>("start_debug", { configId, channel, env, buildConfiguration });
+}
+
+export const stopDebug = (configId: string) =>
+  invoke<boolean>("stop_debug", { configId });
+
+export const debugIds = () => invoke<string[]>("debug_ids");
 
 export function runTests(
   configId: string,

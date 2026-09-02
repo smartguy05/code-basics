@@ -28,6 +28,10 @@ package-lock.json
 /sidecar/**/obj/
 /src-tauri/resources/inspector/
 
+# Debug adapters vendored into the bundle by `pnpm debuggers:fetch`.
+# Pinned, checksummed downloads — never committed.
+/src-tauri/resources/debuggers/
+
 # Claude Code runtime junk under .claude/. The committed hook config
 # (settings.json, hooks/) is tracked; these are per-session artifacts.
 /.claude/scheduled_tasks.lock

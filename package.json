@@ -13,7 +13,8 @@
     "tauri": "tauri",
     "docs:index": "node scripts/generate-index.mjs",
     "docs:check": "node scripts/check-docs.mjs",
-    "sidecar:build": "node scripts/build-sidecar.mjs"
+    "sidecar:build": "node scripts/build-sidecar.mjs",
+    "debuggers:fetch": "node scripts/fetch-debuggers.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",

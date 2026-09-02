@@ -76,6 +76,19 @@ Notes colors belong to individual note records in the versioned global schema,
 not to the Notes window. The titlebar Notes action must restore a mounted,
 minimized panel.
 
+Debug is a separate Run-tab action, and its decisions belong in
+`src/views/debugLogic.ts`, not in `RunView.tsx`. Availability must match what
+`start_debug` accepts and must explain a refusal, including checking every
+member of a compound before the button is offered. Event mapping must keep the
+six debug states distinct: preserve what a missing adapter looked for, preserve
+a failure's detail, emit nothing for `notRunning`, and never report a null exit
+code as a failure — that is what a stop or a replacement launch produces.
+
+Debug adapters ship with the installer, vendored by `pnpm debuggers:fetch` with
+pinned versions and SHA-256 verification. Resolution order is environment pin,
+then bundle, then `PATH`; an absent bundle is an ordinary answer, and a missing
+adapter is always reported rather than degraded into an ordinary run.
+
 The Changes file list carries a multi-selection that is separate from the file
 shown in the diff pane. A right-click inside the selection acts on the whole
 selection; a right-click outside it acts on that single row. A Shift-range

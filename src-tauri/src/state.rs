@@ -128,6 +128,9 @@ pub struct WorkspaceSlot {
     /// collision without namespacing ids, and lets `close` cancel exactly this
     /// workspace's processes.
     pub supervisor: Supervisor,
+    /// Debug adapter processes, keyed exactly like ordinary configuration runs.
+    /// Killing the adapter's process tree also kills the debuggee it launched.
+    pub debug: DebugSessions,
     /// The most recent result per test configuration, so "re-run failed" knows
     /// which tests to name. Keyed by config id, which is unique *within* a
     /// workspace.
@@ -164,6 +167,7 @@ impl WorkspaceSlot {
             // Tracked so this codebase's runs/builds appear in the Running panel
             // and are recoverable as orphans after a crash.
             supervisor: Supervisor::with_store(running),
+            debug: DebugSessions::default(),
             last_test_run: Mutex::new(HashMap::new()),
             last_coverage: Mutex::new(HashMap::new()),
             last_inspect: Mutex::new(None),
@@ -188,6 +192,39 @@ impl WorkspaceSlot {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
+    }
+}
+
+/// The live debug-adapter processes for one workspace.
+#[derive(Clone, Default)]
+pub struct DebugSessions {
+    running: Arc<tokio::sync::Mutex<HashMap<String, u32>>>,
+}
+
+impl DebugSessions {
+    pub async fn register(&self, id: &str, pid: u32) {
+        self.cancel(id).await;
+        self.running.lock().await.insert(id.to_string(), pid);
+    }
+
+    pub async fn finish(&self, id: &str, pid: u32) -> bool {
+        let mut running = self.running.lock().await;
+        if running.get(id) == Some(&pid) {
+            running.remove(id);
+            return true;
+        }
+        false
+    }
+
+    pub async fn cancel(&self, id: &str) -> bool {
+        let Some(pid) = self.running.lock().await.remove(id) else {
+            return false;
+        };
+        cb_core::process::kill_tree_async(pid).await
+    }
+
+    pub async fn ids(&self) -> Vec<String> {
+        self.running.lock().await.keys().cloned().collect()
     }
 }
 

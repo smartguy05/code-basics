@@ -25,6 +25,20 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+use crate::process::Stream;
+
+/// Events streamed to one debug console.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum DebugEvent {
+    State { state: DebugState },
+    Output { stream: Stream, text: String },
+}
+
 /// Where a debug session is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "kind")]

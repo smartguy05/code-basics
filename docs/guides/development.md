@@ -9,8 +9,9 @@
 | `pnpm dev` | Frontend only, in a browser — `invoke` calls fail; layout work only |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm build` | Typecheck + Vite production build into `dist/` |
-| `pnpm tauri build` | Full release build: executable + installers. Does **not** build the sidecar — run `pnpm sidecar:build` first |
+| `pnpm tauri build` | Full release build: executable + installers. Chains `pnpm debuggers:fetch`, but does **not** build the sidecar — run `pnpm sidecar:build` first |
 | `pnpm sidecar:build` | Publish the C# inspector (x64 + x86) into `src-tauri/resources/inspector/`. Skipped silently without the .NET SDK |
+| `pnpm debuggers:fetch` | Vendor the NetCoreDbg and js-debug adapters into `src-tauri/resources/debuggers/`. Pinned versions, SHA-256 verified, idempotent, and chained into `pnpm tauri build`. Skipped with a warning when offline |
 | `pnpm test` | Frontend unit tests (vitest, node environment) |
 | `pnpm coverage` | Frontend tests with coverage; fails under 70% lines on the `*Logic.ts` modules |
 | `cargo test -p cb-core` | All core tests (the entire logic layer) |

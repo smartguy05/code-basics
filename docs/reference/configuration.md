@@ -91,7 +91,7 @@ Named buckets for working-tree files, in the spirit of JetBrains' changelists â€
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "configs": [ /* RunConfig objects */ ],
   "favorites": [ /* config ids, optional */ ],
   "order": [ /* config ids, optional */ ],
@@ -102,7 +102,7 @@ Named buckets for working-tree files, in the spirit of JetBrains' changelists â€
 }
 ```
 
-- `version` exists so a future format change can migrate rather than fail (currently `1`).
+- `version` exists so format changes can migrate rather than fail (currently `2`). Version 1 Rider imports are upgraded on load from their old display-name id to a project-and-configuration id; favourites, ordering, and compound references are rewritten with them.
 - Meant to be **checked in**, sharing run configurations the way Rider's `.run/` directory does.
 - Only user-created and imported configurations are written here. Auto-detected ones are re-derived on every scan, which keeps the file small and lets detection keep working as projects change. On open/rescan, saved configs are merged over detected ones.
 - `favorites` holds starred config ids; they sort before everything else in the UI. `order` is the user's preferred ordering â€” ids listed there sort by position, anything unlisted follows in name order. Both keys are omitted while empty.
@@ -201,7 +201,7 @@ Defined in `crates/core/src/model.rs`, mirrored in `src/ipc/types.ts`. Optional 
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `id` | string | Unique id. Detected configs use stable shapes like `<project>:<eco>:test` |
+| `id` | string | Unique id. Detected configs use stable shapes like `<project>:<eco>:test`; Rider imports include the project and configuration identity, so two projects may both have a `Development` configuration without overwriting each other |
 | `name` | string | Display name |
 | `kind` | `"app"` \| `"test"` | Launch vs. test run |
 | `ecosystem` | string | `"dotnet"`, `"node"`, or a manifest id |

@@ -11,6 +11,7 @@ mod commands {
     pub mod architecture;
     pub mod behavioral;
     pub mod changelists;
+    pub mod debug;
     pub mod enhancements;
     pub mod erosion;
     pub mod features;
@@ -89,6 +90,15 @@ pub fn run() {
         // nothing else would ever kick the build off.
         .setup(|app| {
             use tauri::Manager;
+            // Bundle icons decorate the executable and installer; Windows does
+            // not reliably copy that resource onto a WebView window. Apply the
+            // same icon explicitly so the installed app also owns its taskbar
+            // and title-bar identity.
+            if let (Some(window), Some(icon)) =
+                (app.get_webview_window("main"), app.default_window_icon())
+            {
+                window.set_icon(icon.clone())?;
+            }
             // Detect crash-orphans once, before anything is spawned: reload the
             // previous session's recorded processes, keep the ones still alive
             // whose identity matches, and rewrite the file to the survivors.
@@ -150,6 +160,9 @@ pub fn run() {
             commands::run::build_project,
             commands::run::cancel_run,
             commands::run::running_ids,
+            commands::debug::start_debug,
+            commands::debug::stop_debug,
+            commands::debug::debug_ids,
             commands::run::run_tests,
             commands::run::last_test_run,
             commands::run::coverage_of_change,

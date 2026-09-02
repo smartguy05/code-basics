@@ -51,6 +51,10 @@ pub async fn start_run(
         .find(|c| c.id == config_id)
         .ok_or_else(|| format!("no configuration named {config_id}"))?;
 
+    // One active generation per configuration. A Debug launch owns the same
+    // service/ports as Run, so replacing it is safer than letting both race.
+    slot.debug.cancel(&config_id).await;
+
     if !config.compound.is_empty() {
         return start_compound(&slot, &workspace, config, &env, channel).await;
     }
@@ -113,6 +117,7 @@ async fn start_compound(
 
     let mut handles = Vec::new();
     for (member, invocation) in members {
+        slot.debug.cancel(&member.id).await;
         let _ = channel.send(ProcessEvent::Output {
             stream: cb_core::process::Stream::Stderr,
             text: format!("[code-basics] starting {}\n", member.name),

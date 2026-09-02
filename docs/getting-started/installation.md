@@ -36,6 +36,10 @@ pnpm tauri build
 
 This typechecks and builds the frontend into `dist/`, compiles the Rust workspace in release mode (the workspace profile enables LTO, `opt-level = "s"`, and symbol stripping), and produces the executable plus installers (`bundle.targets` is `"all"`, so MSI and NSIS on Windows). Output lands under `src-tauri/target/release/`.
 
+`beforeBuildCommand` chains **`pnpm debuggers:fetch`**, which vendors the two debug adapters — NetCoreDbg and the standalone js-debug DAP server, both MIT, about 11 MB together — into `src-tauri/resources/debuggers/` so the installer carries them. Versions and SHA-256 hashes are pinned in `scripts/fetch-debuggers.mjs`; a checksum mismatch fails the build deliberately, while an offline machine only warns and produces an app whose Debug button reports no bundled adapter. Re-runs are free: a stamp file skips a download that is already current.
+
+It does **not** chain `pnpm sidecar:build`. Run that first if you want the Objects tab to work in the bundle; see below.
+
 ## Optional features and how each installer asks about them
 
 Two capabilities are optional:

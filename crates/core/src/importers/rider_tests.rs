@@ -436,6 +436,44 @@ fn resolves_a_bare_project_name_to_its_debug_run_configuration() {
 }
 
 #[test]
+fn an_ambiguous_same_named_compound_member_is_dropped_instead_of_guessed() {
+    use crate::model::RunConfig;
+
+    let member = |id: &str, project: &str| {
+        let mut config = RunConfig::new(
+            id,
+            "Development",
+            RunKind::App,
+            "dotnet",
+            ConfigSource::RiderImport,
+        );
+        config.project = Some(project.into());
+        config
+    };
+    let mut compound = RunConfig::new(
+        "rider:all",
+        "All",
+        RunKind::App,
+        "compound",
+        ConfigSource::RiderImport,
+    );
+    compound.compound = vec!["Development".into()];
+    let mut imported = vec![
+        member("rider:api", "Api.csproj"),
+        member("rider:worker", "Worker.csproj"),
+        compound,
+    ];
+
+    resolve_compounds(&mut imported, &[]);
+
+    assert!(imported[2].compound.is_empty());
+    assert!(imported[2]
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("Development")));
+}
+
+#[test]
 fn a_compound_whose_members_all_resolve_nowhere_warns_it_launches_nothing() {
     use crate::model::RunConfig;
 
@@ -621,5 +659,21 @@ fn imported_ids_are_distinct_per_configuration_name() {
     ]);
     let result = import(dir.path());
 
+    assert_ne!(result.configs[0].id, result.configs[1].id);
+}
+
+#[test]
+fn same_named_configurations_are_distinct_per_project() {
+    let api = DOTNET_PROJECT.replace(
+        "$PROJECT_DIR$/src/Api/Api.csproj",
+        "$PROJECT_DIR$/src/Worker/Worker.csproj",
+    );
+    let dir = workspace_with(&[
+        (".run/api.run.xml", DOTNET_PROJECT),
+        (".run/worker.run.xml", &api),
+    ]);
+
+    let result = import(dir.path());
+    assert_eq!(result.configs.len(), 2);
     assert_ne!(result.configs[0].id, result.configs[1].id);
 }

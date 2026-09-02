@@ -47,10 +47,13 @@ import {
 } from "./editorNavLogic";
 import { preferApplicationProcess } from "./inspectLogic";
 import { runningConfigIdsOfKind } from "./runControlLogic";
+import { debugAvailability, debugEffects } from "./debugLogic";
+import type { SessionStatus } from "./debugLogic";
 import type { InspectRequest, OpenFileRequest, SelectConfigRequest } from "../App";
 import type {
   AttachableProcess,
   BuildAction,
+  DebugEvent,
   InspectStatus,
   ProcessEvent,
   RunConfig,
@@ -65,8 +68,11 @@ interface ConsoleSession {
   label: string;
 }
 
-/** What a tab's status icon shows. */
-type SessionStatus = "running" | "ok" | "fail" | "stopped";
+/**
+ * What a tab's status icon shows. Declared in `./debugLogic` so that pure
+ * module can name it without importing this `.tsx` one.
+ */
+export type { SessionStatus };
 
 /**
  * What a session knows that the Inspect affordances need.
@@ -267,6 +273,7 @@ export function RunView({
     appConfigs[0]?.id ?? null,
   );
   const [running, setRunning] = useState<Set<string>>(new Set());
+  const [debugging, setDebugging] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<RunConfig | null>(null);
   const [importing, setImporting] = useState(false);
@@ -855,6 +862,9 @@ export function RunView({
    * would produce that failure are disabled instead.
    */
   const selectedUnreadable = unreadableTarget(selected);
+  // Disabled where `start_debug` would refuse, so a click cannot build a
+  // compound and only then discover a member with no adapter.
+  const debuggable = debugAvailability(selected, workspace.configs);
 
   // Every .NET project in the workspace can have user secrets, not just the one
   // behind the selected run config — a folder with several projects must be able
@@ -870,6 +880,15 @@ export function RunView({
       .then((ids) => setRunning(new Set(ids)))
       .catch(() => {
         /* nothing running */
+      });
+    api
+      .debugIds()
+      .then((ids) => {
+        setDebugging(new Set(ids));
+        setRunning((previous) => new Set([...previous, ...ids]));
+      })
+      .catch(() => {
+        /* nothing being debugged */
       });
 
     // Whether an Inspect affordance can be honoured at all: no sidecar means
@@ -967,6 +986,55 @@ export function RunView({
     }
   }
 
+  function handleDebugEvent(id: string, event: DebugEvent) {
+    for (const effect of debugEffects(event, workspace.root)) {
+      if (effect.kind === "process") handleEvent(id, effect.event);
+      else setStatus(id, effect.status);
+    }
+  }
+
+  async function debug(config: RunConfig) {
+    setError(null);
+    setSelectedId(config.id);
+    openSession(config.id, `${config.name} · debug`);
+    const gen = (runGenRef.current.get(config.id) ?? 0) + 1;
+    runGenRef.current.set(config.id, gen);
+    const current = () => runGenRef.current.get(config.id) === gen;
+    setRunning((previous) => new Set(previous).add(config.id));
+    setDebugging((previous) => new Set(previous).add(config.id));
+    const env =
+      config.ecosystem === "dotnet" && environments.selected
+        ? { ASPNETCORE_ENVIRONMENT: environments.selected }
+        : undefined;
+    try {
+      await api.startDebug(
+        config.id,
+        (event) => handleDebugEvent(config.id, event),
+        env,
+        buildConfigurationOf(config) ?? undefined,
+      );
+    } catch (e) {
+      if (current()) {
+        const message = api.errorMessage(e);
+        setError(message);
+        handleEvent(config.id, { type: "failed", message });
+      }
+    } finally {
+      if (current()) {
+        setRunning((previous) => {
+          const next = new Set(previous);
+          next.delete(config.id);
+          return next;
+        });
+        setDebugging((previous) => {
+          const next = new Set(previous);
+          next.delete(config.id);
+          return next;
+        });
+      }
+    }
+  }
+
   /** What the picker offers for a configuration; empty when it has no such concept. */
   function buildConfigurationOptions(config: RunConfig | null): string[] {
     return buildConfigurationsFor(config, workspace.projects, workspace.root);
@@ -995,15 +1063,20 @@ export function RunView({
   }
 
   async function stop(config: RunConfig) {
-    await api.cancelRun(config.id);
+    if (debugging.has(config.id)) await api.stopDebug(config.id);
+    else await api.cancelRun(config.id);
   }
 
   // Stop every running application (RunKind "app"), leaving tests and builds
   // alone. Reads the live ids from the supervisor so it is authoritative rather
   // than trusting this view's own bookkeeping.
   async function stopAllRuns() {
-    const ids = runningConfigIdsOfKind(workspace.configs, await api.runningIds(), "app");
-    await Promise.all(ids.map((id) => api.cancelRun(id)));
+    const [runIds, debugIds] = await Promise.all([api.runningIds(), api.debugIds()]);
+    const ids = runningConfigIdsOfKind(workspace.configs, runIds, "app");
+    await Promise.all([
+      ...ids.map((id) => api.cancelRun(id)),
+      ...debugIds.map((id) => api.stopDebug(id)),
+    ]);
   }
 
   /** Open the Stop menu under the button, with a freshly read process list. */
@@ -1330,6 +1403,25 @@ export function RunView({
             title={selectedUnreadable ?? undefined}
           >
             Run
+          </button>
+          <button
+            data-command="run.debug"
+            className="primary"
+            onClick={() => selected && void debug(selected)}
+            disabled={
+              !selected ||
+              running.has(selected.id) ||
+              selectedUnreadable !== null ||
+              !debuggable.available
+            }
+            title={
+              selectedUnreadable ??
+              (debuggable.available
+                ? "Launch with the debugger attached"
+                : debuggable.reason)
+            }
+          >
+            Debug
           </button>
           <span className="split-button">
             <button
