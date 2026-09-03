@@ -21,14 +21,14 @@ The second rule that governs the whole feature: **a wrong value is much worse th
 |---|---|---|
 | **Unhandled crash** in your app | The .NET runtime writes a heap dump on its way down | Enable capture for the workspace. Nothing else |
 | **Test host crashes** | VSTest's `--blame-crash-collect-always`, passed automatically while capture is on | Free on VSTest. On Microsoft.Testing.Platform, add the `Microsoft.Testing.Extensions.CrashDump` package and pass `--crashdump` — MTP ignores every `--blame-*` option silently |
-| **Wrong value, no exception** | Attaching to the process while it runs | Pick **Running process** in the Objects tab, or use the Inspect buttons on a running configuration in the Run tab. Every attachable .NET process on the machine is offered, each labelled with how it relates to your configurations — see *the pid is not always your application* below |
+| **Wrong value, no exception** | Attaching to the process while it runs | Pick **Running process** in the Objects tab, or use the Inspect buttons on a running configuration in the Project tab. Every attachable .NET process on the machine is offered, each labelled with how it relates to your configurations — see *the pid is not always your application* below |
 | **Caught exception** | Nothing writes a dump for one. Best-effort: exception objects usually stay resident until the next collection, so a dump taken later often still contains them | Guaranteed capture needs one line in your own code at the catch site |
 
 The **Exceptions on the heap** root exists for that last row: it scans the heap for anything deriving from `Exception` and shows what it finds. It is honest about being a scan — if nothing is there, it says nothing was found rather than implying the exception never happened.
 
 ## Inspecting a running process
 
-Pick **Running process** in the Objects tab, or press one of the Inspect buttons the Run tab shows beside a configuration that is up. The list holds **every .NET process on this machine that can be attached to**, not only the ones code-basics started, and each entry says how it was linked to your work:
+Pick **Running process** in the Objects tab, or press one of the Inspect buttons the Project tab shows beside a configuration that is up. The list holds **every .NET process on this machine that can be attached to**, not only the ones code-basics started, and each entry says how it was linked to your work:
 
 | Label | What it means |
 |---|---|
@@ -105,8 +105,8 @@ The Objects tab can always be driven by hand, but the useful entry points are co
 
 | Where | Appears when | Opens |
 |---|---|---|
-| **Run tab, after an exit** | The run failed *and* a dump was found | The crash exception. Labelled **Inspect crash** when the dump carries the pid the run reported, and **Inspect this dump** — with the executable and pid — when it does not |
-| **Run tab, while running** | The configuration's process is attachable | **Inspect exceptions** attaches and reads every exception on the heap; **Inspect instances** reads a type you name |
+| **Project tab, after an exit** | The run failed *and* a dump was found | The crash exception. Labelled **Inspect crash** when the dump carries the pid the run reported, and **Inspect this dump** — with the executable and pid — when it does not |
+| **Project tab, while running** | The configuration's process is attachable | **Inspect exceptions** attaches and reads every exception on the heap; **Inspect instances** reads a type you name |
 | **Tests tab** | A failed test is selected and the run left a dump | That dump, at the crash exception, described as written *while* the run was going rather than as this test's |
 
 They deliberately do **not** appear when:
@@ -132,7 +132,7 @@ They remain readable on your machine until they are pruned. Deleting the directo
 
 ## Turning capture on
 
-`.code-basics/config.json`, which is **checked in** — so enabling it here enables it for everyone who works in the repository. Every armed run carries a warning in the Run tab saying exactly that.
+`.code-basics/config.json`, which is **checked in** — so enabling it here enables it for everyone who works in the repository. Every armed run carries a warning in the Project tab saying exactly that.
 
 ```json
 "inspector": {

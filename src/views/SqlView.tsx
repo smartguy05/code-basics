@@ -10,6 +10,8 @@ import {
   type ManualConnectionDraft,
 } from "../components/sqlPickerLogic";
 import { SqlResultGrid } from "../components/SqlResultGrid";
+import { registerCommand, useShortcutHint } from "../shortcuts";
+import { withShortcut } from "../shortcutLogic";
 import * as api from "../ipc/api";
 import type {
   SqlCandidate,
@@ -44,6 +46,9 @@ import {
   type SqlPhaseLine,
   type StoppedNote,
   type WritesConfirm,
+  clampSqlEditorHeight,
+  SQL_EDITOR_DEFAULT_HEIGHT,
+  SQL_EDITOR_MIN_HEIGHT,
 } from "./sqlViewLogic";
 
 /**
@@ -96,6 +101,13 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
   const [objectsError, setObjectsError] = useState<string | null>(null);
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [explorerWidth, setExplorerWidth] = useState(250);
+  /** The query editor's height; the divider below it sets this. */
+  const [editorHeight, setEditorHeight] = useState(SQL_EDITOR_DEFAULT_HEIGHT);
+  const splitDragRef = useRef<{ startY: number; startHeight: number; container: number } | null>(null);
+  const consoleMainRef = useRef<HTMLDivElement>(null);
+  const viewRootRef = useRef<HTMLDivElement>(null);
+  /** Whatever Run is bound to now, so the tooltips cannot advertise a stale key. */
+  const runKey = useShortcutHint("run.run");
   const explorerDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [tableColumns, setTableColumns] = useState<
     Record<string, { expanded: boolean; loading: boolean; error: string | null; columns: SqlColumnView[]; openColumns: string[] }>
@@ -414,6 +426,37 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
+  /**
+   * F5 runs the query — but only while the user is actually in this console.
+   *
+   * F5 is bound to `run.run`, the Run toolbar's command, and that is the
+   * right owner: there is one Run key and it should do whatever Run means
+   * where you are standing. `executeCommand` walks registered handlers
+   * newest-first and treats `false` as *not handled*, so returning `false`
+   * when focus is elsewhere hands the key straight back to the Run toolbar.
+   * That is the same fall-through `FileTree` uses for `tree.reveal`.
+   *
+   * Binding F5 to `sql.run` instead would not work: `dispatchShortcut` finds
+   * the *first* command whose chord matches, so two commands sharing a key
+   * means one of them never fires.
+   */
+  useEffect(() => {
+    return registerCommand("run.run", () => {
+      const root = viewRootRef.current;
+      const active = document.activeElement;
+      if (root === null || !(active instanceof Node) || !root.contains(active)) return false;
+      // Refuse the same way the button does rather than running anyway: a
+      // second run while one is in flight, or with no connection, is exactly
+      // what `runDisabledReason` exists to stop.
+      if (disabledRef.current !== null) return true;
+      runRef.current("all");
+      return true;
+    });
+  }, []);
+
+  // `runRef` is declared with the editor's extensions above and is already
+  // kept current; only the refusal reason needs its own ref here.
+  const disabledRef = useRef<string | null>(null);
   const run = (mode: "all" | "selection") => {
     const view = viewRef.current;
     const full = view === null ? sql : view.state.doc.toString();
@@ -484,6 +527,8 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
 
   const running = state.phase.kind === "running";
   const disabled = runDisabledReason({ connection, sql, phase: state.phase });
+  // Kept current every render so the F5 registration can stay mounted once.
+  disabledRef.current = disabled;
   const phase = phaseLine(state.phase);
   const tested =
     testOutcome !== null && connection !== null && testOutcome.id === connection.id
@@ -491,7 +536,7 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
       : null;
 
   return (
-    <div className="sql-view">
+    <div className="sql-view" ref={viewRootRef}>
       <div className="sql-bar">
         <button data-command="sql.connections" className="sql-conn-button" onClick={() => setPickerOpen(true)}>
           {connection === null ? "Choose a connection…" : savedConnectionLabel(connection)}
@@ -547,14 +592,14 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
           className="primary"
           onClick={() => run("all")}
           disabled={disabled !== null}
-          title={disabled ?? "Run everything in the editor (Ctrl+Enter)"}
+          title={disabled ?? withShortcut("Run everything in the editor", runKey, "Ctrl+Enter")}
         >
           Run
         </button>
         <button
           onClick={() => run("selection")}
           disabled={running || connection === null}
-          title="Run only the selected text (Ctrl+Shift+Enter)"
+          title={withShortcut("Run only the selected text", "Ctrl+Shift+Enter")}
         >
           Run selection
         </button>
@@ -697,8 +742,58 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
           </aside>
         )}
 
-        <div className="sql-console-main">
-          <div className="sql-editor" ref={hostRef} />
+        <div className="sql-console-main" ref={consoleMainRef}>
+          <div className="sql-editor" ref={hostRef} style={{ height: editorHeight }} />
+
+          {/* The divider between the query and its results. Mirrors the object
+              explorer's resizer above — pointer capture so a fast drag cannot
+              outrun the handle, and arrow keys so it is reachable without a
+              mouse. The clamp is `sqlViewLogic.clampSqlEditorHeight`, which is
+              what stops either pane being dragged out of existence. */}
+          <div
+            className="sql-split-resizer"
+            role="separator"
+            aria-label="Resize the query editor"
+            aria-orientation="horizontal"
+            aria-valuemin={SQL_EDITOR_MIN_HEIGHT}
+            aria-valuenow={editorHeight}
+            tabIndex={0}
+            onPointerDown={(event) => {
+              splitDragRef.current = {
+                startY: event.clientY,
+                startHeight: editorHeight,
+                // Measured once, at the start: reading it on every move would
+                // re-measure a box this drag is itself resizing.
+                container: consoleMainRef.current?.clientHeight ?? 0,
+              };
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              const drag = splitDragRef.current;
+              if (drag === null) return;
+              setEditorHeight(
+                clampSqlEditorHeight(
+                  drag.startHeight + event.clientY - drag.startY,
+                  drag.container,
+                ),
+              );
+            }}
+            onPointerUp={(event) => {
+              splitDragRef.current = null;
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }}
+            onPointerCancel={() => {
+              splitDragRef.current = null;
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+              event.preventDefault();
+              const container = consoleMainRef.current?.clientHeight ?? 0;
+              setEditorHeight((height) =>
+                clampSqlEditorHeight(height + (event.key === "ArrowUp" ? -16 : 16), container),
+              );
+            }}
+          />
 
           <div className="sql-results">
         <div className="sql-results-bar">
@@ -716,7 +811,8 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
 
         {state.statements.length === 0 && state.connectionError === null && (
           <div className="sql-results-empty">
-            Nothing to show yet. Ctrl+Enter runs the editor; Ctrl+Shift+Enter runs the selection.
+            Nothing to show yet. {withShortcut("Run the editor", runKey, "Ctrl+Enter")};{" "}
+            {withShortcut("run the selection", "Ctrl+Shift+Enter")}.
           </div>
         )}
 

@@ -14,6 +14,9 @@ fn one(command: &str) -> Launchable {
         label: None,
         shell: false,
         pinned: false,
+        shortcut: false,
+        persistent: false,
+        headless: false,
         last_run_ms: 1,
         run_count: 1,
     }

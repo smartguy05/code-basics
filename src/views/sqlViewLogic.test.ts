@@ -14,6 +14,9 @@ import {
   stopLine,
   stoppedNote,
   writesConfirm,
+  clampSqlEditorHeight,
+  SQL_EDITOR_MIN_HEIGHT,
+  SQL_RESULTS_MIN_HEIGHT,
 } from "./sqlViewLogic";
 
 function connection(overrides: Partial<SqlConnectionView> = {}): SqlConnectionView {
@@ -382,5 +385,37 @@ describe("stoppedNote", () => {
     expect(stoppedNote(stopped, 0, 2)).toBeNull();
     expect(stoppedNote(stopped, 1, 2)).toBeNull();
     expect(stoppedNote(stopped, 2, 2)).not.toBeNull();
+  });
+});
+
+describe("clampSqlEditorHeight", () => {
+  const TALL = 800;
+
+  it("leaves a comfortable height alone", () => {
+    expect(clampSqlEditorHeight(300, TALL)).toBe(300);
+  });
+
+  it("keeps the editor tall enough to type in", () => {
+    expect(clampSqlEditorHeight(10, TALL)).toBe(SQL_EDITOR_MIN_HEIGHT);
+  });
+
+  it("never lets the results be dragged away entirely", () => {
+    // A pane that can vanish leaves no handle to bring it back, and the
+    // console would look like it had stopped returning rows.
+    expect(clampSqlEditorHeight(TALL, TALL)).toBe(TALL - SQL_RESULTS_MIN_HEIGHT);
+  });
+
+  it("gives the editor its floor when the window cannot honour both", () => {
+    // The caret has to stay visible or the console cannot be typed into;
+    // the results merely scroll, so they are the pane that gives way.
+    const tiny = SQL_EDITOR_MIN_HEIGHT + SQL_RESULTS_MIN_HEIGHT - 40;
+    expect(clampSqlEditorHeight(500, tiny)).toBe(SQL_EDITOR_MIN_HEIGHT);
+    expect(clampSqlEditorHeight(10, tiny)).toBe(SQL_EDITOR_MIN_HEIGHT);
+  });
+
+  it("is stable when re-applied to its own answer", () => {
+    // The drag handler feeds this its previous result on every pointer move.
+    const once = clampSqlEditorHeight(5000, TALL);
+    expect(clampSqlEditorHeight(once, TALL)).toBe(once);
   });
 });

@@ -35,5 +35,7 @@ pub mod store;
 
 pub use model::{Launchable, LauncherFile, LauncherGroups};
 pub use parse::{program_and_args, shell_args, shell_flag, split_command};
-pub use recents::{group, record_run, remove, rename, set_pinned, within_root, MAX_UNPINNED};
+pub use recents::{
+    group, record_run, remove, rename, set_flags, set_pinned, within_root, MAX_UNPINNED,
+};
 pub use store::{launchers_path, load, save, LAUNCHERS_FILE};

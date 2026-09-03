@@ -6,10 +6,20 @@ use std::path::Path;
 
 use super::model::{Launchable, LauncherFile, LauncherGroups};
 
-/// How many unpinned recents are kept. Pinned entries are exempt — a pin is the
-/// user saying "keep this", and a cap that could drop one would make pinning a
-/// suggestion rather than a promise.
+/// How many ordinary recents are kept. Pinned entries and saved shortcuts are
+/// both exempt — each is the user saying "keep this", and a cap that could drop
+/// one would make pinning, or saving a shortcut, a suggestion rather than a
+/// promise.
 pub const MAX_UNPINNED: usize = 30;
+
+/// Whether an entry is exempt from the recents cap.
+///
+/// One predicate rather than a condition repeated at each of the three sites
+/// that evict, because the two flags are exempt for the same reason and a site
+/// that forgot one would drop a command the user asked to keep.
+fn is_kept(entry: &Launchable) -> bool {
+    entry.pinned || entry.shortcut
+}
 
 /// Record that `command` ran in `cwd`, returning the entry's id.
 ///
@@ -17,7 +27,8 @@ pub const MAX_UNPINNED: usize = 30;
 /// entries, which is what makes the "this codebase" grouping possible without a
 /// second per-repository store. A re-run **updates** its entry — bumping the
 /// clock and the count, and adopting the `shell` flag that actually ran — while
-/// preserving the two things only the user sets: the pin and the rename.
+/// preserving everything only the user sets: the pin, the rename, and the
+/// shortcut/persistent/headless flags.
 pub fn record_run(
     file: &mut LauncherFile,
     command: &str,
@@ -46,6 +57,9 @@ pub fn record_run(
         label: None,
         shell,
         pinned: false,
+        shortcut: false,
+        persistent: false,
+        headless: false,
         last_run_ms: now_ms,
         run_count: 1,
     });
@@ -53,25 +67,25 @@ pub fn record_run(
     id
 }
 
-/// Drop the least recently run unpinned entries until the cap is met.
+/// Drop the least recently run non-exempt entries until the cap is met.
 fn evict_oldest_unpinned(file: &mut LauncherFile) {
     loop {
-        let unpinned = file.entries.iter().filter(|e| !e.pinned).count();
-        if unpinned <= MAX_UNPINNED {
+        let evictable = file.entries.iter().filter(|e| !is_kept(e)).count();
+        if evictable <= MAX_UNPINNED {
             return;
         }
         let oldest = file
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| !e.pinned)
+            .filter(|(_, e)| !is_kept(e))
             .min_by_key(|(_, e)| e.last_run_ms)
             .map(|(index, _)| index);
         match oldest {
             Some(index) => {
                 file.entries.remove(index);
             }
-            // Unreachable while `unpinned > MAX_UNPINNED`, but a `return` here
+            // Unreachable while `evictable > MAX_UNPINNED`, but a `return` here
             // rather than an `unwrap` keeps a future refactor from looping.
             None => return,
         }
@@ -170,6 +184,39 @@ pub fn set_pinned(file: &mut LauncherFile, id: &str, pinned: bool) -> bool {
     entry.pinned = pinned;
     if !pinned {
         // Unpinning re-exposes the entry to the cap it was exempt from.
+        evict_oldest_unpinned(file);
+    }
+    true
+}
+
+/// Apply a partial update to an entry's shortcut/persistent/headless flags.
+/// Returns whether the id was found.
+///
+/// Each flag is an `Option` because this is a **partial** update: `None` means
+/// "leave it alone", never "false". Reading an absent field as `false` is how a
+/// save from one surface silently clears a flag another surface set.
+pub fn set_flags(
+    file: &mut LauncherFile,
+    id: &str,
+    shortcut: Option<bool>,
+    persistent: Option<bool>,
+    headless: Option<bool>,
+) -> bool {
+    let Some(entry) = file.entries.iter_mut().find(|e| e.id == id) else {
+        return false;
+    };
+    if let Some(shortcut) = shortcut {
+        entry.shortcut = shortcut;
+    }
+    if let Some(persistent) = persistent {
+        entry.persistent = persistent;
+    }
+    if let Some(headless) = headless {
+        entry.headless = headless;
+    }
+    if shortcut == Some(false) {
+        // Mirrors unpinning: clearing the thing that made an entry exempt
+        // re-exposes it to the cap it was exempt from.
         evict_oldest_unpinned(file);
     }
     true

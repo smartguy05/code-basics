@@ -139,3 +139,25 @@ export function pickerKeyAction(key: string): PickerAction | null {
       return null;
   }
 }
+
+/**
+ * Whether `path` is `root` or sits under it.
+ *
+ * Mirrors `cb_core::launcher::recents::within_root`, which is what decides the
+ * picker's *this codebase* / *global* split — so a launch attributed with this
+ * and a row grouped with that cannot disagree about which codebase a command
+ * belongs to. Same normalisation: separators unified, a trailing slash
+ * ignored, and compared case-insensitively because this app is Windows-first
+ * and `C:/Repo` and `c:/repo` are one directory.
+ *
+ * The trailing-separator test is the part worth keeping: without it
+ * `/work/api-v2` reads as inside `/work/api`.
+ */
+export function isInside(root: string, path: string): boolean {
+  const tidy = (value: string) =>
+    value.split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+  const base = tidy(root);
+  if (base === "") return false;
+  const target = tidy(path);
+  return target === base || target.startsWith(`${base}/`);
+}

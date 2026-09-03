@@ -5,7 +5,7 @@ import {
   type AppearanceSettings, type ThemeDefinition,
 } from "../appearanceLogic";
 import {
-  COMMANDS, chordFromEvent, conflictingCommand, effectiveBinding, formatChord,
+  COMMANDS, chordFromEvent, commandSections, conflictingCommand, effectiveBinding, formatChord,
   type CommandDefinition, type ShortcutOverrides,
 } from "../shortcutLogic";
 import { loadShortcutOverrides, saveShortcutOverrides } from "../shortcuts";
@@ -36,6 +36,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const selected = activeTheme(appearance);
   const selectedBuiltin = BUILTIN_THEMES.some((theme) => theme.id === selected.id);
   const commands = useMemo(() => COMMANDS.filter((command) => `${command.category} ${command.label}`.toLowerCase().includes(query.toLowerCase())), [query]);
+  // Split after filtering, so searching narrows the blocks rather than
+  // rearranging them, and a block with no match disappears entirely.
+  const sections = useMemo(() => commandSections(commands), [commands]);
 
   function preview(next: AppearanceSettings) {
     setAppearance(next);
@@ -113,10 +116,16 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </>}
           {page === "keyboard" && <>
             <input className="settings-search" placeholder="Search commands" value={query} onChange={(event) => setQuery(event.target.value)} />
-            <div className="shortcut-list">{commands.map((command) => {
+            <div className="shortcut-list">{sections.map((section) => <div key={section.title}>
+              {/* Plugin keys are remappable like any other; they are listed apart
+                  because a command whose feature is switched off is a different
+                  thing from one that is merely unbound. */}
+              <h3 className="shortcut-section">{section.title}</h3>
+              {section.commands.map((command) => {
               const binding = effectiveBinding(command, shortcuts);
               return <div className="shortcut-row" key={command.id}><span><strong>{command.label}</strong><small>{command.category} · {command.context}</small></span><button className={recording === command.id ? "recording" : ""} onClick={() => setRecording(command.id)} onKeyDown={(event) => recording === command.id && record(command, event)}>{recording === command.id ? "Press keys…" : formatChord(binding)}</button><button title="Clear" onClick={() => setShortcuts({ ...shortcuts, [command.id]: null })}>×</button><button title="Reset default" onClick={() => { const next = { ...shortcuts }; delete next[command.id]; setShortcuts(next); }}>↺</button></div>;
-            })}</div>
+            })}
+            </div>)}</div>
           </>}
           {page === "reference" && <div className="native-reference"><h3>Editor</h3><p>Ctrl/Cmd+/ toggle comment · Ctrl+G go to line · Ctrl/Cmd+F find · Ctrl/Cmd+S save where supported.</p><h3>Terminal</h3><p>Ctrl+Shift+C copy · Ctrl+V or Ctrl+Shift+V paste · Ctrl+Insert copy selection · Shift+Insert paste.</p><p>Native editor and terminal bindings are shown for reference and are not remapped by app shortcuts.</p></div>}
           {message && <div className="settings-message">{message}</div>}

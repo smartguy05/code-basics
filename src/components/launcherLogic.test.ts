@@ -9,6 +9,7 @@ import {
   pickerKeyAction,
   pickerRows,
   shortCwd,
+  isInside,
 } from "./launcherLogic";
 
 function entry(over: Partial<Launchable> = {}): Launchable {
@@ -20,6 +21,9 @@ function entry(over: Partial<Launchable> = {}): Launchable {
     label: null,
     shell: false,
     pinned: false,
+    shortcut: false,
+    persistent: false,
+    headless: false,
     lastRunMs: 1000,
     runCount: 1,
     ...over,
@@ -167,5 +171,29 @@ describe("pickerKeyAction", () => {
     expect(pickerKeyAction("ArrowUp")).toBe("prev");
     expect(pickerKeyAction("a")).toBe(null);
     expect(pickerKeyAction("Tab")).toBe(null);
+  });
+});
+
+describe("isInside", () => {
+  it("matches the root itself and anything under it", () => {
+    expect(isInside("C:/repo", "C:/repo")).toBe(true);
+    expect(isInside("C:/repo", "C:/repo/src")).toBe(true);
+  });
+
+  it("does not let a sibling with a shared prefix count as inside", () => {
+    // The reason the trailing separator is tested rather than a bare
+    // startsWith: this is what decides which codebase a launch is blamed on.
+    expect(isInside("C:/work/api", "C:/work/api-v2")).toBe(false);
+  });
+
+  it("ignores separator style and case, like the Rust rule it mirrors", () => {
+    // `recents::within_root` lowercases on Windows and unifies separators;
+    // a launch attributed here and a row grouped there must not disagree.
+    expect(isInside("C:\\Repo", "c:/repo/src")).toBe(true);
+    expect(isInside("C:/repo/", "C:/repo/src")).toBe(true);
+  });
+
+  it("refuses an empty root rather than matching everything", () => {
+    expect(isInside("", "C:/anywhere")).toBe(false);
   });
 });

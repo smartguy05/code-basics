@@ -31,8 +31,19 @@ export function LauncherPicker({
 }: {
   /** The active codebase root, for the cwd default and the "this codebase" hint. */
   root: string | null;
-  /** Run a command; the app owns the process and its output tab. */
-  onLaunch: (spec: { command: string; cwd: string; shell: boolean; label?: string }) => void;
+  /**
+   * Run a command; the app owns the process and its output tab. `headless` is
+   * carried through from the entry rather than decided here — the picker knows
+   * what the user saved, and `appOutputLogic.shouldOpenTab` knows what that
+   * means for the panel.
+   */
+  onLaunch: (spec: {
+    command: string;
+    cwd: string;
+    shell: boolean;
+    label?: string;
+    headless?: boolean;
+  }) => void;
   onClose: () => void;
 }) {
   const [groups, setGroups] = useState<LauncherGroups>({ thisCodebase: [], global: [] });
@@ -84,6 +95,7 @@ export function LauncherPicker({
       cwd: entry.cwd,
       shell: entry.shell,
       label: entry.label ?? undefined,
+      headless: entry.headless,
     });
     onClose();
   };
@@ -123,6 +135,21 @@ export function LauncherPicker({
     if (next === null) return;
     api
       .saveLaunchable(entry.id, { label: next })
+      .then(refresh)
+      .catch((e) => setError(String(e)));
+  };
+
+  /**
+   * Flip one of the three saved flags.
+   *
+   * `shortcut` publishes the entry in the terminal menu, `persistent` says it is
+   * a service (so the menu offers Stop while it is up), and `headless` says not
+   * to mint an output tab for it. All three are independent of `pinned`, which
+   * only orders this list — saving a shortcut must not reorder anything.
+   */
+  const toggle = (entry: Launchable, field: "shortcut" | "persistent" | "headless") => {
+    api
+      .saveLaunchable(entry.id, { [field]: !entry[field] })
       .then(refresh)
       .catch((e) => setError(String(e)));
   };
@@ -171,6 +198,39 @@ export function LauncherPicker({
                 onClick={() => pin(entry)}
               >
                 ★
+              </button>
+              <button
+                className={`launcher-icon${entry.shortcut ? " on" : ""}`}
+                title={
+                  entry.shortcut
+                    ? "Remove from the terminal menu"
+                    : "Save as a shortcut in the terminal menu"
+                }
+                onClick={() => toggle(entry, "shortcut")}
+              >
+                ⚡
+              </button>
+              <button
+                className={`launcher-icon${entry.persistent ? " on" : ""}`}
+                title={
+                  entry.persistent
+                    ? "No longer a service: the menu offers Run again"
+                    : "A long-running service — the menu offers Stop while it is up. Never restarted for you."
+                }
+                onClick={() => toggle(entry, "persistent")}
+              >
+                ∞
+              </button>
+              <button
+                className={`launcher-icon${entry.headless ? " on" : ""}`}
+                title={
+                  entry.headless
+                    ? "Show an output tab when this runs"
+                    : "Run with no output tab. Still listed in Running, and a failure still opens its output."
+                }
+                onClick={() => toggle(entry, "headless")}
+              >
+                ◌
               </button>
               <button className="launcher-icon" title="Rename" onClick={() => rename(entry)}>
                 ✎

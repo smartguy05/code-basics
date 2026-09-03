@@ -248,3 +248,63 @@ fn preserves_unrelated_settings() {
     );
     assert!(value["hooks"]["Stop"].is_array(), "gate added");
 }
+
+// ---------------------------------------------------------------------------
+// What the install preview promises
+// ---------------------------------------------------------------------------
+
+/// Every scope must state the gate's abstain, because that is the promise that
+/// makes installing it safe: a check it cannot run reports itself rather than
+/// wedging a turn no edit could unblock.
+#[test]
+fn every_scope_states_that_an_unrunnable_check_does_not_fail_the_turn() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let home = root.join("home");
+
+    for provider in [ProviderId::ClaudeCode, ProviderId::Codex] {
+        for scope in [InstallScope::Project, InstallScope::User] {
+            let plan = install_plan_for(provider, root, scope, Some(&home)).expect("plan");
+            let joined = plan.caveats.join(" ");
+            assert!(
+                joined.contains("cannot reach its own dependencies"),
+                "{provider:?}/{scope:?} must state the unreachable-tooling abstain: {joined}"
+            );
+            assert!(
+                joined.contains("typecheck"),
+                "{provider:?}/{scope:?} must state the absent-tooling abstain: {joined}"
+            );
+        }
+    }
+}
+
+/// A project-scope install commits an absolute path to *this* machine's
+/// executable. That is a silent no-op for anyone else, so it must be said out
+/// loud — the same reasoning as the Codex trust caveat.
+#[test]
+fn a_shared_install_warns_that_the_command_is_this_machines_executable() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let home = root.join("home");
+
+    for provider in [ProviderId::ClaudeCode, ProviderId::Codex] {
+        let project = install_plan_for(provider, root, InstallScope::Project, Some(&home))
+            .expect("plan")
+            .caveats
+            .join(" ");
+        assert!(
+            project.contains("same path"),
+            "{provider:?} project scope must warn about the baked-in path: {project}"
+        );
+
+        // A user-scope install is not shared, so the warning would be noise.
+        let user = install_plan_for(provider, root, InstallScope::User, Some(&home))
+            .expect("plan")
+            .caveats
+            .join(" ");
+        assert!(
+            !user.contains("same path"),
+            "{provider:?} user scope must not carry the sharing warning: {user}"
+        );
+    }
+}

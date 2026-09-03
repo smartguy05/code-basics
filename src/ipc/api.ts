@@ -501,10 +501,20 @@ export function launchCommand(
 export const stopCommand = (key: string) =>
   invoke<boolean>("stop_command", { key });
 
-/** Pin/unpin or rename a remembered command; resolves to the updated file. */
+/**
+ * Apply a partial update to a remembered command; resolves to the updated file.
+ * Every field is optional and an omitted one is left alone, so a caller sends
+ * only what the user changed.
+ */
 export const saveLaunchable = (
   id: string,
-  changes: { label?: string; pinned?: boolean },
+  changes: {
+    label?: string;
+    pinned?: boolean;
+    shortcut?: boolean;
+    persistent?: boolean;
+    headless?: boolean;
+  },
 ) => invoke<LauncherFile>("save_launchable", { id, ...changes });
 
 /** Forget a remembered command; resolves to the updated file. */

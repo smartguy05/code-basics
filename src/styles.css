@@ -146,8 +146,14 @@ textarea:focus {
   height: 100%;
 }
 
+/* Three columns rather than a flex row: the branch widget sits in the window's
+   centre, and only equal-weight outer columns can put it there. A flex spacer
+   centres against whichever side is narrower, which drifts as the right-hand
+   chrome grows a badge. `minmax(0, 1fr)` (not `1fr`) so a long menu or a wide
+   run of buttons shrinks its own column instead of pushing the centre off. */
 .titlebar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   padding: 6px 12px;
@@ -156,8 +162,21 @@ textarea:focus {
   flex: 0 0 auto;
 }
 
-.titlebar .spacer {
-  flex: 1;
+.titlebar-left,
+.titlebar-center,
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.titlebar-center {
+  justify-content: center;
+}
+
+.titlebar-right {
+  justify-content: flex-end;
 }
 
 .tabs {
@@ -4169,11 +4188,36 @@ textarea:focus {
 
 /* A third of the pane. `min-height` keeps a few lines visible however tall the
    result set grows. */
+/* Height is set inline from `editorHeight`, so the flex basis must be `auto` or
+   flex would override the drag. The floor is repeated from
+   `sqlViewLogic.SQL_EDITOR_MIN_HEIGHT` — the clamp is authoritative, this is a
+   backstop for the first paint before any measurement exists. The bottom border
+   moved to the resizer, which is the visible divider now. */
 .sql-editor {
-  flex: 0 0 34%;
+  flex: 0 0 auto;
   min-height: 96px;
   overflow: hidden;
-  border-bottom: 1px solid var(--border);
+}
+
+/* The drag handle between the query and its results. Three pixels of border
+   with a taller transparent hit area, the same trick `.sql-object-resizer`
+   uses: a 1px target is unhittable, and a 6px visible bar is a heavy line
+   across the console. */
+.sql-split-resizer {
+  flex: 0 0 auto;
+  height: 5px;
+  margin-top: -1px;
+  background: var(--border);
+  background-clip: content-box;
+  border-top: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+  cursor: row-resize;
+}
+
+.sql-split-resizer:hover,
+.sql-split-resizer:focus-visible {
+  background-color: var(--accent);
+  outline: none;
 }
 
 .sql-editor .cm-editor {
@@ -4828,4 +4872,517 @@ button.danger:hover:not(:disabled) {
 @media (max-width: 720px) {
   .settings-grid.colors, .settings-grid.fonts { grid-template-columns: 1fr; }
   .shortcut-row { grid-template-columns: 1fr 130px 30px 30px; }
+}
+
+/* ===================================================================== */
+/* Phase 1 — file-type icons, tree action bar, icon run controls, branch  */
+/* filter. Appended as one block so the four changes stay legible together.*/
+/* ===================================================================== */
+
+/* --------------------------------------------------------------------- */
+/* File-type icons (Run tab file tree, Changes file list)                  */
+/* --------------------------------------------------------------------- */
+
+/* `FileIcon` inlines a build-time-known SVG from `material-icon-theme`, so each
+   glyph brings its own brand colours and this rule deliberately sets none —
+   recolouring them through a token would erase the one thing that makes a C#
+   file distinguishable from a Rust one at a glance, and the palette they ship
+   with is legible on both the dark and light grounds this app uses.
+   What the rows do need is a fixed box: the icons ship with several viewBoxes
+   (24 and 32 are both common), so without one they would render at whatever
+   intrinsic size each file happens to declare and the list would go ragged.
+   `flex: 0 0 auto` matches `.twisty` so a long path cannot squeeze the icon. */
+.tree-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.tree-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+/* --------------------------------------------------------------------- */
+/* File-tree action bar (Run tab)                                          */
+/* --------------------------------------------------------------------- */
+
+/* Sits above the rows, inside `.file-tree`, because the tree is as long as the
+   repository and a bar under it would scroll out of reach. Right-aligned so it
+   reads as chrome for the list rather than as the list's first entry — the
+   `.group-label` above it already carries the heading, and a left-aligned pair
+   of glyphs at row indentation would look like two nameless files. The bottom
+   padding alone (no top) closes the gap to that label without adding a second
+   one above it. */
+.tree-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  padding: 0 4px 2px;
+}
+
+/* Undoes the base `button` chrome: a filled, bordered control at this size next
+   to a dense file list reads as far more important than it is, so these are
+   quiet until hovered — the same "present but not shouting" treatment the
+   twisty gets. `--text-dim` rather than `--text-faint` because unlike a twisty
+   these are clickable and must be findable without hunting. `button:disabled`
+   already supplies the dimming, so the no-open-file state needs nothing here;
+   what it must not gain is the hover, hence `:not(:disabled)`. */
+.tree-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-dim);
+}
+
+.tree-action:hover:not(:disabled) {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* lucide ships every icon at an intrinsic 24px, which is toolbar scale and
+   twice what a tree row is. Sized here rather than through each icon's `size`
+   prop so the two can never drift apart. `currentColor` is lucide's default
+   stroke, so the hover colour above carries into the glyph with no extra rule. */
+.tree-action svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* --------------------------------------------------------------------- */
+/* Icon-only toolbar buttons (Run / Stop / Build in the Run toolbar)      */
+
+/* A toolbar button whose entire label is an icon. It sits shoulder to shoulder
+   with text-label buttons (Debug, Restart, Clear), so the one thing this rule
+   exists to guarantee is that it is exactly as tall as they are — a toolbar
+   whose height shifts as buttons swap between a glyph and a word reads as a
+   layout bug, not as a restyle. Padding and borders are inherited from the base
+   `button` rule untouched, so only the content box is in question here.
+   No colour is declared: a lucide SVG strokes with `currentColor`, which is
+   already the button's own `var(--text)` in both themes (and stays correct
+   under `.primary`). */
+.icon-label-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The height match is made by a zero-width strut rather than by sizing the
+   icon to some measured pixel value. The strut contributes the font's own line
+   box — the very box a text label would produce — and no width, so the button's
+   content height is decided by the same thing that decides it on its
+   neighbours, and it keeps tracking them when the user changes the UI font size
+   in Settings. A zero-width *space* is required: an empty `content: ""` inline
+   block collapses to zero height and would contribute nothing. */
+.icon-label-button::before {
+  content: "\200b";
+  display: inline-block;
+  width: 0;
+}
+
+/* Sized in em, below the strut, so the icon can never be the thing that sets
+   the height. `normal` line-height is comfortably above 1.1 for the UI font
+   stack, so the strut stays the taller of the two at every font size; a pixel
+   size would overtake it as soon as the UI font was shrunk, which is precisely
+   the case that would break the match. `flex: 0 0 auto` keeps it from being
+   shrunk by a cramped toolbar instead of wrapping. */
+.icon-label-button > svg {
+  width: 1.1em;
+  height: 1.1em;
+  flex: 0 0 auto;
+}
+
+/* ---- Branch menu filter (BranchMenu) ---------------------------------- */
+
+/* The filter box sits at the top of the branch dropdown, above Fetch/Pull/Push
+   and separated from the create-branch box by a `.dropdown-separator`. The icon
+   is what keeps the two boxes from reading as the same control: typing a search
+   into the create box offers to create a branch named after the search. */
+.branch-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 4px;
+}
+
+.branch-filter-icon {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+/* `.dropdown-menu input` gives every input in here a full width and a top
+   margin; the filter shares its row with the icon, so it takes the remaining
+   width instead and drops the margin the row already provides. */
+.dropdown-menu input.branch-filter {
+  flex: 1 1 auto;
+  width: auto;
+  margin-top: 0;
+}
+
+/* "No branches match" — deliberately not a `.dropdown-item`, since there is
+   nothing here to click. */
+.branch-empty {
+  padding: 6px 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+   The language-server status indicator, in the bottom status bar.
+
+   Moved out of the Run toolbar: it is one app-wide indicator now, reading the
+   active codebase's poll key, so it has to live beside the folder name and path
+   rather than inside a workspace tab. `LspStatusIndicator` renders
+   `.dropdown.lsp-status`, and everything below is placement — the component
+   keeps its ordinary downward menu anywhere else it is mounted.
+   --------------------------------------------------------------------------- */
+
+.statusbar .lsp-status {
+  /* Locked to the right of the folder row. `margin-left: auto` rather than a
+     spacer element so `.statusbar-path` keeps shrinking into its own ellipsis
+     instead of being pushed out of the bar, and `flex: 0 0 auto` so the path —
+     which is `overflow: hidden` and therefore shrinkable to nothing — gives way
+     first: a starting or missing server is the more useful of the two. */
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.statusbar .lsp-status > button {
+  /* Status-bar chrome, not a toolbar button: the base `button` rule's 4px/10px
+     padding would grow the 22px bar, and its raised background would read as an
+     action in a row of plain text. */
+  background: transparent;
+  border-color: transparent;
+  padding: 0 6px;
+  color: inherit;
+  /* Capped and ellipsised because the label is a whole sentence ("C#: this
+     server does not answer these questions (+2 more)"). The full text is in the
+     `title` tooltip and in the menu, so nothing is lost by trimming it here. */
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar .lsp-status .dropdown-menu {
+  /* Opens *upward*. `.dropdown-menu`'s `top: calc(100% + 4px)` is right for a
+     toolbar and wrong at the bottom of the window: the panel would be laid out
+     below the viewport, where nothing scrolls it into view — a control that
+     visibly toggles and shows nothing at all. The menu's own `max-height` still
+     bounds it, so a long server list scrolls rather than running off the top. */
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+/* ---------------------------------------------------------------------------
+   Renaming a codebase tab (Task 2c).
+   Append after the `.ws-tab-add` rule, which ends the tab-strip block.
+   --------------------------------------------------------------------------- */
+
+/* The inline rename box replaces the `.ws-tab-label` button in place, so it
+   borrows that button's metrics rather than the generic form input styling —
+   the strip must not reflow or change height the moment the user starts
+   editing. The width is the label's own `max-width`, which is also why the cap
+   in `workspaceRenameLogic.ts` is stated in terms of it. */
+.ws-tab-rename {
+  width: 220px;
+  max-width: 220px;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  color: var(--text);
+  font: inherit;
+  padding: 3px 7px; /* 1px less than the label's 4px 8px, to pay for the border */
+  outline: none;
+}
+
+/* A renamed tab reads as an ordinary tab — no badge, no italics. The rename is
+   the user's answer, not an annotation on ours; the real path stays on hover
+   via the tab's `title`. This rule exists only to say that deliberately, so a
+   later change does not add decoration by default. */
+
+/* ---------------------------------------------------------------------------
+   The Project tab's tool-window rail (Phase 3).
+
+   Run and Changes used to be two top-level tabs. They are one tab now, and this
+   narrow strip switches which surface the side panel shows — Rider's tool-window
+   bar, and the reason the switch reads as navigation rather than as a tab
+   change: the editor, the running processes and the console never move.
+   --------------------------------------------------------------------------- */
+
+.project-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 4px;
+  background: var(--bg-raised);
+  border-right: 1px solid var(--border);
+  /* Never scrolls and never shrinks: two icons, and a rail that could be
+     squeezed away would strand the user in whichever pane they last chose. */
+  flex: 0 0 auto;
+}
+
+.project-rail button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-dim);
+}
+
+.project-rail button:hover {
+  background: var(--bg-inset);
+  color: var(--text);
+}
+
+/* The selected surface is marked the way `.tabs button.active` marks a tab —
+   accent edge plus full-strength text — so the rail reads as the same kind of
+   control the tab strip above it is, rather than inventing a second visual
+   language for the same idea. The edge is on the left here because the rail is
+   vertical. */
+.project-rail button.active {
+  background: var(--bg-inset);
+  border-left-color: var(--accent);
+  color: var(--text);
+}
+
+.project-rail button svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* ======================================================================== */
+/* SQL console — the floating window (Task A)                               */
+/* ======================================================================== */
+
+/* Reuses the .review-panel base (float, drag, resize, minimize). Deliberately
+   writes NO z-index: the panel stays in the base panel band that
+   `.review-panel` already sets, beside Review/Behavioral/Apps. It has no raise
+   trigger of its own, and a band above the terminals would pin it permanently
+   over a terminal the user just clicked. Wider and taller than the agent panel
+   by default — it holds an editor, a results grid and an object explorer side
+   by side, and the tab it replaces had the whole window. */
+.sql-panel {
+  width: min(1100px, 86vw);
+  height: min(720px, 82vh);
+}
+
+/* The positioned, clipping ancestor for the two overlays SqlView renders. Both
+   are `position: fixed` in their own rules — right for a full-screen tab, and
+   wrong inside a window: a fixed child of this panel resolves against the
+   VIEWPORT (nothing here sets a transform, unlike `.terminal-panel`), so the
+   connection picker and the writes-confirmation backdrop would each cover the
+   whole application from `--z-overlay`, above every terminal and above Notes.
+   `relative` here scopes them to the console area, leaving the panel header
+   draggable while a modal is open. Safe for the existing absolute children:
+   `.sql-object-resizer` resolves against `.sql-object-explorer`, which is
+   already `position: relative`. */
+.sql-panel .sql-view {
+  position: relative;
+}
+
+/* Both overlays, scoped. The z-index is local to the panel's own stacking
+   context (the `.review-panel` base establishes one), so `1` is enough to sit
+   over the console and cannot escape the band the panel is in — which is the
+   whole point of not leaving them at `--z-overlay`. */
+.sql-panel .sql-view .modal-backdrop,
+.sql-panel .sql-conn-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+/* Viewport-relative sizing inside a window is the same mistake one level down:
+   `10vh` of padding and `min(760px, 94vw)` are measured against the screen, not
+   against the panel the picker now lives in. Re-measure both against the panel. */
+.sql-panel .sql-conn-overlay {
+  padding-top: 24px;
+}
+
+.sql-panel .sql-conn-picker {
+  width: min(760px, calc(100% - 32px));
+  max-height: calc(100% - 48px);
+}
+
+/* Minimized: a thin labelled bar like Notes', but pinned bottom-LEFT. The
+   bottom-right column is taken — `.review-pill` bases there and
+   `terminalLogic.pillBottom` reserves the base slot for the Notes bar and
+   stacks terminal pills upward from one step above it — so a right-hand SQL
+   pill would land on a terminal's. Nothing occupies the left corner. */
+.sql-pill {
+  right: auto;
+  left: 16px;
+  bottom: 16px;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+/* ---------------------------------------------------------------------------
+   The titlebar terminal split button's menu (`terminalMenuLogic.ts`).
+
+   The rows are ordinary `.dropdown-item`s, so the existing dropdown styling
+   applies unchanged; only three things are new. The label takes the free space
+   so a badge or a Run/Stop word lands hard right, and the live dot is what
+   tells a saved command's row that its service is already up — it uses the same
+   `--pass` green as every other "this is alive and well" mark in the app rather
+   than a colour of its own.
+   --------------------------------------------------------------------------- */
+.terminal-menu-label {
+  flex: 1 1 auto;
+}
+
+.terminal-menu-action {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: calc(var(--ui-font-size) - 2px);
+}
+
+/* Only ever rendered for a row where "is it running" is a real question, so an
+   unlit dot means stopped — it is never a placeholder on a row that has no
+   process behind it. */
+.shortcut-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.shortcut-dot.live {
+  background: var(--pass);
+}
+
+/* The running count sits on the caret now that the Running button is gone, so
+   the caret needs room for it beside the ▾. */
+.split-button-arrow .running-badge {
+  margin-left: 4px;
+}
+/* ---------------------------------------------------------------------------
+   Context menus opened from the titlebar (Phase 4).
+
+   `ContextMenu`'s default band (46) sits below `--z-panel`, which is correct
+   for a menu opened from inside a view — it shares a plane with what it acts
+   on. A menu opened from the *titlebar* is above everything, so at 46 it hid
+   behind any open terminal, and so did its click-catching backdrop: clicking
+   that terminal then neither closed the menu nor was intercepted.
+
+   One step below `--z-overlay`, so a modal still covers it.
+   --------------------------------------------------------------------------- */
+
+.dropdown-menu.context-menu-elevated {
+  z-index: calc(var(--z-overlay) - 1);
+}
+
+.dropdown-backdrop.context-menu-elevated-backdrop {
+  z-index: calc(var(--z-overlay) - 2);
+}
+
+/* ---------------------------------------------------------------------------
+   The global notification stack.
+
+   Bottom-right, above every floating panel but below the overlay band, so a
+   modal still covers it. It reports things that belong to no codebase — a
+   long-running service dying, whose working directory may sit outside every
+   open workspace — which is exactly what the workspace-tab signals cannot say.
+   --------------------------------------------------------------------------- */
+
+.notification-host {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: calc(var(--z-overlay) - 1);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* The column is a lane for the toasts, not a surface: clicks pass through the
+     gaps to whatever is behind it. Each toast turns pointer events back on. */
+  pointer-events: none;
+  max-width: min(420px, 90vw);
+}
+
+.notification {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-left-width: 3px;
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+/* The kind is carried by the left edge rather than by the whole background: a
+   fully tinted toast over an editor is hard to read, and these can sit up
+   indefinitely when they are errors. */
+.notification-error {
+  border-left-color: var(--fail);
+}
+
+.notification-warning {
+  border-left-color: var(--skip);
+}
+
+.notification-info {
+  border-left-color: var(--accent);
+}
+
+.notification-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.notification-title {
+  font-weight: 600;
+}
+
+.notification-detail {
+  margin-top: 2px;
+  color: var(--text-dim);
+  /* Wraps rather than ellipsises: the detail is the exit code or the reason a
+     program could not start, and half of that is no use. */
+  overflow-wrap: anywhere;
+}
+
+.notification-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.notification-dismiss:hover {
+  color: var(--text);
+}
+
+/* The heading above each block of shortcuts in Settings — the app's own
+   commands, then one block per plugin. Quiet: it separates a long list, it is
+   not a title competing with the page's own. */
+.shortcut-section {
+  margin: 14px 0 6px;
+  font-size: calc(var(--ui-font-size) - 1px);
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.shortcut-list > div:first-child .shortcut-section {
+  margin-top: 0;
 }

@@ -11,6 +11,11 @@
 //! install fires in every repository: a gate only runs when the change set
 //! *and* the repo's tooling both call for it, and a check we could not even
 //! spawn is treated as "nothing to say", never as a failure.
+//!
+//! A gate that *did* run and failed is not automatically a failure either —
+//! [`cb_core::qgate::read_gate_output`] decides whether its output judges the
+//! code or describes this machine, and this file only routes the three answers:
+//! block, stay quiet, or announce on stderr that nothing was checked.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -19,7 +24,7 @@ use std::process::Command;
 use cb_core::erosion;
 use cb_core::git::{ComparisonMode, Repo};
 use cb_core::process::resolve_program;
-use cb_core::qgate::{self, Gate};
+use cb_core::qgate::{self, Gate, GateVerdict};
 use serde_json::Value;
 
 /// Exit code that makes a Claude Code `Stop` hook block the stop and show the
@@ -73,17 +78,33 @@ fn gate() -> anyhow::Result<Option<String>> {
     }
 
     // Blocking language gates, in the order cb_core decided.
+    //
+    // `package.json` is read once and handed to the verdict reader: only a
+    // package the manifest already declares can be an *environment* problem, so
+    // without it an unresolved import stays the failure it looks like.
+    let manifest = std::fs::read_to_string(root.join("package.json")).unwrap_or_default();
+    let declared = qgate::declared_dependencies(&manifest);
+
     for gate in qgate::gates_for_changes(&changed, inv.full) {
-        if !applicable(gate, &root) {
+        if !applicable(gate, &manifest, &root) {
             continue;
         }
-        if let Some(output) = failing_output(gate, &root) {
-            return Ok(Some(format!(
-                "Quality gate failed: {}\n\
-                 Fix the reported problems before finishing this turn.\n\n{}",
-                gate.label(),
-                output
-            )));
+        match run_gate(gate, &root, &declared) {
+            GateVerdict::Passed => {}
+            GateVerdict::Failed(output) => {
+                return Ok(Some(format!(
+                    "Quality gate failed: {}\n\
+                     Fix the reported problems before finishing this turn.\n\n{}",
+                    gate.label(),
+                    output
+                )));
+            }
+            // Not a verdict on the change set, so it must not block — but it is
+            // also not a pass, and saying nothing would let it read as one.
+            // Announced on stderr beside the other advisories.
+            GateVerdict::Unrunnable { summary, detail } => {
+                eprintln!("{summary}\n\n{detail}");
+            }
         }
     }
 
@@ -173,11 +194,11 @@ fn changed_paths(root: &Path) -> Vec<String> {
 
 /// Does this repo have the tooling a gate needs? Keeps a user-scope hook from
 /// failing a turn in a repository that has no `typecheck` script or no cargo.
-fn applicable(gate: Gate, root: &Path) -> bool {
+///
+/// `manifest` is the already-read `package.json` text, empty when there is none.
+fn applicable(gate: Gate, manifest: &str, root: &Path) -> bool {
     match gate {
-        Gate::Typecheck => std::fs::read_to_string(root.join("package.json"))
-            .map(|t| qgate::has_typecheck_script(&t))
-            .unwrap_or(false),
+        Gate::Typecheck => qgate::has_typecheck_script(manifest),
         Gate::Rustfmt | Gate::Clippy => root.join("Cargo.toml").exists(),
     }
 }
@@ -196,21 +217,24 @@ fn erosion_reminder(root: &Path) -> Option<String> {
     qgate::erosion_reminder(&report)
 }
 
-/// Run a gate. `Some(output)` means it failed (and carries the combined
-/// stdout+stderr); `None` means it passed *or could not be spawned* — the
-/// abstain-safe reading, since blocking on a check we could not run would be a
-/// guess.
-fn failing_output(gate: Gate, root: &Path) -> Option<String> {
+/// Run a gate and read what its run meant.
+///
+/// A gate that could not even be **spawned** is `Passed` — the long-standing
+/// abstain-safe reading, since blocking on a check that never ran would be a
+/// guess. A gate that ran and exited non-zero is handed to
+/// [`qgate::read_gate_output`], which decides whether its output is a verdict on
+/// the code or a description of this machine; this function makes no such
+/// judgement of its own.
+fn run_gate(gate: Gate, root: &Path, declared: &[String]) -> GateVerdict {
     let (program, args) = gate.command();
     let mut cmd = Command::new(resolve_program(program));
     cmd.args(&args).current_dir(root);
     #[cfg(windows)]
     cb_core::process::no_window(&mut cmd);
-    let output = cmd.output().ok()?;
-    if output.status.success() {
-        return None;
-    }
+    let Ok(output) = cmd.output() else {
+        return GateVerdict::Passed;
+    };
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
-    Some(combined.trim().to_string())
+    qgate::read_gate_output(gate, output.status.success(), &combined, declared)
 }

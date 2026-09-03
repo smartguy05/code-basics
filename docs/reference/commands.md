@@ -26,7 +26,7 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 
 ## Workspace files
 
-`src-tauri/src/commands/files.rs` — backs the Run tab's directory tree and file editor. All paths are workspace-relative; paths that would escape the root (absolute, `..`) are rejected.
+`src-tauri/src/commands/files.rs` — backs the Project tab's directory tree and file editor. All paths are workspace-relative; paths that would escape the root (absolute, `..`) are rejected.
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
@@ -91,7 +91,7 @@ One binary ships every feature, so these decide only what is *shown*. An install
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `start_run` | `config_id: String`, `channel: Channel<ProcessEvent>`, `env: Map?`, `build_configuration: String?` | `()` | Streams output; resolves on exit. `env` is layered over the config's own for this run only (the Run tab's environment picker), and `build_configuration` overrides `Debug`/`Release` the same way (the toolbar's picker). An empty string is ignored rather than emitting a bare `-c` |
+| `start_run` | `config_id: String`, `channel: Channel<ProcessEvent>`, `env: Map?`, `build_configuration: String?` | `()` | Streams output; resolves on exit. `env` is layered over the config's own for this run only (the Project tab's environment picker), and `build_configuration` overrides `Debug`/`Release` the same way (the toolbar's picker). An empty string is ignored rather than emitting a bare `-c` |
 | `build_project` | `config_id: String`, `action: "build" \| "rebuild" \| "clean"`, `channel: Channel<ProcessEvent>`, `build_configuration: String?` | `()` | .NET only; runs `dotnet build` / `build --no-incremental` / `clean`, registered as `<config_id>:build`. Takes the same override as `start_run` so a build produces the binaries the next run will start |
 | `cancel_run` | `config_id: String`, `root?: String` | `bool` | Kills the process **tree**. `root` targets a specific (possibly background) workspace; defaults to the active one |
 | `running_ids` | `root?: String` | `String[]` | Config ids currently running in `root`'s workspace, or the active one |
@@ -147,9 +147,9 @@ the codebase it was started from does not stop it.
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
 | `list_launchables` | – | `LauncherGroups` | `{ thisCodebase, global }` — remembered commands, the open codebase's first (grouped by each entry's `cwd`); pinned first, then most recently run |
-| `launch_command` | `command: String`, `cwd: String?`, `shell: bool`, `label: String?`, `key: String?`, `channel: Channel<ProcessEvent>` | `LaunchedApp` | Splits the command line (`launcher::program_and_args`) and spawns it headless; resolves as soon as it is running, not at exit. An unquoted `\|`, `>`, `<`, `&` or `;` is **refused** unless `shell` is set — a bare argv would pass it to the program as an argument. `cwd` defaults to the open workspace, else home. `key` is normally supplied by the frontend so its console has a destination before this returns; a blank one is minted. Recorded into the recents only once it resolves to a real command |
+| `launch_command` | `command: String`, `cwd: String?`, `shell: bool`, `label: String?`, `key: String?`, `channel: Channel<ProcessEvent>` | `LaunchedApp` | Splits the command line (`launcher::program_and_args`) and spawns it with no console window of its own; resolves as soon as it is running, not at exit. (Distinct from the `headless` flag on a saved launchable, which is frontend-only and decides whether an output *tab* is minted — every launch streams to the channel the caller supplies either way.) An unquoted `\|`, `>`, `<`, `&` or `;` is **refused** unless `shell` is set — a bare argv would pass it to the program as an argument. `cwd` defaults to the open workspace, else home. `key` is normally supplied by the frontend so its console has a destination before this returns; a blank one is minted. Recorded into the recents only once it resolves to a real command |
 | `stop_command` | `key: String` | `bool` | Cancels a launched app through the global supervisor; the output tab and its exit line stay |
-| `save_launchable` | `id: String`, `label: String?`, `pinned: bool?` | `LauncherFile` | Rename (a blank name clears the rename) and/or pin. Pinned entries are exempt from the 30-entry recents cap |
+| `save_launchable` | `id: String`, `label: String?`, `pinned: bool?`, `shortcut: bool?`, `persistent: bool?`, `headless: bool?` | `LauncherFile` | Partial update: an omitted field is left alone. Rename (a blank name clears the rename), pin, publish as a named terminal-menu command (`shortcut`), mark as a long-running service (`persistent`, never auto-restarted), or run with no output tab (`headless`). Pinned entries **and** shortcuts are exempt from the 30-entry recents cap |
 | `delete_launchable` | `id: String` | `LauncherFile` | Forgets one remembered command |
 
 ## Running processes
@@ -183,7 +183,7 @@ The Running panel: what the app has running now (across every open codebase) plu
 | `git_checkout_branch` | `name: String` | `()` | |
 | `git_checkout_remote_branch` | `name: String` | `()` | Like `git switch`: creates the local tracking branch (or reuses it), then switches |
 | `git_delete_branch` | `name: String` | `()` | |
-| `git_merge_branch` | `name: String` | `MergeReport` | Merge a branch into the current one. Refuses to start with modified tracked files or another operation in progress. Conflicts do not error: they come back as `outcome: "conflicted"` with the paths, and the merge is **left in progress** to resolve in the Changes tab |
+| `git_merge_branch` | `name: String` | `MergeReport` | Merge a branch into the current one. Refuses to start with modified tracked files or another operation in progress. Conflicts do not error: they come back as `outcome: "conflicted"` with the paths, and the merge is **left in progress** to resolve in the Changes pane |
 | `git_abort_merge` | | `()` | Discard an in-progress merge and return to the pre-merge commit |
 | `git_changelists` | | `Changelists` | The workspace's change groups |
 | `git_create_changelist` | `name: String` | `Changelists` | Add an empty group; rejects a duplicate or blank name |

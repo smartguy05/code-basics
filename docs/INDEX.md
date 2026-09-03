@@ -97,7 +97,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/git/attribution.rs` | 844 | Deciding which recorded edit produced which line of a diff. |
 | `crates/core/src/git/attribution_tests.rs` | 1045 | Tests for attributing diff lines to recorded edits. |
 | `crates/core/src/git/coverage.rs` | 355 | Auditing the agent's own story about its work. |
-| `crates/core/src/git/coverage_tests.rs` | 917 | Tests for the intent-coverage reverse pass and scorecard. |
+| `crates/core/src/git/coverage_tests.rs` | 962 | Tests for the intent-coverage reverse pass and scorecard. |
 | `crates/core/src/git/grouping.rs` | 1036 | Turning hunks into a handful of decisions. |
 | `crates/core/src/git/grouping_tests.rs` | 1616 | Tests for collapsing hunks into cards. |
 | `crates/core/src/git/mod.rs` | 34 | Git operations. |
@@ -150,15 +150,15 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/whyhook_tests.rs` | 86 | Tests for the durable-why post-commit hook installer. |
 | `crates/core/src/invocation.rs` | 371 | Turning a run configuration into a command line. |
 | `crates/core/src/invocation_tests.rs` | 531 | Tests for dispatching a configuration to the adapter that owns it. |
-| `crates/core/src/launcher/mod.rs` | 39 | The app launcher: arbitrary command lines the user wants to run beside the |
-| `crates/core/src/launcher/model.rs` | 85 | What a launchable is, and the shape of the file that stores them. |
-| `crates/core/src/launcher/model_tests.rs` | 71 |  |
+| `crates/core/src/launcher/mod.rs` | 41 | The app launcher: arbitrary command lines the user wants to run beside the |
+| `crates/core/src/launcher/model.rs` | 109 | What a launchable is, and the shape of the file that stores them. |
+| `crates/core/src/launcher/model_tests.rs` | 107 |  |
 | `crates/core/src/launcher/parse.rs` | 140 | Turning a typed command line into a program and argv — or refusing to. |
 | `crates/core/src/launcher/parse_tests.rs` | 99 |  |
-| `crates/core/src/launcher/recents.rs` | 192 | The recents policy: what running a command remembers, what it forgets, and |
-| `crates/core/src/launcher/recents_tests.rs` | 218 |  |
+| `crates/core/src/launcher/recents.rs` | 239 | The recents policy: what running a command remembers, what it forgets, and |
+| `crates/core/src/launcher/recents_tests.rs` | 343 |  |
 | `crates/core/src/launcher/store.rs` | 90 | The launchers file on disk: `<config>/code-basics/launchers.json`. |
-| `crates/core/src/launcher/store_tests.rs` | 90 |  |
+| `crates/core/src/launcher/store_tests.rs` | 93 |  |
 | `crates/core/src/lib.rs` | 49 | Core logic for `code-basics`. |
 | `crates/core/src/lsp/client.rs` | 1233 | One language server, from handshake to shutdown, as questions and answers. |
 | `crates/core/src/lsp/client_tests.rs` | 658 | Unit tests for the parts of the client that need no server. |
@@ -200,10 +200,10 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/pty/model.rs` | 125 | The wire types for an interactive terminal session. |
 | `crates/core/src/pty/shell.rs` | 90 | Pure decisions for the PTY layer: which shell to launch, and clamping the |
 | `crates/core/src/pty/shell_tests.rs` | 80 |  |
-| `crates/core/src/qgate/decide_tests.rs` | 254 | Decision-logic tests for the quality gate — the Rust port of the behaviour |
-| `crates/core/src/qgate/install.rs` | 300 | Installing the quality-gate Stop hook — the same method the intent hooks use. |
-| `crates/core/src/qgate/install_tests.rs` | 250 | Installer tests for the quality-gate hook. The behaviour that matters most |
-| `crates/core/src/qgate/mod.rs` | 276 | The quality-gate Stop hook: deterministic checks when an agent turn ends. |
+| `crates/core/src/qgate/decide_tests.rs` | 454 | Decision-logic tests for the quality gate — the Rust port of the behaviour |
+| `crates/core/src/qgate/install.rs` | 325 | Installing the quality-gate Stop hook — the same method the intent hooks use. |
+| `crates/core/src/qgate/install_tests.rs` | 310 | Installer tests for the quality-gate hook. The behaviour that matters most |
+| `crates/core/src/qgate/mod.rs` | 502 | The quality-gate Stop hook: deterministic checks when an agent turn ends. |
 | `crates/core/src/review.rs` | 429 | Assembling the command line for an in-app adversarial review. |
 | `crates/core/src/review_tests.rs` | 573 | Tests for [`crate::review`] — the pure, agent-aware command-line assembly for |
 | `crates/core/src/rules/mod.rs` | 149 | Business-rule invariants, authored as markdown and injected as review |
@@ -232,7 +232,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/sql/driver/postgres.rs` | 1339 | The PostgreSQL driver, over `sqlx`. |
 | `crates/core/src/sql/driver/postgres_tests.rs` | 922 |  |
 | `crates/core/src/sql/driver/sqlite.rs` | 607 | The SQLite driver, over `sqlx`. |
-| `crates/core/src/sql/driver/sqlite_tests.rs` | 277 |  |
+| `crates/core/src/sql/driver/sqlite_tests.rs` | 291 |  |
 | `crates/core/src/sql/driver/value.rs` | 41 | The one-to-one relabelling from what [`crate::sql::format`] renders to what |
 | `crates/core/src/sql/driver/value_tests.rs` | 84 |  |
 | `crates/core/src/sql/dsn.rs` | 854 | Parsing a connection string into the parts a driver needs, and — just as |
@@ -283,7 +283,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/sql_mssql.rs` | 733 | The SQL Server half of the SQL console, against a real server. |
 | `crates/core/tests/sql_postgres.rs` | 811 | The PostgreSQL half of the SQL subsystem's end-to-end proof. |
 | `crates/core/tests/sql_sqlite.rs` | 1006 | The first test in the SQL subsystem that touches a real database. |
-| `src/App.tsx` | 771 |  |
+| `src/App.tsx` | 1247 |  |
 | `src/appearance.ts` | 68 |  |
 | `src/appearanceLogic.test.ts` | 21 |  |
 | `src/appearanceLogic.ts` | 131 |  |
@@ -291,21 +291,24 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/AskPanel.tsx` | 240 |  |
 | `src/components/AttachConfirm.tsx` | 63 |  |
 | `src/components/BehavioralPanel.tsx` | 402 |  |
-| `src/components/BranchMenu.tsx` | 386 |  |
+| `src/components/BranchMenu.tsx` | 460 |  |
 | `src/components/ConfigEditor.tsx` | 313 |  |
-| `src/components/ContextMenu.tsx` | 94 |  |
+| `src/components/ContextMenu.tsx` | 111 |  |
+| `src/components/DiffPane.tsx` | 441 |  |
 | `src/components/DiffView.tsx` | 967 |  |
 | `src/components/EnvironmentPicker.tsx` | 107 |  |
 | `src/components/ErosionPanel.tsx` | 101 |  |
 | `src/components/ErrorBoundary.tsx` | 65 |  |
 | `src/components/FeaturesPicker.tsx` | 96 |  |
-| `src/components/FileEditor.tsx` | 1036 |  |
-| `src/components/FileTree.tsx` | 379 |  |
+| `src/components/FileEditor.tsx` | 1041 |  |
+| `src/components/FileIcon.tsx` | 108 | The file-type icon beside a name in the file tree and the Changes list. |
+| `src/components/FileTree.tsx` | 513 |  |
 | `src/components/IntentPanel.tsx` | 1530 |  |
-| `src/components/LauncherPicker.tsx` | 248 |  |
-| `src/components/LspStatus.tsx` | 155 |  |
+| `src/components/LauncherPicker.tsx` | 308 |  |
+| `src/components/LspStatus.tsx` | 184 |  |
 | `src/components/MenuBar.tsx` | 406 |  |
 | `src/components/NotesPanel.tsx` | 385 |  |
+| `src/components/NotificationHost.tsx` | 79 |  |
 | `src/components/ObjectTree.tsx` | 357 |  |
 | `src/components/OutputConsole.tsx` | 484 |  |
 | `src/components/PillColorMenu.tsx` | 84 |  |
@@ -315,22 +318,25 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/RunConfigMenu.tsx` | 161 |  |
 | `src/components/RunningPanel.tsx` | 240 |  |
 | `src/components/SearchEverywhere.tsx` | 492 |  |
-| `src/components/SettingsDialog.tsx` | 128 |  |
+| `src/components/SettingsDialog.tsx` | 137 |  |
 | `src/components/SetupPrompt.tsx` | 115 |  |
 | `src/components/Sidebar.tsx` | 50 |  |
 | `src/components/SqlConnectionPicker.tsx` | 495 |  |
+| `src/components/SqlPanel.tsx` | 184 |  |
 | `src/components/SqlResultGrid.tsx` | 217 |  |
 | `src/components/StashPanel.tsx` | 288 |  |
 | `src/components/TerminalPanel.tsx` | 451 |  |
 | `src/components/TerminalView.tsx` | 159 |  |
 | `src/components/TestTree.tsx` | 125 |  |
-| `src/components/WorkspaceTab.tsx` | 573 |  |
-| `src/components/appOutputLogic.test.ts` | 193 |  |
-| `src/components/appOutputLogic.ts` | 171 | Pure decisions for the launched-apps output panel — the tab list, which tab |
+| `src/components/WorkspaceTab.tsx` | 670 |  |
+| `src/components/appOutputLogic.test.ts` | 279 |  |
+| `src/components/appOutputLogic.ts` | 222 | Pure decisions for the launched-apps output panel — the tab list, which tab |
 | `src/components/askLogic.test.ts` | 254 |  |
 | `src/components/askLogic.ts` | 294 | The "Ask the codebase" modal's decisions, with no React and no DOM in sight. |
 | `src/components/behavioralPanelLogic.test.ts` | 425 |  |
 | `src/components/behavioralPanelLogic.ts` | 451 |  |
+| `src/components/branchFilterLogic.test.ts` | 126 |  |
+| `src/components/branchFilterLogic.ts` | 88 |  |
 | `src/components/claimChecklistLogic.test.ts` | 147 |  |
 | `src/components/claimChecklistLogic.ts` | 106 |  |
 | `src/components/claimVerifyLogic.test.ts` | 312 |  |
@@ -345,26 +351,38 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/coverageOfChangeLogic.ts` | 103 |  |
 | `src/components/diffLogic.test.ts` | 501 |  |
 | `src/components/diffLogic.ts` | 401 |  |
-| `src/components/editorSourceLogic.test.ts` | 119 |  |
-| `src/components/editorSourceLogic.ts` | 85 | What backs an open editor tab. |
+| `src/components/diffPaneLogic.test.ts` | 253 |  |
+| `src/components/diffPaneLogic.ts` | 150 |  |
+| `src/components/editorSourceLogic.test.ts` | 199 |  |
+| `src/components/editorSourceLogic.ts` | 196 | What backs an open editor tab. |
 | `src/components/enhancementsLogic.test.ts` | 118 |  |
 | `src/components/enhancementsLogic.ts` | 100 | Pure decisions behind the Enhancements menu, kept out of the rendering shell |
 | `src/components/erosionLogic.test.ts` | 78 |  |
 | `src/components/erosionLogic.ts` | 69 |  |
-| `src/components/featuresLogic.test.ts` | 168 |  |
+| `src/components/featuresLogic.test.ts` | 130 |  |
 | `src/components/featuresLogic.ts` | 69 | Decision logic for optional features: what is switched on, and what that hides. |
+| `src/components/fileIconLogic.test.ts` | 129 |  |
+| `src/components/fileIconLogic.ts` | 159 | Which file-type icon a row shows. |
 | `src/components/fileTreeLogic.test.ts` | 159 |  |
 | `src/components/fileTreeLogic.ts` | 117 | Pure decisions for the Run tab's file tree — where a new file lands, whether |
+| `src/components/fileTreeRevealLogic.test.ts` | 91 |  |
+| `src/components/fileTreeRevealLogic.ts` | 76 | Pure decisions behind the file tree's "select opened file" action: which |
 | `src/components/intentPanelLogic.test.ts` | 644 |  |
 | `src/components/intentPanelLogic.ts` | 559 |  |
 | `src/components/language.test.ts` | 122 |  |
 | `src/components/language.ts` | 119 |  |
-| `src/components/launcherLogic.test.ts` | 171 |  |
-| `src/components/launcherLogic.ts` | 141 | Pure decisions for the app launcher's picker — whether a command line needs |
-| `src/components/lspStatusLogic.test.ts` | 319 |  |
-| `src/components/lspStatusLogic.ts` | 238 |  |
+| `src/components/launcherLogic.test.ts` | 199 |  |
+| `src/components/launcherLogic.ts` | 163 | Pure decisions for the app launcher's picker — whether a command line needs |
+| `src/components/lspStatusLogic.test.ts` | 409 |  |
+| `src/components/lspStatusLogic.ts` | 300 |  |
 | `src/components/notesLogic.test.ts` | 219 |  |
 | `src/components/notesLogic.ts` | 178 | Pure decisions for the Notes / scratchpad panel — creating, renaming, |
+| `src/components/notificationLogic.test.ts` | 169 |  |
+| `src/components/notificationLogic.ts` | 161 | The app's notification service: what deserves a notification, what it says, |
+| `src/components/pluginMenuLogic.test.ts` | 83 |  |
+| `src/components/pluginMenuLogic.ts` | 113 | The **Plugins** titlebar menu: what the optional features offer, and whether |
+| `src/components/projectViewLogic.test.ts` | 171 |  |
+| `src/components/projectViewLogic.ts` | 222 | Pure decisions for the merged **Project** tab — the view that puts the old |
 | `src/components/reviewLayoutLogic.test.ts` | 174 |  |
 | `src/components/reviewLayoutLogic.ts` | 172 | Pure decisions for positioning the floating agent panel — the clamp |
 | `src/components/reviewLogic.test.ts` | 182 |  |
@@ -379,37 +397,43 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/searchLogic.ts` | 439 | The search palette's decisions, with no React and no DOM in sight. |
 | `src/components/setupPromptLogic.test.ts` | 110 |  |
 | `src/components/setupPromptLogic.ts` | 62 | Decision logic for the first-open setup prompt. Pure so it can be unit-tested |
+| `src/components/sqlPanelLogic.test.ts` | 99 |  |
+| `src/components/sqlPanelLogic.ts` | 86 | Pure decisions for the floating SQL console panel: when it is mounted, when a |
 | `src/components/sqlPickerLogic.test.ts` | 272 |  |
 | `src/components/sqlPickerLogic.ts` | 216 |  |
 | `src/components/stashLogic.test.ts` | 33 |  |
 | `src/components/stashLogic.ts` | 21 |  |
 | `src/components/terminalLogic.test.ts` | 347 |  |
 | `src/components/terminalLogic.ts` | 293 | Pure decisions for the floating terminals — naming, cascade staggering, |
+| `src/components/terminalMenuLogic.test.ts` | 254 |  |
+| `src/components/terminalMenuLogic.ts` | 245 | Pure decisions for the titlebar's terminal split button — which rows its |
 | `src/components/treeLogic.test.ts` | 383 |  |
 | `src/components/treeLogic.ts` | 148 |  |
 | `src/components/usagesExtension.ts` | 469 | The CodeMirror half of Find Usages / Go To Definition: decorations, a widget, |
 | `src/components/usagesLogic.test.ts` | 1238 |  |
 | `src/components/usagesLogic.ts` | 922 | Every decision the usages UI makes, with no React, no DOM and no CodeMirror. |
-| `src/components/workspaceTabsLogic.test.ts` | 166 |  |
-| `src/components/workspaceTabsLogic.ts` | 176 | Pure decisions for the top-level workspace tab strip — adding an open |
+| `src/components/workspaceRenameLogic.test.ts` | 246 |  |
+| `src/components/workspaceRenameLogic.ts` | 222 | Custom, user-chosen labels for the open-codebase tabs. |
+| `src/components/workspaceTabsLogic.test.ts` | 241 |  |
+| `src/components/workspaceTabsLogic.ts` | 226 | Pure decisions for the top-level workspace tab strip — adding an open |
 | `src/editorFontSize.ts` | 52 | Applying the editor font size, and telling live editors it moved. |
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 | The one font size every CodeMirror editor in the app reads. |
-| `src/ipc/api.ts` | 1261 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 2240 | TypeScript mirrors of the `cb-core` model types. |
+| `src/ipc/api.ts` | 1271 | Typed wrappers over the Tauri command surface. |
+| `src/ipc/types.ts` | 2255 | TypeScript mirrors of the `cb-core` model types. |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
 | `src/reexportGuards.test.ts` | 23 | / <reference types="vite/client" /> |
-| `src/shortcutLogic.test.ts` | 22 |  |
-| `src/shortcutLogic.ts` | 135 |  |
-| `src/shortcuts.ts` | 40 |  |
+| `src/shortcutLogic.test.ts` | 133 |  |
+| `src/shortcutLogic.ts` | 295 |  |
+| `src/shortcuts.ts` | 78 |  |
 | `src/views/ArchitectureView.tsx` | 679 |  |
-| `src/views/ChangesView.tsx` | 1631 |  |
+| `src/views/ChangesView.tsx` | 1020 |  |
 | `src/views/HistoryView.tsx` | 542 |  |
 | `src/views/InspectView.tsx` | 1086 |  |
-| `src/views/RunView.tsx` | 1932 |  |
-| `src/views/SqlView.tsx` | 917 |  |
+| `src/views/RunView.tsx` | 2220 |  |
+| `src/views/SqlView.tsx` | 1013 |  |
 | `src/views/TestsView.tsx` | 426 |  |
 | `src/views/architecture/DiagramCanvas.tsx` | 760 |  |
 | `src/views/architecture/DiagramEditor.tsx` | 324 |  |
@@ -447,10 +471,12 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/runControlLogic.ts` | 23 | Decision logic for the bulk stop controls (Run tab "Stop All", Tests tab |
 | `src/views/sqlLogic.test.ts` | 653 |  |
 | `src/views/sqlLogic.ts` | 671 | Pure decisions for the SQL console — the streaming reducer, the cell |
-| `src/views/sqlViewLogic.test.ts` | 386 |  |
-| `src/views/sqlViewLogic.ts` | 449 | The decisions `SqlView` would otherwise make inline. |
+| `src/views/sqlViewLogic.test.ts` | 421 |  |
+| `src/views/sqlViewLogic.ts` | 480 | The decisions `SqlView` would otherwise make inline. |
 | `src/views/testsLogic.test.ts` | 279 |  |
 | `src/views/testsLogic.ts` | 89 |  |
+| `src/views/useChangesModel.ts` | 505 | The working-tree model behind the Project tab's Changes rail. |
+| `src/vite-env.d.ts` | 7 | / <reference types="vite/client" /> |
 | `src-tauri/src/commands/architecture.rs` | 219 | Architecture-diagram commands. |
 | `src-tauri/src/commands/behavioral.rs` | 485 | Behavioral before/after testing — running the same configuration against |
 | `src-tauri/src/commands/changelists.rs` | 57 | Change-group commands. |
@@ -462,7 +488,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/git.rs` | 387 | Git commands. |
 | `src-tauri/src/commands/inspect.rs` | 352 | Object-inspection commands. |
 | `src-tauri/src/commands/intents.rs` | 832 | Agent-intent commands. |
-| `src-tauri/src/commands/launcher.rs` | 367 | The app launcher's bridge: run an arbitrary command line, and manage the |
+| `src-tauri/src/commands/launcher.rs` | 380 | The app launcher's bridge: run an arbitrary command line, and manage the |
 | `src-tauri/src/commands/lsp.rs` | 459 | Asking this workspace's language servers something, and saying what they do. |
 | `src-tauri/src/commands/notes.rs` | 21 | Notes / scratchpad commands. |
 | `src-tauri/src/commands/qgate.rs` | 78 | Commands behind the installable quality-gate Stop hook. |
@@ -478,7 +504,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/workspace.rs` | 258 | Workspace and configuration commands. |
 | `src-tauri/src/lib.rs` | 297 | The Tauri shell. |
 | `src-tauri/src/main.rs` | 6 | Suppress the extra console window on Windows in release builds. |
-| `src-tauri/src/qgate_run.rs` | 216 | The `quality-gate` mode: deterministic checks when an agent turn ends. |
+| `src-tauri/src/qgate_run.rs` | 240 | The `quality-gate` mode: deterministic checks when an agent turn ends. |
 | `src-tauri/src/recorder.rs` | 139 | The `record-intent` mode, which is what the installed hooks actually run. |
 | `src-tauri/src/state.rs` | 594 | Shared application state. |
 | `src-tauri/src/state_tests.rs` | 605 | Tests for the multi-workspace [`AppState`]. |
@@ -597,7 +623,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/invocation.rs`: `build()`, `build_coverage()`, `rerun_filter()`, `plan_compound()`, `SolutionBuildStep`, `plan_solution_build()`
 - `crates/core/src/launcher/model.rs`: `Launchable`, `LauncherFile`, `LauncherGroups`
 - `crates/core/src/launcher/parse.rs`: `Tokens`, `tokenise()`, `split_command()`, `shell_flag()`, `shell_args()`, `program_and_args()`
-- `crates/core/src/launcher/recents.rs`: `record_run()`, `group()`, `within_root()`, `rename()`, `set_pinned()`, `remove()`, `find()`
+- `crates/core/src/launcher/recents.rs`: `record_run()`, `group()`, `within_root()`, `rename()`, `set_pinned()`, `set_flags()`, `remove()`, `find()`
 - `crates/core/src/launcher/store.rs`: `launchers_path()`, `load()`, `save()`
 - `crates/core/src/lsp/client.rs`: `ReadyState`, `is_ready()`, `StartFailure`, `RequestError`, `Client`, `start()`, `start_with_ceiling()`, `spec()`, `root()`, `root_uri()`, `capabilities()`, `pid()`, `death()`, `stderr_tail()`, `readiness()`, `wait_ready()`, `shutdown()`, `did_open()`, `did_change()`, `did_close()`, `document_version()`, `references()`, `definition()`, `implementation()`, `type_definition()`, `document_symbols()`
 - `crates/core/src/lsp/documents.rs`: `SyncAction`, `server()`, `path()`, `Documents`, `new()`, `open()`, `change()`, `close()`, `replay_for()`, `text()`, `version()`, `is_open()`, `open_paths()`, `servers_for()`
@@ -623,7 +649,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/pty/model.rs`: `PtySpec`, `TerminalEvent`
 - `crates/core/src/pty/shell.rs`: `clamp_size()`, `pick_shell()`, `default_shell()`, `is_session_marker()`
 - `crates/core/src/qgate/install.rs`: `status()`, `status_for()`, `settings_path()`, `install_plan()`, `install_plan_for()`, `uninstall_plan()`, `uninstall_plan_for()`, `merged_into()`
-- `crates/core/src/qgate/mod.rs`: `Gate`, `label()`, `command()`, `gates_for_changes()`, `touched_source()`, `touched_memories()`, `should_remind_memories()`, `erosion_reminder()`, `has_unresolved_rejection()`, `should_skip_for_loop()`, `has_typecheck_script()`, `is_quality_gate_invocation()`, `QGateInvocation`, `parse_qgate_args()`
+- `crates/core/src/qgate/mod.rs`: `Gate`, `label()`, `command()`, `gates_for_changes()`, `touched_source()`, `touched_memories()`, `should_remind_memories()`, `erosion_reminder()`, `GateVerdict`, `unresolved_packages()`, `declared_dependencies()`, `read_gate_output()`, `has_unresolved_rejection()`, `should_skip_for_loop()`, `has_typecheck_script()`, `is_quality_gate_invocation()`, `QGateInvocation`, `parse_qgate_args()`
 - `crates/core/src/review.rs`: `ReviewAgent`, `AgentMode`, `id()`, `from_id()`, `id()`, `label()`, `program()`, `models()`, `default_model()`, `from_id()`, `models_for()`, `codex_models()`, `parse_codex_models()`, `resolve_model()`, `compose_prompt()`, `resolve_prompt_body()`, `agent_args()`, `detect_agents()`, `agent_args_interactive()`
 - `crates/core/src/rules/mod.rs`: `RuleDoc`, `RulesReport`, `rules_dir()`, `parse_rule_doc()`, `load_rules()`
 - `crates/core/src/running/classify.rs`: `ProcInfo`, `OrphanClassification`, `classify_orphans()`, `identity_matches()`

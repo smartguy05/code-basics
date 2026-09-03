@@ -97,7 +97,7 @@ fn plabel(turn: &str, text: &str, paths: &[&str], source: LabelSource) -> Intent
     }
 }
 
-use crate::git::grouping::GroupKind;
+use crate::git::grouping::{GroupKind, IntentGroup};
 
 fn build(diffs: &[FileDiff], intents: &Intents) -> IntentReview {
     let attributions = attribution::attribute(diffs, intents, Options::default());
@@ -567,14 +567,27 @@ fn one_orphan_geometry_turn_splits_into_two_declared_intent_cards() {
     assert!(out.unfulfilled.is_empty());
 }
 
-/// Two declared labels from different turns both scope the same file: no single
-/// reason can be *bound* (that would be a guess), but rather than dropping them
-/// to a symbol title the card now lists both as candidates — the author's intent
-/// stays visible. The scorecard is untouched: both remain honest, unevidenced
-/// claims (this is the guard against a synthetic span flipping them to
-/// evidenced).
+/// Two declared labels from different turns both scope the same file, and the
+/// geometry binds neither uniquely: each becomes **its own card**, and the one
+/// genuinely ambiguous line is repeated in both.
+///
+/// # This test was rewritten, and why that is not weakening it
+///
+/// It was written for an earlier design (`d9eb2ab`) in which the ambiguity
+/// produced a *single* untitled card listing both reasons in `candidates`. That
+/// design was replaced in `22e7a78`, and the rule that replaced it is the one
+/// stated in `CLAUDE.md`: "An Intent card is one declared intent ... only
+/// genuinely ambiguous lines repeat across plausible intent cards." A synthetic
+/// multi-intent card makes the reviewer decode several goals at once, which
+/// defeats the intent-first review model.
+///
+/// The test was not updated with the code, so it failed on a correct tree while
+/// reporting that a reason had been guessed at. What it guards is unchanged and
+/// is still asserted below: **no reason is invented, none is dropped, and the
+/// scorecard still counts both as honest unevidenced claims** — the guard
+/// against a synthetic span flipping them to evidenced.
 #[test]
-fn two_declared_labels_covering_one_file_surface_as_candidates() {
+fn two_declared_labels_covering_one_file_become_one_card_each() {
     let diff = simple(
         "f.rs",
         &["+    let an_ambiguous_distinctive_line = go_now();"],
@@ -594,20 +607,52 @@ fn two_declared_labels_covering_one_file_surface_as_candidates() {
 
     let out = build(&[diff], &intents);
 
-    let card = out
+    let cards: Vec<&IntentGroup> = out
         .groups
         .iter()
-        .find(|g| g.kind == GroupKind::Intent)
-        .expect("an ambiguous intent card");
-    assert_eq!(card.label, "", "no single reason titles an ambiguous card");
-    assert_eq!(card.candidates.len(), 2);
-    assert!(card.candidates.contains(&"first reason".to_string()));
-    assert!(card.candidates.contains(&"second reason".to_string()));
+        .filter(|g| g.kind == GroupKind::Intent)
+        .collect();
 
-    // Scorecard unchanged — the reasons are shown, not evidenced.
-    assert_eq!(out.scorecard.evidenced, 0);
+    // One card per declared intent — neither reason is dropped, and neither is
+    // merged into the other.
+    let labels: Vec<&str> = cards.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(cards.len(), 2, "got {labels:?}");
+    assert!(labels.contains(&"first reason"), "got {labels:?}");
+    assert!(labels.contains(&"second reason"), "got {labels:?}");
+
+    for card in &cards {
+        // The ambiguous line appears in *both* cards: it is the one line that
+        // genuinely may belong to either, and hiding it from one of them would
+        // be the guess this module refuses.
+        let file = card
+            .files
+            .iter()
+            .find(|f| f.path == "f.rs")
+            .unwrap_or_else(|| panic!("{} covers f.rs", card.label));
+        assert_eq!(file.line_indices, vec![0], "{}", card.label);
+
+        // A card that *is* one intent has nothing to offer as an alternative;
+        // `candidates` belongs to the superseded single-ambiguous-card design.
+        assert!(card.candidates.is_empty(), "{}", card.label);
+
+        // Stated, not corroborated by matched geometry.
+        assert_eq!(card.confidence, Confidence::Low, "{}", card.label);
+    }
+
+    // Scorecard unchanged by the retitling — the reasons are shown, not
+    // evidenced. This is the original guard and the reason the test exists.
     assert_eq!(out.scorecard.claims, 2);
+    assert_eq!(out.scorecard.evidenced, 0);
     assert_eq!(out.scorecard.unmatched, 2);
+
+    // And both are still reported as unfulfilled: titling a card is not
+    // evidence that the claim was carried out.
+    let unfulfilled: Vec<&str> = out.unfulfilled.iter().map(|u| u.label.as_str()).collect();
+    assert!(unfulfilled.contains(&"first reason"), "got {unfulfilled:?}");
+    assert!(
+        unfulfilled.contains(&"second reason"),
+        "got {unfulfilled:?}"
+    );
 }
 
 /// A single bare declared label (no paths) binds to the one orphan geometry

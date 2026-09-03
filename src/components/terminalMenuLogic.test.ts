@@ -1,0 +1,254 @@
+import { describe, expect, it } from "vitest";
+import type { Launchable, RunningRecord, RunningReport } from "../ipc/types";
+import {
+  liveKeysByEntry,
+  newTerminalButton,
+  offersStop,
+  SHORTCUTS_SECTION,
+  shortcutActionLabel,
+  shortcutEntries,
+  terminalMenuRows,
+  type TerminalMenuRow,
+  type TerminalMenuState,
+} from "./terminalMenuLogic";
+
+function entry(over: Partial<Launchable> = {}): Launchable {
+  return {
+    id: "e1",
+    command: "redis-server",
+    cwd: "/repo",
+    env: {},
+    label: null,
+    shell: false,
+    pinned: false,
+    shortcut: false,
+    persistent: false,
+    headless: false,
+    lastRunMs: 0,
+    runCount: 1,
+    ...over,
+  };
+}
+
+function record(over: Partial<RunningRecord> = {}): RunningRecord {
+  return {
+    pid: 100,
+    kind: "external",
+    label: "redis-server",
+    root: "/repo",
+    key: "ext:1",
+    program: "redis-server",
+    startedAtMs: 0,
+    ...over,
+  };
+}
+
+function report(over: Partial<RunningReport> = {}): RunningReport {
+  return { live: [], orphans: [], warnings: [], ...over };
+}
+
+function state(over: Partial<TerminalMenuState> = {}): TerminalMenuState {
+  return {
+    workspaceOpen: true,
+    runningCount: 0,
+    appTabCount: 0,
+    liveAppCount: 0,
+    shortcuts: [],
+    liveKeys: new Map(),
+    shortcutsLoading: false,
+    ...over,
+  };
+}
+
+const row = (rows: TerminalMenuRow[], id: string) => rows.find((r) => r.id === id);
+
+describe("shortcutEntries", () => {
+  it("takes only entries marked as a shortcut, this codebase first", () => {
+    const groups = {
+      thisCodebase: [entry({ id: "a", shortcut: true }), entry({ id: "b" })],
+      global: [entry({ id: "c" }), entry({ id: "d", shortcut: true })],
+    };
+    expect(shortcutEntries(groups).map((e) => e.id)).toEqual(["a", "d"]);
+  });
+
+  it("never reads a pin as a shortcut — they are different facts", () => {
+    const groups = {
+      thisCodebase: [entry({ id: "pinned-only", pinned: true })],
+      global: [],
+    };
+    expect(shortcutEntries(groups)).toEqual([]);
+  });
+});
+
+describe("liveKeysByEntry", () => {
+  it("has nothing to say before a report has been read", () => {
+    expect(liveKeysByEntry(null, new Map([["ext:1", "e1"]])).size).toBe(0);
+  });
+
+  it("joins live external processes back to the entry they were launched from", () => {
+    const live = report({ live: [record({ key: "ext:1" }), record({ key: "ext:2", pid: 101 })] });
+    const map = liveKeysByEntry(live, new Map([["ext:1", "e1"], ["ext:2", "e1"]]));
+    expect(map.get("e1")).toEqual(["ext:1", "ext:2"]);
+  });
+
+  it("ignores processes of every other kind", () => {
+    const live = report({ live: [record({ key: "ext:1", kind: "terminal" })] });
+    expect(liveKeysByEntry(live, new Map([["ext:1", "e1"]])).size).toBe(0);
+  });
+
+  it("ignores a launch whose process is no longer live", () => {
+    const map = liveKeysByEntry(report(), new Map([["ext:1", "e1"]]));
+    expect(map.get("e1")).toBe(undefined);
+  });
+
+  it("ignores a live process the app did not launch from the launcher", () => {
+    const live = report({ live: [record({ key: "ext:stranger" })] });
+    expect(liveKeysByEntry(live, new Map()).size).toBe(0);
+  });
+});
+
+describe("newTerminalButton", () => {
+  it("is enabled with a codebase open", () => {
+    expect(newTerminalButton({ workspaceOpen: true }).disabled).toBe(false);
+  });
+
+  it("says why it is disabled with none open", () => {
+    const button = newTerminalButton({ workspaceOpen: false });
+    expect(button.disabled).toBe(true);
+    expect(button.title).toMatch(/Open a codebase/);
+  });
+});
+
+describe("terminalMenuRows", () => {
+  it("lists the four folded-in actions in order", () => {
+    const rows = terminalMenuRows(state());
+    expect(rows.map((r) => r.id)).toEqual([
+      "terminal.new",
+      "panel.launch",
+      "panel.running",
+      "panel.apps",
+    ]);
+  });
+
+  it("disables New Terminal with no codebase open, and says why", () => {
+    const rows = terminalMenuRows(state({ workspaceOpen: false }));
+    expect(row(rows, "terminal.new")?.disabled).toBe(true);
+    expect(row(rows, "terminal.new")?.action).toBe(null);
+  });
+
+  it("leaves Launch and Running usable with no codebase open", () => {
+    const rows = terminalMenuRows(state({ workspaceOpen: false }));
+    expect(row(rows, "panel.launch")?.disabled).toBe(false);
+    expect(row(rows, "panel.running")?.disabled).toBe(false);
+  });
+
+  it("no longer offers the SQL console — that moved to the Plugins menu", () => {
+    // This menu is about *running things*; a database console is not one, and
+    // the next plugin would have been a second guest here. Its rules now live
+    // in `pluginMenuLogic`, tested there.
+    expect(row(terminalMenuRows(state()), "view.sql")).toBe(undefined);
+  });
+
+  it("badges the running count, and shows no badge for none", () => {
+    expect(row(terminalMenuRows(state({ runningCount: 3 })), "panel.running")?.badge).toBe(3);
+    expect(row(terminalMenuRows(state()), "panel.running")?.badge).toBe(null);
+  });
+
+  it("disables App output until something has been launched", () => {
+    const empty = row(terminalMenuRows(state()), "panel.apps");
+    expect(empty?.disabled).toBe(true);
+    expect(empty?.title).toMatch(/Nothing launched/);
+    const some = row(terminalMenuRows(state({ appTabCount: 2, liveAppCount: 1 })), "panel.apps");
+    expect(some?.disabled).toBe(false);
+    expect(some?.badge).toBe(1);
+  });
+
+  it("badges only the apps still running, not every tab", () => {
+    const rows = terminalMenuRows(state({ appTabCount: 3, liveAppCount: 0 }));
+    expect(row(rows, "panel.apps")?.badge).toBe(null);
+    expect(row(rows, "panel.apps")?.disabled).toBe(false);
+  });
+
+  it("draws no separator and no section when there are no shortcuts", () => {
+    const rows = terminalMenuRows(state());
+    expect(rows.some((r) => r.separator)).toBe(false);
+    expect(rows.some((r) => r.section !== undefined)).toBe(false);
+  });
+
+  it("says it is still reading rather than claiming there are none", () => {
+    const rows = terminalMenuRows(state({ shortcutsLoading: true }));
+    const loading = row(rows, "shortcuts.loading");
+    expect(loading?.disabled).toBe(true);
+    expect(loading?.action).toBe(null);
+    expect(loading?.section).toBe(SHORTCUTS_SECTION);
+  });
+
+  it("opens the shortcut section once, on the first shortcut row", () => {
+    const rows = terminalMenuRows(
+      state({ shortcuts: [entry({ id: "a", shortcut: true }), entry({ id: "b", shortcut: true })] }),
+    );
+    expect(row(rows, "shortcut:a")?.separator).toBe(true);
+    expect(row(rows, "shortcut:a")?.section).toBe(SHORTCUTS_SECTION);
+    expect(row(rows, "shortcut:b")?.separator).toBe(false);
+    expect(row(rows, "shortcut:b")?.section).toBe(undefined);
+  });
+
+  it("labels a shortcut by its rename, falling back to the command", () => {
+    const rows = terminalMenuRows(
+      state({
+        shortcuts: [
+          entry({ id: "a", shortcut: true, label: "Redis" }),
+          entry({ id: "b", shortcut: true, command: "docker compose up" }),
+        ],
+      }),
+    );
+    expect(row(rows, "shortcut:a")?.label).toBe("Redis");
+    expect(row(rows, "shortcut:b")?.label).toBe("docker compose up");
+  });
+
+  it("runs a shortcut that is not running", () => {
+    const rows = terminalMenuRows(state({ shortcuts: [entry({ id: "a", shortcut: true })] }));
+    expect(row(rows, "shortcut:a")?.live).toBe(false);
+    expect(row(rows, "shortcut:a")?.action).toEqual({
+      kind: "runShortcut",
+      entry: entry({ id: "a", shortcut: true }),
+    });
+  });
+
+  it("offers Stop for a persistent shortcut that is up, with every live key", () => {
+    const persistent = entry({ id: "a", shortcut: true, persistent: true });
+    const rows = terminalMenuRows(
+      state({
+        shortcuts: [persistent],
+        liveKeys: new Map([["a", ["ext:1", "ext:2"]]]),
+      }),
+    );
+    const shortcut = row(rows, "shortcut:a");
+    expect(shortcut?.live).toBe(true);
+    expect(shortcut?.action).toEqual({
+      kind: "stopShortcut",
+      entry: persistent,
+      keys: ["ext:1", "ext:2"],
+    });
+    expect(shortcutActionLabel(shortcut as TerminalMenuRow)).toBe("Stop");
+  });
+
+  it("still offers Run for an ordinary shortcut that is up, but shows it as live", () => {
+    const ordinary = entry({ id: "a", shortcut: true });
+    const rows = terminalMenuRows(
+      state({ shortcuts: [ordinary], liveKeys: new Map([["a", ["ext:1"]]]) }),
+    );
+    const shortcut = row(rows, "shortcut:a");
+    expect(shortcut?.live).toBe(true);
+    expect(shortcut?.action?.kind).toBe("runShortcut");
+    expect(shortcutActionLabel(shortcut as TerminalMenuRow)).toBe("Run");
+  });
+});
+
+describe("offersStop", () => {
+  it("needs both a persistent entry and a live process", () => {
+    expect(offersStop(entry({ persistent: true }), true)).toBe(true);
+    expect(offersStop(entry({ persistent: true }), false)).toBe(false);
+    expect(offersStop(entry(), true)).toBe(false);
+  });
+});

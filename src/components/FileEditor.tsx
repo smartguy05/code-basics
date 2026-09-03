@@ -14,7 +14,7 @@ import {
   EMPTY_SECRETS,
   sourceEnablesLsp,
   sourceLanguageHint,
-  type EditorSource,
+  type EditableSource,
 } from "./editorSourceLogic";
 import { lineToPos } from "./searchLogic";
 import { onEditorFontSizeChange } from "../editorFontSize";
@@ -137,7 +137,7 @@ function baseName(path: string): string {
  * for the file read and write, and everything LSP-shaped degrades to a row or a
  * corner badge that says what happened.
  *
- * The tab's backing is an {@link EditorSource}, not a bare path: a workspace file
+ * The tab's backing is an {@link EditableSource}, not a bare path: a workspace file
  * reads/writes through `fs_*` and drives the language-server surface, while a
  * project's user secrets read/write through the secrets commands and skip the
  * server entirely (see {@link lspEnabled}). Everything else — line numbers, find,
@@ -151,7 +151,12 @@ export function FileEditor({
   onNavigate,
 }: {
   /** What backs this tab. A FileEditor is keyed by its identity and never rebinds. */
-  source: EditorSource;
+  /**
+   * What backs this tab. Deliberately not `EditorSource`: a diff is rendered by
+   * `DiffPane`, and letting one reach the read/write ternaries below would
+   * overwrite the real file with the diff buffer. See `EditableSource`.
+   */
+  source: EditableSource;
   onDirtyChange: (dirty: boolean) => void;
   /**
    * A 1-based line to put the cursor on and scroll to, or null for none.

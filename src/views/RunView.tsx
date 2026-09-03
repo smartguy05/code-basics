@@ -1,4 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { FolderTree, GitCompare, Hammer, Play, Square } from "lucide-react";
+import { ChangesView } from "./ChangesView";
+import { DiffPane } from "../components/DiffPane";
+import { useChangesModel } from "./useChangesModel";
+import {
+  paneForAction,
+  toolbarFor,
+  type ChangesVisibility,
+  type ProjectAction,
+  type ProjectPane,
+} from "../components/projectViewLogic";
 import { OutputConsole, type ConsoleHandle } from "../components/OutputConsole";
 import { ConfigEditor } from "../components/ConfigEditor";
 import {
@@ -8,7 +19,7 @@ import {
 } from "../components/configLogic";
 import { FileEditor } from "../components/FileEditor";
 import { FileTree } from "../components/FileTree";
-import { LspStatusIndicator } from "../components/LspStatus";
+import { lspPollKeyFor } from "../components/lspStatusLogic";
 import { RiderImportDialog } from "../components/RiderImportDialog";
 import { RunConfigMenu } from "../components/RunConfigMenu";
 import { ContextMenu } from "../components/ContextMenu";
@@ -20,8 +31,19 @@ import {
   stopRowLabel,
   type StopMenuRow,
 } from "../components/runningLogic";
-import { secretsFile, secretsProjects, type OpenEditorFile } from "../components/editorSourceLogic";
+import {
+  diffFile,
+  sameWorkspaceFile,
+  secretsFile,
+  secretsProjects,
+  sourceEnablesLsp,
+  sourceEntersNavStack,
+  workspaceFile,
+  type OpenEditorFile,
+} from "../components/editorSourceLogic";
 import { Sidebar } from "../components/Sidebar";
+import { useShortcutHint } from "../shortcuts";
+import { withShortcut } from "../shortcutLogic";
 import {
   EnvironmentPicker,
   type EnvironmentState,
@@ -52,7 +74,9 @@ import type { SessionStatus } from "./debugLogic";
 import type { InspectRequest, OpenFileRequest, SelectConfigRequest } from "../App";
 import type {
   AttachableProcess,
+  BehavioralReport,
   BuildAction,
+  ComparisonMode,
   DebugEvent,
   InspectStatus,
   ProcessEvent,
@@ -172,6 +196,26 @@ function loadEnvironments(root: string): EnvironmentState {
   }
 }
 
+/**
+ * The **Project** tab: the file tree and the working-tree changes behind one
+ * icon rail, over a single shared editor area.
+ *
+ * The merge landed here rather than in a new container on purpose. `openFiles`
+ * — the open tabs, the active one, the dirty and pinned sets, the back/forward
+ * stack — already lives in this component, and a change's diff is now just
+ * another tab in it. A wrapper above `RunView` would have had to re-own all of
+ * that (or thread it through props in both directions) to put one more tab in
+ * the strip.
+ *
+ * Two decouplings are load-bearing and both live in `projectViewLogic`:
+ *
+ * - The **toolbar follows the active editor tab**, not the rail — a diff tab
+ *   shows the Changes toolbar, everything else the Run toolbar. Tying it to the
+ *   rail would arm Stage/Revert above a source file.
+ * - The **rail does not follow the tabs**: opening an editor tab moves no pane,
+ *   because the result of opening one is in the main area, which both panes
+ *   share.
+ */
 export function RunView({
   workspace,
   onWorkspaceChange,
@@ -182,11 +226,38 @@ export function RunView({
   onSelectConsumed,
   onNavigate,
   onProcessResult,
+  onLspPollKeyChange,
   active,
+  pane,
+  onPaneChange,
+  tabForeground,
+  codebaseActive,
+  behavioral,
+  onOpenReview,
+  onRunBehavioral,
+  onVerifyClaims,
 }: {
   workspace: Workspace;
   onWorkspaceChange: (workspace: Workspace) => void;
   onInspect: (request: InspectRequest) => void;
+  /**
+   * Which surface the icon rail is showing. Owned by `WorkspaceTab` rather than
+   * here, because the `view.run` / `view.changes` shortcuts have to select the
+   * Project tab *and* preselect a pane in one action.
+   */
+  pane: ProjectPane;
+  onPaneChange: (pane: ProjectPane) => void;
+  /**
+   * The two halves of {@link active}, kept apart because the changes model needs
+   * all three visibility terms separately — see `ChangesVisibility`.
+   */
+  tabForeground: boolean;
+  codebaseActive: boolean;
+  /** The finished before/after report, for the intent cards' badges. */
+  behavioral: BehavioralReport | null;
+  onOpenReview: () => void;
+  onRunBehavioral: (configId: string, httpFiles: string[] | null) => void;
+  onVerifyClaims: (configId: string, httpFiles: string[] | null) => void;
   /**
    * Whether the Run tab is the one on screen. The back/forward mouse buttons
    * only act while it is: this view stays mounted when hidden, and moving the
@@ -215,6 +286,18 @@ export function RunView({
   onSelectConsumed?: () => void;
   /** Report how any hosted run/build process ended to the workspace tab. */
   onProcessResult?: (success: boolean) => void;
+  /**
+   * Report this view's open-file set upward, as the key the language-server
+   * status indicator polls on.
+   *
+   * The indicator lives in the app's bottom status bar, which is outside every
+   * workspace tab and so cannot see these editors — and it must not simply poll
+   * forever instead: a server is started by the `didOpen` a `FileEditor` sends,
+   * so with nothing open there is nothing that could have started one and
+   * `lspStatusLogic.lspPollDelay` deliberately stops. Reported per codebase and
+   * read for the active one, exactly as terminal attention is.
+   */
+  onLspPollKeyChange?: (key: string) => void;
 }) {
   const appConfigs = workspace.configs.filter((c) => c.kind === "app");
 
@@ -339,11 +422,75 @@ export function RunView({
 
   function openFile(path: string, name: string) {
     setOpenFiles((previous) =>
-      previous.some((f) => f.id === path)
+      // `sameWorkspaceFile`, never `f.id === path`: a diff tab on this file
+      // carries the file's path too, so an id comparison would find the diff,
+      // decide the file was already open, and activate the diff instead.
+      previous.some((f) => sameWorkspaceFile(f, path))
         ? previous
-        : [...previous, { id: path, name, source: { kind: "workspace", path } }],
+        : [...previous, { ...workspaceFile(path), name }],
     );
     setActiveFile(path);
+  }
+
+  /**
+   * The comparison mode the next diff tab is minted at.
+   *
+   * A ref because {@link useChangesModel} is handed `onOpenDiff` *before* it
+   * returns the mode, so the callback cannot close over it. The hook only calls
+   * `onOpenDiff` from event handlers, never during render, so by the time it
+   * fires this ref is the current mode. `selectMode` writes it synchronously
+   * for the one handler that changes the mode and re-opens in the same tick.
+   */
+  const modeRef = useRef<ComparisonMode>("workingToHead");
+
+  /**
+   * Show a changed file's diff, as another editor tab beside the open files.
+   *
+   * Minted through `diffFile`, so the mode is part of the tab's identity: the
+   * same file staged and unstaged are two different things to look at, and one
+   * tab that quietly re-aimed would keep its label and scroll position while
+   * meaning something else.
+   */
+  function openDiff(path: string) {
+    const file = diffFile(path, modeRef.current);
+    setOpenFiles((previous) =>
+      previous.some((f) => f.id === file.id) ? previous : [...previous, file],
+    );
+    setActiveFile(file.id);
+  }
+
+  /**
+   * Whether the changes panel is actually on screen, in all three of its
+   * senses. Memoised because the model's refresh and poll effects depend on the
+   * object, not on its fields.
+   */
+  const changesVisibility = useMemo<ChangesVisibility>(
+    () => ({ pane, tabForeground, codebaseActive }),
+    [pane, tabForeground, codebaseActive],
+  );
+
+  /**
+   * The working tree, shared by the side panel and the one diff pane below.
+   * Owned here — above both — because they would otherwise each hold a mode, a
+   * busy flag and a scan, and disagree the moment either one acted.
+   */
+  const changes = useChangesModel({
+    workspace,
+    visibility: changesVisibility,
+    onOpenDiff: openDiff,
+  });
+  modeRef.current = changes.mode;
+
+  /** Set the comparison mode everywhere it is read, this render included. */
+  function selectMode(next: ComparisonMode) {
+    modeRef.current = next;
+    changes.setMode(next);
+  }
+
+  /** Move the rail, but only for the actions that have earned the right to. */
+  function applyProjectAction(action: ProjectAction) {
+    const next = paneForAction(action);
+    if (next !== null) onPaneChange(next);
   }
 
   /**
@@ -551,7 +698,15 @@ export function RunView({
    * where the warning belongs.
    */
   function closePathAndDescendants(path: string) {
-    const gone = (id: string) => id === path || id.startsWith(`${path}/`);
+    // Matched on the *source* path, not the tab id, so a diff tab on a deleted
+    // file goes too — its id is `diff:<mode>:<path>`, which no prefix test over
+    // ids would catch, and a diff of a file that no longer exists is a pane
+    // that can only fail to read.
+    const goneFile = (file: OpenFile) =>
+      file.source.kind !== "secrets" &&
+      (file.source.path === path || file.source.path.startsWith(`${path}/`));
+    const goneIds = new Set(openFiles.filter(goneFile).map((f) => f.id));
+    const gone = (id: string) => goneIds.has(id);
     const remaining = openFiles.filter((f) => !gone(f.id));
     if (remaining.length === openFiles.length) return;
 
@@ -849,6 +1004,25 @@ export function RunView({
     saveCollapsed(localStorage, workspace.root, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openFiles.length, consoleCollapsed, workspace.root]);
+
+  // The open-file set, as the status bar's language-server indicator polls on
+  // it. Reported from an effect keyed on the *string* rather than on the array,
+  // so a render that did not change which files are open does not re-arm the
+  // poll — and so a caller passing a fresh closure each render cannot loop.
+  //
+  // Filtered by `sourceEnablesLsp`, which is not cosmetic: a `secrets:` tab is
+  // opened with the language server off and sends no `didOpen`, so it can never
+  // start a server. Counting one would leave the app polling forever for a
+  // status that cannot change — cheap per tab when this lived in the Run
+  // toolbar, app-global now that one indicator serves every codebase.
+  const lspPollKey = lspPollKeyFor(
+    openFiles.filter((f) => sourceEnablesLsp(f.source)).map((f) => f.id),
+  );
+  useEffect(() => {
+    onLspPollKeyChange?.(lspPollKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lspPollKey]);
+
   const selected = appConfigs.find((c) => c.id === selectedId) ?? null;
   const favorites = new Set(workspace.favorites);
 
@@ -1248,6 +1422,19 @@ export function RunView({
       : null;
   const crashCode = activeInspect?.exit?.code ?? null;
 
+  /**
+   * The tab the editor area is showing, and what backs it.
+   *
+   * `isDiff` comes from `toolbarFor` rather than a hand-rolled kind check, so
+   * the toolbar the user sees and the pane the main area renders can never
+   * disagree — they are the same decision, asked once.
+   */
+  const activeTab = openFiles.find((file) => file.id === activeFile) ?? null;
+  const activeSource = activeTab?.source ?? null;
+  const isDiff = toolbarFor(activeTab) === "changes";
+  /** Whatever Run is bound to now, so the tooltip cannot advertise a stale key. */
+  const runKey = useShortcutHint("run.run");
+
   // The open tabs split into the pinned row and the normal row; with nothing
   // pinned this is exactly the old single strip.
   const { pinned: pinnedTabs, unpinned: unpinnedTabs } = partitionTabs(
@@ -1264,10 +1451,23 @@ export function RunView({
         className={file.id === activeFile ? "active" : ""}
         onClick={() => {
           setActiveFile(file.id);
-          // Only workspace files enter the back/forward stack: a secrets tab has
-          // no reopenable path (its id is `secrets:<project>`), and go-to-def
-          // never lands on it.
-          if (file.source.kind === "workspace") recordNav(file.source.path);
+          // Which sources enter the back/forward stack is `editorSourceLogic`'s
+          // rule, not a condition retyped here: the stack stores paths, so a
+          // secrets tab (`secrets:<project>`, no path at all) and a diff tab
+          // (which would come back as the plain file at a mode the stack never
+          // recorded) are both excluded.
+          if (sourceEntersNavStack(file.source)) {
+            recordNav(file.source.path);
+          }
+          // Clicking a diff tab is another way of selecting that change, so the
+          // model is told: the panel's selected row, the card scoping and the
+          // comparison mode must all describe the diff now on screen. `openFile`
+          // calls back into `openDiff`, which mints the identical id and so
+          // finds this very tab rather than adding one.
+          if (file.source.kind === "diff") {
+            selectMode(file.source.mode);
+            changes.openFile(file.source.path);
+          }
         }}
         // Middle-click closes, like browser tabs. The mousedown guard stops the
         // autoscroll cursor.
@@ -1315,38 +1515,83 @@ export function RunView({
 
   return (
     <>
-      <Sidebar>
-        {/* Above the tree, not below it: the tree is as long as the repository
-            and this would never be seen under it. Rows here are text, not
-            controls — there is nothing to run, and the reason is on the row
-            and in the tooltip so it is readable without opening a console. */}
-        {unreadableProjects.length > 0 && (
-          <>
-            <div className="group-label">Could not be read</div>
-            {unreadableProjects.map((project) => (
-              <div
-                key={project.id}
-                className="row project-unreadable"
-                title={`${project.manifestPath}\n${project.unreadable}`}
-              >
-                <div className="project-unreadable-name">{project.name}</div>
-                <div className="faint">{project.unreadable}</div>
-              </div>
-            ))}
-          </>
-        )}
+      {/* The tool-window rail, Rider-style. Two surfaces over one editor
+          area, so switching is navigation rather than a tab change: the open
+          files, the running processes and the console all stay as they were. */}
+      <div className="project-rail" role="tablist" aria-label="Project panels">
+        <button
+          className={pane === "files" ? "active" : ""}
+          role="tab"
+          aria-selected={pane === "files"}
+          aria-label="Files"
+          title="Files"
+          onClick={() => applyProjectAction({ kind: "railSelect", pane: "files" })}
+        >
+          <FolderTree />
+        </button>
+        <button
+          className={pane === "changes" ? "active" : ""}
+          role="tab"
+          aria-selected={pane === "changes"}
+          aria-label="Changes"
+          title="Changes"
+          onClick={() => applyProjectAction({ kind: "railSelect", pane: "changes" })}
+        >
+          <GitCompare />
+        </button>
+      </div>
 
-        <div className="group-label">Files</div>
-        <FileTree
-          refreshToken={workspace}
-          activePath={activeFile}
-          onOpenFile={(path, name) => {
-            openFile(path, name);
-            recordNav(path);
-          }}
-          onPathGone={closePathAndDescendants}
+      {/* Only the selected panel is mounted. The tree is cheap to rebuild and
+          the changes panel re-reads git on becoming visible anyway
+          (`shouldRefreshChanges`), so keeping the hidden one alive would buy
+          nothing — and it would put a second `changes.commit` button in the
+          DOM, which is exactly what `executeCommand`'s first-*rendered*-match
+          rule had to be written to survive. */}
+      {pane === "files" ? (
+        <Sidebar>
+          {/* Above the tree, not below it: the tree is as long as the repository
+              and this would never be seen under it. Rows here are text, not
+              controls — there is nothing to run, and the reason is on the row
+              and in the tooltip so it is readable without opening a console. */}
+          {unreadableProjects.length > 0 && (
+            <>
+              <div className="group-label">Could not be read</div>
+              {unreadableProjects.map((project) => (
+                <div
+                  key={project.id}
+                  className="row project-unreadable"
+                  title={`${project.manifestPath}\n${project.unreadable}`}
+                >
+                  <div className="project-unreadable-name">{project.name}</div>
+                  <div className="faint">{project.unreadable}</div>
+                </div>
+              ))}
+            </>
+          )}
+
+          <div className="group-label">Files</div>
+          <FileTree
+            refreshToken={workspace}
+            // A diff tab's id is `diff:<mode>:<path>` and names no file on disk,
+            // so the tree is told nothing rather than asked to reveal it.
+            activePath={activeSource?.kind === "workspace" ? activeSource.path : null}
+            onOpenFile={(path, name) => {
+              openFile(path, name);
+              recordNav(path);
+            }}
+            onPathGone={closePathAndDescendants}
+          />
+        </Sidebar>
+      ) : (
+        <ChangesView
+          workspace={workspace}
+          model={changes}
+          behavioral={behavioral}
+          onOpenReview={onOpenReview}
+          onRunBehavioral={onRunBehavioral}
+          onVerifyClaims={onVerifyClaims}
         />
-      </Sidebar>
+      )}
 
       {stopMenu && (
         <ContextMenu x={stopMenu.x} y={stopMenu.y} onClose={() => setStopMenu(null)}>
@@ -1394,367 +1639,402 @@ export function RunView({
       )}
 
       <div className="main">
-        <div className="toolbar">
-          <button
-            data-command="run.run"
-            className="primary"
-            onClick={() => selected && start(selected)}
-            disabled={!selected || running.has(selected.id) || selectedUnreadable !== null}
-            title={selectedUnreadable ?? undefined}
-          >
-            Run
-          </button>
-          <button
-            data-command="run.debug"
-            className="primary"
-            onClick={() => selected && void debug(selected)}
-            disabled={
-              !selected ||
-              running.has(selected.id) ||
-              selectedUnreadable !== null ||
-              !debuggable.available
-            }
-            title={
-              selectedUnreadable ??
-              (debuggable.available
-                ? "Launch with the debugger attached"
-                : debuggable.reason)
-            }
-          >
-            Debug
-          </button>
-          <span className="split-button">
-            <button
-              data-command="run.stop"
-              onClick={() => selected && stop(selected)}
-              disabled={!selected || !running.has(selected.id)}
-              title="Stop the selected configuration"
-            >
-              Stop
-            </button>
-            <button
-              className="split-button-arrow"
-              onClick={(e) => void openStopMenu(e)}
-              title="Choose a running configuration to stop"
-              aria-label="Choose a running configuration to stop"
-            >
-              ▾
-            </button>
-          </span>
-          <button
-            data-command="run.restart"
-            onClick={() => selected && start(selected)}
-            disabled={!selected || selectedUnreadable !== null}
-            title={selectedUnreadable ?? "Stop and start again"}
-          >
-            Restart
-          </button>
-          <button
-            onClick={() =>
-              activeSession && consoleRefs.current.get(activeSession)?.clear()
-            }
-            disabled={!activeSession}
-            title="Clear this tab's console output"
-          >
-            Clear
-          </button>
+        {/* The main area shows the active tab, and the toolbar follows it.
 
-          <button
-            data-command="run.build"
-            onClick={() => selected && runBuild(selected, "build")}
-            disabled={
-              selected?.ecosystem !== "dotnet" || building || selectedUnreadable !== null
-            }
-            title={selectedUnreadable ?? "Build the project"}
-          >
-            🔨
-          </button>
-          <button
-            data-command="run.rebuild"
-            onClick={() => selected && runBuild(selected, "rebuild")}
-            disabled={
-              selected?.ecosystem !== "dotnet" || building || selectedUnreadable !== null
-            }
-            title={selectedUnreadable ?? "Rebuild the project (full, non-incremental)"}
-          >
-            ⟳
-          </button>
-          <button
-            data-command="run.clean"
-            onClick={() => selected && runBuild(selected, "clean")}
-            disabled={
-              selected?.ecosystem !== "dotnet" || building || selectedUnreadable !== null
-            }
-            title={selectedUnreadable ?? "Clean the project's build output"}
-          >
-            🧹
-          </button>
-
-          <button onClick={() => selected && setEditing(selected)} disabled={!selected}>
-            Edit
-          </button>
-          {onlySecretProj ? (
-            <button
-              onClick={() => openSecrets(onlySecretProj.manifestPath)}
-              title={`Edit ${onlySecretProj.name}'s .NET user secrets`}
-            >
-              Secrets…
-            </button>
-          ) : secretProjs.length > 1 ? (
-            <div className="dropdown">
-              <button
-                onClick={() => setSecretsOpen((was) => !was)}
-                title="Choose a .NET project to edit its user secrets"
-              >
-                Secrets… ▾
-              </button>
-              {secretsOpen && (
-                <>
-                  <div className="dropdown-backdrop" onClick={() => setSecretsOpen(false)} />
-                  <div className="dropdown-menu" style={{ minWidth: 220 }}>
-                    {secretProjs.map((project) => (
-                      <div
-                        key={project.id}
-                        className="dropdown-item"
-                        onClick={() => {
-                          openSecrets(project.manifestPath);
-                          setSecretsOpen(false);
-                        }}
-                      >
-                        {project.name}
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          ) : (
-            <button disabled title="User secrets are available for .NET projects">
-              Secrets…
-            </button>
-          )}
-          {selected?.ecosystem === "dotnet" && (
-            <>
-            {(() => {
-              // Only shown for an ecosystem that has build configurations at
-              // all, which today means .NET. `buildConfigurationsFor` returns
-              // nothing for the others rather than inventing a Debug/Release
-              // pair that would put a flag on a command line that never took
-              // one.
-              const options = buildConfigurationOptions(selected);
-              if (!selected || options.length === 0) return null;
-              const current = buildConfigurationOf(selected) ?? options[0];
-              return (
-                <select
-                  value={current}
-                  onChange={(e) => chooseBuildConfiguration(selected.id, e.target.value)}
-                  title="The build configuration this configuration runs and builds in"
-                  aria-label="Build configuration"
-                >
-                  {options.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              );
-            })()}
-            <EnvironmentPicker state={environments} onChange={saveEnvironments} />
-            </>
-          )}
-          {/* The run-configuration picker sits just right of the environment
-              dropdown, so what you run and what you run it in are together. */}
-          <RunConfigMenu
-            configs={appConfigs}
-            selectedId={selectedId}
-            favorites={favorites}
-            dotClass={dotClass}
-            canMove={(config, delta) => neighborId(config, delta) !== null}
-            groupLabel={solutionOf}
-            onSelect={(config) => {
-              setSelectedId(config.id);
-              // Selecting something that has a console tab focuses that tab.
-              if (sessions.some((s) => s.id === config.id)) {
-                setActiveSession(config.id);
-              }
-            }}
-            onToggleFavorite={(config) => void toggleFavorite(config)}
-            onMove={(config, delta) => void move(config, delta)}
-            onNew={() =>
-              setEditing({
-                id: `custom:${Date.now()}`,
-                name: "New configuration",
-                kind: "app",
-                ecosystem: "dotnet",
-                source: "userFile",
-              })
-            }
-            onImport={() => setImporting(true)}
+            The order is load-bearing. `DiffPane` renders its own `.toolbar`
+            and `.content`, so with a diff active the DOM reads: diff toolbar,
+            diff content, then the editor area *hidden beside it*. Two
+            consequences, both deliberate: the editors stay mounted and keep
+            their state, scroll and language-server documents; and there is
+            never a second `.toolbar` on screen, so `changes.stage` cannot be
+            answered by a control the user is not looking at. */}
+        {isDiff ? (
+          <DiffPane
+            path={changes.selectedPath}
+            mode={changes.mode}
+            onModeChange={selectMode}
+            scopedHunks={changes.groupHunks}
+            highlight={changes.highlight}
+            intentGroups={changes.intentGroups}
+            erosion={changes.erosion}
+            coverage={changes.coverage}
+            busy={changes.busy}
+            runAction={changes.withBusy}
+            // A `useState` setter, never an inline arrow: this is a
+            // dependency of the pane's load effect, and a fresh identity per
+            // render would refetch the diff forever.
+            onError={changes.setError}
+            onMutated={changes.refreshAll}
+            reloadRef={changes.reloadFile}
+            banner={changes.error ? <div className="error">{changes.error}</div> : null}
           />
-
-          <span style={{ flex: 1 }} />
-          {/* Silent unless a server is starting, missing or dead. The key is
-              the open-file set because opening a file is what starts a server:
-              a `didOpen` from `FileEditor`, not anything this component does. */}
-          <LspStatusIndicator pollKey={openFiles.map((f) => f.id).join("\0")} />
-          {selected && (
-            <span className="muted mono" style={{ fontSize: 11 }}>
-              {selected.ecosystem}
-              {/* The build configuration is not repeated here: it is the
-                  picker above, and a second copy would go stale the moment the
-                  picker overrode the configuration's own default. */}
-              {selected.launchProfile ? ` · ${selected.launchProfile}` : ""}
-              {selected.script ? ` · ${selected.script}` : ""}
-            </span>
-          )}
-        </div>
-
-        {error && <div className="error">{error}</div>}
-        {selectedUnreadable && (
-          <div className="warning inspect-notice">
-            <strong>This configuration's project could not be read.</strong>
-            <div>{selectedUnreadable}</div>
-            <div className="muted">
-              Running it would start the same runner over the same file and fail
-              several seconds later with the runner's wording, so Run, Restart
-              and the build buttons are disabled until the manifest parses.
-            </div>
-          </div>
-        )}
-        {selected?.warnings?.map((warning) => (
-          <div className="warning" key={warning}>
-            {warning}
-          </div>
-        ))}
-
-        {/* Deliberately outside `.console-area`: that subtree hosts xterm and
-            its sizing is not to be disturbed. */}
-        {/* A dump is only called *this* run's crash when it carries the pid
-            this run reported. Otherwise it is a dump that was written while
-            this ran — with two configurations up it is as likely to be the
-            other one's — and it is offered named rather than claimed. */}
-        {crashDump && (
+        ) : (
+          <>
           <div className="toolbar">
-            <span className="muted" style={{ fontSize: 11 }}>
-              {crashDump.certain ? (
-                <>
-                  {activeLabel} crashed
-                  {crashCode != null ? ` (exit ${crashCode})` : ""} and a dump
-                  was captured.
-                </>
-              ) : (
-                <>
-                  {activeLabel} exited
-                  {crashCode != null ? ` (exit ${crashCode})` : ""}. A dump was
-                  written while it was running — nothing confirms it came from
-                  this configuration rather than another one:{" "}
-                  <span className="mono">
-                    {crashDump.dump.executable} · pid {crashDump.dump.pid}
-                  </span>
-                  .
-                </>
-              )}
-            </span>
             <button
-              className={crashDump.certain ? "primary" : undefined}
-              title={`Read ${crashDump.dump.executable} · pid ${crashDump.dump.pid}`}
-              onClick={() =>
-                onInspect({
-                  target: { kind: "dump", path: crashDump.dump.path },
-                  root: { kind: "crashException" },
-                  reason: crashDump.certain
-                    ? `crash in ${activeLabel}${
-                        crashCode != null ? ` (exit ${crashCode})` : ""
-                      }`
-                    : `${crashDump.dump.executable} · pid ${crashDump.dump.pid}, a dump written while ${activeLabel} was running — not confirmed to be its crash`,
-                })
-              }
+              data-command="run.run"
+              className="primary icon-label-button"
+              onClick={() => selected && start(selected)}
+              disabled={!selected || running.has(selected.id) || selectedUnreadable !== null}
+              title={selectedUnreadable ?? withShortcut("Run the selected configuration", runKey)}
+              aria-label="Run"
             >
-              {crashDump.certain ? "Inspect crash" : "Inspect this dump"}
+              <Play />
             </button>
-          </div>
-        )}
-
-        {/* What an attach costs, and what the pid actually is, before the
-            click — pressing either button below starts the snapshot in the
-            same commit that the Objects tab first renders its own warning, so
-            a caveat that only lives there arrives after the pause. */}
-        {liveProcess != null &&
-          (attachCaveats.length > 0 || liveProcess.launcherCaveat != null) && (
-            <div className="warning">
-              {liveProcess.launcherCaveat != null && (
-                <div>
-                  <strong>
-                    pid {liveProcess.pid} is not{" "}
-                    {liveProcess.configName ?? activeLabel} itself.
-                  </strong>{" "}
-                  {liveProcess.launcherCaveat}
-                </div>
-              )}
-              {attachCaveats.map((caveat) => (
-                <div key={caveat}>{caveat}</div>
-              ))}
-            </div>
-          )}
-
-        {liveProcess != null && (
-          <div className="toolbar">
-            {/* The process name is stated, not just the pid: for a `dotnet
-                run` configuration the attachable application is a different
-                executable from the one the supervisor launched, and naming it
-                is how the user can tell the offer aims at their code. */}
-            <span
-              className="muted"
-              style={{ fontSize: 11 }}
-              title={liveProcess.path ?? undefined}
-            >
-              {activeLabel} is running — {liveProcess.name} (pid{" "}
-              {liveProcess.pid}).
-            </span>
             <button
-              title="Attach to the running process and read every exception still on its heap — including ones it caught and logged. This copies the process's memory: expect a brief pause and a memory spike."
-              onClick={() =>
-                onInspect({
-                  target: { kind: "live", pid: liveProcess.pid },
-                  root: { kind: "exceptions" },
-                  reason: `exceptions in ${activeLabel} (pid ${liveProcess.pid})`,
-                })
+              data-command="run.debug"
+              className="primary"
+              onClick={() => selected && void debug(selected)}
+              disabled={
+                !selected ||
+                running.has(selected.id) ||
+                selectedUnreadable !== null ||
+                !debuggable.available
               }
-            >
-              Inspect exceptions
-            </button>
-            <input
-              placeholder="Namespace.TypeName"
-              value={liveType}
-              onChange={(e) => setLiveType(e.target.value)}
-              style={{ width: 190 }}
-              title="A type to read instances of. There is no option to guess something interesting — a live heap holds millions of objects."
-            />
-            <button
-              disabled={liveType.trim() === ""}
               title={
-                liveType.trim() === ""
-                  ? "Enter the type to look for"
-                  : `Read up to ${LIVE_TYPE_LIMIT} live instances of ${liveType.trim()}. This copies the process's memory: expect a brief pause and a memory spike.`
-              }
-              onClick={() =>
-                onInspect({
-                  target: { kind: "live", pid: liveProcess.pid },
-                  root: {
-                    kind: "type",
-                    name: liveType.trim(),
-                    limit: LIVE_TYPE_LIMIT,
-                  },
-                  reason: `${liveType.trim()} in ${activeLabel} (pid ${liveProcess.pid})`,
-                })
+                selectedUnreadable ??
+                (debuggable.available
+                  ? "Launch with the debugger attached"
+                  : debuggable.reason)
               }
             >
-              Inspect instances
+              Debug
             </button>
-          </div>
-        )}
+            <span className="split-button">
+              <button
+                data-command="run.stop"
+                className="icon-label-button"
+                onClick={() => selected && stop(selected)}
+                disabled={!selected || !running.has(selected.id)}
+                title="Stop the selected configuration"
+                aria-label="Stop"
+              >
+                <Square />
+              </button>
+              <button
+                className="split-button-arrow"
+                onClick={(e) => void openStopMenu(e)}
+                title="Choose a running configuration to stop"
+                aria-label="Choose a running configuration to stop"
+              >
+                ▾
+              </button>
+            </span>
+            <button
+              data-command="run.restart"
+              onClick={() => selected && start(selected)}
+              disabled={!selected || selectedUnreadable !== null}
+              title={selectedUnreadable ?? "Stop and start again"}
+            >
+              Restart
+            </button>
+            <button
+              onClick={() =>
+                activeSession && consoleRefs.current.get(activeSession)?.clear()
+              }
+              disabled={!activeSession}
+              title="Clear this tab's console output"
+            >
+              Clear
+            </button>
 
-        <div className="content console-area">
+            <button
+              data-command="run.build"
+              className="icon-label-button"
+              onClick={() => selected && runBuild(selected, "build")}
+              disabled={
+                selected?.ecosystem !== "dotnet" || building || selectedUnreadable !== null
+              }
+              title={selectedUnreadable ?? "Build the project"}
+              aria-label="Build the project"
+            >
+              <Hammer />
+            </button>
+            <button
+              data-command="run.rebuild"
+              onClick={() => selected && runBuild(selected, "rebuild")}
+              disabled={
+                selected?.ecosystem !== "dotnet" || building || selectedUnreadable !== null
+              }
+              title={selectedUnreadable ?? "Rebuild the project (full, non-incremental)"}
+            >
+              ⟳
+            </button>
+            <button
+              data-command="run.clean"
+              onClick={() => selected && runBuild(selected, "clean")}
+              disabled={
+                selected?.ecosystem !== "dotnet" || building || selectedUnreadable !== null
+              }
+              title={selectedUnreadable ?? "Clean the project's build output"}
+            >
+              🧹
+            </button>
+
+            <button onClick={() => selected && setEditing(selected)} disabled={!selected}>
+              Edit
+            </button>
+            {onlySecretProj ? (
+              <button
+                onClick={() => openSecrets(onlySecretProj.manifestPath)}
+                title={`Edit ${onlySecretProj.name}'s .NET user secrets`}
+              >
+                Secrets…
+              </button>
+            ) : secretProjs.length > 1 ? (
+              <div className="dropdown">
+                <button
+                  onClick={() => setSecretsOpen((was) => !was)}
+                  title="Choose a .NET project to edit its user secrets"
+                >
+                  Secrets… ▾
+                </button>
+                {secretsOpen && (
+                  <>
+                    <div className="dropdown-backdrop" onClick={() => setSecretsOpen(false)} />
+                    <div className="dropdown-menu" style={{ minWidth: 220 }}>
+                      {secretProjs.map((project) => (
+                        <div
+                          key={project.id}
+                          className="dropdown-item"
+                          onClick={() => {
+                            openSecrets(project.manifestPath);
+                            setSecretsOpen(false);
+                          }}
+                        >
+                          {project.name}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : (
+              <button disabled title="User secrets are available for .NET projects">
+                Secrets…
+              </button>
+            )}
+            {selected?.ecosystem === "dotnet" && (
+              <>
+              {(() => {
+                // Only shown for an ecosystem that has build configurations at
+                // all, which today means .NET. `buildConfigurationsFor` returns
+                // nothing for the others rather than inventing a Debug/Release
+                // pair that would put a flag on a command line that never took
+                // one.
+                const options = buildConfigurationOptions(selected);
+                if (!selected || options.length === 0) return null;
+                const current = buildConfigurationOf(selected) ?? options[0];
+                return (
+                  <select
+                    value={current}
+                    onChange={(e) => chooseBuildConfiguration(selected.id, e.target.value)}
+                    title="The build configuration this configuration runs and builds in"
+                    aria-label="Build configuration"
+                  >
+                    {options.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                );
+              })()}
+              <EnvironmentPicker state={environments} onChange={saveEnvironments} />
+              </>
+            )}
+            {/* The run-configuration picker sits just right of the environment
+                dropdown, so what you run and what you run it in are together. */}
+            <RunConfigMenu
+              configs={appConfigs}
+              selectedId={selectedId}
+              favorites={favorites}
+              dotClass={dotClass}
+              canMove={(config, delta) => neighborId(config, delta) !== null}
+              groupLabel={solutionOf}
+              onSelect={(config) => {
+                setSelectedId(config.id);
+                // Selecting something that has a console tab focuses that tab.
+                if (sessions.some((s) => s.id === config.id)) {
+                  setActiveSession(config.id);
+                }
+              }}
+              onToggleFavorite={(config) => void toggleFavorite(config)}
+              onMove={(config, delta) => void move(config, delta)}
+              onNew={() =>
+                setEditing({
+                  id: `custom:${Date.now()}`,
+                  name: "New configuration",
+                  kind: "app",
+                  ecosystem: "dotnet",
+                  source: "userFile",
+                })
+              }
+              onImport={() => setImporting(true)}
+            />
+
+            <span style={{ flex: 1 }} />
+            {selected && (
+              <span className="muted mono" style={{ fontSize: 11 }}>
+                {selected.ecosystem}
+                {/* The build configuration is not repeated here: it is the
+                    picker above, and a second copy would go stale the moment the
+                    picker overrode the configuration's own default. */}
+                {selected.launchProfile ? ` · ${selected.launchProfile}` : ""}
+                {selected.script ? ` · ${selected.script}` : ""}
+              </span>
+            )}
+          </div>
+
+          {error && <div className="error">{error}</div>}
+          {selectedUnreadable && (
+            <div className="warning inspect-notice">
+              <strong>This configuration's project could not be read.</strong>
+              <div>{selectedUnreadable}</div>
+              <div className="muted">
+                Running it would start the same runner over the same file and fail
+                several seconds later with the runner's wording, so Run, Restart
+                and the build buttons are disabled until the manifest parses.
+              </div>
+            </div>
+          )}
+          {selected?.warnings?.map((warning) => (
+            <div className="warning" key={warning}>
+              {warning}
+            </div>
+          ))}
+
+          {/* Deliberately outside `.console-area`: that subtree hosts xterm and
+              its sizing is not to be disturbed. */}
+          {/* A dump is only called *this* run's crash when it carries the pid
+              this run reported. Otherwise it is a dump that was written while
+              this ran — with two configurations up it is as likely to be the
+              other one's — and it is offered named rather than claimed. */}
+          {crashDump && (
+            <div className="toolbar">
+              <span className="muted" style={{ fontSize: 11 }}>
+                {crashDump.certain ? (
+                  <>
+                    {activeLabel} crashed
+                    {crashCode != null ? ` (exit ${crashCode})` : ""} and a dump
+                    was captured.
+                  </>
+                ) : (
+                  <>
+                    {activeLabel} exited
+                    {crashCode != null ? ` (exit ${crashCode})` : ""}. A dump was
+                    written while it was running — nothing confirms it came from
+                    this configuration rather than another one:{" "}
+                    <span className="mono">
+                      {crashDump.dump.executable} · pid {crashDump.dump.pid}
+                    </span>
+                    .
+                  </>
+                )}
+              </span>
+              <button
+                className={crashDump.certain ? "primary" : undefined}
+                title={`Read ${crashDump.dump.executable} · pid ${crashDump.dump.pid}`}
+                onClick={() =>
+                  onInspect({
+                    target: { kind: "dump", path: crashDump.dump.path },
+                    root: { kind: "crashException" },
+                    reason: crashDump.certain
+                      ? `crash in ${activeLabel}${
+                          crashCode != null ? ` (exit ${crashCode})` : ""
+                        }`
+                      : `${crashDump.dump.executable} · pid ${crashDump.dump.pid}, a dump written while ${activeLabel} was running — not confirmed to be its crash`,
+                  })
+                }
+              >
+                {crashDump.certain ? "Inspect crash" : "Inspect this dump"}
+              </button>
+            </div>
+          )}
+
+          {/* What an attach costs, and what the pid actually is, before the
+              click — pressing either button below starts the snapshot in the
+              same commit that the Objects tab first renders its own warning, so
+              a caveat that only lives there arrives after the pause. */}
+          {liveProcess != null &&
+            (attachCaveats.length > 0 || liveProcess.launcherCaveat != null) && (
+              <div className="warning">
+                {liveProcess.launcherCaveat != null && (
+                  <div>
+                    <strong>
+                      pid {liveProcess.pid} is not{" "}
+                      {liveProcess.configName ?? activeLabel} itself.
+                    </strong>{" "}
+                    {liveProcess.launcherCaveat}
+                  </div>
+                )}
+                {attachCaveats.map((caveat) => (
+                  <div key={caveat}>{caveat}</div>
+                ))}
+              </div>
+            )}
+
+          {liveProcess != null && (
+            <div className="toolbar">
+              {/* The process name is stated, not just the pid: for a `dotnet
+                  run` configuration the attachable application is a different
+                  executable from the one the supervisor launched, and naming it
+                  is how the user can tell the offer aims at their code. */}
+              <span
+                className="muted"
+                style={{ fontSize: 11 }}
+                title={liveProcess.path ?? undefined}
+              >
+                {activeLabel} is running — {liveProcess.name} (pid{" "}
+                {liveProcess.pid}).
+              </span>
+              <button
+                title="Attach to the running process and read every exception still on its heap — including ones it caught and logged. This copies the process's memory: expect a brief pause and a memory spike."
+                onClick={() =>
+                  onInspect({
+                    target: { kind: "live", pid: liveProcess.pid },
+                    root: { kind: "exceptions" },
+                    reason: `exceptions in ${activeLabel} (pid ${liveProcess.pid})`,
+                  })
+                }
+              >
+                Inspect exceptions
+              </button>
+              <input
+                placeholder="Namespace.TypeName"
+                value={liveType}
+                onChange={(e) => setLiveType(e.target.value)}
+                style={{ width: 190 }}
+                title="A type to read instances of. There is no option to guess something interesting — a live heap holds millions of objects."
+              />
+              <button
+                disabled={liveType.trim() === ""}
+                title={
+                  liveType.trim() === ""
+                    ? "Enter the type to look for"
+                    : `Read up to ${LIVE_TYPE_LIMIT} live instances of ${liveType.trim()}. This copies the process's memory: expect a brief pause and a memory spike.`
+                }
+                onClick={() =>
+                  onInspect({
+                    target: { kind: "live", pid: liveProcess.pid },
+                    root: {
+                      kind: "type",
+                      name: liveType.trim(),
+                      limit: LIVE_TYPE_LIMIT,
+                    },
+                    reason: `${liveType.trim()} in ${activeLabel} (pid ${liveProcess.pid})`,
+                  })
+                }
+              >
+                Inspect instances
+              </button>
+            </div>
+          )}
+          </>
+        )}
+        {/* Hidden, never unmounted: an unmount would throw away every open
+            editor's state and its language-server document. */}
+        <div className="content console-area" hidden={isDiff}>
           <div className="editor-console-split" ref={splitRef}>
             {openFiles.length > 0 && (
               <>
@@ -1782,7 +2062,14 @@ export function RunView({
                     </div>
                   )}
                   <div className="editor-area">
-                    {openFiles.map((file) => (
+                    {/* Diff tabs are shown by the one `DiffPane` above, not
+                        here. The filter is what keeps them out: `FileEditor`
+                        takes an `EditableSource`, and a diff reaching its
+                        read/write pair would render the plain file and then
+                        write the buffer back over it on the flush timer. The
+                        type says so, and this is where the type is honoured. */}
+                    {openFiles.map((file) =>
+                      file.source.kind === "diff" ? null : (
                       <div
                         key={file.id}
                         style={{
@@ -1800,7 +2087,8 @@ export function RunView({
                           }
                         />
                       </div>
-                    ))}
+                      ),
+                    )}
                   </div>
                 </div>
                 {!consoleCollapsed && (

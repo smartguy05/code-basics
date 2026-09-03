@@ -30,7 +30,7 @@ Intent(src/parser.ts): rewrite the tokenizer [confidence: low]
 
 A scoped line covers the files it names; one plain line may cover the rest.
 Keep each label short enough to read at a glance — it titles a group of hunks
-in the Changes tab, not a commit message.
+in the Project tab's Changes pane, not a commit message.
 
 ## Rejected changes
 

@@ -27,7 +27,7 @@ The complete command list with parameters is in the [command reference](../refer
 
 ### Keeping the symbol index honest is a command's job
 
-`reindex_saved_file` and its mirror `unindex_moved_path` both take an **absolute** path, because the two callers do not mean the same thing by a relative one — the Run tab's are workspace-relative, the Changes tab's come from git and are relative to the *repository*, which `Repo::open` may discover above the workspace. `symbols::index::relative_to_root` re-keys the absolute result, and a file that turns out not to be under the workspace is left alone rather than keyed against a root it does not sit under.
+`reindex_saved_file` and its mirror `unindex_moved_path` both take an **absolute** path, because the two callers do not mean the same thing by a relative one — the Project tab's are workspace-relative, the Changes pane's come from git and are relative to the *repository*, which `Repo::open` may discover above the workspace. `symbols::index::relative_to_root` re-keys the absolute result, and a file that turns out not to be under the workspace is left alone rather than keyed against a root it does not sit under.
 
 `fs_write_file` and `fs_create_file` re-index what they wrote; `fs_rename` does both (drop the old key, index the new); `fs_delete` only drops. The drop is `remove_file` rather than `replace_file` with an empty symbol list, because `replace_file` deliberately **keeps** the `files` entry when the path is missing on disk — an unreadable file is not a deleted one, and only the caller who performed the deletion knows the difference.
 

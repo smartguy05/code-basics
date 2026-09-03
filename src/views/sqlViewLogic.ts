@@ -447,3 +447,34 @@ export function stoppedNote(
     row: "The run was stopped, so reading ended here. Rows may be missing and no cap was reported — do not read this as the whole answer.",
   };
 }
+
+/** The shortest the query editor may be dragged. Matches its CSS floor. */
+export const SQL_EDITOR_MIN_HEIGHT = 96;
+
+/**
+ * The shortest the results pane may be squeezed to.
+ *
+ * Deliberately not zero. Dragging the divider to the bottom would hide the
+ * results entirely, and a pane that can vanish leaves no handle to bring it
+ * back — the user would be left with a console that appears to have stopped
+ * returning rows. Keeping a strip visible keeps the divider reachable.
+ */
+export const SQL_RESULTS_MIN_HEIGHT = 120;
+
+/** The editor's height on first open, before the divider is ever dragged. */
+export const SQL_EDITOR_DEFAULT_HEIGHT = 220;
+
+/**
+ * Where the divider between the query editor and the results may sit.
+ *
+ * Both panes have a floor, and in a short window the two floors can ask for
+ * more room than there is. The editor's floor wins that argument: the caret
+ * has to stay visible or the console cannot be typed into at all, whereas the
+ * results merely scroll. Stated here rather than left to whichever `Math.min`
+ * happened to be applied last.
+ */
+export function clampSqlEditorHeight(height: number, containerHeight: number): number {
+  const ceiling = containerHeight - SQL_RESULTS_MIN_HEIGHT;
+  if (ceiling <= SQL_EDITOR_MIN_HEIGHT) return SQL_EDITOR_MIN_HEIGHT;
+  return Math.min(ceiling, Math.max(SQL_EDITOR_MIN_HEIGHT, height));
+}

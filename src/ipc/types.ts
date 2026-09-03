@@ -554,8 +554,23 @@ export interface Launchable {
   label: string | null;
   /** Run through the default shell (needed for `|`, `>`, `&&`). */
   shell: boolean;
-  /** Pinned entries sort first and are never evicted by the recents cap. */
+  /**
+   * Pinned entries sort first and are never evicted by the recents cap.
+   * Ordering only — not the same fact as {@link Launchable.shortcut}.
+   */
   pinned: boolean;
+  /**
+   * Show this entry as a named command in the terminal menu. Distinct from
+   * `pinned`, which only sorts. Like a pin, exempt from the recents cap.
+   */
+  shortcut: boolean;
+  /**
+   * A long-running service: it keeps running and stays listed until stopped.
+   * Never auto-restarted.
+   */
+  persistent: boolean;
+  /** Run with no output panel tab. Still tracked, still stoppable. */
+  headless: boolean;
   /** When it last ran, ms since the Unix epoch. */
   lastRunMs: number;
   runCount: number;

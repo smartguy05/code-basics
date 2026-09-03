@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  DIFF_MODE_LABELS,
   EMPTY_SECRETS,
+  diffFile,
   secretsFile,
   secretsProjects,
   sourceEnablesLsp,
+  sourceEntersNavStack,
   sourceLanguageHint,
   workspaceFile,
   type EditorSource,
 } from "./editorSourceLogic";
-import type { Project } from "../ipc/types";
+import type { ComparisonMode, Project } from "../ipc/types";
+
+/** Every comparison mode, so a new one cannot slip past these tests unlabelled. */
+const MODES: ComparisonMode[] = ["workingToHead", "workingToIndex", "indexToHead"];
 
 /** A minimal Project stub — only the fields secretsProjects reads matter. */
 function proj(over: Partial<Project> & Pick<Project, "id" | "ecosystem">): Project {
@@ -61,10 +67,79 @@ describe("secretsFile", () => {
   });
 });
 
+describe("diffFile", () => {
+  it("namespaces the identity so it cannot collide with a workspace path", () => {
+    const f = diffFile("src/App.tsx", "workingToHead");
+    expect(f.id).toBe("diff:workingToHead:src/App.tsx");
+    expect(f.source).toEqual({ kind: "diff", path: "src/App.tsx", mode: "workingToHead" });
+  });
+
+  it("puts the mode in the identity, so two baselines are two tabs", () => {
+    const staged = diffFile("src/App.tsx", "indexToHead");
+    const unstaged = diffFile("src/App.tsx", "workingToIndex");
+    expect(staged.id).not.toBe(unstaged.id);
+  });
+
+  it("is stable for the same path and mode, so reopening finds the same tab", () => {
+    expect(diffFile("a.cs", "indexToHead").id).toBe(diffFile("a.cs", "indexToHead").id);
+  });
+
+  it("labels the tab with the file name and the mode, so the two are told apart", () => {
+    expect(diffFile("src/a/App.tsx", "indexToHead").name).toBe("App.tsx (Staged)");
+    expect(diffFile("src\\a\\App.tsx", "workingToIndex").name).toBe("App.tsx (Unstaged)");
+    expect(diffFile("README", "workingToHead").name).toBe("README (Diff)");
+  });
+
+  it("gives every mode a distinct id and a distinct label for one path", () => {
+    const ids = MODES.map((m) => diffFile("a.cs", m).id);
+    const names = MODES.map((m) => diffFile("a.cs", m).name);
+    expect(new Set(ids).size).toBe(MODES.length);
+    expect(new Set(names).size).toBe(MODES.length);
+  });
+
+  it("labels every mode, so no mode falls through to an empty suffix", () => {
+    for (const mode of MODES) {
+      expect(DIFF_MODE_LABELS[mode].trim()).not.toBe("");
+    }
+  });
+});
+
+describe("the three id schemes", () => {
+  it("cannot collide, even for the same underlying string", () => {
+    const same = "src/MyApi/MyApi.csproj";
+    const ids = [
+      workspaceFile(same).id,
+      secretsFile(same).id,
+      ...MODES.map((m) => diffFile(same, m).id),
+    ];
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("keeps a workspace path bare and namespaces the other two", () => {
+    expect(workspaceFile("diff.ts").id).toBe("diff.ts");
+    expect(secretsFile("a.csproj").id.startsWith("secrets:")).toBe(true);
+    expect(diffFile("a.cs", "workingToHead").id.startsWith("diff:")).toBe(true);
+  });
+});
+
 describe("sourceEnablesLsp", () => {
   it("is true only for a workspace file", () => {
     expect(sourceEnablesLsp({ kind: "workspace", path: "a.cs" })).toBe(true);
     expect(sourceEnablesLsp({ kind: "secrets", project: "a.csproj" })).toBe(false);
+  });
+
+  it("is false for a diff — its lines are two revisions, not the file's text", () => {
+    for (const mode of MODES) {
+      expect(sourceEnablesLsp({ kind: "diff", path: "a.cs", mode })).toBe(false);
+    }
+  });
+});
+
+describe("sourceEntersNavStack", () => {
+  it("is true only for a workspace file, the one source the stack can reopen", () => {
+    expect(sourceEntersNavStack({ kind: "workspace", path: "a.cs" })).toBe(true);
+    expect(sourceEntersNavStack({ kind: "secrets", project: "a.csproj" })).toBe(false);
+    expect(sourceEntersNavStack({ kind: "diff", path: "a.cs", mode: "indexToHead" })).toBe(false);
   });
 });
 
@@ -77,6 +152,11 @@ describe("sourceLanguageHint", () => {
   it("is a .json name for secrets, so the tab gets JSON highlighting", () => {
     const source: EditorSource = { kind: "secrets", project: "a.csproj" };
     expect(sourceLanguageHint(source)).toBe("secrets.json");
+  });
+
+  it("is the compared file's path for a diff, so each side highlights as that file", () => {
+    const source: EditorSource = { kind: "diff", path: "src/App.tsx", mode: "workingToHead" };
+    expect(sourceLanguageHint(source)).toBe("src/App.tsx");
   });
 });
 

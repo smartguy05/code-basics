@@ -20,6 +20,7 @@ export function ContextMenu({
   x,
   y,
   zIndex = 46,
+  elevated = false,
   onClose,
   children,
 }: {
@@ -27,6 +28,22 @@ export function ContextMenu({
   y: number;
   /** Stacking level; overlay-hosted menus must sit above their host overlay. */
   zIndex?: number;
+  /**
+   * Raise this menu above the floating panels.
+   *
+   * The default 46 sits *below* the panel band (`--z-panel` is 60, and a
+   * raised terminal is higher still). That is right for a menu opened from
+   * inside a view — it shares a plane with the thing it acts on — and wrong
+   * for one opened from the **titlebar**, which is above everything: at 46
+   * the menu hid behind any open terminal, and so did its click-catching
+   * backdrop, so clicking that terminal neither closed the menu nor was
+   * intercepted.
+   *
+   * A class rather than a number, because the bands live in `styles.css`
+   * and no z-index integer is written in TypeScript. The inline `zIndex` is
+   * omitted when this is set, or it would win over the class.
+   */
+  elevated?: boolean;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -64,8 +81,8 @@ export function ContextMenu({
   return (
     <>
       <div
-        className="dropdown-backdrop"
-        style={{ zIndex: zIndex - 1 }}
+        className={`dropdown-backdrop${elevated ? " context-menu-elevated-backdrop" : ""}`}
+        style={elevated ? undefined : { zIndex: zIndex - 1 }}
         onClick={onClose}
         // A right-click on the backdrop closes the menu rather than opening the
         // webview's own; without this the two menus stack.
@@ -76,12 +93,12 @@ export function ContextMenu({
       />
       <div
         ref={panel}
-        className="dropdown-menu"
+        className={`dropdown-menu${elevated ? " context-menu-elevated" : ""}`}
         style={{
           position: "fixed",
           left: x + (shift?.dx ?? 0),
           top: y + (shift?.dy ?? 0),
-          zIndex,
+          ...(elevated ? {} : { zIndex }),
           // Invisible for the one frame between being drawn and being measured,
           // so a menu near an edge is never seen in the wrong place first.
           visibility: shift === null ? "hidden" : "visible",

@@ -1,6 +1,6 @@
 # Agent intent capture
 
-The Changes tab can collapse a diff into the *decisions* behind it — "add retry to token refresh", "Whitespace only", "`EstimateCost`" — and stage or revert each as a unit. Switch between **Files**, **Intent**, and **Stashes** at the top of the Changes sidebar.
+The Project tab's Changes pane can collapse a diff into the *decisions* behind it — "add retry to token refresh", "Whitespace only", "`EstimateCost`" — and stage or revert each as a unit. Switch between **Files**, **Intent**, and **Stashes** at the top of the Changes panel.
 
 Because the Intent view has no Staged section of its own, each card and each file within it carries a **staged** / **partial** badge, read from `git status`: staged when the whole card (or file) is in the index, partial when only some of it is. So staging a card from here and watching it move to *staged* works without switching back to the Files view.
 

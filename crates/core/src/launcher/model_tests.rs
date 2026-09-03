@@ -9,6 +9,9 @@ fn sample() -> Launchable {
         label: None,
         shell: false,
         pinned: true,
+        shortcut: true,
+        persistent: true,
+        headless: true,
         last_run_ms: 42,
         run_count: 3,
     }
@@ -26,12 +29,15 @@ fn launchable_serialises_with_camel_case_keys() {
             "command",
             "cwd",
             "env",
+            "headless",
             "id",
             "label",
             "lastRunMs",
+            "persistent",
             "pinned",
             "runCount",
             "shell",
+            "shortcut",
         ]
     );
 }
@@ -68,4 +74,34 @@ fn a_file_with_no_version_reads_as_version_one() {
 fn an_empty_object_reads_as_an_empty_file() {
     let file: LauncherFile = serde_json::from_str("{}").unwrap();
     assert_eq!(file, LauncherFile::default());
+}
+
+#[test]
+fn an_entry_written_before_the_shortcut_flags_existed_still_loads() {
+    // The back-compat guarantee itself, not the `serde(default)` attribute that
+    // implements it: a `launchers.json` from a build that predates these fields
+    // must load, with every new flag off. Anything else silently turns an old
+    // recent into a shortcut, or refuses to open the picker at all.
+    let old = r#"{
+        "version": 1,
+        "entries": [
+            {
+                "id": "id-1",
+                "command": "docker compose up",
+                "cwd": "/repo",
+                "env": {},
+                "label": null,
+                "shell": false,
+                "pinned": true,
+                "lastRunMs": 42,
+                "runCount": 3
+            }
+        ]
+    }"#;
+    let file: LauncherFile = serde_json::from_str(old).unwrap();
+    let entry = &file.entries[0];
+    assert!(entry.pinned, "the fields that did exist are unchanged");
+    assert!(!entry.shortcut);
+    assert!(!entry.persistent);
+    assert!(!entry.headless);
 }
