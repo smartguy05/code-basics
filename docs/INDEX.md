@@ -196,10 +196,10 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/process/resolve.rs` | 200 | Windows program-name resolution. |
 | `crates/core/src/pty/argv.rs` | 145 | Refusing arguments a Windows batch shim would re-interpret. |
 | `crates/core/src/pty/argv_tests.rs` | 267 |  |
-| `crates/core/src/pty/mod.rs` | 325 | Interactive pseudo-terminal sessions. |
-| `crates/core/src/pty/model.rs` | 125 | The wire types for an interactive terminal session. |
-| `crates/core/src/pty/shell.rs` | 90 | Pure decisions for the PTY layer: which shell to launch, and clamping the |
-| `crates/core/src/pty/shell_tests.rs` | 80 |  |
+| `crates/core/src/pty/mod.rs` | 328 | Interactive pseudo-terminal sessions. |
+| `crates/core/src/pty/model.rs` | 209 | The wire types for an interactive terminal session. |
+| `crates/core/src/pty/shell.rs` | 366 | Pure decisions for the PTY layer: which shell to launch, and clamping the |
+| `crates/core/src/pty/shell_tests.rs` | 357 |  |
 | `crates/core/src/qgate/decide_tests.rs` | 454 | Decision-logic tests for the quality gate — the Rust port of the behaviour |
 | `crates/core/src/qgate/install.rs` | 325 | Installing the quality-gate Stop hook — the same method the intent hooks use. |
 | `crates/core/src/qgate/install_tests.rs` | 310 | Installer tests for the quality-gate hook. The behaviour that matters most |
@@ -283,10 +283,11 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/sql_mssql.rs` | 733 | The SQL Server half of the SQL console, against a real server. |
 | `crates/core/tests/sql_postgres.rs` | 811 | The PostgreSQL half of the SQL subsystem's end-to-end proof. |
 | `crates/core/tests/sql_sqlite.rs` | 1006 | The first test in the SQL subsystem that touches a real database. |
-| `src/App.tsx` | 1247 |  |
+| `src/App.tsx` | 1275 |  |
 | `src/appearance.ts` | 68 |  |
 | `src/appearanceLogic.test.ts` | 21 |  |
 | `src/appearanceLogic.ts` | 131 |  |
+| `src/components/AboutDialog.tsx` | 138 |  |
 | `src/components/AppOutputPanel.tsx` | 237 |  |
 | `src/components/AskPanel.tsx` | 240 |  |
 | `src/components/AttachConfirm.tsx` | 63 |  |
@@ -306,7 +307,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/IntentPanel.tsx` | 1530 |  |
 | `src/components/LauncherPicker.tsx` | 308 |  |
 | `src/components/LspStatus.tsx` | 184 |  |
-| `src/components/MenuBar.tsx` | 406 |  |
+| `src/components/MenuBar.tsx` | 437 |  |
 | `src/components/NotesPanel.tsx` | 385 |  |
 | `src/components/NotificationHost.tsx` | 79 |  |
 | `src/components/ObjectTree.tsx` | 357 |  |
@@ -318,17 +319,19 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/RunConfigMenu.tsx` | 161 |  |
 | `src/components/RunningPanel.tsx` | 240 |  |
 | `src/components/SearchEverywhere.tsx` | 492 |  |
-| `src/components/SettingsDialog.tsx` | 137 |  |
+| `src/components/SettingsDialog.tsx` | 193 |  |
 | `src/components/SetupPrompt.tsx` | 115 |  |
 | `src/components/Sidebar.tsx` | 50 |  |
 | `src/components/SqlConnectionPicker.tsx` | 495 |  |
 | `src/components/SqlPanel.tsx` | 184 |  |
 | `src/components/SqlResultGrid.tsx` | 217 |  |
 | `src/components/StashPanel.tsx` | 288 |  |
-| `src/components/TerminalPanel.tsx` | 451 |  |
-| `src/components/TerminalView.tsx` | 159 |  |
+| `src/components/TerminalPanel.tsx` | 558 |  |
+| `src/components/TerminalView.tsx` | 178 |  |
 | `src/components/TestTree.tsx` | 125 |  |
-| `src/components/WorkspaceTab.tsx` | 670 |  |
+| `src/components/WorkspaceTab.tsx` | 725 |  |
+| `src/components/aboutLogic.test.ts` | 134 |  |
+| `src/components/aboutLogic.ts` | 140 | The string composition behind the About dialog. |
 | `src/components/appOutputLogic.test.ts` | 279 |  |
 | `src/components/appOutputLogic.ts` | 222 | Pure decisions for the launched-apps output panel — the tab list, which tab |
 | `src/components/askLogic.test.ts` | 254 |  |
@@ -403,10 +406,12 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/sqlPickerLogic.ts` | 216 |  |
 | `src/components/stashLogic.test.ts` | 33 |  |
 | `src/components/stashLogic.ts` | 21 |  |
-| `src/components/terminalLogic.test.ts` | 347 |  |
-| `src/components/terminalLogic.ts` | 293 | Pure decisions for the floating terminals — naming, cascade staggering, |
-| `src/components/terminalMenuLogic.test.ts` | 254 |  |
-| `src/components/terminalMenuLogic.ts` | 245 | Pure decisions for the titlebar's terminal split button — which rows its |
+| `src/components/terminalLogic.test.ts` | 487 |  |
+| `src/components/terminalLogic.ts` | 403 | Pure decisions for the floating terminals — naming, cascade staggering, |
+| `src/components/terminalMenuLogic.test.ts` | 350 |  |
+| `src/components/terminalMenuLogic.ts` | 343 | Pure decisions for the titlebar's terminal split button — which rows its |
+| `src/components/terminalShellLogic.test.ts` | 162 |  |
+| `src/components/terminalShellLogic.ts` | 129 | The remembered choice of shell for new terminals: how it is stored, and — |
 | `src/components/treeLogic.test.ts` | 383 |  |
 | `src/components/treeLogic.ts` | 148 |  |
 | `src/components/usagesExtension.ts` | 469 | The CodeMirror half of Find Usages / Go To Definition: decorations, a widget, |
@@ -419,8 +424,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/editorFontSize.ts` | 52 | Applying the editor font size, and telling live editors it moved. |
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 | The one font size every CodeMirror editor in the app reads. |
-| `src/ipc/api.ts` | 1271 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 2255 | TypeScript mirrors of the `cb-core` model types. |
+| `src/ipc/api.ts` | 1298 | Typed wrappers over the Tauri command surface. |
+| `src/ipc/types.ts` | 2331 | TypeScript mirrors of the `cb-core` model types. |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
@@ -477,6 +482,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/testsLogic.ts` | 89 |  |
 | `src/views/useChangesModel.ts` | 505 | The working-tree model behind the Project tab's Changes rail. |
 | `src/vite-env.d.ts` | 7 | / <reference types="vite/client" /> |
+| `src-tauri/src/commands/about.rs` | 99 | What build is this? — the data behind Help → About. |
 | `src-tauri/src/commands/architecture.rs` | 219 | Architecture-diagram commands. |
 | `src-tauri/src/commands/behavioral.rs` | 485 | Behavioral before/after testing — running the same configuration against |
 | `src-tauri/src/commands/changelists.rs` | 57 | Change-group commands. |
@@ -500,9 +506,9 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/setup.rs` | 57 | First-open setup: preview and apply the combined agent-hook install (intent |
 | `src-tauri/src/commands/sql.rs` | 2303 | The SQL console's bridge: list and save connection profiles, discover the |
 | `src-tauri/src/commands/symbols.rs` | 234 | The command palette's surface: searching the workspace, and asking after |
-| `src-tauri/src/commands/terminal.rs` | 259 | Interactive floating terminals. |
+| `src-tauri/src/commands/terminal.rs` | 277 | Interactive floating terminals. |
 | `src-tauri/src/commands/workspace.rs` | 258 | Workspace and configuration commands. |
-| `src-tauri/src/lib.rs` | 297 | The Tauri shell. |
+| `src-tauri/src/lib.rs` | 300 | The Tauri shell. |
 | `src-tauri/src/main.rs` | 6 | Suppress the extra console window on Windows in release builds. |
 | `src-tauri/src/qgate_run.rs` | 240 | The `quality-gate` mode: deterministic checks when an agent turn ends. |
 | `src-tauri/src/recorder.rs` | 139 | The `record-intent` mode, which is what the installed hooks actually run. |
@@ -525,6 +531,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **launcher** (`src-tauri/src/commands/launcher.rs`): `list_launchables`, `launch_command`, `stop_command`, `save_launchable`, `delete_launchable`
 - **features** (`src-tauri/src/commands/features.rs`): `list_features`, `set_feature`
 - **notes** (`src-tauri/src/commands/notes.rs`): `read_notes`, `write_notes`
+- **about** (`src-tauri/src/commands/about.rs`): `about_info`
 - **files** (`src-tauri/src/commands/files.rs`): `fs_list_dir`, `fs_read_file`, `fs_write_file`, `fs_create_file`, `fs_create_dir`, `fs_rename`, `fs_delete`
 - **secrets** (`src-tauri/src/commands/secrets.rs`): `read_project_secrets`, `write_project_secrets`
 - **run** (`src-tauri/src/commands/run.rs`): `start_run`, `build_project`, `cancel_run`, `running_ids`, `run_tests`, `last_test_run`, `coverage_of_change`
@@ -542,13 +549,13 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **architecture** (`src-tauri/src/commands/architecture.rs`): `arch_project_graph`, `arch_render_graph`, `arch_component_graph`, `arch_render_component_graph`, `arch_list_diagrams`, `arch_read_diagram`, `arch_write_diagram`, `arch_validate`
 - **symbols** (`src-tauri/src/commands/symbols.rs`): `search_everywhere`, `symbol_index_status`, `rebuild_symbol_index`
 - **lsp** (`src-tauri/src/commands/lsp.rs`): `lsp_status`, `lsp_restart`, `lsp_open_document`, `lsp_change_document`, `lsp_close_document`, `lsp_find_usages`, `lsp_goto_definition`, `lsp_declaration_anchors`
-- **terminal** (`src-tauri/src/commands/terminal.rs`): `terminal_open`, `terminal_write`, `terminal_resize`, `terminal_close`, `terminal_list`, `terminal_set_label`
+- **terminal** (`src-tauri/src/commands/terminal.rs`): `terminal_open`, `terminal_write`, `terminal_resize`, `terminal_close`, `terminal_list`, `terminal_set_label`, `list_shells`
 - **running** (`src-tauri/src/commands/running.rs`): `list_running`, `kill_running`
 - **sql** (`src-tauri/src/commands/sql.rs`): `sql_list_connections`, `sql_discover`, `sql_save_connection`, `sql_delete_connection`, `sql_set_allow_writes`, `sql_test_connection`, `sql_test_connection_string`, `sql_list_objects`, `sql_list_columns`, `sql_execute`, `sql_cancel`
 
 ## Frontend IPC wrappers (`src/ipc/api.ts`)
 
-`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `fsCreateFile`, `fsCreateDir`, `fsRename`, `fsDelete`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `listFeatures`, `setFeature`, `readNotes`, `writeNotes`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `startDebug`, `stopDebug`, `debugIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `agentInteractiveCommand`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listLaunchables`, `launchCommand`, `stopCommand`, `saveLaunchable`, `deleteLaunchable`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashPaths`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `intentPrunePreview`, `pruneIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `moveCardEdits`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspRestart`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `sqlListConnections`, `sqlDiscover`, `sqlSaveConnection`, `sqlDeleteConnection`, `sqlSetAllowWrites`, `sqlTestConnection`, `sqlTestConnectionString`, `sqlListObjects`, `sqlListColumns`, `sqlExecute`, `sqlCancel`, `errorMessage`
+`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `fsCreateFile`, `fsCreateDir`, `fsRename`, `fsDelete`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `listFeatures`, `setFeature`, `readNotes`, `writeNotes`, `aboutInfo`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `startDebug`, `stopDebug`, `debugIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `agentInteractiveCommand`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listShells`, `listLaunchables`, `launchCommand`, `stopCommand`, `saveLaunchable`, `deleteLaunchable`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashPaths`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `intentPrunePreview`, `pruneIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `moveCardEdits`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspRestart`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `sqlListConnections`, `sqlDiscover`, `sqlSaveConnection`, `sqlDeleteConnection`, `sqlSetAllowWrites`, `sqlTestConnection`, `sqlTestConnectionString`, `sqlListObjects`, `sqlListColumns`, `sqlExecute`, `sqlCancel`, `errorMessage`
 
 ## Public core API (`cb-core`)
 
@@ -646,8 +653,8 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/process/resolve.rs`: `resolve_program()`
 - `crates/core/src/pty/argv.rs`: `is_batch_target()`, `batch_argv_refusal()`, `batch_program_refusal()`, `check_batch_argv()`
 - `crates/core/src/pty/mod.rs`: `PtyManager`, `new()`, `with_store()`, `open()`, `open_tracked()`, `write()`, `resize()`, `close()`, `is_open()`, `list()`
-- `crates/core/src/pty/model.rs`: `PtySpec`, `TerminalEvent`
-- `crates/core/src/pty/shell.rs`: `clamp_size()`, `pick_shell()`, `default_shell()`, `is_session_marker()`
+- `crates/core/src/pty/model.rs`: `PtySpec`, `ShellInfo`, `DetectedShells`, `TerminalEvent`
+- `crates/core/src/pty/shell.rs`: `clamp_size()`, `pick_shell()`, `default_shell()`, `is_session_marker()`, `ShellCandidate`, `shell_candidates()`, `detected_shells()`, `is_wsl_bash_launcher()`, `default_among()`, `detect_shells()`
 - `crates/core/src/qgate/install.rs`: `status()`, `status_for()`, `settings_path()`, `install_plan()`, `install_plan_for()`, `uninstall_plan()`, `uninstall_plan_for()`, `merged_into()`
 - `crates/core/src/qgate/mod.rs`: `Gate`, `label()`, `command()`, `gates_for_changes()`, `touched_source()`, `touched_memories()`, `should_remind_memories()`, `erosion_reminder()`, `GateVerdict`, `unresolved_packages()`, `declared_dependencies()`, `read_gate_output()`, `has_unresolved_rejection()`, `should_skip_for_loop()`, `has_typecheck_script()`, `is_quality_gate_invocation()`, `QGateInvocation`, `parse_qgate_args()`
 - `crates/core/src/review.rs`: `ReviewAgent`, `AgentMode`, `id()`, `from_id()`, `id()`, `label()`, `program()`, `models()`, `default_model()`, `from_id()`, `models_for()`, `codex_models()`, `parse_codex_models()`, `resolve_model()`, `compose_prompt()`, `resolve_prompt_body()`, `agent_args()`, `detect_agents()`, `agent_args_interactive()`

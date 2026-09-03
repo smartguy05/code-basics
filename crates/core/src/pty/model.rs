@@ -30,6 +30,55 @@ pub struct PtySpec {
     pub env: BTreeMap<String, String>,
 }
 
+/// One shell the app actually found on this machine.
+///
+/// Only ever constructed for a file that was located, so every field describes
+/// something that existed at detection time — there is no "disabled" or
+/// "missing" row, because a row the user cannot launch is worse than a shorter
+/// list (see [`crate::pty::detected_shells`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellInfo {
+    /// Stable identifier the frontend persists as the user's preference:
+    /// `"pwsh"`, `"powershell"`, `"cmd"`, `"bash"`, … Persisting the **id**
+    /// rather than the path is what lets `program` be re-detected on every use
+    /// without the stored choice ever going stale.
+    pub id: String,
+    /// What the picker shows. Asserts nothing that was not verified — `pwsh` is
+    /// "PowerShell (pwsh)" and not "PowerShell 7", because `pwsh` 6 exists and
+    /// no version was read.
+    pub label: String,
+    /// The **resolved absolute path** — what actually gets spawned.
+    ///
+    /// Not the bare name: detection proved *that file* exists, and re-resolving
+    /// `"pwsh"` at spawn time re-runs the PATHEXT walk, which could launch a
+    /// different file than the one the user picked. It is also the only thing
+    /// that tells two `bash` installations apart, which is why the UI shows it.
+    pub program: String,
+    /// Arguments to pass with `program`. Empty for every shell detected today;
+    /// the field exists so a shell that needs one (a login flag, say) can be
+    /// added without a wire change.
+    pub args: Vec<String>,
+}
+
+/// What `list_shells` answers: which shells exist, and which of them the app
+/// would launch with no preference at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedShells {
+    /// The shells found, in preference order. **Empty is a legitimate answer**,
+    /// not a failure: terminals still open, because the terminal command falls
+    /// back to [`crate::pty::default_shell`] when the frontend names no program.
+    pub shells: Vec<ShellInfo>,
+    /// The id [`crate::pty::default_shell`] resolves to, or `None` when it
+    /// matches nothing detected.
+    ///
+    /// No `skip_serializing_if`, deliberately: "we could not identify the
+    /// default" must not be indistinguishable from a backend that forgot to
+    /// send one, so this crosses as an explicit `null`.
+    pub default_id: Option<String>,
+}
+
 /// Events emitted over the lifetime of one terminal session.
 //
 // `rename_all` covers the variant names; `rename_all_fields` covers the fields
@@ -121,5 +170,40 @@ mod tests {
         let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
         keys.sort();
         assert_eq!(keys, ["args", "cols", "cwd", "env", "rows", "shell"]);
+    }
+
+    #[test]
+    fn shell_info_serialises_with_the_keys_the_ui_reads() {
+        // Every field here is a single word, so `rename_all = "camelCase"` is a
+        // no-op on all four — which is exactly the trap
+        // `docs/architecture/ipc-contract.md` warns about: the rename looks
+        // like it is doing work it is not, so the keys are pinned regardless.
+        let shell = ShellInfo {
+            id: "pwsh".into(),
+            label: "PowerShell (pwsh)".into(),
+            program: r"C:\Program Files\PowerShell\7\pwsh.exe".into(),
+            args: Vec::new(),
+        };
+        let json = serde_json::to_value(&shell).unwrap();
+        let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["args", "id", "label", "program"]);
+    }
+
+    #[test]
+    fn detected_shells_serialises_with_the_keys_the_ui_reads() {
+        // Asserted with `default_id: None` on purpose: the key must be present
+        // as an explicit `null`. "We could not identify the default" and "the
+        // backend forgot to send one" are different facts, and an omitted key
+        // makes them the same fact in the UI.
+        let detected = DetectedShells {
+            shells: Vec::new(),
+            default_id: None,
+        };
+        let json = serde_json::to_value(&detected).unwrap();
+        let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["defaultId", "shells"]);
+        assert!(json["defaultId"].is_null());
     }
 }

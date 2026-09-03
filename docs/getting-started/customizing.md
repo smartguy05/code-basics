@@ -60,6 +60,29 @@ than to code-basics. The **Native keys** tab lists those bindings for reference;
 they are not editable in this settings dialog. Destructive commands still show
 their normal confirmation after they are invoked from a custom shortcut.
 
+## Terminal
+
+The Terminal tab chooses the shell new terminals run. It lists what was actually
+found on this machine, each with the resolved path it would launch, plus a
+**System default** entry — which names the platform default when it can, and
+stays unlabelled rather than guessing when it cannot.
+
+Three states are kept distinct, because they mean different things: while the
+list is still being read the tab says so; a machine where no shell could be
+found says *that*, rather than showing an empty picker that would claim none
+exist; and a choice whose shell has since vanished is reported without being
+erased. A shell can be missing because `PATH` is temporarily broken or a tool is
+mid-upgrade, and silently dropping your choice over a transient absence is not
+recoverable — so the preference is kept, new terminals fall back to the platform
+default, and this tab tells you which shell it could not find.
+
+Unlike every other control in this dialog, this one has no live preview. There
+is nothing to preview: a terminal's shell is fixed when the terminal opens, and a
+running session cannot have one swapped underneath it. The setting applies to
+terminals you open next. To open a single terminal in a different shell without
+changing the default, use **New terminal in** in the terminal button's caret
+menu.
+
 ## Project attention signals
 
 Work continues when you switch to another project. A background project tab

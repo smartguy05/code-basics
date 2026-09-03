@@ -10,7 +10,7 @@
 //! than silently doing nothing, and the two counts that used to sit on the
 //! titlebar keep being visible as row badges.
 
-import type { Launchable, RunningReport } from "../ipc/types";
+import type { Launchable, RunningReport, ShellInfo } from "../ipc/types";
 import { displayLabel } from "./launcherLogic";
 
 /** What clicking a row does. The component maps these onto its handlers. */
@@ -19,6 +19,14 @@ export type TerminalMenuAction =
   | { kind: "launcher" }
   | { kind: "running" }
   | { kind: "apps" }
+  /**
+   * Open a terminal in one specific detected shell, this once — it does not
+   * change the stored preference (Settings does that). The whole `ShellInfo`
+   * travels with the action rather than an id, so the resolved path the row
+   * showed is the path that gets spawned: re-resolving a name at spawn time
+   * would re-run the PATHEXT walk and could launch a different file.
+   */
+  | { kind: "newTerminalIn"; shell: ShellInfo }
   /** Start a saved shortcut. */
   | { kind: "runShortcut"; entry: Launchable }
   /**
@@ -75,10 +83,27 @@ export interface TerminalMenuState {
    * saved no shortcuts, which is a guess.
    */
   shortcutsLoading: boolean;
+  /** The shells detected on this machine, in the backend's preference order. */
+  shells: ShellInfo[];
+  /**
+   * Detection has not answered yet. The same *not read yet* vs *none* split as
+   * {@link TerminalMenuState.shortcutsLoading}, for the same reason: an empty
+   * shells section would report "no shell on this machine", which is a much
+   * stronger claim than "we have not looked".
+   */
+  shellsLoading: boolean;
 }
 
 /** The heading above the shortcut rows, when there are any. */
 export const SHORTCUTS_SECTION = "Commands";
+
+/**
+ * The heading above the one-off shell rows.
+ *
+ * The menu is a **flat** list — there is no submenu mechanism — so the shells
+ * are their own section rather than a fly-out under New Terminal.
+ */
+export const SHELLS_SECTION = "New terminal in";
 
 /**
  * The shortcuts to offer, this codebase's first.
@@ -151,6 +176,75 @@ export function offersStop(entry: Launchable, live: boolean): boolean {
   return live && entry.persistent;
 }
 
+/**
+ * The shell rows, including the two rows that are *not* shells.
+ *
+ * Three distinct answers, never collapsed into two:
+ *
+ * - detection in flight ⇒ one disabled "Detecting shells…" row and **no** shell
+ *   rows even if a previous list is still in state, because acting on a stale
+ *   list is worse than waiting a moment for the fresh one;
+ * - detection answered with nothing ⇒ one **disabled row carrying the reason**,
+ *   not an omitted section. This is the `Project.unreadable` posture and
+ *   deliberately unlike the switched-off-plugin rule: a plugin the user turned
+ *   off needs no arguing with, whereas "we found no shell on this machine" is a
+ *   machine fact they may need to act on, and a silently missing section is
+ *   indistinguishable from a bug;
+ * - a list ⇒ one row each, in the order the backend gave them (its preference
+ *   order), with the resolved path as the tooltip — the only thing that tells
+ *   two installations of the same shell apart.
+ *
+ * Every real shell row takes its `disabled` **and** its disabled reason from
+ * {@link newTerminalButton}, the same rule the split button's body and the New
+ * Terminal row use, so a shell row can never claim it can open a terminal when
+ * New Terminal says it cannot. Enabled, the tooltip is the path instead: there
+ * is no reason to state, and the path is the useful thing to show.
+ *
+ * No check-mark marks the preferred shell. These rows are one-off launches, and
+ * marking one would suggest clicking it changes the default.
+ */
+function shellRows(state: TerminalMenuState): TerminalMenuRow[] {
+  const open = newTerminalButton(state);
+  if (state.shellsLoading) {
+    return [
+      {
+        id: "shells.loading",
+        label: "Detecting shells…",
+        badge: null,
+        disabled: true,
+        title: "Looking for the shells installed on this machine",
+        action: null,
+        separator: true,
+        section: SHELLS_SECTION,
+      },
+    ];
+  }
+  if (state.shells.length === 0) {
+    return [
+      {
+        id: "shells.none",
+        label: "No shells detected",
+        badge: null,
+        disabled: true,
+        title: "No shells detected — new terminals use the system default",
+        action: null,
+        separator: true,
+        section: SHELLS_SECTION,
+      },
+    ];
+  }
+  return state.shells.map((shell, index) => ({
+    id: `shell:${shell.id}`,
+    label: shell.label,
+    badge: null,
+    disabled: open.disabled,
+    title: open.disabled ? open.title : shell.program,
+    action: open.disabled ? null : { kind: "newTerminalIn", shell },
+    separator: index === 0,
+    ...(index === 0 ? { section: SHELLS_SECTION } : {}),
+  }));
+}
+
 /** The whole menu, in display order. */
 export function terminalMenuRows(state: TerminalMenuState): TerminalMenuRow[] {
   const rows: TerminalMenuRow[] = [];
@@ -200,6 +294,10 @@ export function terminalMenuRows(state: TerminalMenuState): TerminalMenuRow[] {
     action: noApps ? null : { kind: "apps" },
     separator: false,
   });
+
+  // The shells sit between the base rows and the commands: they group with New
+  // Terminal without pushing Launch/Running/App output under a heading.
+  rows.push(...shellRows(state));
 
   if (state.shortcutsLoading) {
     rows.push({

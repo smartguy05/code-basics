@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { applyAppearance, loadAppearance, validThemeColors } from "../appearance";
 import {
   activeTheme, allThemes, BUILTIN_THEMES, COLOR_KEYS, DEFAULT_APPEARANCE, parseThemeFile,
@@ -9,8 +9,14 @@ import {
   type CommandDefinition, type ShortcutOverrides,
 } from "../shortcutLogic";
 import { loadShortcutOverrides, saveShortcutOverrides } from "../shortcuts";
+import {
+  DEFAULT_TERMINAL_SHELL, loadTerminalShell, missingShellNotice, saveTerminalShell,
+  type TerminalShellPref,
+} from "./terminalShellLogic";
+import * as api from "../ipc/api";
+import type { DetectedShells } from "../ipc/types";
 
-type Page = "appearance" | "keyboard" | "reference";
+type Page = "appearance" | "terminal" | "keyboard" | "reference";
 const cloneAppearance = (value: AppearanceSettings): AppearanceSettings => JSON.parse(JSON.stringify(value)) as AppearanceSettings;
 
 function downloadTheme(theme: ThemeDefinition) {
@@ -32,6 +38,30 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [recording, setRecording] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  // The remembered shell for new terminals, buffered like the appearance draft.
+  const [shell, setShell] = useState<TerminalShellPref>(() => loadTerminalShell(localStorage));
+  /**
+   * What the machine has. `null` is "not read yet", never "none found" — an
+   * empty select would claim we looked and found nothing.
+   *
+   * **This is the first asynchronously loaded surface in this dialog**, which is
+   * otherwise entirely synchronous reads of `localStorage`, so it is the first
+   * place here that has a loading state to render at all.
+   */
+  const [shells, setShells] = useState<DetectedShells | null>(null);
+  useEffect(() => {
+    let live = true;
+    void api.listShells()
+      .then((found) => { if (live) setShells(found); })
+      // A detection failure leaves the list unread rather than claiming an empty
+      // machine: "Detecting shells…" is wrong for only as long as the dialog is
+      // open, while "no shells found" would be a fabricated machine fact.
+      .catch((e) => console.error("code-basics: shell detection failed", e));
+    return () => { live = false; };
+  }, []);
+  const shellList = shells?.shells ?? null;
+  const defaultShellLabel = shells?.shells.find((s) => s.id === shells.defaultId)?.label;
+  const shellMissing = missingShellNotice(shell, shellList);
 
   const selected = activeTheme(appearance);
   const selectedBuiltin = BUILTIN_THEMES.some((theme) => theme.id === selected.id);
@@ -87,7 +117,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   function cancel() { applyAppearance(originalAppearance.current, false); onClose(); }
   function apply() {
     if (!validThemeColors(appearance)) { setMessage("Every color must be a valid CSS color."); return; }
-    applyAppearance(appearance, true); saveShortcutOverrides(shortcuts); onClose();
+    applyAppearance(appearance, true); saveShortcutOverrides(shortcuts); saveTerminalShell(localStorage, shell); onClose();
   }
 
   return <div className="settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) cancel(); }}>
@@ -96,6 +126,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       <div className="settings-body">
         <nav>
           <button className={page === "appearance" ? "active" : ""} onClick={() => setPage("appearance")}>Appearance</button>
+          <button className={page === "terminal" ? "active" : ""} onClick={() => setPage("terminal")}>Terminal</button>
           <button className={page === "keyboard" ? "active" : ""} onClick={() => setPage("keyboard")}>Keyboard</button>
           <button className={page === "reference" ? "active" : ""} onClick={() => setPage("reference")}>Native keys</button>
         </nav>
@@ -114,6 +145,31 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <h3>Colors</h3>
             <div className="settings-grid colors">{COLOR_KEYS.map((key) => <label key={key}>{key}<span><input type="color" disabled={selectedBuiltin} value={selected.colors[key].startsWith("#") && selected.colors[key].length === 7 ? selected.colors[key] : "#000000"} onChange={(event) => updateTheme((theme) => ({ ...theme, colors: { ...theme.colors, [key]: event.target.value } }))} /><input disabled={selectedBuiltin} value={selected.colors[key]} onChange={(event) => updateTheme((theme) => ({ ...theme, colors: { ...theme.colors, [key]: event.target.value } }))} /></span></label>)}</div>
           </>}
+          {/* No `preview()` on this page, unlike every other control in this
+              dialog: there is nothing to apply live. A terminal reads its
+              `command` once at mount and a live shell cannot be swapped under a
+              running session, so existing terminals are never re-pointed and the
+              value only matters to the *next* one. The buffered value is written
+              in `apply()`; `cancel()` therefore needs no undo, because nothing
+              was applied. */}
+          {page === "terminal" && <>
+            <h3>Shell for new terminals</h3>
+            {shellList === null
+              ? <div className="settings-row"><label>Shell</label><select disabled><option>Detecting shells…</option></select></div>
+              : shellList.length === 0
+                ? <p>No shells were detected on this machine. New terminals use the system default.</p>
+                : <div className="settings-row"><label>Shell</label>
+                    <select value={shell.shellId ?? ""} onChange={(event) => setShell({ version: 1, shellId: event.target.value === "" ? null : event.target.value })}>
+                      {/* The default's name is shown only when the backend told
+                          us which id it resolves to — inferring it from the list
+                          order would be a guess. */}
+                      <option value="">{defaultShellLabel ? `System default (${defaultShellLabel})` : "System default"}</option>
+                      {shellList.map((option) => <option key={option.id} value={option.id} title={option.program}>{option.label} — {option.program}</option>)}
+                    </select>
+                  </div>}
+            {shellMissing && <div className="warning">{shellMissing}</div>}
+            <p>Applies to terminals opened from now on. A terminal already open keeps the shell it started with.</p>
+          </>}
           {page === "keyboard" && <>
             <input className="settings-search" placeholder="Search commands" value={query} onChange={(event) => setQuery(event.target.value)} />
             <div className="shortcut-list">{sections.map((section) => <div key={section.title}>
@@ -131,7 +187,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           {message && <div className="settings-message">{message}</div>}
         </main>
       </div>
-      <footer><button onClick={() => { preview(DEFAULT_APPEARANCE); setShortcuts({}); }}>Reset all</button><span /><button onClick={cancel}>Cancel</button><button className="primary" onClick={apply}>Apply</button></footer>
+      <footer><button onClick={() => { preview(DEFAULT_APPEARANCE); setShortcuts({}); setShell(DEFAULT_TERMINAL_SHELL); }}>Reset all</button><span /><button onClick={cancel}>Cancel</button><button className="primary" onClick={apply}>Apply</button></footer>
     </section>
   </div>;
 }

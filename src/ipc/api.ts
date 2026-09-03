@@ -2,6 +2,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  AboutInfo,
   AgentCommand,
   AnchorResult,
   ArchGraph,
@@ -15,6 +16,7 @@ import type {
   ComparisonMode,
   DefinitionResult,
   DebugEvent,
+  DetectedShells,
   DiagramFile,
   DirEntry,
   ElidedReason,
@@ -236,6 +238,20 @@ export const writeNotes = (file: NotesFile) =>
   invoke<void>("write_notes", { file });
 
 // ---------------------------------------------------------------------------
+// About (Help -> About)
+// ---------------------------------------------------------------------------
+
+/**
+ * What build is running: host platform, and the commit and instant `build.rs`
+ * stamped in. Cannot fail — anything it could not establish comes back as the
+ * literal `"unknown"` rather than as an error or a blank.
+ *
+ * The application and Tauri versions are *not* here; read those from
+ * `@tauri-apps/api/app`, which the bundle already carries.
+ */
+export const aboutInfo = () => invoke<AboutInfo>("about_info");
+
+// ---------------------------------------------------------------------------
 // Running
 // ---------------------------------------------------------------------------
 
@@ -455,6 +471,17 @@ export const terminalClose = (id: string) =>
 
 /** The ids of every open terminal. */
 export const terminalList = () => invoke<string[]>("terminal_list");
+
+/**
+ * The shells on this machine, and which of them a terminal opens with no
+ * preference set. Read-only detection — nothing is spawned.
+ *
+ * `shells` may legitimately be **empty**, which is not a failure: a terminal
+ * opened with no program still runs the platform default. And a shell may
+ * appear or vanish between calls (a tool mid-upgrade, a PATH change), so the
+ * list is what is here *now* rather than something to cache.
+ */
+export const listShells = () => invoke<DetectedShells>("list_shells");
 
 // ---------------------------------------------------------------------------
 // The app launcher

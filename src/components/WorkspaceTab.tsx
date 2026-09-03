@@ -24,6 +24,7 @@ import {
   syncStackOrder,
   type TerminalDescriptor,
 } from "./terminalLogic";
+import { loadTerminalShell, resolvePreferredShell } from "./terminalShellLogic";
 import { sendToAgentTitle } from "./notesLogic";
 import {
   CLOSED_SQL_PANEL,
@@ -35,7 +36,7 @@ import {
 import type { TabSignal } from "./workspaceTabsLogic";
 import * as api from "../ipc/api";
 import type { AgentMode } from "../ipc/api";
-import type { BehavioralReport, FeatureInfo, Note, Workspace } from "../ipc/types";
+import type { BehavioralReport, FeatureInfo, Note, ShellInfo, Workspace } from "../ipc/types";
 import type { InspectRequest, OpenFileRequest, SelectConfigRequest } from "../App";
 import { featureEnabled, tabAfterDisable, visibleTabs, type FeatureKey } from "./featuresLogic";
 import type { ProjectPane } from "./projectViewLogic";
@@ -71,6 +72,13 @@ const FEATURE_BY_TAB: Partial<Record<Tab, FeatureKey>> = {};
  */
 export interface WorkspaceTabHandle {
   openTerminal(): void;
+  /**
+   * Open a terminal in one detected shell, this once, without touching the
+   * stored preference. Part of the handle for the same reason `openTerminal`
+   * is: the titlebar is global chrome and the terminals are per-codebase, so
+   * the action has to be routed to the foreground tab.
+   */
+  openTerminalIn(shell: ShellInfo): void;
   /**
    * Open an interactive terminal in this codebase already asking `question` of
    * `agentId`. Part of the handle rather than private to the tab because the
@@ -338,14 +346,58 @@ export function WorkspaceTab({
     return requestToken.current;
   }
 
-  const openTerminal = () => {
+  /**
+   * Add one terminal to this codebase's set, running `command` — or the
+   * platform default shell when that is `null`.
+   *
+   * Shared by the plain open and the one-off shell pick so the sequence counter
+   * is bumped in exactly one place: two copies of that increment could drift
+   * and mint the same `term-N`, which would have React reuse a live xterm for a
+   * different PTY session.
+   */
+  const mintTerminal = (command: { program: string; args: string[] } | null) => {
     terminalSeq.current += 1;
     const seq = terminalSeq.current;
     setTerminals((open) => [
       ...open,
-      makeTerminal(seq, nextTerminalNumber(open), workspace.root),
+      makeTerminal(seq, nextTerminalNumber(open), workspace.root, command ?? undefined),
     ]);
   };
+  /**
+   * Open a plain terminal, in the preferred shell if that shell is here.
+   *
+   * Detection runs at **open** time rather than being cached, mirroring
+   * `openAskTerminal`, which already awaits `agent_interactive_command` before
+   * minting a descriptor. It costs a few `is_file` probes and buys the
+   * preference being re-validated against the machine as it is *now*: a shell
+   * uninstalled since the choice was made resolves to nothing and
+   * `resolvePreferredShell` abstains, so the terminal opens on the platform
+   * default rather than failing to spawn a file that is gone.
+   *
+   * A failed detection must not stop a terminal opening — the user asked for a
+   * terminal — and must not silently claim the preference was honoured, hence
+   * the log rather than a silent `catch`.
+   */
+  const openTerminal = () => {
+    void api
+      .listShells()
+      .then(({ shells }) =>
+        mintTerminal(resolvePreferredShell(loadTerminalShell(localStorage), shells)),
+      )
+      .catch((e) => {
+        console.error("code-basics: shell detection failed; opening the system default", e);
+        mintTerminal(null);
+      });
+  };
+  /**
+   * Open a terminal in one specific shell, this once, from the titlebar menu.
+   *
+   * The `ShellInfo` was resolved by the detection that built the menu, so
+   * nothing is looked up again here — the path the row showed is the path that
+   * gets spawned.
+   */
+  const openTerminalIn = (shell: ShellInfo) =>
+    mintTerminal({ program: shell.program, args: shell.args });
   /**
    * Open a terminal running an agent that has already been asked `question`.
    *
@@ -451,6 +503,7 @@ export function WorkspaceTab({
   // needs to re-register when a handler identity changes between renders.
   const handleRef = useRef<WorkspaceTabHandle>({
     openTerminal,
+    openTerminalIn,
     openAskTerminal,
     openRunAgent,
     openReview,
@@ -459,6 +512,7 @@ export function WorkspaceTab({
   });
   handleRef.current = {
     openTerminal,
+    openTerminalIn,
     openAskTerminal,
     openRunAgent,
     openReview,
@@ -468,6 +522,7 @@ export function WorkspaceTab({
   useEffect(() => {
     const stable: WorkspaceTabHandle = {
       openTerminal: () => handleRef.current.openTerminal(),
+      openTerminalIn: (shell) => handleRef.current.openTerminalIn(shell),
       openAskTerminal: (question, agentId, model) =>
         handleRef.current.openAskTerminal(question, agentId, model),
       openRunAgent: (id) => handleRef.current.openRunAgent(id),

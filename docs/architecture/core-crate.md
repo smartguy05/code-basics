@@ -116,6 +116,42 @@ The **second** place that spawns a process, and the only bidirectional one — b
 - `TerminalEvent` is deliberately **not** `ProcessEvent`: a PTY multiplexes stdout and stderr onto one stream (no `stream` field) and the shell prints its own prompt (no `Started` banner). Output is one merged raw stream written straight to xterm.
 - `shell` is pure and holds the two decisions worth testing without a process: `default_shell` (Windows `pwsh`→`powershell`→`cmd`; Unix `$SHELL`→`bash`→`sh`), `clamp_size` (floor 1×1 — xterm can momentarily report 0), and `is_session_marker`. The last strips the Claude Code child-session markers this app inherits when it is itself launched from a Claude Code session (`CLAUDE_CODE_*`, plus bare `CLAUDECODE`/`CLAUDE_PID`/`CLAUDE_EFFORT`/`AI_AGENT`); left in place a nested `claude` runs as a child — transcripts off, parent IPC socket reused — instead of a fresh top-level session.
 
+### Which shell, and the one rule that does *not* apply here
+
+`shell::default_shell` answers "launch something" and `shell::detect_shells` answers "what
+is here", and they are deliberately opposite in the one case that matters. `pick_shell`,
+which `default_shell` uses, falls back to its **last** candidate even when nothing was
+found — correct for a caller that must spawn *a* shell or fail. `detected_shells` **omits**
+a candidate it cannot locate, so an empty list is a legitimate answer rather than a
+fallback, and the doc comment on each function names the other so neither gets "fixed" to
+match. Nothing breaks on empty: `commands::terminal::spec_program` still calls
+`default_shell()` whenever the frontend sends no program.
+
+The pure core is `detected_shells(candidates, locate)` — the filesystem arrives as an
+injected closure, so every rule is tested with no shell installed. `ShellInfo::program` is
+the **resolved absolute path**, not the probed name: detection proved that file exists, and
+re-resolving `"pwsh"` at spawn time would re-walk `PATHEXT` and could launch a different
+file than the one the user picked. Candidates that resolve to the same file are listed once
+(case-insensitively on Windows), keeping the earliest — which is also the better-labelled
+one, and is why `$SHELL` is appended *last* on Unix. A candidate whose resolved path
+`pty::argv::check_batch_argv` would refuse is dropped too: a `.cmd` shim under a directory
+containing `&` or `%` is one `cmd.exe` re-parses, and advertising a row that cannot spawn is
+worse than not offering it. `DetectedShells::default_id` is an `Option` with no
+`skip_serializing_if`, because "we could not identify the default" must not look like a
+backend that forgot to send one.
+
+Two exclusions are deliberate and must stay written down. **`wsl.exe` is never listed**: it
+ships in `System32` on every modern Windows install whether or not a distribution exists, so
+file presence is no evidence a shell would start, and deciding honestly would mean running
+`wsl.exe -l -q` — a subprocess spawn, with its latency and hang risk, inside a call whose
+whole job is to look at the disk. Listing it on presence alone is exactly the guess this
+crate refuses. **`bash.exe` under `System32`/`SysWOW64`** is dropped by
+`is_wsl_bash_launcher` for the same reason from the other end: that file is the legacy WSL
+launcher and fails outright with no distribution. That one is a heuristic — it would also
+drop a genuine bash copied there — and omitting is the safe side. `git-bash.exe` is out on
+different grounds entirely: it opens its own MinTTY window rather than a PTY-attached shell,
+so it is not a shell this app can host.
+
 ## `symbols`
 
 What a workspace declares, and finding it fast — the index the search palette sits on. The layering is one-directional, and each layer is testable on its own terms:

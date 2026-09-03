@@ -176,6 +176,59 @@ Do this check whenever a workflow that ran cargo finishes. Agents have been told
 - **`pnpm typecheck` / `pnpm test` fail with hundreds of `Cannot find module 'react'` (or `'vitest'`), in files nobody touched.** Every entry in `node_modules` is a pnpm **junction**, and an agent shell here often cannot traverse one: the give-away is `The path cannot be traversed because it contains an untrusted mount point` (os error 448 from cargo, `ERR_MODULE_NOT_FOUND` from node). Nothing is wrong with the code or the install — `node_modules/.pnpm/<pkg>` is intact, only the link into it is unreadable from that process. Disabling the tool sandbox does **not** help. Confirm with `Test-Path node_modules/react/package.json` (False) against `Test-Path node_modules/.pnpm/react@*/node_modules/react/package.json` (True), then say the frontend gate could not be run rather than "reporting" a green you never saw. **Cargo hits the same wall and has a way through**: the `~/.cargo/bin` shim gives `Permission denied` and cannot spawn `rustc`, so invoke the toolchain directly and pin `RUSTC` — point `TC` at `$USERPROFILE/.rustup/toolchains/stable-x86_64-pc-windows-msvc/bin`, then run `PATH="$TC:$PATH" RUSTC="$TC/rustc.exe" "$TC/cargo.exe" test -p cb-core`. `pnpm test` must resolve *through* the junctions and so has to be run by the user, but **`tsc` has a way through too**: generate a scratch tsconfig that extends the real one with `baseUrl` plus a `paths` entry pointing every package at its own `node_modules/.pnpm/<name>@<version>/node_modules/<name>` directory, then `npx tsc --noEmit -p` it. Three details are each worth hundreds of fake errors — prefer the package's **own** `.pnpm` directory (a first-match scan picks nested copies that are themselves junctions), point bare specifiers **straight at their `@types` package** (once `react` resolves to untyped JS, TypeScript's `@types` fallback walks the unreadable `node_modules/@types`, and `typeRoots` does *not* fix that — it governs global inclusion only), and add vite's `client.d.ts` to `include` for `?raw` imports. Measured on this repo: 1 error, and that one is a pre-existing `/// <reference types="vite/client" />` that `paths` cannot redirect. The `Stop` quality-gate hook still cannot be satisfied from such a session — it runs the literal `pnpm typecheck` — but since the `Unrunnable` change it **no longer blocks** on it: it prints that nothing was checked. Do not read that as a pass; a real type error still hides in that wall of noise, so read it rather than dismissing the whole run.
 - **The Objects tab is dead in a fresh clone and nothing reports an error.** `pnpm tauri build` runs `beforeBuildCommand: "pnpm debuggers:fetch && pnpm build"` — which chains the *debug adapters* but **not** `pnpm sidecar:build` — and `src-tauri/resources/inspector/` is gitignored. With no sidecar present `inspect_status` reports the feature unavailable — by design, since missing .NET is not a build failure, but it means a clean checkout ships an inert tab. Run `pnpm sidecar:build` manually before bundling. Under `pnpm tauri dev`, `CB_INSPECTOR_PATH` (a directory or a single binary) overrides the bundled copy.
 
+### A control inside a draggable panel header gets no clicks, and focus set on pointerdown does not stick
+
+Two separate DOM facts, both invisible in the markup, both found the hard way, and both
+recurring for **every** floating panel in this app (terminals, Notes, Review, Apps, Running,
+SQL). They cost a working feature that shipped inert and a click that silently did nothing.
+
+- **Pointer capture eats `click` and `dblclick`.** Every floating panel drags by its header
+  via `setPointerCapture(e.pointerId)`. While capture is active the browser dispatches
+  `click`/`dblclick` to the **capturing element** — the header — and a parent event never
+  reaches a child handler. So the terminal's double-click-to-rename `<strong>` sat inside
+  that header, fully wired (`onRename` passed, `renameTerminal` implemented, CSS present),
+  and could not fire. The visually identical Notes rename worked only because its tab strip
+  is *outside* its capturing header. The fix is to exempt the control from the drag exactly
+  as the header buttons already are (`closest("button, strong, input")`), so the press starts
+  no drag and takes no capture — **not** `preventDefault()`, which risks the `dblclick` the
+  rename depends on.
+- **Focus set during `pointerdown` is undone by the default action.** The browser's default
+  mousedown behaviour moves focus after your handler runs, so `viewRef.current?.focus()` in
+  an `onPointerDown` looks right and does nothing — clicking a terminal's header left the
+  caret wherever it was, despite a `focus()` call that had been there since the panel was
+  written. Focus inside a `setTimeout(…, 0)` so it lands after the default action;
+  `TerminalPanel.restore()` already did this and was the precedent nobody connected.
+
+Before putting any interactive control in a panel header, assume both apply.
+
+### Returning `false` from xterm's key handler does not stop the webview
+
+`attachCustomKeyEventHandler` returning `false` stops only xterm's **key translation**; the
+bundle returns immediately and calls no `preventDefault()`. So a paste chord handled by
+reading the clipboard and writing the text *also* gets the webview's native paste onto
+xterm's hidden textarea, whose own paste listener fires `term.onData` — one Ctrl+V, two
+writes. Worse, they were not the same write: ours was raw, xterm's was CRLF→CR normalized
+and bracketed, so the duplicate was the dangerous half (an unbracketed multi-line paste is
+executed line by line by the shell). A paste chord must `preventDefault()` **and** route the
+text through `term.paste`, which is the same helper the native path uses, so the app has one
+paste behaviour rather than two. Two rules follow and both are pinned by tests: a
+**passthrough must never** `preventDefault` (Ctrl+C is the shell interrupt, and a blanket
+prevention is the tempting "simplification" that breaks it), and any `Ctrl+`key chord needs
+an `altKey` guard, because **Windows reports AltGr as Ctrl+Alt** — without it, Ctrl+V eats
+AltGr+V on every layout where that types a character.
+
+### One rename, two destinations, one rule
+
+A terminal rename writes the descriptor the header and pill render from *and* the backend
+running-registry record the Running panel renders from, through two different calls. Moving
+one to `normalizeLabel` while the other kept `value.trim()` made them disagree on exactly
+the inputs the cleaning exists for — `trim` strips neither U+0000 nor a bidi override — so a
+title the header **refused** still renamed the Running row, and `"a	b"` left the two
+showing different names for one terminal. `acceptedTerminalTitle` in `terminalLogic.ts` is
+now the single name for that rule and both callers ask it. Whenever a rename has more than
+one destination, give the acceptance one function; a second acceptance test at one call site
+is the bug, not a safeguard.
+
 ## Tests first — not optional
 
 Write the failing test before the implementation. `cb-core` exists precisely so that every decision is testable headlessly; if something is hard to test, it is in the wrong layer, not untestable.
@@ -212,7 +265,7 @@ Three layers with a strict dependency rule:
    - `launcher/` — the **app launcher**: free-form command lines run beside the detected configurations (a local Redis, a Python script, `docker compose up`), and the memory of what has been run. It sits *next to* `config`/`invocation` and not inside them for a reason worth keeping: a `RunConfig` has **no program of its own** — `invocation::build_with` always resolves one through an ecosystem adapter, and an adapter only speaks for a project it detected — so a launchable resolves **directly** into an `Invocation` instead, which `process::Supervisor` already runs headless and tracks (as the new `running::RunKind::External`). The store is **user-global like `notes.rs`, not per-workspace** (`code-basics/launchers.json`, `CB_LAUNCHERS_PATH`): "the commands I run" belongs to the person, and a checked-in `.code-basics/config.json` would share one developer's local shortcuts with the team — each entry instead records its `cwd`, which is what lets `recents::group` put the open codebase's commands first with no second store. `parse.rs` is where the abstain rule bites hardest, because this is the one place free text the user typed becomes a process: only `"` groups and only `\"` escapes (a Windows path is not an escape sequence), an empty line and an unbalanced quote are errors that name the problem, and an unquoted `|`/`>`/`<`/`&`/`;` is **refused with the fix** rather than run as a bare argv — `echo hi | findstr hi` would otherwise "work" while printing `hi | findstr hi`. Nothing here interprets those characters; a `shell` flag hands the line to `pty::default_shell()` with `/C`/`-c`. `recents.rs` is the whole policy, pure with the clock as an argument: identity is `(command, cwd)`, a re-run preserves the only two things the user sets (the pin and the rename), and the 30-entry cap **never evicts a pinned entry** — a cap that could would make pinning a suggestion rather than a promise.
    - `notes.rs` — the global notes/scratchpad store behind the floating Notes panel. Unlike everything else this crate persists it is **user-global, not per-workspace**: `notes_path()` resolves `code-basics/notes.json` under the user config dir beside the enhancements library (`CB_NOTES_PATH` overrides the whole path), so there is no `.code-basics/` gitignore entry and the commands take no `AppState`. Same abstain-and-tolerate rule as `enhancements::runs`: `load` turns a missing or corrupt file into an empty `NotesFile` (`version` 1) rather than erroring, so a bad file never stops the panel opening. A `NotesFile` is a `version` plus an ordered `Vec<Note>`; camelCase keys pinned by a test, the same IPC contract as `model`. Pure fs/serde, tested in `notes_tests.rs`.
    - `process/` — process spawning, output chunking, cross-platform kill. Layers colour-enabling env defaults under the config's own. `pid(id)`/`running()` expose what the supervisor already knew, so the inspector can attach to a live process without a second lifecycle.
-   - `pty/` — the app's **second** process path and the only bidirectional one, behind the floating terminals: a real pseudo-terminal (ConPTY/forkpty via `portable-pty`) with stdin open and resizable, so an interactive program (Claude Code's TUI included) runs unchanged. `Supervisor` is deliberately *not* reused — it spawns `stdin`-null and streams to exit. `PtyManager` mirrors `Supervisor`'s shape (clone-cheap handle over a session map) but uses a `std::sync::Mutex` because the reader/waiter threads have no async runtime; `close` reuses `process::kill_tree` so a shell's `claude`/`node` children die with it. Two things the pure `shell.rs` pins: Enter over a PTY is `\r` not `\n`, and a user-opened terminal must be a clean **top-level** session — `is_session_marker` strips the inherited Claude Code child-session markers (`CLAUDE_CODE_*` plus bare `CLAUDECODE`/`CLAUDE_PID`/`CLAUDE_EFFORT`/`AI_AGENT`) before spawning, or a nested `claude` runs with transcripts off and the parent's IPC socket. `TerminalEvent` is one merged stream (no stdout/stderr split, no `Started` banner), unlike `ProcessEvent`.
+   - `pty/` — the app's **second** process path and the only bidirectional one, behind the floating terminals: a real pseudo-terminal (ConPTY/forkpty via `portable-pty`) with stdin open and resizable, so an interactive program (Claude Code's TUI included) runs unchanged. `Supervisor` is deliberately *not* reused — it spawns `stdin`-null and streams to exit. `PtyManager` mirrors `Supervisor`'s shape (clone-cheap handle over a session map) but uses a `std::sync::Mutex` because the reader/waiter threads have no async runtime; `close` reuses `process::kill_tree` so a shell's `claude`/`node` children die with it. `shell.rs` also answers *what shells are here* (`detect_shells`), and is deliberately the opposite of the `pick_shell` beside it: `pick_shell` falls back to its last candidate, `detected_shells` **omits** what it cannot find, so an empty list is a real answer (`spec_program` still falls back to `default_shell()`). `wsl.exe` is never offered — it ships in `System32` regardless of whether a distribution exists, so presence is not evidence a shell would start. Two things the pure `shell.rs` pins: Enter over a PTY is `\r` not `\n`, and a user-opened terminal must be a clean **top-level** session — `is_session_marker` strips the inherited Claude Code child-session markers (`CLAUDE_CODE_*` plus bare `CLAUDECODE`/`CLAUDE_PID`/`CLAUDE_EFFORT`/`AI_AGENT`) before spawning, or a nested `claude` runs with transcripts off and the parent's IPC socket. `TerminalEvent` is one merged stream (no stdout/stderr split, no `Started` banner), unlike `ProcessEvent`.
    - `invocation.rs` — turns a `RunConfig` into a command line: `build()` (the single dispatch point over the adapters), `plan_compound` (compound member resolution + env layering, resolve-all-before-start-any), `rerun_filter` (the "re-run failed" guard).
    - `erosion/` — a rules-based, **no-model** scan over the diff for changes that quietly weaken the codebase (a deleted assertion, an `[Ignore]`/`.skip` test, a widened `catch`, an introduced `.unwrap()`, a `TODO` in a production path, a removed timeout, a dropped log). Each rule is **one regex against one *side*** of the diff and a match is only taken on a line of that origin, never context (getting the side backwards is how a rules scan makes noise); `rules.rs` ships built-ins per ecosystem (.cs / ts-js / .rs), **extended never shadowed** by `.code-basics/erosion/*.toml` like `adapters/manifest`. `scan.rs::scan_diffs` yields `ErosionReport { flags, warnings }` — each flag cites the exact line plus the `DiffLine::index` for the click highlight, a bad regex lands in `warnings` rather than being dropped, and the detector **ranks nothing** (a pure producer of located facts).
    - `behavioral/` — the **runtime** counterpart to the intent `git/coverage` Scorecard: run a config against `HEAD` (materialised in an isolated `git worktree`, `worktree.rs` — net-new, since every other checkout mutates the single working tree in place; `Drop`-guarded, oid-cached, and reusing the same Windows read-only-directory handling as `checkout_tree_tolerating_locks`) and against the working tree, then diff the *observable* outcomes: test results (`compare.rs`, joined by `full_name`; `Other` is never a pass), console output (`console.rs`, masking timestamps/ids/both run roots and comparing as multisets), and HTTP responses replayed from `.http` files (`httpfile.rs` pure parse + `@readiness`, `replay.rs` the only networking layer, `http.rs` diff with volatile headers ignored and JSON compared structurally). `attribute.rs` pins each delta to the one intent card whose files it points at, or abstains to an unattributed bucket — and two of the three kinds **always** abstain, which is a rule and not a gap: an `.http` request's handler is not derivable so `candidate_paths` returns an empty set for HTTP, and `compare.rs` sets every `CaseDelta.files_hint` to `Vec::new()` so a test delta has nothing to match on, leaving console (whose changed lines may name exactly one card's files) as the only kind that can attribute; `scenario.rs`/`prepare.rs` are the pure, tested seams the untestable command delegates to. Same abstain rule, **sharpened for how weak runtime evidence is**: equal-after-masking is *no* delta, a single-run test flip is capped at `Medium`, and a never-ready server / missing-or-ambiguous launch config / no `@readiness` each become a warning rather than a fabricated result. HTTP replay is **strictly sequential** (base then work — same port) and can never hang on a server that will not exit (the detached run task is cancelled with a retry that closes the spawn/registration race, then awaited under a timeout).
@@ -332,6 +385,26 @@ Three layers with a strict dependency rule:
   persists, terminal attention remains until acknowledged, success expires,
   cancellation is quiet, and an event already visible in the active workspace
   must not latch and appear after switching away.
+- The shell a terminal runs is chosen **before** its descriptor exists, which is
+  what keeps `TerminalPanel`'s `command` prop honestly read-once-at-mount — a live
+  session can never have its shell swapped underneath it. The preference is a
+  versioned `localStorage` key in `src/components/terminalShellLogic.ts` (storage
+  injected as a parameter, like every other pref module), and its abstentions are
+  the point: no preference, a list not yet read, or a saved id naming nothing
+  detected all resolve to *send no program and let `default_shell()` decide*. The
+  last of those must not fall back to the bare saved id, and must not erase the
+  preference — a shell can be missing because `PATH` is broken or a tool is
+  mid-upgrade, and discarding a choice over a transient absence is unrecoverable.
+  Settings' Terminal page is the first async-loading surface in that dialog, the
+  only page there that deliberately does not `preview()`, and must render
+  *detecting*, *none detected* and *a list* as three distinct states.
+- Help → About must never present a provenance field it did not establish. Every
+  one abstains to the literal `unknown`; a sha built from a modified tree carries
+  its `-dirty` marker, since an unmarked sha is a *wrong* answer about which code
+  is running; and the commit is shown beside the build date because an unstaged
+  edit after a build does not re-stamp the binary. All composition lives in the
+  tested `aboutLogic.ts` — `versionDrift` in particular **reports** a crate/bundle
+  version disagreement rather than picking one to believe.
 - The Changes file list carries a multi-selection separate from the file the
   diff pane shows. A right-click inside the selection acts on all of it; a
   right-click outside it acts on that one row. A Shift-range follows the order

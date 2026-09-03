@@ -227,6 +227,44 @@ export type TerminalEvent =
   | { type: "exited"; code: number | null; success: boolean }
   | { type: "failed"; message: string };
 
+/**
+ * One shell `list_shells` found on this machine. Mirrors the Rust `ShellInfo`,
+ * pinned by `shell_info_serialises_with_the_keys_the_ui_reads` in
+ * `crates/core/src/pty/model.rs`.
+ *
+ * Every row describes a file that existed at detection time — there is no
+ * "missing" or disabled variant, because a shell that cannot be launched is
+ * omitted rather than offered.
+ */
+export interface ShellInfo {
+  /** Stable id; this, not `program`, is what a stored preference persists. */
+  id: string;
+  /** Display name. Never derived from a version nobody read. */
+  label: string;
+  /**
+   * The resolved absolute path that gets spawned — and the only thing that
+   * tells two installations of the same shell apart, so show it as the row's
+   * helper text or tooltip.
+   */
+  program: string;
+  /** Arguments to pass with `program`. Empty for every shell detected today. */
+  args: string[];
+}
+
+/**
+ * What `list_shells` answers. Mirrors the Rust `DetectedShells`, pinned by
+ * `detected_shells_serialises_with_the_keys_the_ui_reads`.
+ *
+ * An **empty** `shells` array is a legitimate answer, not a failure: terminals
+ * still open on the platform default. `defaultId` is `T | null` rather than
+ * optional, deliberately — "we could not identify the default" must not be
+ * indistinguishable from a backend that forgot to send one.
+ */
+export interface DetectedShells {
+  shells: ShellInfo[];
+  defaultId: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Running processes (the Running panel)
 // ---------------------------------------------------------------------------
@@ -2253,3 +2291,41 @@ export type SqlTestOutcome =
  * would make a race look like a working feature.
  */
 export type SqlStopOutcome = "signalled" | "alreadyStopping" | "notFound";
+
+// ---------------------------------------------------------------------------
+// About (Help -> About)
+// ---------------------------------------------------------------------------
+
+/**
+ * What build is running. Mirrors the Rust `AboutInfo`, pinned by
+ * `about_info_serialises_with_the_keys_the_ui_reads` in
+ * `src-tauri/src/commands/about.rs` — unusually for this file the struct lives
+ * in the command module rather than `cb-core`, because it carries no decision
+ * the core crate needs to make.
+ *
+ * The application and Tauri versions are absent on purpose: the frontend reads
+ * those from `@tauri-apps/api/app`, so this covers only what that API cannot
+ * answer. Every field is a plain string and **none of them is optional** — a
+ * fact that could not be established arrives as the literal `"unknown"`, so
+ * "we do not know" can never be confused with a backend that forgot to send it.
+ */
+export interface AboutInfo {
+  /** `cb-app`'s crate version, which may differ from `getVersion()`'s. */
+  appVersion: string;
+  /** `std::env::consts::OS` for the compiled target, e.g. `"windows"`. */
+  os: string;
+  /** `std::env::consts::ARCH`, e.g. `"x86_64"`. */
+  arch: string;
+  /**
+   * The short commit, suffixed `-dirty` when the tree carried uncommitted
+   * changes at build time, `-unverified` when that could not be checked, or
+   * `"unknown"`. Read it through `aboutLogic.treeState` rather than by hand.
+   */
+  gitSha: string;
+  /**
+   * UNIX epoch **seconds** as a decimal string, or `"unknown"` — not a
+   * formatted date. `aboutLogic.formatBuildDate` renders it; see `build.rs`
+   * for why the formatting is on this side.
+   */
+  buildDate: string;
+}

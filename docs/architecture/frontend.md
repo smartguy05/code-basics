@@ -122,7 +122,7 @@ src/
 │   │                     right-click create-from / merge-into, abort-merge
 │   ├── treeLogic.ts      the slash-name → folder-tree builder (buildTree /
 │   │                     ancestorPaths), shared by BranchMenu and HistoryView
-│   ├── MenuBar.tsx       menu bar: File (Open/Rescan/Exit) + Enhancements with
+│   ├── MenuBar.tsx       menu bar: File (Open/Rescan/Exit) + Help (About) + Enhancements with
 │   │                     fly-out Add Instructions/Run Agent submenus (enhancementsLogic.ts)
 │   ├── enhancementsLogic.ts  the Enhancements decisions: add/remove action, badges,
 │   │                     empty-state text, run-once click/badge + confirm messages
@@ -263,6 +263,73 @@ It returns four answers rather than a boolean — nothing carries this id, the o
   Panes hosting a terminal must be `overflow: hidden` — an outer scrollbar fights the fit addon. The xterm viewport's **own** scrollbar is the exception and is styled explicitly to a real, layout-taking one: WebView2's default is an *overlay* bar that takes no width, so `FitAddon` measures a scrollbar width of zero and lays `.xterm-screen` — a later, positioned sibling — across the strip the bar is painted in, giving a scrollbar you can see and cannot drag.
 - **WorkspaceTab** is one open codebase. `App` holds `openWorkspaces` + `activeRoot` and renders one `WorkspaceTab` per root wrapped in `hidden={!active}` — backgrounding is `display:none`, **never an unmount**, so a background codebase's running processes, terminals and language server stay live. Everything per-codebase lives here (the inner Run/Tests/… selection, the agent and before/after panels, the palette, the setup prompt, this codebase's terminals); the global chrome (branch widget, bottom status bar, Notes) stays in `App`, and per-workspace *actions* route back to the foreground tab through a `WorkspaceTabHandle` registered via `onRegister(root, handle)`. Switching awaits `set_active_workspace` before flipping `activeRoot`, so a newly-foregrounded view never queries the previous workspace. The backend shards state per root (`AppState` → a per-slot supervisor, symbol index and LSP session; the review/behavioral supervisor and the PTY manager stay app-global). The pure tab decisions — add/dedupe, which neighbour inherits focus on close, label disambiguation when two share a name — are in the tested `workspaceTabsLogic.ts`.
 - **TerminalPanel / TerminalView** are the [floating interactive terminals](../getting-started/using-the-app.md#terminals), hosted **per open codebase** (inside each `WorkspaceTab`, bound to that workspace's root as the PTY cwd) so a running session survives a tab switch. `TerminalPanel` is the draggable, resizable, minimize-to-pill shell modelled on `ReviewPanel`; it reuses `reviewLayoutLogic.ts` (its own persistence key + a cascade offset so several do not stack) and flashes the pill **only on the terminal bell (`\x07`)** while minimized — ordinary output does not flash, since a build or a TUI streams constantly and flashing on any of it would mean nothing — and also decides copy/paste (`Ctrl+Shift+C`/`Ctrl+Insert` copy the selection, `Ctrl+V`/`Ctrl+Shift+V`/`Shift+Insert` paste, `Ctrl+C` stays the shell interrupt); every such decision is in the tested `terminalLogic.ts`. A minimized terminal bubbles two things up to its **workspace tab** when it is not the foreground one: the bell, as long as it is unacknowledged (`onAttentionChange`, live state a restore clears), and a one-shot `onCompleted` when its process exits — see [tab signals](#tab-signals) below. `TerminalView` is a deliberately thin, **raw** xterm wrapper: PTY bytes written straight in, keystrokes straight out via `onData`, copy/paste through `attachCustomKeyEventHandler` + `navigator.clipboard`, and none of `OutputConsole`'s re-colouring/filtering/rebuild, which would corrupt a program that redraws its own screen (Claude Code's TUI, a shell line editor). It relies on xterm answering Device Status Report queries itself, so an interactive shell in a PTY does not hang. Backed by [`cb_core::pty`](core-crate.md#pty) through the `terminal_*` commands.
+
+  Three things about that header are worth knowing before putting any control in one, because
+  all three cost real time to find and none is visible in the markup. **A control inside a
+  header that takes pointer capture never receives `click` or `dblclick`.** The drag handler
+  calls `setPointerCapture`, and while capture is active the browser dispatches those to the
+  *capturing* element — the header — and a parent event does not reach a child handler. That is
+  why the rename `<strong>` sat there inert while the visually identical Notes rename worked:
+  Notes' tab strip is *outside* its capturing header. The fix is the bail-out, which now covers
+  the title and the rename input as well as the buttons, so a press on them starts no drag and
+  takes no capture. **Focusing another element during `pointerdown` does not stick**, either —
+  the browser's default mousedown action then moves focus, undoing it a moment later, which is
+  why clicking the header did not put the caret in the terminal despite a `focus()` call that
+  had been there all along. Focusing inside a `setTimeout(…, 0)` lands after the default
+  action; `restore()` in the same file already did exactly this. **And returning `false` from
+  `attachCustomKeyEventHandler` stops only xterm's key translation** — it calls no
+  `preventDefault()`, so the webview still performs a native paste onto xterm's hidden
+  textarea and xterm's own paste listener fires a second data event. One Ctrl+V, two writes,
+  and not even matching ones: ours was raw where xterm's was CRLF-normalized and bracketed, so
+  the duplicate was also the dangerous half — an unbracketed multi-line paste is executed line
+  by line. Both now go through `term.paste`, which is the same helper the native path uses, so
+  there is one paste behaviour in the app rather than two. The chord table gained an `altKey`
+  guard while it was open: Windows reports AltGr as Ctrl+Alt, so `Ctrl+V` without that guard
+  eats AltGr+V on any layout where it types a character.
+
+  `acceptedTerminalTitle` exists because a rename has **two** destinations — the descriptor the
+  header and the pill render from, and the running-registry record the Running panel renders
+  from — written by two different calls. One cleaning through `normalizeLabel` while the other
+  merely trimmed made them disagree on precisely the inputs the cleaning is for (`trim` strips
+  neither U+0000 nor a bidi override), so a title the header *refused* still renamed the
+  Running row. Both callers now ask the one function, and the rule is `normalizeLabel` — the
+  codebase-tab rename's own helper, reused rather than reimplemented.
+
+- **Which shell a terminal runs** is decided before the descriptor exists, which is what keeps
+  `TerminalPanel`'s `command` prop read-once-at-mount honest: nothing ever needs to re-point a
+  live session. `terminalShellLogic.ts` holds the preference (a versioned `localStorage` key,
+  `storage` injected as a parameter like every other pref module here) and the abstention that
+  is the point of it. `resolvePreferredShell` returns `null` — meaning *send no program and let
+  the backend's `default_shell()` decide* — when there is no preference, when the detected list
+  has not been read yet (never guess off a stale list), **and when the saved id names nothing
+  detected**. That last case explicitly does not fall back to `{ program: savedId }`: spawning
+  a remembered bare id whose file is gone would fail the open instead of opening a terminal.
+  Nor is the preference erased, because a shell can be absent for a `PATH` that is temporarily
+  broken or a tool mid-upgrade, and discarding a choice over a transient absence is not
+  recoverable — so it persists, use abstains, and `missingShellNotice` says so out loud (and
+  stays silent while the read is in flight, since a warning during it is a false alarm).
+  `SettingsDialog`'s Terminal page is the **first async-loading surface** in a dialog that is
+  otherwise entirely synchronous, and the only page there that deliberately does not
+  `preview()` — there is nothing to apply live. It renders *detecting*, *none detected* and *a
+  list* as three distinct states, because an empty picker would claim none exist when we simply
+  have not looked. The caret menu's `New terminal in` rows take their `disabled`/`title` from
+  the same `newTerminalButton()` the New Terminal row uses, so a shell row can never claim it
+  can open a terminal when New Terminal says it cannot; and a detected-empty list is a
+  **disabled row with a reason**, not an omitted section — deliberately unlike the
+  switched-off-plugin rule, because "no shell was found on this machine" is a machine fact the
+  user may need to act on, and a silently missing section is indistinguishable from a bug.
+
+- **AboutDialog** is the one place the app says what it is. It reads `getVersion()` /
+  `getTauriVersion()` from `@tauri-apps/api/app` (already permitted by `core:default`, so no
+  dependency and no capability change) and `about_info` for OS, arch and the build provenance
+  `src-tauri/build.rs` stamps in. All the composition lives in the tested `aboutLogic.ts`
+  — `formatBuildDate` renders the epoch seconds the build script emits (date arithmetic in a
+  build script is the one place in the tree no test can reach, so it stays too simple to be
+  wrong), `treeState` reads the `-dirty`/`-unverified` marker, and `versionDrift` **reports** a
+  disagreement between the crate version and the bundle's rather than picking one to believe.
+  Every field abstains to the literal `unknown` rather than going blank, and the commit is
+  shown beside the build date on purpose: an unstaged edit made after a build does not re-stamp
+  the binary, so the date is what tells a reader how old the reading is.
 - **NotesPanel** is the floating [notes / scratchpad](../getting-started/using-the-app.md#notes), hosted at the app level (one global instance, opened from the titlebar **Notes** button) so it survives a tab switch. It reuses `reviewLayoutLogic.ts` — with its own persistence key — for the drag/resize/minimize shell, minimizing to a thin labeled bar rather than a pill. A tab strip switches between several named notes; edits autosave (debounced, with a max-wait cap so continuous typing still lands — `flushDelay`) through the `read_notes`/`write_notes` commands over [`cb_core::notes`](core-crate.md#notes), and the panel flushes any pending write on close **and on `pagehide`**. `notes::save` writes **atomically** (temp file + rename, and a `.bak` before an empty overwrite), so notes survive an app crash or restart without an explicit save. Every decision — create/rename/delete, which tab is active after a delete, the persistence keys — lives in the tested `notesLogic.ts`; the component decides nothing. **Send to agent** opens the shared `ReviewPanel` with the note's text as `initialPromptBody` (an inline prompt in place of a library one — the prompt picker hides), and **Save as instruction** calls `save_note_as_instruction` to add the note to the Enhancements instruction library. Notes are **user-global**, not per-workspace, so unlike the other views the panel reads and writes a file under the user config directory rather than `.code-basics/`.
 - **LauncherPicker / AppOutputPanel** are the [app launcher](../getting-started/using-the-app.md#running-other-apps): a titlebar **Launch** button opens an overlay with a command box and the commands you have run before, and **one shared floating panel** holds a tab per launched app. Both are app-level, not per-codebase, because a launched app belongs to no repository — closing the codebase it was started from must not take it down (its process lives in the *global* supervisor, recorded as `RunKind::External`). There is no "add an entry" form: running a command is what remembers it, and an entry can then be pinned or renamed. The toolbar's **severity picker** narrows the active tab's console to *All levels* / *Info+* / *Warn+* / *Errors*, and the threshold lives on the `AppTab` rather than inside the console — per tab, because two services running at once are usually being watched for two different reasons, and on the tab so it survives the panel being hidden. Two lifetime rules the panel exists to keep: every console **stays mounted** while its tab exists (hidden tabs included — `OutputConsole` already skips fitting when it has no `offsetParent`), and a **tab outlives its process**, because the Running panel drops a row the instant a process exits, leaving the tab as the only place the exit code and the output survive. Output that arrives before a console has mounted is buffered in `App` and flushed on registration, so the lines explaining a mistyped command are never lost. Whether the shell checkbox starts ticked is `needsShell` in `launcherLogic.ts`, whose quoting rules mirror the Rust tokeniser exactly — it is only the *default*, since [`cb_core::launcher`](core-crate.md#launcher) refuses an unquoted `|`/`>`/`&&` rather than passing it through as an argument. The Running panel gains a **View** action on those rows only (`hasOutput`), which focuses the app's output tab.
 - **BehavioralPanel** streams a [before/after run](../getting-started/using-the-app.md#changes) and then shows what it found, behind a two-tab strip: **Console** (the live run) and **Evidence** (the assembled `BehavioralReport`). The panel switches itself to Evidence when the report lands — that is what the run was for — but the console **stays mounted** behind it rather than being unmounted, the same rule `AppOutputPanel` keeps: the scrollback is the only record of a run that has already finished. Evidence renders the scorecard, the test summary, and then every delta as a collapsible row: `deltaLine` is the always-visible header, `deltaDetail` the rows underneath — the actual console lines that appeared and disappeared, an HTTP delta's status, header and body changes (rendered nowhere before), and a note naming the masking when a comparison was normalised. Each unattributed delta also carries `unattributedReason`, because "0 attributed" is usually a documented abstain rather than a failure: a test case is not mapped to a source file and an `.http` request's handler is not derivable, so those deltas can *never* pin to a card, and a console delta pins only when its lines name exactly one card's files. Rows auto-expand only while the whole report has at most `AUTO_EXPAND_LIMIT` (3) deltas — the one-delta case must not open folded, or the panel reproduces the bug it exists to fix — and each side of a diff is capped at `EVIDENCE_LINE_CAP` (20) lines with a `+N more` row rather than silently truncating. Every one of those decisions is in the tested `behavioralPanelLogic.ts`; the component only renders them. `claimVerifyLogic.describeDelta` reuses the same `deltaDetail`, so the verifying agent and the reader can never be looking at different evidence.

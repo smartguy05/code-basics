@@ -4,6 +4,8 @@
 //! live PTY. The React/xterm plumbing that drives them lives in
 //! `TerminalPanel.tsx` and `TerminalView.tsx` and decides nothing.
 
+import { normalizeLabel } from "./workspaceRenameLogic";
+
 /** A terminal the app is hosting: a stable React key, a display title, and the
  * workspace it belongs to. */
 export interface TerminalDescriptor {
@@ -53,9 +55,36 @@ export interface TerminalDescriptor {
  * Build a newly opened terminal from a monotonic identity and a reusable
  * display number. Keeping those separate lets React/session identity remain
  * unique while the title uses the lowest slot not occupied in this workspace.
+ *
+ * `command` is the shell to run — either the stored preference resolved against
+ * what is on the machine now, or a one-off pick from the titlebar menu.
+ * Omitting it is the ordinary case and means *send no program*, leaving
+ * `spec_program` to fall back to `cb_core::pty::default_shell()`; that is what
+ * every terminal did before the shell picker existed, and it is also the
+ * deliberate answer whenever the preference cannot be honoured.
+ *
+ * An **optional fourth parameter** rather than a sibling of `makeAgentTerminal`,
+ * because unlike the agent terminal nothing else about the descriptor changes:
+ * the **title stays `Terminal N`** even for a one-off shell pick, since the
+ * shell announces itself in its own prompt and the header is renamable.
+ *
+ * `args` is **copied** for the reason `makeAgentTerminal` copies: it came from
+ * an IPC result, and a later mutation of that array must not rewrite what a
+ * running terminal was spawned with.
  */
-export function makeTerminal(seq: number, number: number, cwd: string): TerminalDescriptor {
-  return { key: `term-${seq}`, number, title: `Terminal ${number}`, cwd };
+export function makeTerminal(
+  seq: number,
+  number: number,
+  cwd: string,
+  command?: { program: string; args: readonly string[] },
+): TerminalDescriptor {
+  return {
+    key: `term-${seq}`,
+    number,
+    title: `Terminal ${number}`,
+    cwd,
+    ...(command ? { command: { program: command.program, args: [...command.args] } } : {}),
+  };
 }
 
 /** The lowest positive terminal number not reserved by an open window. */
@@ -105,18 +134,44 @@ export function makeAgentTerminal(
 }
 
 /**
- * Rename the terminal with `key` in a list. A blank (or whitespace-only) title
- * is refused — the existing title is kept — so a terminal never renders as an
- * empty header or an unreadable pill, the same rule `renameNote` follows for
+ * Rename the terminal with `key` in a list. A title `normalizeLabel` refuses is
+ * refused here too — the existing title is kept — so a terminal never renders as
+ * an empty header or an unreadable pill, the same rule `renameNote` follows for
  * notes. Other terminals are returned untouched.
+ *
+ * The cleaning is {@link normalizeLabel}, the codebase-tab rename's own helper,
+ * reused rather than reimplemented: a header title sits beside the other
+ * terminals' titles exactly as a tab label sits beside other tabs, so it wants
+ * the same control/bidi stripping, the same whitespace collapsing, and the same
+ * 40-character cap (`MAX_LABEL_LENGTH`) sliced by **code point**. A second
+ * copy of that character class is a second place for it to drift, and the one
+ * thing worse than an unreadable title is two rules for what makes one.
  */
 export function renameTerminal(
   list: TerminalDescriptor[],
   key: string,
   title: string,
 ): TerminalDescriptor[] {
-  const clean = title.trim();
-  return list.map((t) => (t.key === key && clean !== "" ? { ...t, title: clean } : t));
+  const clean = acceptedTerminalTitle(title);
+  return list.map((t) => (t.key === key && clean !== null ? { ...t, title: clean } : t));
+}
+
+/**
+ * The title a terminal may actually be called, or `null` when the rename is
+ * refused outright.
+ *
+ * This exists so that the *one* rule has one name. A rename has two
+ * destinations — the descriptor the header and the pill render from, and the
+ * backend running-registry record the Running panel renders from — and they are
+ * written by two different calls. While one of them cleaned through
+ * {@link normalizeLabel} and the other merely trimmed, the two disagreed on
+ * exactly the inputs the cleaning exists for: `trim` removes neither U+0000 nor
+ * a bidi override, so a title this rule *refused* still reached the registry,
+ * and a title it merely tidied (`"a	b"`) left the header and the Running panel
+ * showing different names for one terminal. Both callers now ask this.
+ */
+export function acceptedTerminalTitle(title: string): string | null {
+  return normalizeLabel(title);
 }
 
 /**
@@ -198,6 +253,15 @@ export interface TerminalKeyEvent {
   type: string;
   ctrlKey: boolean;
   shiftKey: boolean;
+  /**
+   * Whether Alt was held.
+   *
+   * Read for one reason: on Windows **AltGr is reported as Ctrl+Alt**, so a
+   * layout where AltGr+V types a character produces exactly the modifier state
+   * a Ctrl+V paste chord matches. Without this the terminal ate the keystroke
+   * and that character could not be typed at all.
+   */
+  altKey: boolean;
   key: string;
 }
 
@@ -209,16 +273,62 @@ export interface TerminalKeyEvent {
  * **interrupt**, so copying uses `Ctrl+Shift+C` (or `Ctrl+Insert` with a
  * selection). Pasting has no such conflict to protect, so both the Windows
  * standard `Ctrl+V` and the terminal chord `Ctrl+Shift+V` paste (as does
- * `Shift+Insert`). Everything else passes through.
+ * `Shift+Insert`). Everything else passes through — including anything held
+ * with Alt, because AltGr is indistinguishable from Ctrl+Alt on Windows and a
+ * character the user typed must reach the shell.
  */
 export function terminalKeyAction(e: TerminalKeyEvent, hasSelection: boolean): TerminalKeyAction {
   if (e.type !== "keydown") return "passthrough";
+  // Alt up on every chord below. AltGr arrives as Ctrl+Alt, so a chord that
+  // ignored Alt would claim AltGr+V — a character on several layouts — as a
+  // paste, and there is then no way to type that character into a terminal.
+  if (e.altKey) return "passthrough";
   const key = e.key.toLowerCase();
   if (e.ctrlKey && e.shiftKey && key === "c") return "copy";
   if (e.ctrlKey && key === "v") return "paste"; // Ctrl+V and Ctrl+Shift+V
   if (e.ctrlKey && !e.shiftKey && key === "insert") return hasSelection ? "copy" : "passthrough";
   if (e.shiftKey && !e.ctrlKey && key === "insert") return "paste";
   return "passthrough";
+}
+
+/**
+ * What the view must do for a key action: whether to stop the webview's own
+ * handling of the chord, and which clipboard operation to run.
+ */
+export interface TerminalKeyEffect {
+  /** Call `preventDefault()` on the keyboard event. */
+  preventDefault: boolean;
+  /** Write the terminal's selection to the clipboard. */
+  copy: boolean;
+  /** Read the clipboard and paste it into the terminal. */
+  paste: boolean;
+}
+
+/**
+ * Turn a {@link TerminalKeyAction} into the two things the view actually does,
+ * so `TerminalView` executes an effect rather than deciding one.
+ *
+ * This exists because the interesting half of the decision was invisible.
+ * Returning `false` from xterm's custom key handler stops only xterm's own key
+ * **translation**; it calls no `preventDefault()`, so the webview still ran its
+ * native paste onto xterm's hidden textarea, whose paste listener fired another
+ * data event — one `Ctrl+V`, two writes to the PTY, and the extra one neither
+ * CRLF-normalized nor bracketed, so a multi-line paste was executed line by
+ * line by the shell. The copy chords get the same treatment for a smaller
+ * reason: `Ctrl+Insert` is a native Copy command, and leaving the default in
+ * place races our `writeText` against a native copy of the (usually empty)
+ * textarea selection.
+ *
+ * A passthrough must **never** prevent the default, which is what the test of
+ * that name guards: `Ctrl+C` is the shell interrupt and `F5` is an app
+ * shortcut, and a blanket `preventDefault()` here would swallow both.
+ */
+export function terminalKeyEffect(action: TerminalKeyAction): TerminalKeyEffect {
+  return {
+    preventDefault: action !== "passthrough",
+    copy: action === "copy",
+    paste: action === "paste",
+  };
 }
 
 // --- Which terminal is in front -------------------------------------------

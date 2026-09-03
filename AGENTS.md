@@ -100,6 +100,45 @@ combine `stdout` with `stderr`, must not split a chunk over the byte cap, and
 must not withhold: flush before blocking, and flush before any non-output event,
 so nothing overtakes output still held back.
 
+A control placed inside a floating panel's drag header will not receive `click`
+or `dblclick`: the drag handler takes pointer capture, and the browser then
+dispatches those to the capturing element, never down to a child. Exempt such a
+control from the drag the way the header buttons already are. For the same
+family of reasons, focusing another element during `pointerdown` does not stick —
+the default mousedown action moves focus afterwards — so focus inside a
+`setTimeout(..., 0)`.
+
+Returning `false` from xterm's `attachCustomKeyEventHandler` stops only xterm's
+key translation, not the webview's native handling. A paste chord must
+`preventDefault()` as well, or the native paste reaches xterm's hidden textarea
+and its own paste listener writes the text a second time. Route pasted text
+through `term.paste` so bracketing and CRLF normalization match the native path
+rather than diverging from it, and keep `Ctrl+C` a passthrough that never
+prevents the default. Any `Ctrl+`key chord also needs an `altKey` guard, because
+Windows reports AltGr as Ctrl+Alt.
+
+A rename with more than one destination must apply one acceptance rule to all of
+them. Terminal titles go through `acceptedTerminalTitle`, which is
+`normalizeLabel`; a second test such as `trim()` at one call site diverges on
+exactly the inputs the cleaning exists for and lets a refused title reach the
+other destination.
+
+Shell detection omits what it cannot find. An empty detected list is a
+legitimate answer, not a fallback — terminals still open on `default_shell` —
+and `pick_shell`'s last-candidate fallback must not be copied into it. A saved
+shell preference whose shell has disappeared is reported and kept, never erased
+and never spawned as a bare program name. Do not offer `wsl.exe`: it ships on
+every Windows install regardless of whether a distribution exists, so its
+presence is not evidence a shell would start.
+
+Build provenance abstains to the literal `unknown` and never fails the build. A
+sha from a modified tree must carry its `-dirty` marker, because an unmarked sha
+is a wrong statement about which code is running. `.git/HEAD` alone is not
+enough to keep the stamp fresh — committing on a branch rewrites the branch ref
+and leaves `HEAD` untouched — so watch the resolved ref and `.git/index` too,
+and show the build date beside the commit rather than asking a reader to infer
+freshness from the sha.
+
 The Changes file list carries a multi-selection that is separate from the file
 shown in the diff pane. A right-click inside the selection acts on the whole
 selection; a right-click outside it acts on that single row. A Shift-range

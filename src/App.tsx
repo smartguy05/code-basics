@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { AboutDialog } from "./components/AboutDialog";
 import { AppOutputPanel } from "./components/AppOutputPanel";
 import { BranchMenu } from "./components/BranchMenu";
 import { LauncherPicker } from "./components/LauncherPicker";
@@ -83,6 +84,7 @@ import type {
   FeatureInfo,
   RootSpec,
   RunningReport,
+  ShellInfo,
   Workspace,
 } from "./ipc/types";
 
@@ -154,6 +156,8 @@ export function App() {
    */
   const [features, setFeatures] = useState<FeatureInfo[] | null>(null);
   const [featuresOpen, setFeaturesOpen] = useState(false);
+  /** Help → About. App-level like the other dialogs: it describes the build, not a codebase. */
+  const [aboutOpen, setAboutOpen] = useState(false);
   // The Running panel and the report it renders. The report is polled here (not
   // in the panel) so the titlebar badge stays live even while the panel is
   // closed; `list_running` is a cheap in-memory read.
@@ -175,6 +179,15 @@ export function App() {
    * claims the user has saved no shortcuts and that would be a guess.
    */
   const [terminalMenu, setTerminalMenu] = useState<{ x: number; y: number } | null>(null);
+  /**
+   * The shells detected on this machine, for the menu's one-off pick rows.
+   *
+   * `null` is "not detected yet", exactly as `launcherGroups` is: the menu is
+   * told which of the two it is, because an empty shells section would report
+   * that this machine has no shell at all — a much stronger claim than "we have
+   * not looked", and one the user might act on.
+   */
+  const [shells, setShells] = useState<ShellInfo[] | null>(null);
   const [pluginMenu, setPluginMenu] = useState<{ x: number; y: number } | null>(null);
   const [launcherGroups, setLauncherGroups] = useState<LauncherGroups | null>(null);
   /**
@@ -643,6 +656,13 @@ export function App() {
       .listLaunchables()
       .then(setLauncherGroups)
       .catch((e) => setError(api.errorMessage(e)));
+    // Shells are re-detected on every open under the same rule, which also
+    // means a shell installed mid-session shows up without a restart.
+    setShells(null);
+    api
+      .listShells()
+      .then(({ shells: found }) => setShells(found))
+      .catch((e) => setError(api.errorMessage(e)));
   };
 
   /** Run one saved command shortcut, honouring its headless flag. */
@@ -663,6 +683,9 @@ export function App() {
     switch (action.kind) {
       case "newTerminal":
         activeHandle()?.openTerminal();
+        return;
+      case "newTerminalIn":
+        activeHandle()?.openTerminalIn(action.shell);
         return;
       case "launcher":
         setLauncherOpen(true);
@@ -893,6 +916,7 @@ export function App() {
             onOpenReview={() => activeHandle()?.openReview()}
             onOpenFeatures={() => setFeaturesOpen(true)}
             onOpenSettings={() => setSettingsOpen(true)}
+            onOpenAbout={() => setAboutOpen(true)}
           />
         </div>
 
@@ -1111,6 +1135,8 @@ export function App() {
             shortcuts: launcherGroups ? shortcutEntries(launcherGroups) : [],
             liveKeys: liveKeysByEntry(runningReport, new Map(Object.entries(launchEntryIds))),
             shortcutsLoading: launcherGroups === null,
+            shells: shells ?? [],
+            shellsLoading: shells === null,
           }).map((row) => (
             <div key={row.id}>
               {row.separator && <div className="dropdown-separator" />}
@@ -1166,6 +1192,8 @@ export function App() {
       )}
 
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+
+      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
 
       {notesOpen && (
         <NotesPanel

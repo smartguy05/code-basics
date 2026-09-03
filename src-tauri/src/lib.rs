@@ -8,6 +8,7 @@
 mod state;
 
 mod commands {
+    pub mod about;
     pub mod architecture;
     pub mod behavioral;
     pub mod changelists;
@@ -147,6 +148,7 @@ pub fn run() {
             commands::features::set_feature,
             commands::notes::read_notes,
             commands::notes::write_notes,
+            commands::about::about_info,
             commands::files::fs_list_dir,
             commands::files::fs_read_file,
             commands::files::fs_write_file,
@@ -263,6 +265,7 @@ pub fn run() {
             commands::terminal::terminal_close,
             commands::terminal::terminal_list,
             commands::terminal::terminal_set_label,
+            commands::terminal::list_shells,
             commands::running::list_running,
             commands::running::kill_running,
             commands::sql::sql_list_connections,

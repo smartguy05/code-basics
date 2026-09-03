@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { Launchable, RunningRecord, RunningReport } from "../ipc/types";
+import type { Launchable, RunningRecord, RunningReport, ShellInfo } from "../ipc/types";
 import {
   liveKeysByEntry,
   newTerminalButton,
   offersStop,
+  SHELLS_SECTION,
   SHORTCUTS_SECTION,
   shortcutActionLabel,
   shortcutEntries,
@@ -47,6 +48,10 @@ function report(over: Partial<RunningReport> = {}): RunningReport {
   return { live: [], orphans: [], warnings: [], ...over };
 }
 
+function shell(over: Partial<ShellInfo> = {}): ShellInfo {
+  return { id: "pwsh", label: "PowerShell (pwsh)", program: "C:\\pwsh.exe", args: [], ...over };
+}
+
 function state(over: Partial<TerminalMenuState> = {}): TerminalMenuState {
   return {
     workspaceOpen: true,
@@ -56,6 +61,8 @@ function state(over: Partial<TerminalMenuState> = {}): TerminalMenuState {
     shortcuts: [],
     liveKeys: new Map(),
     shortcutsLoading: false,
+    shells: [],
+    shellsLoading: false,
     ...over,
   };
 }
@@ -122,7 +129,7 @@ describe("newTerminalButton", () => {
 describe("terminalMenuRows", () => {
   it("lists the four folded-in actions in order", () => {
     const rows = terminalMenuRows(state());
-    expect(rows.map((r) => r.id)).toEqual([
+    expect(rows.slice(0, 4).map((r) => r.id)).toEqual([
       "terminal.new",
       "panel.launch",
       "panel.running",
@@ -169,10 +176,10 @@ describe("terminalMenuRows", () => {
     expect(row(rows, "panel.apps")?.disabled).toBe(false);
   });
 
-  it("draws no separator and no section when there are no shortcuts", () => {
+  it("draws no shortcut separator and no shortcut section when there are none", () => {
     const rows = terminalMenuRows(state());
-    expect(rows.some((r) => r.separator)).toBe(false);
-    expect(rows.some((r) => r.section !== undefined)).toBe(false);
+    expect(rows.some((r) => r.section === SHORTCUTS_SECTION)).toBe(false);
+    expect(rows.some((r) => r.id.startsWith("shortcut:"))).toBe(false);
   });
 
   it("says it is still reading rather than claiming there are none", () => {
@@ -242,6 +249,95 @@ describe("terminalMenuRows", () => {
     expect(shortcut?.live).toBe(true);
     expect(shortcut?.action?.kind).toBe("runShortcut");
     expect(shortcutActionLabel(shortcut as TerminalMenuRow)).toBe("Run");
+  });
+});
+
+describe("terminalMenuRows — the shells section", () => {
+  it("puts the shell rows after the four base rows and before the commands", () => {
+    const rows = terminalMenuRows(
+      state({
+        shells: [shell(), shell({ id: "cmd", label: "Command Prompt" })],
+        shortcuts: [entry({ id: "a", shortcut: true })],
+      }),
+    );
+    expect(rows.map((r) => r.id)).toEqual([
+      "terminal.new",
+      "panel.launch",
+      "panel.running",
+      "panel.apps",
+      "shell:pwsh",
+      "shell:cmd",
+      "shortcut:a",
+    ]);
+  });
+
+  it("opens its own section once, on the first shell row", () => {
+    const rows = terminalMenuRows(
+      state({ shells: [shell(), shell({ id: "cmd", label: "Command Prompt" })] }),
+    );
+    expect(row(rows, "shell:pwsh")?.separator).toBe(true);
+    expect(row(rows, "shell:pwsh")?.section).toBe(SHELLS_SECTION);
+    expect(row(rows, "shell:cmd")?.separator).toBe(false);
+    expect(row(rows, "shell:cmd")?.section).toBe(undefined);
+  });
+
+  it("shows the label, the resolved path as the tooltip, no badge and no live dot", () => {
+    const rows = terminalMenuRows(state({ shells: [shell()] }));
+    const pwsh = row(rows, "shell:pwsh");
+    expect(pwsh?.label).toBe("PowerShell (pwsh)");
+    expect(pwsh?.title).toBe("C:\\pwsh.exe");
+    expect(pwsh?.badge).toBe(null);
+    expect(pwsh?.live).toBe(undefined);
+  });
+
+  it("carries the whole ShellInfo in its action, so nothing is re-resolved later", () => {
+    const cmd = shell({ id: "cmd", label: "Command Prompt", program: "C:\\cmd.exe", args: ["/K"] });
+    const rows = terminalMenuRows(state({ shells: [cmd] }));
+    expect(row(rows, "shell:cmd")?.action).toEqual({ kind: "newTerminalIn", shell: cmd });
+  });
+
+  it("marks no shell as the preferred one — these rows are one-off launches", () => {
+    const rows = terminalMenuRows(state({ shells: [shell(), shell({ id: "cmd" })] }));
+    const shellRows = rows.filter((r) => r.id.startsWith("shell:"));
+    expect(shellRows.every((r) => !r.label.includes("✓"))).toBe(true);
+    expect(shellRows.every((r) => r.badge === null)).toBe(true);
+  });
+
+  it("disables every shell row with the same reason New Terminal gives", () => {
+    // A shell row must never claim it can open a terminal when New Terminal says
+    // it cannot, so both read one rule.
+    const rows = terminalMenuRows(state({ workspaceOpen: false, shells: [shell()] }));
+    const expected = newTerminalButton({ workspaceOpen: false });
+    const pwsh = row(rows, "shell:pwsh");
+    expect(pwsh?.disabled).toBe(true);
+    expect(pwsh?.title).toBe(expected.title);
+    expect(pwsh?.action).toBe(null);
+  });
+
+  it("says it is still detecting rather than claiming none were found", () => {
+    const rows = terminalMenuRows(state({ shellsLoading: true }));
+    const loading = row(rows, "shells.loading");
+    expect(loading?.disabled).toBe(true);
+    expect(loading?.action).toBe(null);
+    expect(loading?.section).toBe(SHELLS_SECTION);
+    expect(rows.some((r) => r.id.startsWith("shell:"))).toBe(false);
+  });
+
+  it("ignores a stale list while a fresh detection is in flight", () => {
+    const rows = terminalMenuRows(state({ shellsLoading: true, shells: [shell()] }));
+    expect(row(rows, "shell:pwsh")).toBe(undefined);
+    expect(row(rows, "shells.loading")).not.toBe(undefined);
+  });
+
+  it("reports an empty detection as a disabled row with a reason, never an omitted section", () => {
+    // "We found no shell on this machine" is a machine fact the user may need to
+    // act on; a silently missing section is indistinguishable from a bug.
+    const rows = terminalMenuRows(state({ shells: [] }));
+    const none = row(rows, "shells.none");
+    expect(none?.disabled).toBe(true);
+    expect(none?.action).toBe(null);
+    expect(none?.section).toBe(SHELLS_SECTION);
+    expect(none?.title.toLowerCase()).toContain("system default");
   });
 });
 

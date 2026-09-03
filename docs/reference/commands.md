@@ -65,6 +65,16 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `read_notes` | — | `NotesFile` | The global notes; a missing or unreadable file is an empty set, not an error |
 | `write_notes` | `file: NotesFile` | `()` | Overwrite the global notes file, creating its directory if absent |
 
+## About
+
+`src-tauri/src/commands/about.rs` — what build is running, behind **Help → About**. Takes no `AppState` (process metadata belongs to the process, not a workspace), and its `AboutInfo` struct is **local to the command module** rather than in `cb-core`, because it carries no decision the core crate needs to make; the camelCase keys are pinned by `about_info_serialises_with_the_keys_the_ui_reads` in the same file.
+
+The **application and Tauri versions are not here** — the frontend reads those from `@tauri-apps/api/app`, which `core:default` already permits — so this command covers only what that API cannot answer.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `about_info` | — | `AboutInfo` (`appVersion`, `os`, `arch`, `gitSha`, `buildDate`) | Cannot fail. `appVersion` is `cb-app`'s crate version (the Cargo workspace couples it; `aboutLogic.versionDrift` reports a disagreement with the bundle's rather than picking one to believe). `gitSha` and `buildDate` are stamped in by `src-tauri/build.rs`, which **never fails the build**: no `.git` or no `git` on `PATH` emits the literal `unknown`, and a modified working tree is marked `-dirty` — an unmarked sha on a dirty tree would be a *wrong* answer about which code is running. `-unverified` is the third answer, for a known commit whose cleanliness could not be checked. `buildDate` is UNIX epoch **seconds** as a decimal string, not a formatted date: date arithmetic in a build script is the one place in the tree no test can reach, so `aboutLogic.formatBuildDate` renders it (and abstains to `unknown` on anything it cannot parse) |
+
 ## Optional features
 
 `src-tauri/src/commands/features.rs` — which optional features are switched on. Like notes, the store is **user-global, not per-workspace** (`code-basics/features.json` under the user config directory; `CB_FEATURES_PATH` overrides the whole path), so neither command touches `AppState`.
@@ -135,6 +145,7 @@ Both adapters are **bundled with the installer** (`pnpm debuggers:fetch` vendors
 | `terminal_close` | `id: String` | `bool` | Kills the process **tree** (so a shell's `claude`/`node` children die too); `false` if nothing was open |
 | `terminal_list` | – | `String[]` | Ids of every open terminal |
 | `terminal_set_label` | `id: String`, `root: String`, `label: String` | `()` | Updates a terminal's title in the running-process registry after a rename, so the Running panel shows it |
+| `list_shells` | – | `DetectedShells` (`shells`, `defaultId`) | The shells found on this machine, in preference order, each with its **resolved absolute path** as `program` — what a picker passes back to `terminal_open`. Read-only: nothing is spawned. A candidate that cannot be found, whose path `cmd.exe` would re-read, or which is really the WSL `bash.exe` launcher is **omitted** rather than offered broken or disabled, so an empty list is a legitimate answer (terminals still open on `default_shell`). `defaultId` is the id `default_shell` resolves to, or an explicit `null` when it matches nothing detected. `wsl` and `git-bash.exe` are deliberately never listed |
 
 ## The app launcher
 

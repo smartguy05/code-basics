@@ -22,10 +22,13 @@ pub use argv::{batch_argv_refusal, check_batch_argv, is_batch_target};
 
 mod shell;
 
-pub use shell::{clamp_size, default_shell};
+pub use shell::{
+    clamp_size, default_among, default_shell, detect_shells, detected_shells, is_wsl_bash_launcher,
+    shell_candidates, ShellCandidate,
+};
 
 mod model;
-pub use model::{PtySpec, TerminalEvent};
+pub use model::{DetectedShells, PtySpec, ShellInfo, TerminalEvent};
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
