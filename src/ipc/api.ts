@@ -1204,6 +1204,20 @@ export const sqlDeleteConnection = (id: string) =>
   invoke<SqlConnectionView[]>("sql_delete_connection", { id });
 
 /**
+ * Rename a saved connection, and record that the user chose the name.
+ *
+ * Its own verb rather than a `sqlSaveConnection` round-trip, and not for
+ * tidiness: a {@link SqlConnectionView} carries a **redacted** secret, so the
+ * only profile a caller holding one can rebuild has the display form where the
+ * password was. Posting a rename that way would break the connection it renamed.
+ *
+ * `name` must already have passed `acceptedConnectionName` — the one acceptance
+ * rule, shared with the create form.
+ */
+export const sqlRenameConnection = (id: string, name: string) =>
+  invoke<SqlConnectionView[]>("sql_rename_connection", { id, name });
+
+/**
  * Allow or disallow writes on one connection — the consent action.
  *
  * Its own verb on purpose. Enabling writes both lifts the read-only guard for

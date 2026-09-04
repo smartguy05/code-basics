@@ -22,6 +22,24 @@ Changes preview immediately while Settings is open. **Apply** saves them;
 **Cancel** restores the appearance that was active before the dialog opened.
 Deleting the active custom theme selects a built-in theme instead.
 
+### Window opacity
+
+Beneath the theme colours is a **Window** section with an opacity slider. It
+applies **only while no file or diff is open** — the moment you open one the
+window is fully opaque again, so nothing you are reading is ever shown through.
+Floating panels are unaffected: a terminal, the Notes panel, the SQL console and
+the agent panel all stay solid over a translucent window, which is the point.
+
+The default is 100%, which is exactly the window as it was before the setting
+existed. The slider stops at 30% so the file tree and console labels stay
+readable whatever is behind them.
+
+Transparency needs support from the window manager, so the slider is available
+on Windows and is **disabled with the reason stated** elsewhere — on macOS it
+would require a private API this build does not enable, and on Linux it needs a
+compositing window manager that cannot be detected reliably. Where it is
+disabled the window is simply opaque; nothing else changes.
+
 ### Moving a theme between computers
 
 Use **Export** to download the selected custom theme as JSON. **Import** accepts

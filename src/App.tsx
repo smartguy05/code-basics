@@ -73,7 +73,9 @@ import * as api from "./ipc/api";
  * unlike the other three signals it expires without being acknowledged.
  */
 const DONE_SIGNAL_MS = 1900;
-import { applyAppearance, loadAppearance } from "./appearance";
+import { applyAppearance, loadAppearance, onAppearanceChange } from "./appearance";
+import { applyWindowOpacity } from "./windowTransparency";
+import { transparencySupport, windowBackgroundOpacity } from "./windowTransparencyLogic";
 import { dispatchShortcut, registerCommand } from "./shortcuts";
 import { loadRecents, rememberRecent } from "./recentsLogic";
 import type {
@@ -217,6 +219,16 @@ export function App() {
   const [lspPollKeyByRoot, setLspPollKeyByRoot] = useState<Record<string, string>>({});
 
   /**
+   * Whether each open codebase's editor area holds a tab, as its Run view
+   * reports it. Read for the *active* root only — the window is one window, and
+   * a background codebase's editors are not what the user is looking at.
+   *
+   * A root **absent** from this map has not reported yet, which
+   * `windowBackgroundOpacity` reads as "unknown" and resolves to opaque.
+   */
+  const [editorTabsByRoot, setEditorTabsByRoot] = useState<Record<string, boolean>>({});
+
+  /**
    * The app-wide notification stack.
    *
    * Global, not per-workspace, because the first thing it reports belongs to
@@ -261,6 +273,25 @@ export function App() {
       return prev[root] === key ? prev : { ...prev, [root]: key };
     });
   }, []);
+  /**
+   * Record, or drop, one codebase's editor state. Deletes on `null` for the
+   * same reason the poll key does: a stale entry for a closed codebase would go
+   * on answering the window's question.
+   */
+  const setEditorTabsForRoot = useCallback((root: string, open: boolean | null) => {
+    setEditorTabsByRoot((prev) => {
+      if (open === null) {
+        if (!(root in prev)) return prev;
+        const { [root]: _closed, ...rest } = prev;
+        return rest;
+      }
+      // Guarded, like the poll key: this fires on every codebase's editor-tab
+      // change, and an unconditional new object re-renders the app for an
+      // answer that did not move.
+      return prev[root] === open ? prev : { ...prev, [root]: open };
+    });
+  }, []);
+
   /**
    * Per-codebase latched signal — a build that succeeded or failed, or a
    * minimized terminal that finished.
@@ -719,6 +750,47 @@ export function App() {
     return () => clearInterval(timer);
   }, [refreshRunning]);
 
+  /**
+   * The window's background opacity, and whether this platform can honour it.
+   *
+   * `appearance` tracks the *applied* settings rather than what is in storage:
+   * the Settings dialog previews unpersisted, so re-reading `localStorage` here
+   * would preview nothing. That is what `onAppearanceChange` now hands over.
+   *
+   * `os` stays `null` until `about_info` answers, and a failed read leaves it
+   * there — `transparencySupport(null)` is unsupported, so the window abstains
+   * to fully opaque rather than guessing at a platform.
+   */
+  const [appearance, setAppearance] = useState(loadAppearance);
+  const [os, setOs] = useState<string | null>(null);
+  useEffect(() => onAppearanceChange(setAppearance), []);
+  useEffect(() => {
+    let live = true;
+    void api
+      .aboutInfo()
+      .then((info) => {
+        if (live) setOs(info.os);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // The single writer of `--app-bg-opacity`. Every input is state this
+  // component already holds, and the whole decision is the pure, tested
+  // `windowBackgroundOpacity` — nothing is decided here.
+  useEffect(() => {
+    applyWindowOpacity(
+      windowBackgroundOpacity({
+        opacity: appearance.windowOpacity,
+        supported: transparencySupport(os).supported,
+        activeRoot,
+        editorTabsByRoot,
+      }),
+    );
+  }, [appearance.windowOpacity, os, activeRoot, editorTabsByRoot]);
+
   /** Apply user-global appearance and route every configurable shortcut. */
   useEffect(() => {
     applyAppearance(loadAppearance(), false);
@@ -1107,6 +1179,7 @@ export function App() {
                 if (row.action === null) return;
                 setPluginMenu(null);
                 if (row.action.kind === "sql") activeHandle()?.openSql();
+                if (row.action.kind === "ask") activeHandle()?.openAsk();
               }}
             >
               {row.label}
@@ -1176,6 +1249,7 @@ export function App() {
             setAttentionByRoot((prev) => ({ ...prev, [root]: has }))
           }
           onLspPollKeyChange={setLspPollKeyForRoot}
+          onEditorTabsChange={setEditorTabsForRoot}
           onSignal={raiseSignal}
           features={features}
         />

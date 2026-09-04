@@ -272,6 +272,7 @@ pub fn run() {
             commands::sql::sql_discover,
             commands::sql::sql_save_connection,
             commands::sql::sql_delete_connection,
+            commands::sql::sql_rename_connection,
             commands::sql::sql_set_allow_writes,
             commands::sql::sql_test_connection,
             commands::sql::sql_test_connection_string,

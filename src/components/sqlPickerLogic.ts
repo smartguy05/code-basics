@@ -1,3 +1,4 @@
+import { normalizeLabel } from "./workspaceRenameLogic";
 import type {
   SqlAuthMode,
   SqlCandidate,
@@ -39,8 +40,30 @@ export function candidateSourceDetail(candidate: SqlCandidate): string {
   }
 }
 
+/**
+ * The one acceptance rule for a connection name, shared by the rename and the
+ * create form.
+ *
+ * A thin delegation to {@link normalizeLabel} on purpose, and named the way
+ * `acceptedTerminalTitle` is named for the same reason: a rename here has two
+ * destinations — the picker's React state and the JSON store behind
+ * `sql_rename_connection` — and a second, slightly different acceptance at one
+ * of them is the bug, not a safeguard. `null` means *not a usable name*, which
+ * leaves the row untouched rather than saving something the header would then
+ * render differently.
+ */
+export function acceptedConnectionName(name: string): string | null {
+  return normalizeLabel(name);
+}
+
 /** Display identity for saved references, including profiles saved before composite names existed. */
 export function savedConnectionLabel(connection: SqlConnectionView): string {
+  // A name the user typed is the identity; nothing is composed over it. The
+  // derivation below is this module's *guess* at one, and it is right only while
+  // nobody has supplied a better answer. Without this guard a typed name with no
+  // " · " in it is indistinguishable from an old generic key and silently
+  // reacquires the `project · source ·` prefix on the next read.
+  if (connection.userNamed) return connection.name;
   if (connection.name.includes(" · ")) return connection.name;
   switch (connection.secret.kind) {
     case "literal":
@@ -78,7 +101,10 @@ export interface ManualConnectionDraft {
 
 /** The first reason a manual connection cannot be tested and added. */
 export function manualConnectionError(draft: ManualConnectionDraft): string | null {
-  if (draft.name.trim() === "") return "Enter a connection name.";
+  // The same question the rename asks, not a looser one: a bare `trim` strips
+  // neither U+0000 nor a bidi override, so the create path could save a name the
+  // rename would refuse.
+  if (acceptedConnectionName(draft.name) === null) return "Enter a connection name.";
   if (draft.engine === null) return "Choose a database engine.";
   if (draft.connectionString.trim() === "") return "Enter a connection string.";
   return null;

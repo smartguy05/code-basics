@@ -100,6 +100,15 @@ export interface WorkspaceTabHandle {
    * tab, so no caller has to re-derive it.
    */
   openSql(): void;
+  /**
+   * Open the "Ask the codebase" box for this codebase.
+   *
+   * Part of the handle for the same reason `openSql` is: the Plugins menu is
+   * global titlebar chrome and the box is per-codebase. The gate is inside the
+   * tab — calling this while the `askCodebase` feature is off does nothing, so
+   * no caller has to re-derive it.
+   */
+  openAsk(): void;
 }
 
 /**
@@ -136,6 +145,7 @@ export function WorkspaceTab({
   onRegister,
   onAttentionChange,
   onLspPollKeyChange,
+  onEditorTabsChange,
   onSignal,
   features,
 }: {
@@ -160,6 +170,20 @@ export function WorkspaceTab({
    * is a value `App` renders, so it has to travel the way attention does.
    */
   onLspPollKeyChange: (root: string, key: string | null) => void;
+  /**
+   * Report whether this codebase's editor area holds a tab, so `App` can decide
+   * the window's transparency.
+   *
+   * A sibling of {@link onLspPollKeyChange} rather than a
+   * {@link WorkspaceTabHandle} method, for the reason stated there: this is a
+   * value `App` renders from, not an action it invokes.
+   *
+   * `null` on unmount, so `App` **deletes** the entry rather than blanking it.
+   * A lingering `false` would keep the window translucent for a codebase that is
+   * gone, and a lingering `true` would keep it opaque — forever, one dead key
+   * per codebase ever opened.
+   */
+  onEditorTabsChange: (root: string, open: boolean | null) => void;
   /**
    * Report a one-shot event worth showing on this codebase's tab while it is in
    * the background: a build that succeeded or failed, or a minimized terminal
@@ -281,6 +305,22 @@ export function WorkspaceTab({
    * does nothing is indistinguishable from the app being broken.
    */
   const [askError, setAskError] = useState<string | null>(null);
+  /**
+   * A monotonic open request for `AskPanel`, in the request-and-consume shape
+   * `App` already uses for `openRequest`/`selectRequest`.
+   *
+   * A counter rather than a lifted `open` boolean: the panel owns its own
+   * visibility (and its Ctrl+/ registration, which is what keeps that chord
+   * returning cleanly to CodeMirror when the feature is off), so this only ever
+   * *asks* it to open. Re-opening after the user closed it changes no field a
+   * boolean could compare, which is exactly what the counter is for.
+   */
+  const [askOpenSignal, setAskOpenSignal] = useState(0);
+  const askEnabled = featureEnabled(features, "askCodebase");
+  const openAsk = () => {
+    if (!askEnabled) return;
+    setAskOpenSignal((n) => n + 1);
+  };
 
   const [terminals, setTerminals] = useState<TerminalDescriptor[]>([]);
   const terminalSeq = useRef(0);
@@ -338,6 +378,20 @@ export function WorkspaceTab({
   }, [lspPollKey, workspace.root]);
   useEffect(() => {
     return () => onLspPollKeyChange(workspace.root, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Whether this codebase's editor area holds a tab. Reported for **every**
+  // codebase and not only the foreground one, exactly as the poll key is, so a
+  // tab switch re-decides the window from state `App` already holds rather than
+  // waiting for the newly-foregrounded tab to report.
+  const [editorTabsOpen, setEditorTabsOpen] = useState(false);
+  useEffect(() => {
+    onEditorTabsChange(workspace.root, editorTabsOpen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorTabsOpen, workspace.root]);
+  useEffect(() => {
+    return () => onEditorTabsChange(workspace.root, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -509,6 +563,7 @@ export function WorkspaceTab({
     openReview,
     openNoteInAgent,
     openSql,
+    openAsk,
   });
   handleRef.current = {
     openTerminal,
@@ -518,6 +573,7 @@ export function WorkspaceTab({
     openReview,
     openNoteInAgent,
     openSql,
+    openAsk,
   };
   useEffect(() => {
     const stable: WorkspaceTabHandle = {
@@ -529,6 +585,7 @@ export function WorkspaceTab({
       openReview: () => handleRef.current.openReview(),
       openNoteInAgent: (note) => handleRef.current.openNoteInAgent(note),
       openSql: () => handleRef.current.openSql(),
+      openAsk: () => handleRef.current.openAsk(),
     };
     onRegister(workspace.root, stable);
     return () => onRegister(workspace.root, null);
@@ -576,6 +633,7 @@ export function WorkspaceTab({
           onNavigate={requestOpenFile}
           onProcessResult={(ok) => onSignal(workspace.root, ok ? "success" : "error")}
           onLspPollKeyChange={setLspPollKey}
+          onEditorTabsChange={setEditorTabsOpen}
           active={active && tab === "project"}
           pane={pane}
           onPaneChange={setPane}
@@ -626,7 +684,8 @@ export function WorkspaceTab({
           cleanly to CodeMirror's comment toggle. */}
       <AskPanel
         active={active}
-        enabled={featureEnabled(features, "askCodebase")}
+        openSignal={askOpenSignal}
+        enabled={askEnabled}
         onAsk={openAskTerminal}
       />
 

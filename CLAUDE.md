@@ -295,6 +295,20 @@ Three layers with a strict dependency rule:
   `src/appearance.ts` is the DOM/application layer and derives terminal colours.
   UI and code font sizes are independent, and theme changes must continue to
   reach CodeMirror, xterm, diffs, and application chrome.
+- **Adding an appearance field does not mean bumping the version.**
+  `readAppearance` re-derives each field rather than spreading the parsed object,
+  so one with a safe absent-value (`undefined` → `NaN` → the clamp's fallback)
+  is correct at version 1; a bump makes the gate **reject every existing blob**,
+  discarding each user's themes and sizes. Bump only when a field's meaning
+  changes; a test pins that for `windowOpacity`.
+- **Window transparency splits stored value from runtime decision** —
+  `appearanceLogic`'s `windowOpacity` (floor 30; its non-finite fallback is the
+  *safe* 100, unlike its nearest-bound neighbours) versus the codebase-spanning
+  `windowTransparencyLogic.ts`, whose rule is that **a codebase that has not said
+  its editor is empty has not said it is empty**: an absent root is opaque, which
+  stops a translucent flash on startup. `applyAppearance` must never write
+  `--app-bg-opacity` — two writers would fight.
+  [Full rules](docs/architecture/frontend.md#window-transparency).
 - App-owned keyboard commands are declared in `src/shortcutLogic.ts` and
   dispatched through `src/shortcuts.ts`. Settings must not advertise a command
   without a registered handler or stable `data-command` target. Native
@@ -338,6 +352,18 @@ Three layers with a strict dependency rule:
   *not read yet* rather than *none* — so nothing flashes during startup. The
   same `PLUGIN_LABELS` map names them here and in Settings' shortcut list, which
   groups plugin keys into their own section (`shortcutLogic.commandSections`).
+  A plugin panel owning its own `open` state is opened with a **monotonic
+  `openSignal` counter**, not a lifted boolean (`AskPanel`): it keeps its command
+  registration — what keeps Ctrl+/ returning cleanly to CodeMirror when off —
+  and re-opening a box the user just closed changes no field a boolean could
+  compare. That path skips `shouldAbstainForFocus`.
+- **A titlebar-opened menu must be elevated, and so must its backdrop.** The
+  generic `.dropdown` chrome is 41 over a backdrop at 40, both below
+  `--z-panel`, so a terminal covers the menu *and* the backdrop — clicking it
+  then neither closes it nor is intercepted. Use `ContextMenu`'s
+  `elevated`, or `dropdown-elevated`/`dropdown-elevated-backdrop` for a plain
+  `.dropdown` (`BranchMenu`) — classes, not numbers. The branch band sits two
+  steps lower so its submenu's backdrop stays above the branch list.
 - Tooltips that mention a shortcut read it from the registry
   (`useShortcutHint` + `withShortcut`), never a literal: a hardcoded key drifts
   the moment someone rebinds it in Settings.

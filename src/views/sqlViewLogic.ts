@@ -28,6 +28,7 @@ import type {
   SqlStopOutcome,
 } from "../ipc/types";
 import {
+  acceptedConnectionName,
   candidateConnectionLabel,
   type ManualConnectionDraft,
 } from "../components/sqlPickerLogic";
@@ -366,6 +367,9 @@ export function profileFromCandidate(
     secret: candidate.source,
     workspaceRoot,
     allowWrites: false,
+    // Derived from the candidate, so the picker keeps composing a label for it
+    // until the user renames it.
+    userNamed: false,
     createdAtMs: nowMs,
     lastUsedMs: null,
   };
@@ -388,11 +392,15 @@ export function profileFromManual(
   }
   return {
     id,
-    name: draft.name.trim(),
+    name: acceptedConnectionName(draft.name) ?? draft.name.trim(),
     engine: draft.engine,
     secret: { kind: "literal", connectionString: draft.connectionString },
     workspaceRoot: draft.global ? null : workspaceRoot,
     allowWrites: false,
+    // The user typed this name in the manual form, so nothing derives over it.
+    // (A literal secret was never decorated anyway — this states the fact rather
+    // than relying on the label function's variant arm to keep saying so.)
+    userNamed: true,
     createdAtMs: nowMs,
     lastUsedMs: null,
   };

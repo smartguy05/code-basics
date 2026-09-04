@@ -17,6 +17,7 @@ export function RunConfigMenu({
   onSelect,
   onToggleFavorite,
   onMove,
+  onEdit,
   onNew,
   onImport,
 }: {
@@ -38,6 +39,15 @@ export function RunConfigMenu({
   onSelect: (config: RunConfig) => void;
   onToggleFavorite: (config: RunConfig) => void;
   onMove: (config: RunConfig, delta: -1 | 1) => void;
+  /**
+   * Open the configuration editor on this config.
+   *
+   * A per-row action rather than a toolbar button beside the menu: the toolbar
+   * one could only ever edit the *selection*, so reaching a different config
+   * meant selecting it first — which also changes what F5 runs. Here the pencil
+   * edits the row it sits on and leaves the selection alone.
+   */
+  onEdit: (config: RunConfig) => void;
   onNew: () => void;
   onImport: () => void;
 }) {
@@ -115,6 +125,18 @@ export function RunConfigMenu({
                     ↓
                   </span>
                 )}
+                <span
+                  className="row-action"
+                  role="button"
+                  title={`Edit ${config.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEdit(config);
+                    setOpen(false);
+                  }}
+                >
+                  ✎
+                </span>
                 <span
                   className={`star ${favorites.has(config.id) ? "active" : ""}`}
                   role="button"

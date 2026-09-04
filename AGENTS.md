@@ -52,6 +52,22 @@ DOM application and terminal colour derivation live in `src/appearance.ts`.
 Keep theme decisions in the pure logic module and cover migrations or validation
 changes in `src/appearanceLogic.test.ts`.
 
+Adding a field to those preferences is not a reason to bump the schema version.
+`readAppearance` re-derives each field rather than spreading the parsed object,
+so a new one whose absent value is safe reads correctly at version 1. A bump
+makes the version gate reject every stored blob and fall back to the defaults,
+discarding each user's custom themes and font sizes. Bump only when an existing
+field's meaning changes.
+
+Window transparency keeps the stored number (`windowOpacity`) apart from the
+runtime decision (`src/windowTransparencyLogic.ts`), because that decision spans
+open codebases. Its rule is that a codebase which has not reported whether its
+editor area is empty has not reported it empty: an unknown root resolves to
+fully opaque, which is what stops the window flashing translucent during
+startup. Only the active codebase is consulted. `applyAppearance` must never
+write `--app-bg-opacity` — it cannot know the editor state, and a second writer
+would race the one in `App`.
+
 App-owned shortcuts are declared in `src/shortcutLogic.ts` and dispatched by
 `src/shortcuts.ts`. A command shown in Settings must have a registered handler
 or a stable `data-command` target. Editor and terminal native shortcuts are
@@ -121,7 +137,24 @@ A rename with more than one destination must apply one acceptance rule to all of
 them. Terminal titles go through `acceptedTerminalTitle`, which is
 `normalizeLabel`; a second test such as `trim()` at one call site diverges on
 exactly the inputs the cleaning exists for and lets a refused title reach the
-other destination.
+other destination. SQL connection names follow the same shape through
+`acceptedConnectionName`, and the manual-create form asks it too rather than
+trimming — otherwise creating accepts a name renaming refuses.
+
+A name the user typed and a name the app derived are different facts, and a name
+alone cannot tell them apart. A saved SQL connection therefore carries
+`userNamed` beside its `name`: the picker composes `project · source · key` only
+while that is false, and `upsert` will not overwrite a name once it is set, so
+re-adopting a discovered connection cannot revert a rename. Only the rename verb
+sets the flag, exactly as only the consent verb moves `allowWrites`.
+
+A menu opened from the titlebar sits above the floating panels, and the generic
+`.dropdown` chrome does not: at z-index 41 over a backdrop at 40 it hides behind
+any terminal, and so does the backdrop that closes it. Use `ContextMenu`'s
+`elevated`, or the `dropdown-elevated` / `dropdown-elevated-backdrop` classes for
+a plain dropdown. Raise the backdrop in the same change as the menu, and express
+the level as a class — the bands live in `styles.css` and no z-index integer is
+written in TypeScript.
 
 Shell detection omits what it cannot find. An empty detected list is a
 legitimate answer, not a fallback — terminals still open on `default_shell` —

@@ -176,6 +176,11 @@ pub struct SqlConnectionView {
     pub holds_a_secret: bool,
     pub workspace_root: Option<PathBuf>,
     pub allow_writes: bool,
+    /// Whether the user typed this name. The picker derives a composite label
+    /// from the reference when it did not, and shows `name` verbatim when it
+    /// did — so this has to cross, or the derivation would reappear on a
+    /// renamed connection the moment the list is re-read.
+    pub user_named: bool,
     pub created_at_ms: u64,
     pub last_used_ms: Option<u64>,
 }
@@ -211,6 +216,7 @@ pub(crate) fn redact_connection(stored: &StoredConnection) -> SqlConnectionView 
         holds_a_secret: stored.secret.holds_a_secret(),
         workspace_root: stored.workspace_root.clone(),
         allow_writes: stored.allow_writes,
+        user_named: stored.user_named,
         created_at_ms: stored.created_at_ms,
         last_used_ms: stored.last_used_ms,
     }
@@ -233,7 +239,13 @@ fn views(file: &SqlConnectionsFile) -> Vec<SqlConnectionView> {
 pub(crate) fn upsert(file: &mut SqlConnectionsFile, incoming: StoredConnection) {
     match file.connections.iter_mut().find(|c| c.id == incoming.id) {
         Some(existing) => {
-            existing.name = incoming.name;
+            // A name the user typed outranks the one the payload carries, for
+            // the same reason consent does: re-adopting a discovered connection
+            // (a rescan, a re-save from the form) must not silently undo a
+            // rename. `user_named` is likewise only ever set by [`rename`].
+            if !existing.user_named {
+                existing.name = incoming.name;
+            }
             existing.engine = incoming.engine;
             existing.secret = incoming.secret;
             existing.workspace_root = incoming.workspace_root;
@@ -241,6 +253,7 @@ pub(crate) fn upsert(file: &mut SqlConnectionsFile, incoming: StoredConnection) 
         None => {
             let mut fresh = incoming;
             fresh.allow_writes = false;
+            fresh.user_named = false;
             file.connections.push(fresh);
         }
     }
@@ -252,6 +265,29 @@ pub(crate) fn remove(file: &mut SqlConnectionsFile, id: &str) -> bool {
     let before = file.connections.len();
     file.connections.retain(|c| c.id != id);
     file.connections.len() != before
+}
+
+/// The rename action, and the only thing that sets `user_named`.
+///
+/// Its own verb rather than a round-trip through [`upsert`], and not for tidiness:
+/// a [`SqlConnectionView`] carries a **redacted** secret, so a caller holding one
+/// cannot rebuild the [`StoredConnection`] an upsert needs — a rename posted that
+/// way would replace a stored password with its own display form and break the
+/// connection. Taking only the two fields a rename is about makes that impossible
+/// rather than merely unlikely.
+///
+/// `name` is stored as given. The cleaning and refusal rule lives at the one
+/// frontend seam (`acceptedConnectionName`), so a name that reaches here has
+/// already been accepted; the store's job is to keep it.
+pub(crate) fn rename(file: &mut SqlConnectionsFile, id: &str, name: String) -> bool {
+    match file.connections.iter_mut().find(|c| c.id == id) {
+        Some(entry) => {
+            entry.name = name;
+            entry.user_named = true;
+            true
+        }
+        None => false,
+    }
 }
 
 /// The consent action, and the only thing that moves `allow_writes`.
@@ -785,6 +821,24 @@ pub async fn sql_delete_connection(id: String) -> Result<Vec<SqlConnectionView>,
     Ok(views(&file))
 }
 
+/// Rename a saved connection.
+///
+/// Hands back the whole redacted list, as every other mutation here does, so the
+/// picker replaces its state from one answer rather than patching a row.
+#[tauri::command]
+pub async fn sql_rename_connection(
+    id: String,
+    name: String,
+) -> Result<Vec<SqlConnectionView>, String> {
+    let path = store::sql_connections_path();
+    let mut file = store::load(&path);
+    if !rename(&mut file, &id, name) {
+        return Err(format!("no connection named {id}"));
+    }
+    store::save(&path, &file).map_err(|e| format!("{e:#}"))?;
+    Ok(views(&file))
+}
+
 /// Allow or disallow writes on one connection.
 ///
 /// Its own verb on purpose: this is the consent action, and burying it inside
@@ -937,6 +991,7 @@ pub async fn sql_test_connection_string(
         secret: SecretSource::Literal { connection_string },
         workspace_root: None,
         allow_writes: false,
+        user_named: false,
         created_at_ms: 0,
         last_used_ms: None,
     };
@@ -1268,6 +1323,7 @@ mod tests {
             },
             workspace_root: None,
             allow_writes: false,
+            user_named: false,
             created_at_ms: 10,
             last_used_ms: None,
         }
@@ -1514,6 +1570,77 @@ mod tests {
         let mut file = SqlConnectionsFile::default();
         assert!(!set_allow_writes(&mut file, "nope", true));
         assert!(file.connections.is_empty());
+    }
+
+    #[test]
+    fn renaming_records_that_the_user_chose_the_name() {
+        // Both halves matter: the name the picker shows, and the flag that stops
+        // it composing `project · source · key` over the top of it.
+        let mut file = SqlConnectionsFile::default();
+        upsert(&mut file, literal("Data Source=app.db"));
+        assert!(!file.connections[0].user_named);
+
+        assert!(rename(&mut file, "c1", "Shop (live)".into()));
+        assert_eq!(file.connections[0].name, "Shop (live)");
+        assert!(file.connections[0].user_named);
+    }
+
+    #[test]
+    fn renaming_an_unknown_id_reports_it_rather_than_inventing_an_entry() {
+        let mut file = SqlConnectionsFile::default();
+        assert!(!rename(&mut file, "nope", "Shop".into()));
+        assert!(file.connections.is_empty());
+    }
+
+    #[test]
+    fn renaming_touches_nothing_but_the_name() {
+        // In particular not the secret: a rename that went through `upsert`
+        // would need a whole profile, and the only one a caller holding a
+        // redacted view can build has the *display form* where the password was.
+        let mut file = SqlConnectionsFile::default();
+        upsert(&mut file, literal("Data Source=app.db"));
+        set_allow_writes(&mut file, "c1", true);
+
+        rename(&mut file, "c1", "Shop".into());
+
+        let entry = &file.connections[0];
+        assert_eq!(
+            entry.secret,
+            SecretSource::Literal {
+                connection_string: "Data Source=app.db".into()
+            }
+        );
+        assert!(entry.allow_writes, "a rename is not a consent decision");
+        assert_eq!(entry.created_at_ms, 10);
+    }
+
+    #[test]
+    fn a_save_cannot_undo_a_rename() {
+        // Re-adopting a discovered connection — a rescan, or a re-save from the
+        // form — carries the *derived* name. Letting it win would revert the
+        // rename, and the flag would then disagree with the name it guards.
+        let mut file = SqlConnectionsFile::default();
+        upsert(&mut file, literal("Data Source=app.db"));
+        rename(&mut file, "c1", "Shop (live)".into());
+
+        let mut rediscovered = literal("Data Source=app.db");
+        rediscovered.name = "Api · Default · Orders".into();
+        rediscovered.user_named = false;
+        upsert(&mut file, rediscovered);
+
+        assert_eq!(file.connections[0].name, "Shop (live)");
+        assert!(file.connections[0].user_named);
+    }
+
+    #[test]
+    fn a_save_cannot_claim_the_user_named_a_new_profile() {
+        // The same rule as consent: only the rename verb sets this, so a payload
+        // asserting it cannot freeze a derived label on a brand-new entry.
+        let mut file = SqlConnectionsFile::default();
+        let mut incoming = literal("Data Source=app.db");
+        incoming.user_named = true;
+        upsert(&mut file, incoming);
+        assert!(!file.connections[0].user_named);
     }
 
     // -----------------------------------------------------------------------
@@ -1823,6 +1950,7 @@ mod tests {
                 "lastUsedMs",
                 "name",
                 "secret",
+                "userNamed",
                 "workspaceRoot",
             ]
         );

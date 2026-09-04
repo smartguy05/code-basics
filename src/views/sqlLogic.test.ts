@@ -368,6 +368,7 @@ const connection = (over: Partial<SqlConnectionView> = {}): SqlConnectionView =>
   engine: "sqlite",
   secret: { kind: "dotEnv", path: ".env", key: "DB" },
   holdsASecret: false,
+  userNamed: false,
   workspaceRoot: null,
   allowWrites: false,
   createdAtMs: 0,

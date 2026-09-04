@@ -22,6 +22,7 @@ fn typed(id: &str, name: &str, connection_string: &str) -> SqlConnection {
         },
         workspace_root: Some(PathBuf::from("C:/code/shop")),
         allow_writes: false,
+        user_named: false,
         created_at_ms: 1_000,
         last_used_ms: Some(2_000),
     }
@@ -109,6 +110,64 @@ fn allow_writes_survives_a_round_trip_when_granted() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+#[test]
+fn user_named_defaults_to_false() {
+    // Every connection saved before renaming existed was named by *derivation*
+    // — the picker composes `project · source · key` from the reference. So an
+    // absent key must load as "the user has not named this", or one release
+    // would freeze every existing label at whatever it happened to read.
+    let path = scratch("user-named-default");
+    fs::write(
+        &path,
+        r#"{
+          "version": 1,
+          "connections": [
+            {
+              "id": "c1",
+              "name": "Orders",
+              "engine": "postgres",
+              "secret": { "kind": "literal", "connectionString": "postgres://u:p@h/db" },
+              "workspaceRoot": "C:/code/shop",
+              "createdAtMs": 1000,
+              "lastUsedMs": null
+            }
+          ]
+        }"#,
+    )
+    .unwrap();
+
+    let loaded = load(&path);
+    assert_eq!(
+        loaded.connections.len(),
+        1,
+        "the entry must still load with userNamed absent"
+    );
+    assert!(
+        !loaded.connections[0].user_named,
+        "a store that does not mention userNamed must not claim the user typed the name"
+    );
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn user_named_survives_a_round_trip() {
+    // Otherwise a rename would hold until the next launch and then quietly
+    // revert to the derived label — the worst shape of this bug, because the
+    // rename appears to have worked.
+    let path = scratch("user-named-round-trip");
+    let mut entry = typed("c1", "Orders", "postgres://u:p@h/db");
+    entry.user_named = true;
+    let file = SqlConnectionsFile {
+        version: 1,
+        connections: vec![entry],
+    };
+    save(&path, &file).unwrap();
+    let loaded = load(&path);
+    assert!(loaded.connections[0].user_named);
+    assert_eq!(loaded.connections[0].name, "Orders");
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 // ---------------------------------------------------------------------------
 // Round trip
 // ---------------------------------------------------------------------------
@@ -130,6 +189,7 @@ fn a_saved_connection_round_trips() {
                 },
                 workspace_root: Some(PathBuf::from("C:/code/shop")),
                 allow_writes: false,
+                user_named: false,
                 created_at_ms: 3_000,
                 last_used_ms: None,
             },
@@ -363,6 +423,7 @@ fn serialisation_shape_pins_the_wire_keys() {
             "lastUsedMs",
             "name",
             "secret",
+            "userNamed",
             "workspaceRoot",
         ]
     );

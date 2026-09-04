@@ -28,6 +28,7 @@ function connection(overrides: Partial<SqlConnectionView> = {}): SqlConnectionVi
     holdsASecret: false,
     workspaceRoot: null,
     allowWrites: false,
+    userNamed: false,
     createdAtMs: 0,
     lastUsedMs: null,
     ...overrides,

@@ -26,6 +26,19 @@ export interface AppearanceSettings {
   customThemes: ThemeDefinition[];
   uiFontSize: number;
   codeFontSize: number;
+  /**
+   * The window background's opacity, as a **percentage** (30-100).
+   *
+   * A percentage rather than a 0-1 fraction so one unit runs end to end: the
+   * slider reads 60, the label reads `60%`, and the CSS custom property is
+   * `60%`. 100 is "off", and is byte-identical to the window before the feature
+   * existed — see `styles.css`'s `--app-bg-opacity`.
+   *
+   * Stored here because it is an appearance preference, but *applied* by
+   * `windowTransparencyLogic`, which also knows whether anything is open to
+   * read. `applyAppearance` deliberately does not write it.
+   */
+  windowOpacity: number;
 }
 
 const darkColors: ThemeColors = {
@@ -74,6 +87,7 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   customThemes: [],
   uiFontSize: 13,
   codeFontSize: 12.5,
+  windowOpacity: 100,
 };
 
 export function clampUiFontSize(value: number): number {
@@ -81,6 +95,23 @@ export function clampUiFontSize(value: number): number {
 }
 export function clampCodeFontSize(value: number): number {
   return Number.isFinite(value) ? Math.min(32, Math.max(8, value)) : 12.5;
+}
+/**
+ * The window's background opacity, as a percentage.
+ *
+ * Note the deliberate asymmetry with the two clamps above: theirs fall back to
+ * their own default, and so does this one — but here the default is also the
+ * *safe* answer. A stored value that is not a number must resolve to a readable
+ * window, never to the floor, because this is the one preference in the file
+ * that can make the application hard to use.
+ *
+ * The floor is 30 rather than 0 for the same reason. The chrome paints itself
+ * opaque so the window would still be findable at 0, but the file tree and the
+ * console labels sit on the see-through layer, and the only route back from an
+ * unreadable one is a dialog rendered on top of it.
+ */
+export function clampWindowOpacity(value: number): number {
+  return Number.isFinite(value) ? Math.min(100, Math.max(30, value)) : 100;
 }
 
 export function allThemes(settings: AppearanceSettings): ThemeDefinition[] {
@@ -115,6 +146,12 @@ export function readAppearance(raw: string | null, legacyCodeSize?: string | nul
         customThemes,
         uiFontSize: clampUiFontSize(Number(parsed.uiFontSize)),
         codeFontSize: clampCodeFontSize(Number(parsed.codeFontSize)),
+        // Absent in every blob written before the slider existed:
+        // `undefined` -> `NaN` -> 100, which is exactly "the user never chose
+        // this". That is why adding this field needed no version bump — and a
+        // bump would have been destructive, since the gate above rejects a blob
+        // of any other version and the fallback discards its custom themes.
+        windowOpacity: clampWindowOpacity(Number(parsed.windowOpacity)),
       };
     }
   } catch { /* malformed user storage falls back below */ }

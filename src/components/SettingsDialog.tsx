@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { applyAppearance, loadAppearance, validThemeColors } from "../appearance";
 import {
-  activeTheme, allThemes, BUILTIN_THEMES, COLOR_KEYS, DEFAULT_APPEARANCE, parseThemeFile,
+  activeTheme, allThemes, BUILTIN_THEMES, clampWindowOpacity, COLOR_KEYS, DEFAULT_APPEARANCE,
+  parseThemeFile,
   type AppearanceSettings, type ThemeDefinition,
 } from "../appearanceLogic";
+import { transparencySupport } from "../windowTransparencyLogic";
 import {
   COMMANDS, chordFromEvent, commandSections, conflictingCommand, effectiveBinding, formatChord,
   type CommandDefinition, type ShortcutOverrides,
@@ -34,6 +36,19 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [appearance, setAppearance] = useState(() => cloneAppearance(originalAppearance.current));
   const [shortcuts, setShortcuts] = useState<ShortcutOverrides>(() => loadShortcutOverrides());
   const [page, setPage] = useState<Page>("appearance");
+  /**
+   * Whether this platform can show anything behind the window. `null` until
+   * `about_info` answers, which `transparencySupport` reads as unsupported with
+   * nothing to say — so the slider is briefly disabled and silent rather than
+   * accusing the platform of something before we have looked.
+   */
+  const [os, setOs] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void api.aboutInfo().then((info) => { if (live) setOs(info.os); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  const transparency = transparencySupport(os);
   const [query, setQuery] = useState("");
   const [recording, setRecording] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -142,6 +157,28 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <label>UI size<input type="number" min={10} max={24} step={1} value={appearance.uiFontSize} onChange={(event) => preview({ ...appearance, uiFontSize: Math.min(24, Math.max(10, Number(event.target.value))) })} /></label>
               <label>Code size<input type="number" min={8} max={32} step={0.5} value={appearance.codeFontSize} onChange={(event) => preview({ ...appearance, codeFontSize: Math.min(32, Math.max(8, Number(event.target.value))) })} /></label>
             </div>
+            <h3>Window</h3>
+            {/* The one appearance control that a *runtime* condition also gates:
+                the window is only translucent while the active codebase's editor
+                area is empty. `windowTransparencyLogic` owns that rule; this
+                just stores the number. Disabled-with-a-reason rather than hidden
+                on a platform that cannot do it — "not available here, and why"
+                beats a control that silently does nothing. */}
+            <div className="settings-row">
+              <label>Opacity when nothing is open</label>
+              <input
+                type="range"
+                min={30}
+                max={100}
+                step={5}
+                disabled={!transparency.supported}
+                value={appearance.windowOpacity}
+                onChange={(event) => preview({ ...appearance, windowOpacity: clampWindowOpacity(Number(event.target.value)) })}
+              />
+              <span className="muted">{appearance.windowOpacity}%</span>
+            </div>
+            {transparency.reason !== null && <div className="warning">{transparency.reason}</div>}
+            <p>Applies only while no file or diff is open. Terminals, Notes and the other floating panels stay opaque.</p>
             <h3>Colors</h3>
             <div className="settings-grid colors">{COLOR_KEYS.map((key) => <label key={key}>{key}<span><input type="color" disabled={selectedBuiltin} value={selected.colors[key].startsWith("#") && selected.colors[key].length === 7 ? selected.colors[key] : "#000000"} onChange={(event) => updateTheme((theme) => ({ ...theme, colors: { ...theme.colors, [key]: event.target.value } }))} /><input disabled={selectedBuiltin} value={selected.colors[key]} onChange={(event) => updateTheme((theme) => ({ ...theme, colors: { ...theme.colors, [key]: event.target.value } }))} /></span></label>)}</div>
           </>}

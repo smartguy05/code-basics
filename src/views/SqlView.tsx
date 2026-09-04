@@ -391,6 +391,24 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
       .catch((e) => setError(api.errorMessage(e)));
 
   /**
+   * Rename one connection.
+   *
+   * Its own command rather than a `sqlSaveConnection` round-trip: the profiles
+   * this view holds are **redacted views**, so rebuilding one to re-save would
+   * put the display form where a stored password was. It hands back the whole
+   * list, like every other mutation here, so the state is replaced from one
+   * answer rather than patched.
+   */
+  const rename = (target: SqlConnectionView, name: string) =>
+    api
+      .sqlRenameConnection(target.id, name)
+      .then((rows) => {
+        setConnections(rows);
+        setError(null);
+      })
+      .catch((e) => setError(api.errorMessage(e)));
+
+  /**
    * The consent action. Never applied straight from a click: turning writes on
    * is routed through a confirmation that says what the guard is and is not,
    * and — on SQLite — what stronger protection is being given up. Turning them
@@ -850,6 +868,7 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
           onAddManual={addManual}
           onTest={(target) => void test(target)}
           onDelete={(target) => void remove(target)}
+          onRename={(target, name) => void rename(target, name)}
           onSetAllowWrites={requestAllowWrites}
           onRefreshDiscovery={refreshDiscovery}
           testOutcome={testOutcome}

@@ -2080,6 +2080,11 @@ export interface SqlConnectionProfile {
    * form round-trip cannot turn the read-only guard off.
    */
   allowWrites: boolean;
+  /**
+   * Sent and **ignored**, for the same reason: only `sqlRenameConnection` sets
+   * this, so a re-save carrying a derived name cannot undo a rename.
+   */
+  userNamed: boolean;
   createdAtMs: number;
   lastUsedMs: number | null;
 }
@@ -2094,6 +2099,12 @@ export interface SqlConnectionView {
   holdsASecret: boolean;
   workspaceRoot: string | null;
   allowWrites: boolean;
+  /**
+   * Whether the user typed `name`. When they did, `savedConnectionLabel` shows
+   * it verbatim; when they did not, it composes `project · source · key` from
+   * the reference. Two different facts — a name alone cannot say who wrote it.
+   */
+  userNamed: boolean;
   createdAtMs: number;
   lastUsedMs: number | null;
 }

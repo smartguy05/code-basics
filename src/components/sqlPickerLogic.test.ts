@@ -5,6 +5,7 @@ import type {
   SqlSecretView,
 } from "../ipc/types";
 import {
+  acceptedConnectionName,
   candidateBlocker,
   candidateConnectionLabel,
   candidateSourceDetail,
@@ -61,12 +62,86 @@ describe("connection labels", () => {
           key: "AppConfiguration:ConnectionStrings:DatabaseConnection",
         },
         holdsASecret: false,
+        userNamed: false,
         workspaceRoot: "C:/repo",
         allowWrites: false,
         createdAtMs: 0,
         lastUsedMs: null,
       }),
     ).toBe("ONEflight.Server.Api · Staging · DatabaseConnection");
+  });
+
+  it("shows a name the user typed verbatim, deriving nothing over it", () => {
+    // The whole point of the rename: the composite is this module's own guess at
+    // an identity, and it must stop the moment the user supplies one. Without
+    // `userNamed` a typed name containing no " · " is indistinguishable from an
+    // old generic one and gets the prefix back.
+    expect(
+      savedConnectionLabel({
+        id: "saved",
+        name: "Staging",
+        engine: "postgres",
+        secret: {
+          kind: "appSettings",
+          path: "C:/repo/ONEflight.Server.Api/appsettings.Staging.json",
+          key: "AppConfiguration:ConnectionStrings:DatabaseConnection",
+        },
+        holdsASecret: false,
+        userNamed: true,
+        workspaceRoot: "C:/repo",
+        allowWrites: false,
+        createdAtMs: 0,
+        lastUsedMs: null,
+      }),
+    ).toBe("Staging");
+  });
+
+  it("still derives for a connection the user has not named", () => {
+    expect(
+      savedConnectionLabel({
+        id: "saved",
+        name: "Staging",
+        engine: "postgres",
+        secret: {
+          kind: "appSettings",
+          path: "C:/repo/ONEflight.Server.Api/appsettings.Staging.json",
+          key: "AppConfiguration:ConnectionStrings:DatabaseConnection",
+        },
+        holdsASecret: false,
+        userNamed: false,
+        workspaceRoot: "C:/repo",
+        allowWrites: false,
+        createdAtMs: 0,
+        lastUsedMs: null,
+      }),
+    ).toBe("ONEflight.Server.Api · Staging · Staging");
+  });
+});
+
+describe("acceptedConnectionName", () => {
+  it("keeps an ordinary name", () => {
+    expect(acceptedConnectionName("Shop (live)")).toBe("Shop (live)");
+  });
+
+  it("cleans the same things every other rename in the app cleans", () => {
+    // One acceptance rule, shared with the terminal and codebase renames, so a
+    // name the picker refuses cannot be the one the store keeps. Control and
+    // bidi characters become a space and then collapse — they are removed as
+    // *characters* rather than deleted from between two words, so a name still
+    // reads as two words if that is what was typed.
+    //
+    // Spelled as escapes, never as the literal characters, for the reason
+    // `normalizeLabel` gives: every one of them is invisible in an editor.
+    expect(acceptedConnectionName("  Shop   live  ")).toBe("Shop live");
+    expect(acceptedConnectionName("a\u0000b")).toBe("a b");
+    expect(acceptedConnectionName("Shop\u202egnp.exe")).toBe("Shop gnp.exe");
+    expect(acceptedConnectionName("one\ntwo")).toBe("one two");
+  });
+
+  it("refuses a name that cleans away to nothing", () => {
+    expect(acceptedConnectionName("   ")).toBe(null);
+    expect(acceptedConnectionName("\u200b")).toBe(null);
+    expect(acceptedConnectionName("")).toBe(null);
   });
 });
 
@@ -80,6 +155,10 @@ describe("manualConnectionError", () => {
 
   it("requires a name, engine, and connection string", () => {
     expect(manualConnectionError({ ...valid, name: "  " })).toMatch(/name/i);
+    // The create path asks the *same* question the rename asks. Before this it
+    // used a bare trim, so a name the rename refused could still be saved here —
+    // the two-acceptances disagreement `acceptedTerminalTitle` exists to prevent.
+    expect(manualConnectionError({ ...valid, name: "\u200b" })).toMatch(/name/i);
     expect(manualConnectionError({ ...valid, engine: null })).toMatch(/engine/i);
     expect(manualConnectionError({ ...valid, connectionString: "  " })).toMatch(/string/i);
   });

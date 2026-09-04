@@ -227,6 +227,7 @@ export function RunView({
   onNavigate,
   onProcessResult,
   onLspPollKeyChange,
+  onEditorTabsChange,
   active,
   pane,
   onPaneChange,
@@ -298,6 +299,16 @@ export function RunView({
    * read for the active one, exactly as terminal attention is.
    */
   onLspPollKeyChange?: (key: string) => void;
+  /**
+   * Report whether this codebase's editor area currently holds a tab — a file
+   * or a diff.
+   *
+   * Travels the same way `onLspPollKeyChange` does, and for the same reason it
+   * is a callback rather than a `WorkspaceTabHandle` method: the handle is for
+   * one-shot actions `App` *invokes* through a ref, and a ref is invisible to
+   * rendering. This is a value `App` renders from.
+   */
+  onEditorTabsChange?: (open: boolean) => void;
 }) {
   const appConfigs = workspace.configs.filter((c) => c.kind === "app");
 
@@ -1022,6 +1033,27 @@ export function RunView({
     onLspPollKeyChange?.(lspPollKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lspPollKey]);
+
+  // Whether this codebase's editor area is holding anything, for the window
+  // transparency decision in `App`.
+  //
+  // `openFiles.length > 0`, and not one of the two nearby terms that look
+  // equivalent: `activeTab` is `null` for a render while `activeFile` catches up
+  // after a close, which would flash the window mid-close, and `!isDiff` is the
+  // *toolbar* question — a diff is an editor tab and counts. This is the same
+  // term `consolePanelLogic.shouldForceExpand` already uses for "there is no
+  // editor above this pane", so the two answers cannot disagree about what an
+  // empty editor area is. Floating panels are not in `openFiles` at all, so
+  // "an open terminal does not count" is true by construction.
+  //
+  // Keyed on the boolean, like `lspPollKey` above and for the same two reasons:
+  // a render that did not change the answer must not re-render the app, and a
+  // caller passing a fresh closure each render must not loop.
+  const editorTabsOpen = openFiles.length > 0;
+  useEffect(() => {
+    onEditorTabsChange?.(editorTabsOpen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorTabsOpen]);
 
   const selected = appConfigs.find((c) => c.id === selectedId) ?? null;
   const favorites = new Set(workspace.favorites);
@@ -1771,9 +1803,6 @@ export function RunView({
               🧹
             </button>
 
-            <button onClick={() => selected && setEditing(selected)} disabled={!selected}>
-              Edit
-            </button>
             {onlySecretProj ? (
               <button
                 onClick={() => openSecrets(onlySecretProj.manifestPath)}
@@ -1861,6 +1890,7 @@ export function RunView({
               }}
               onToggleFavorite={(config) => void toggleFavorite(config)}
               onMove={(config, delta) => void move(config, delta)}
+              onEdit={(config) => setEditing(config)}
               onNew={() =>
                 setEditing({
                   id: `custom:${Date.now()}`,

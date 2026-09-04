@@ -16,7 +16,7 @@ import { PLUGIN_LABELS } from "../shortcutLogic";
 import type { FeatureInfo } from "../ipc/types";
 
 /** What clicking a plugin row does. One variant per plugin. */
-export type PluginAction = { kind: "sql" };
+export type PluginAction = { kind: "sql" } | { kind: "ask" };
 
 export interface PluginRow {
   /** The command id this row corresponds to, and the React key. */
@@ -57,6 +57,18 @@ const PLUGINS: PluginEntry[] = [
     needsWorkspace: true,
     ready: "Open the SQL console for the active codebase",
     noWorkspace: "Open a codebase to query its databases",
+  },
+  {
+    // Reachable only by its chord (Ctrl+/) until now, despite already having a
+    // `PLUGIN_LABELS` entry and a `plugin:` tag on its command — so the menu
+    // that exists to give the optional features a surface silently omitted the
+    // one feature nothing else advertises. The chord keeps working.
+    feature: "askCodebase",
+    commandId: "agent.ask",
+    action: { kind: "ask" },
+    needsWorkspace: true,
+    ready: "Ask an agent a question about the active codebase",
+    noWorkspace: "Open a codebase to ask a question about it",
   },
 ];
 

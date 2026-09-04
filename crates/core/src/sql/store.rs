@@ -134,6 +134,19 @@ pub struct SqlConnection {
     /// silently appeared.
     #[serde(default)]
     pub allow_writes: bool,
+    /// **The user typed this name**, so nothing derives a label from it.
+    ///
+    /// The picker composes `project · source · key` for a reference-backed
+    /// profile, which is the right identity for one it named itself and the
+    /// wrong one for a name the user chose — a typed name would silently
+    /// reacquire the prefix. This flag is what ends the derivation, and it is a
+    /// separate fact from the name because a name alone cannot say who wrote it.
+    ///
+    /// `#[serde(default)]` for the same reason as `allow_writes`, and it keeps
+    /// the file at version 1: every profile saved before renaming existed *was*
+    /// derived, so an absent key means exactly `false`.
+    #[serde(default)]
+    pub user_named: bool,
     /// When the profile was created, milliseconds since the Unix epoch. The
     /// clock is the caller's, as in [`crate::notes::Note`].
     pub created_at_ms: u64,

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type {
   SqlCandidate,
   SqlConnectionView,
@@ -8,7 +8,9 @@ import type {
 } from "../ipc/types";
 import { groupConnections, statusLine } from "../views/sqlLogic";
 import { ContextMenu } from "./ContextMenu";
+import { MAX_LABEL_LENGTH } from "./workspaceRenameLogic";
 import {
+  acceptedConnectionName,
   candidateBlocker,
   candidateConnectionLabel,
   candidateSourceDetail,
@@ -61,6 +63,14 @@ export interface SqlConnectionPickerProps {
   onTest: (connection: SqlConnectionView) => void;
   onDelete: (connection: SqlConnectionView) => void;
   /**
+   * Rename a connection to an already-accepted name.
+   *
+   * The picker applies `acceptedConnectionName` before calling this, so a name
+   * that cleaned away to nothing never arrives — a refusal leaves the row as it
+   * was rather than travelling to the store and coming back different.
+   */
+  onRename: (connection: SqlConnectionView, name: string) => void;
+  /**
    * Consent to writes, which the backend accepts only through
    * `sql_set_allow_writes` — never as part of saving a profile.
    */
@@ -91,6 +101,7 @@ export function SqlConnectionPicker({
   onAddManual,
   onTest,
   onDelete,
+  onRename,
   onSetAllowWrites,
   onRefreshDiscovery,
   testOutcome = null,
@@ -98,6 +109,17 @@ export function SqlConnectionPicker({
   onClose,
 }: SqlConnectionPickerProps) {
   const [menu, setMenu] = useState<MenuState | null>(null);
+  /** The connection whose name is being edited inline, and the draft text. */
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  /**
+   * Escape got in before the blur.
+   *
+   * Unmounting the input fires `onBlur`, so without this flag the cancel path
+   * commits the very edit it is cancelling — the same guard, for the same
+   * reason, as `TerminalPanel`'s.
+   */
+  const abandoningRename = useRef(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualDraft, setManualDraft] = useState<ManualConnectionDraft>({
     name: "",
@@ -109,6 +131,32 @@ export function SqlConnectionPicker({
   const [addingManual, setAddingManual] = useState(false);
   const [manualOutcome, setManualOutcome] = useState<SqlTestOutcome | null>(null);
   const [candidateEngines, setCandidateEngines] = useState<Record<string, SqlEngine | "">>({});
+
+  const startRename = (connection: SqlConnectionView) => {
+    abandoningRename.current = false;
+    // The draft starts at the *displayed* label, not the raw `name`: that is
+    // what the user sees and is about to edit. For a derived label this makes
+    // the composite the starting point, which is the honest offer — accepting it
+    // unchanged keeps exactly what was on screen.
+    setRenameDraft(savedConnectionLabel(connection));
+    setRenaming(connection.id);
+  };
+
+  const commitRename = (connection: SqlConnectionView, value: string) => {
+    if (abandoningRename.current) {
+      abandoningRename.current = false;
+      setRenaming(null);
+      return;
+    }
+    const clean = acceptedConnectionName(value);
+    // A refused name leaves the row exactly as it was. Saving something the
+    // picker would then render differently is the one outcome worse than the
+    // rename not happening.
+    if (clean !== null && clean !== savedConnectionLabel(connection)) {
+      onRename(connection, clean);
+    }
+    setRenaming(null);
+  };
 
   const groups = groupConnections(connections, root);
   const manualError = manualConnectionError(manualDraft);
@@ -155,9 +203,44 @@ export function SqlConnectionPicker({
         }}
       >
         <span className="sql-conn-identity">
-          <span className="sql-conn-name" title={savedConnectionLabel(connection)}>
-            {savedConnectionLabel(connection)}
-          </span>
+          {renaming === connection.id ? (
+            <input
+              className="sql-conn-rename"
+              autoFocus
+              // Controlled with the cap on the field: a box that takes a pasted
+              // paragraph and silently keeps 40 characters reads as a bug.
+              value={renameDraft}
+              maxLength={MAX_LABEL_LENGTH}
+              // The row's own click selects the connection and its
+              // double-click starts this editor — neither should fire again
+              // from inside the input.
+              onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              onBlur={() => commitRename(connection, renameDraft)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  commitRename(connection, renameDraft);
+                } else if (e.key === "Escape") {
+                  // Flag first: unmounting the input fires `onBlur`.
+                  abandoningRename.current = true;
+                  setRenaming(null);
+                }
+              }}
+            />
+          ) : (
+            <span
+              className="sql-conn-name"
+              title={`${savedConnectionLabel(connection)} — double-click to rename`}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                startRename(connection);
+              }}
+              style={{ cursor: "text" }}
+            >
+              {savedConnectionLabel(connection)}
+            </span>
+          )}
           {origin !== null && (
             <span className="sql-conn-meta" title={origin}>
               {origin}
@@ -478,6 +561,16 @@ export function SqlConnectionPicker({
             }}
           >
             {menu.connection.allowWrites ? "Disallow writes" : "Allow writes"}
+          </div>
+          <div
+            className="dropdown-item"
+            onClick={() => {
+              const connection = menu.connection;
+              setMenu(null);
+              startRename(connection);
+            }}
+          >
+            Rename…
           </div>
           <div
             className="dropdown-item danger"

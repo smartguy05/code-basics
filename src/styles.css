@@ -65,6 +65,12 @@
   --z-notes: 200;
   --z-overlay: 300;
 
+  /* The window background's opacity. Written by `windowTransparency.ts` and by
+     nothing else; this value is only the first-paint fallback, which is why it
+     is 100% — the window starts opaque and becomes translucent after React's
+     first render, so there is no flash of desktop through an unpainted app. */
+  --app-bg-opacity: 100%;
+
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
   --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
@@ -82,12 +88,36 @@ body,
   margin: 0;
 }
 
+/* The one layer that carries the window transparency.
+   `color-mix(in srgb, X 100%, transparent)` computes to exactly `X`, so at the
+   default this is byte-identical to the plain `var(--bg)` it replaced — the
+   "indistinguishable when off" guarantee holds in the CSS and not only in the
+   predicate that feeds it.
+   `--bg` itself is deliberately not given alpha: four other selectors use it as
+   an opaque paint (`.ws-tabs`, `.intent-panel pre`, `.intent-edit-prompt`,
+   `.ws-tab-rename`) and would go see-through with it. */
 body {
-  background: var(--bg);
+  background: color-mix(in srgb, var(--bg) var(--app-bg-opacity), transparent);
   color: var(--text);
   font-family: var(--font);
   font-size: var(--ui-font-size);
   overflow: hidden;
+}
+
+/* An invalid value falls back to 100% rather than poisoning the whole
+   `background` declaration — which would compute to `unset` and leave a fully
+   see-through window with no way to read anything on it. */
+@property --app-bg-opacity {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 100%;
+}
+
+/* An older WebView2 with no `color-mix` degrades to exactly today's paint. */
+@supports not (background: color-mix(in srgb, red 50%, transparent)) {
+  body {
+    background: var(--bg);
+  }
 }
 
 button {
@@ -1191,6 +1221,11 @@ textarea:focus {
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
   overflow-x: auto;
+  /* Chrome, so it paints its own surface: with a translucent window this strip
+     holds label text and would otherwise sit directly on the desktop. Every
+     other strip in the app (`.titlebar`, `.tabs-row`, `.project-rail`,
+     `.sidebar`, `.statusbar`) already does this; this one did not. */
+  background: var(--bg-raised);
 }
 
 .console-tabs button {
@@ -4646,6 +4681,21 @@ textarea:focus {
   text-overflow: ellipsis;
 }
 
+/* The inline rename editor, matching `.terminal-title-edit` and
+   `.notes-tab-rename` — one rename affordance, drawn one way. `width: 100%`
+   rather than a min-width, because unlike a panel header this sits in a row
+   that is already sized. */
+.sql-conn-rename {
+  font: inherit;
+  font-size: var(--ui-font-size);
+  width: 100%;
+  padding: 1px 4px;
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+
 .sql-conn-identity,
 .sql-cand-identity {
   display: flex;
@@ -5289,6 +5339,24 @@ button.danger:hover:not(:disabled) {
 
 .dropdown-backdrop.context-menu-elevated-backdrop {
   z-index: calc(var(--z-overlay) - 2);
+}
+
+/* The same lift for a plain `.dropdown` opened from the titlebar — the branch
+   widget. Named without `context-menu-` because it is not one; the band is
+   shared so there is still only one place the number lives.
+
+   Two steps *below* the elevated context band on purpose. `BranchMenu` opens a
+   right-click menu over itself, and today that menu's backdrop (45) sits above
+   the branch list (41) so a click on a branch row closes the submenu instead of
+   checking that branch out. Lifting both to the same band would invert that and
+   make the click check out a branch with a menu still open. */
+
+.dropdown-menu.dropdown-elevated {
+  z-index: calc(var(--z-overlay) - 4);
+}
+
+.dropdown-backdrop.dropdown-elevated-backdrop {
+  z-index: calc(var(--z-overlay) - 5);
 }
 
 /* ---------------------------------------------------------------------------

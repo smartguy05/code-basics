@@ -4,6 +4,7 @@ import * as api from "../ipc/api";
 import type { Branch, NetworkKind, WorkingStatus } from "../ipc/types";
 import { expansionForQuery, filterBranches, hasQuery } from "./branchFilterLogic";
 import { ancestorPaths, buildTree, type BranchFolder } from "./treeLogic";
+import { ContextMenu } from "./ContextMenu";
 
 /**
  * The titlebar's branch widget, in the spirit of Rider's: the current branch
@@ -271,8 +272,14 @@ export function BranchMenu() {
 
       {open && (
         <>
-          <div className="dropdown-backdrop" onClick={closeMenu} />
-          <div className="dropdown-menu" style={{ minWidth: 260 }}>
+          {/* Elevated because this menu is opened from the *titlebar*, which is
+              above everything: on the default band (41, with its backdrop at
+              40) it hid behind any open terminal or the Notes panel, and so did
+              the backdrop — so clicking that terminal neither closed the menu
+              nor was intercepted. Same fix, and the same band, as
+              `ContextMenu`'s `elevated`. */}
+          <div className="dropdown-backdrop dropdown-elevated-backdrop" onClick={closeMenu} />
+          <div className="dropdown-menu dropdown-elevated" style={{ minWidth: 260 }}>
             {/* The filter, kept at the very top and behind an icon so it cannot
                 be mistaken for the create-branch box further down — typing a
                 filter into that one silently offers to create a branch named
@@ -413,45 +420,40 @@ export function BranchMenu() {
           </div>
 
           {context && (
-            <>
+            <ContextMenu
+              x={context.x}
+              y={context.y}
+              elevated
+              onClose={() => setContext(null)}
+            >
               <div
-                className="dropdown-backdrop"
-                style={{ zIndex: 45 }}
-                onClick={() => setContext(null)}
-              />
-              <div
-                className="dropdown-menu"
-                style={{ position: "fixed", left: context.x, top: context.y, zIndex: 46 }}
+                className="dropdown-item"
+                onClick={() => {
+                  setCreateFrom(context.branch);
+                  setContext(null);
+                  setTimeout(() => nameInputRef.current?.focus(), 0);
+                }}
               >
+                New branch from {context.branch.name}…
+              </div>
+
+              {/* Merging a branch into itself is the one case with no
+                  meaning, so the current branch only offers the rest. */}
+              {!context.branch.isHead && (
                 <div
-                  className="dropdown-item"
+                  className={`dropdown-item ${busy !== null ? "muted" : ""}`}
+                  title={`Merge ${context.branch.name} into ${status?.branch ?? "HEAD"}`}
                   onClick={() => {
-                    setCreateFrom(context.branch);
+                    if (busy !== null) return;
+                    const branch = context.branch;
                     setContext(null);
-                    setTimeout(() => nameInputRef.current?.focus(), 0);
+                    merge(branch);
                   }}
                 >
-                  New branch from {context.branch.name}…
+                  Merge {context.branch.name} into {status?.branch ?? "HEAD"}
                 </div>
-
-                {/* Merging a branch into itself is the one case with no
-                    meaning, so the current branch only offers the rest. */}
-                {!context.branch.isHead && (
-                  <div
-                    className={`dropdown-item ${busy !== null ? "muted" : ""}`}
-                    title={`Merge ${context.branch.name} into ${status?.branch ?? "HEAD"}`}
-                    onClick={() => {
-                      if (busy !== null) return;
-                      const branch = context.branch;
-                      setContext(null);
-                      merge(branch);
-                    }}
-                  >
-                    Merge {context.branch.name} into {status?.branch ?? "HEAD"}
-                  </div>
-                )}
-              </div>
-            </>
+              )}
+            </ContextMenu>
           )}
         </>
       )}
