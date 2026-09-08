@@ -533,6 +533,49 @@ textarea:focus {
   background: rgba(201, 162, 39, 0.12);
 }
 
+/* The counterpart to `.warning` and `.error`: something finished, and said so.
+   Needed because a modal that clears its own preview on success gives the user
+   no signal at all, which reads as a cancel. */
+.success {
+  margin: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--pass);
+  border-radius: 4px;
+  background: rgba(79, 181, 115, 0.12);
+}
+
+/* An `InstallPlan` preview holds the *entire* final contents of each file it
+   would write, and one of those files is `~/.claude.json` — 122 KB here, with
+   long single-line JSON. A bare `<pre>` is `white-space: pre` with no height
+   bound, so it pushed straight out of its `max-height: 70vh` container in both
+   axes and the confirm buttons went with it.
+
+   The rule this follows is the one in CLAUDE.md: wide content scrolls inside
+   its own container, and the surface around it never does. Height is capped so
+   the actions stay reachable no matter how large the file is, and the content
+   is *not* wrapped — this is JSON and TOML a person is checking before it is
+   written to their machine, and rewrapped braces are harder to verify, not
+   easier. Shared by every PlanPreview consumer: the intent hooks, the quality
+   gate, the first-open setup prompt and the MCP installer. */
+.plan-preview {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.plan-preview pre {
+  max-height: 30vh;
+  overflow: auto;
+  margin: 4px 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-inset, var(--bg-raised));
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  tab-size: 2;
+}
+
 .group-label {
   font-size: calc(var(--ui-font-size) - 2px);
   text-transform: uppercase;
@@ -3240,6 +3283,42 @@ textarea:focus {
    Faint and small: on a file whose language has no server it is on screen the
    whole time, so it has to be ignorable — and its `title` is where the
    actionable detail (the install hint, the server's error) lives. */
+/* The F2 rename field.
+
+   Positioned inside `.editor-frame` (the same positioned wrapper the usages
+   dropdown is clamped into) rather than injected into CodeMirror, which tears
+   out DOM on the next viewport update. `placeRenameField` supplies `left`/`top`;
+   everything else is here so no z-index integer is written in TypeScript. */
+.rename-field {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 320px;
+}
+
+.rename-input {
+  width: 240px;
+  padding: 2px 6px;
+  border: 1px solid var(--accent, var(--border));
+  border-radius: 3px;
+  background: var(--bg-inset);
+  color: var(--text);
+  font-family: var(--code-font-family, monospace);
+  font-size: var(--editor-font-size, inherit);
+}
+
+.rename-error {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-inset);
+  color: var(--text-faint);
+  font-size: calc(var(--ui-font-size) - 1px);
+  white-space: normal;
+}
+
 .usages-note {
   position: absolute;
   right: 8px;
@@ -4726,6 +4805,13 @@ textarea:focus {
 
 .sql-conn-writes {
   color: var(--fail);
+}
+
+/* Granted, not dangerous: exposure is read-only on the agent path, so it must
+   not borrow the writes badge's failure colour and read as a broken state. It
+   is still a grant, so it is not the muted `--skip` either. */
+.sql-conn-exposed {
+  color: var(--accent);
 }
 
 .sql-conn-test {

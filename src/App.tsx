@@ -1180,6 +1180,7 @@ export function App() {
                 setPluginMenu(null);
                 if (row.action.kind === "sql") activeHandle()?.openSql();
                 if (row.action.kind === "ask") activeHandle()?.openAsk();
+                if (row.action.kind === "mcp") activeHandle()?.openMcp();
               }}
             >
               {row.label}
@@ -1251,6 +1252,7 @@ export function App() {
           onLspPollKeyChange={setLspPollKeyForRoot}
           onEditorTabsChange={setEditorTabsForRoot}
           onSignal={raiseSignal}
+          onNotify={notify}
           features={features}
         />
       ))}

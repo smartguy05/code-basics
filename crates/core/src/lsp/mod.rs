@@ -85,6 +85,28 @@
 //!   missing key. Its one asymmetry — 1-based lines, 0-based UTF-16 columns — is
 //!   restated on every field it touches.
 //!
+//! Two more are pure and belong to rename, which is the only feature here that
+//! *writes* — so its mistakes are not a wrong answer but a wrong file:
+//!
+//! * [`edits`] — a set of ranges and the text that replaces them. [`edits::plan`]
+//!   takes **no text at all**, so an overlap, a backwards range or two colliding
+//!   insertions refuse the whole rename before a file is read. It abstains by
+//!   refusing rather than choosing: every error is a case where two answers are
+//!   equally defensible, and it is the one place in the subsystem that does
+//!   **not** clamp a position the document does not have — a clamped range in a
+//!   usage row shows the wrong line, a clamped range in a rename writes text
+//!   somewhere plausible in a file nobody has open.
+//! * [`rename`] — a whole `WorkspaceEdit`, in two phases, with the filesystem
+//!   injected through [`rename::Files`]. Phase 1 resolves, plans and validates
+//!   and **writes nothing**; phase 2 writes only files the editor does not have
+//!   open, because a disk write behind an open buffer is invisible to it. It
+//!   abstains *whole* rather than per row — unlike [`results`], where an
+//!   unopenable row is merely shown, an unapplied edit is a partial rename and a
+//!   partial rename does not compile — and it refuses any file operation the
+//!   server asks for, which is the real safeguard: the declared
+//!   `resourceOperations: []` is a true statement about this client and not a
+//!   promise about the server, which really does ignore its neighbour.
+//!
 //! Only the top three touch a process, and they are the ones whose mistakes are
 //! invisible rather than wrong — a leaked server tree, a waiter nobody wakes:
 //!
@@ -137,12 +159,14 @@
 
 pub mod client;
 pub mod documents;
+pub mod edits;
 pub mod framing;
 pub mod jsonrpc;
 pub mod model;
 pub mod positions;
 pub mod protocol;
 pub mod registry;
+pub mod rename;
 pub mod results;
 pub mod session;
 pub mod settings;

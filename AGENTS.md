@@ -178,3 +178,36 @@ selection; a right-click outside it acts on that single row. A Shift-range
 follows the rendered row order, not the flat order. Stashing selected files must
 stash only those paths and leave every other change, staged or not, in the
 working tree; conflicted files are never offered.
+- F2 rename is `refactor.rename` in `shortcutLogic.ts`, `allowInText` because the
+  caret is by definition in CodeMirror when it fires. Every decision lives in the
+  tested `renameLogic.ts`, and it must **abstain on language rules**: reject only
+  an empty name, one containing whitespace, and one equal to the old name. A
+  per-language identifier validator here would be a second, worse opinion than
+  the language server's own and would refuse `@class`, non-ASCII names and `$`.
+- A rename refuses to open its field while a `didChange` is owed, flushes first,
+  and re-checks the document version again at Enter. Ranges computed against a
+  stale mirror are plausible and wrong, which is worse than a wrong count.
+- Several `FileEditor`s are mounted at once inside hidden wrappers, so exactly
+  one must answer F2: visibility is `getClientRects().length > 0`, never
+  `offsetParent`, which is null for the fixed floating panels.
+- The rename field is a positioned `<input>`, not a CodeMirror widget. DOM inside
+  CodeMirror fights its event handling and is torn out by the next viewport
+  update, and a document-mutating approach would fire `docChanged` and
+  desynchronise the very mirror the ordering rule protects.
+- Rename edits reach other open tabs through the request-and-consume monotonic
+  token pattern (`pendingEdits`/`pendingEditsToken`), matched on
+  `source.kind === "workspace" && source.path === path` — **never**
+  `file.id === path`, because a diff tab carries a `path` too. A buffer with no
+  receiving editor is reported, never dropped.
+- `PlanPreview` renders the entire final contents of each file it would write,
+  and one of those is a 122 KB `~/.claude.json`. Its `<pre>` must stay inside its
+  own capped scroll container: unstyled, it pushed out of a `max-height: 70vh`
+  modal in both axes and took the confirm buttons with it. Content is
+  deliberately not wrapped — this is JSON and TOML a person is verifying before
+  it is written to their machine.
+- A modal that clears its own preview on success must say what it did. Without a
+  written-note surface a successful install is indistinguishable from a cancel,
+  and the natural response is to install a second time. `writtenNote` names the
+  files actually written — from the approved plan, not a second read — and states
+  both silent-no-op conditions: a project `.mcp.json` needs the agent's approval
+  before it loads, and a running agent will not see the change until it restarts.

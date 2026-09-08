@@ -75,6 +75,15 @@ export interface SqlConnectionPickerProps {
    * `sql_set_allow_writes` — never as part of saving a profile.
    */
   onSetAllowWrites: (connection: SqlConnectionView, allowWrites: boolean) => void;
+  /**
+   * The second consent action, and a different fact from
+   * {@link SqlConnectionPickerProps.onSetAllowWrites}: whether an agent may see
+   * this connection at all through the MCP server. The agent path forces
+   * read-only whatever `allowWrites` says, so the two never combine into a
+   * write — but exposure grants *reading*, which is its own decision and so has
+   * its own verb, its own badge and its own confirmation.
+   */
+  onSetExposeToAgents: (connection: SqlConnectionView, exposeToAgents: boolean) => void;
   onRefreshDiscovery: () => void;
   /**
    * The last connection test and which connection it was for. Worded by
@@ -103,6 +112,7 @@ export function SqlConnectionPicker({
   onDelete,
   onRename,
   onSetAllowWrites,
+  onSetExposeToAgents,
   onRefreshDiscovery,
   testOutcome = null,
   error = null,
@@ -271,6 +281,18 @@ export function SqlConnectionPicker({
             title="Writes are allowed on this connection."
           >
             writes allowed
+          </span>
+        )}
+
+        {/* Only the granted state is badged. "not exposed" is the default for
+            every connection, so a badge saying so would be on almost every row
+            and would say nothing. */}
+        {connection.exposeToAgents && (
+          <span
+            className="sql-conn-meta sql-conn-exposed"
+            title="An agent can read this connection through the MCP server. Every statement it sends is forced read-only."
+          >
+            exposed to agents
           </span>
         )}
 
@@ -561,6 +583,20 @@ export function SqlConnectionPicker({
             }}
           >
             {menu.connection.allowWrites ? "Disallow writes" : "Allow writes"}
+          </div>
+          <div
+            className="dropdown-item"
+            title={
+              menu.connection.exposeToAgents
+                ? "Stop agents seeing this connection. It takes effect on the next call."
+                : "Let an agent read this connection through the MCP server. Reads only — writes are forced off on that path."
+            }
+            onClick={() => {
+              onSetExposeToAgents(menu.connection, !menu.connection.exposeToAgents);
+              setMenu(null);
+            }}
+          >
+            {menu.connection.exposeToAgents ? "Hide from agents" : "Expose to agents…"}
           </div>
           <div
             className="dropdown-item"

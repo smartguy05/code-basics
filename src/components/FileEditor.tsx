@@ -17,9 +17,24 @@ import {
   type EditableSource,
 } from "./editorSourceLogic";
 import { lineToPos } from "./searchLogic";
+import {
+  acceptedNewName,
+  bufferVerdict,
+  documentBoundsVerdict,
+  identifierAt,
+  placeRenameField,
+  posAt,
+  provisionalRenameWarning,
+  renameOffer,
+  renameReadiness,
+  replacedTextMatches,
+  shouldHandleRename,
+  type RenameReport,
+} from "./renameLogic";
+import { registerCommand } from "../shortcuts";
 import { onEditorFontSizeChange } from "../editorFontSize";
 import * as api from "../ipc/api";
-import type { DeclarationAnchor, Highlight, Target } from "../ipc/types";
+import type { DeclarationAnchor, Highlight, RangeEdit, RenameResult, Target } from "../ipc/types";
 import {
   ANCHOR_RETRY_LIMIT,
   ANCHOR_RETRY_MS,
@@ -106,6 +121,49 @@ type Menu =
     }
   | { kind: "note"; place: Placement; message: string };
 
+/**
+ * The inline rename field, while it is open.
+ *
+ * A React `<input>` absolutely positioned inside `.editor-frame`, **not** a
+ * CodeMirror widget. `usagesExtension`'s own module doc records the finding: DOM
+ * injected inside CodeMirror fights its event handling and is torn out by the
+ * next viewport update, which is worse for an input that needs sustained focus
+ * and whose text changes on every keystroke by design. A document-mutating
+ * approach is worse still — it would fire `docChanged`, bump `docVersion` and arm
+ * the flush timer, desynchronising the very thing the ordering guarantee
+ * protects.
+ */
+interface RenameField {
+  place: Placement;
+  /** The identifier read out of the buffer. Also the backend's token check. */
+  oldName: string;
+  value: string;
+  /** Where the question was aimed: 1-based line, 0-based UTF-16 character. */
+  line: number;
+  character: number;
+  /** The document version the field was opened over; re-checked at Enter. */
+  docVersion: number;
+  /** The server's qualification of its own `ready` answer, when it made one. */
+  caveat: string | null;
+  /** Whether the user has already been shown {@link caveat} and pressed Enter. */
+  confirmed: boolean;
+  /** Why the last Enter did nothing. */
+  error: string | null;
+}
+
+/**
+ * Another editor's rename, handed to this one to apply to its own buffer.
+ *
+ * Carries `oldName` because the stale-mirror check is per edit and needs it: the
+ * backend runs the same rule over the closed files it reads and cannot run it
+ * here, since it has no text for a buffer that has not been saved.
+ */
+export interface PendingRenameEdits {
+  path: string;
+  oldName: string;
+  edits: RangeEdit[];
+}
+
 /** A quiet corner badge: why this file has no inline rows. */
 interface EditorNote {
   text: string;
@@ -149,6 +207,11 @@ export function FileEditor({
   revealLine = null,
   revealToken = 0,
   onNavigate,
+  pendingEdits = null,
+  pendingEditsToken = 0,
+  onPendingEditsConsumed,
+  onRenameApplied,
+  onRenameNote,
 }: {
   /** What backs this tab. A FileEditor is keyed by its identity and never rebinds. */
   /**
@@ -187,6 +250,40 @@ export function FileEditor({
    * which files are open. `line` is **1-based**, as everywhere in this app.
    */
   onNavigate: (path: string, name: string, line: number) => void;
+  /**
+   * A rename another editor performed, sliced to this tab's own file.
+   *
+   * The request-and-consume monotonic-token pattern `pendingOpen`/`reveal`
+   * already use, and for the same reason: a second rename of the same symbol
+   * changes no field a consumer could compare, so a plain value would be applied
+   * once and then ignored for ever. `RunView` owns the map and slices it on
+   * `sameWorkspaceFile`, never on `file.id === path` — a diff tab carries a
+   * `path` too, and applying a rename into a diff buffer writes it over the real
+   * file.
+   */
+  pendingEdits?: PendingRenameEdits | null;
+  pendingEditsToken?: number;
+  /**
+   * This tab has taken its share of a rename, so the map may forget the path.
+   *
+   * Without it the entry outlives the tab: `appliedEditsToken` is a per-mount
+   * ref, so closing this file and reopening it re-consumed a rename that
+   * finished minutes ago. See `consumeRenameEdits`.
+   */
+  onPendingEditsConsumed?: (path: string) => void;
+  /**
+   * A rename finished. The result is handed up rather than acted on here,
+   * because only `RunView` knows which files are open and can therefore fan the
+   * open-buffer half out — and only it can tell whether a `buffers` entry found
+   * an editor at all.
+   */
+  onRenameApplied?: (rename: {
+    oldName: string;
+    newName: string;
+    result: RenameResult;
+  }) => void;
+  /** Something worth telling the user about, en route to the notification host. */
+  onRenameNote?: (report: RenameReport) => void;
 }) {
   /**
    * The tab's stable identity: the build effect's dependency, and — for a
@@ -217,6 +314,9 @@ export function FileEditor({
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [note, setNote] = useState<EditorNote | null>(null);
+  const [renameField, setRenameField] = useState<RenameField | null>(null);
+  /** The last `pendingEditsToken` this tab applied, so a repeat is not re-run. */
+  const appliedEditsToken = useRef(0);
 
   /** The jump asked for, and the token of the last one actually performed. */
   const wantedReveal = useRef<{ line: number; token: number } | null>(null);
@@ -252,8 +352,20 @@ export function FileEditor({
   }, [revealLine, revealToken]);
 
   // Read through refs so the editor is not torn down when they change.
-  const handlers = useRef({ onDirtyChange, onNavigate });
-  handlers.current = { onDirtyChange, onNavigate };
+  const handlers = useRef({
+    onDirtyChange,
+    onNavigate,
+    onRenameApplied,
+    onRenameNote,
+    onPendingEditsConsumed,
+  });
+  handlers.current = {
+    onDirtyChange,
+    onNavigate,
+    onRenameApplied,
+    onRenameNote,
+    onPendingEditsConsumed,
+  };
   const dirty = useRef(false);
 
   // -------------------------------------------------------------------------
@@ -500,13 +612,71 @@ export function FileEditor({
       });
   };
 
+  /**
+   * Send the buffer now and answer when the server has it.
+   *
+   * Split out of {@link flushChange} for the rename, which cannot use a
+   * fire-and-forget flush: F2 must open its field **only** once the server holds
+   * this exact text, so it needs the promise, and it needs a rejection it can
+   * refuse with rather than a silently-swallowed one. `flushChange` keeps the
+   * debounce and the not-opened-yet reschedule; this is only the send.
+   *
+   * Rejects with whatever the call rejected with, *after* recording it as
+   * {@link syncError} and taking the rows down — so both callers see the same
+   * state and only the wording differs.
+   */
+  const sendChange = (): Promise<void> => {
+    if (!lspEnabled) return Promise.resolve();
+    const view = viewRef.current;
+    if (!view) return Promise.resolve();
+    if (!opened.current) {
+      return Promise.reject(
+        new Error("the language server has not been told about this file yet"),
+      );
+    }
+    const mine = gen.current;
+    // Captured before the send, not read in the reply: the user goes on typing
+    // during the round trip, and what landed on the server is this text.
+    const sent = docVersion.current;
+    return api
+      .lspChangeDocument(identity, view.state.doc.toString())
+      .then(() => {
+        if (gen.current !== mine) return;
+        syncError.current = null;
+        syncedVersion.current = sent;
+        // The anchors move and can appear or disappear with the edit, so they
+        // are re-derived rather than reused.
+        loadAnchors();
+      })
+      .catch((e) => {
+        // The generation guard covers the *state* writes, not the rejection: a
+        // caller waiting on this promise is owed an answer whether or not this
+        // mount is still the current one, and swallowing the error here would
+        // resolve it successfully and let a rename proceed on a stale flush.
+        if (gen.current !== mine) throw e;
+        syncError.current = api.errorMessage(e);
+        setNote({
+          text: "Usages paused",
+          detail:
+            "This file could not be sent to the language server, so no usages are being " +
+            `counted until the next edit gets through: ${syncError.current}`,
+        });
+        // Take the rows down with it. They were placed from anchors derived before
+        // the edit and nothing will answer them, so leaving them there is a row
+        // that reads exactly like "not asked yet" — for ever, above the wrong line.
+        pushRows();
+        // Rethrown rather than absorbed: `flushChange` ignores it (the badge above
+        // is the report), and the rename path needs it as its refusal reason.
+        throw e;
+      });
+  };
+
   /** Send the buffer, then re-derive anchors and counts against it. */
   const flushChange = () => {
     // No server for this source: nothing to send, and returning here stops the
     // "not opened yet, try again" reschedule below from spinning a timer forever.
     if (!lspEnabled) return;
-    const view = viewRef.current;
-    if (!view) return;
+    if (!viewRef.current) return;
     if (!opened.current) {
       // Typing inside the open round trip is routine — guaranteed while a server
       // is starting, since `opened` only flips when `lspOpenDocument` resolves.
@@ -520,34 +690,9 @@ export function FileEditor({
       }, CHANGE_DEBOUNCE_MS);
       return;
     }
-    const mine = gen.current;
-    // Captured before the send, not read in the reply: the user goes on typing
-    // during the round trip, and what landed on the server is this text.
-    const sent = docVersion.current;
-    api
-      .lspChangeDocument(identity, view.state.doc.toString())
-      .then(() => {
-        if (gen.current !== mine) return;
-        syncError.current = null;
-        syncedVersion.current = sent;
-        // The anchors move and can appear or disappear with the edit, so they
-        // are re-derived rather than reused.
-        loadAnchors();
-      })
-      .catch((e) => {
-        if (gen.current !== mine) return;
-        syncError.current = api.errorMessage(e);
-        setNote({
-          text: "Usages paused",
-          detail:
-            "This file could not be sent to the language server, so no usages are being " +
-            `counted until the next edit gets through: ${syncError.current}`,
-        });
-        // Take the rows down with it. They were placed from anchors derived before
-        // the edit and nothing will answer them, so leaving them there is a row
-        // that reads exactly like "not asked yet" — for ever, above the wrong line.
-        pushRows();
-      });
+    void sendChange().catch(() => {
+      /* already recorded as `syncError` and shown as the corner badge */
+    });
   };
 
   // -------------------------------------------------------------------------
@@ -638,6 +783,262 @@ export function FileEditor({
       });
   };
 
+  // -------------------------------------------------------------------------
+  // F2 — rename symbol.
+  //
+  // The ordering guarantee lives here and nowhere else: the ranges a rename
+  // answers with are applied to *this* text, so they must have been computed
+  // from *this* text. `renameReadiness` decides; this only obeys it.
+  // -------------------------------------------------------------------------
+
+  /** A refusal, in the same overlay the goto path uses for one. */
+  const showRenameNote = (message: string) => {
+    const view = viewRef.current;
+    const at = view ? view.coordsAtPos(view.state.selection.main.head) : null;
+    setMenu({ kind: "note", place: place(at?.left ?? 0, at?.bottom ?? 0), message });
+  };
+
+  /**
+   * Ask the server whether this position can be renamed, then open the field.
+   *
+   * The prefill comes from the **buffer**, not from the answer: real Roslyn
+   * replies with a bare range and no placeholder (measured against 2.140.9), so
+   * `identifierAt` is the live path here rather than a fallback, and without it
+   * the box opens empty. A `placeholder` is taken when a server does send one.
+   */
+  const openRenameField = () => {
+    const view = viewRef.current;
+    if (!view) return;
+    const head = view.state.selection.main.head;
+    const docLine = view.state.doc.lineAt(head);
+    const character = head - docLine.from;
+    const found = identifierAt(docLine.text, character);
+    if (!found) {
+      showRenameNote("Put the caret on a name to rename it.");
+      return;
+    }
+
+    // Anchored on the identifier's own start rather than the caret, so the field
+    // does not jump about depending on where in the word F2 was pressed.
+    const coords = view.coordsAtPos(docLine.from + found.start);
+    const rect = wrapRef.current?.getBoundingClientRect();
+    const at = placeRenameField(
+      coords?.left ?? 0,
+      coords?.bottom ?? 0,
+      rect ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null,
+    );
+
+    const mine = gen.current;
+    const version = docVersion.current;
+    api
+      .lspPrepareRename(identity, docLine.number, character)
+      .then((prepare) => {
+        if (gen.current !== mine) return;
+        const offer = renameOffer(prepare);
+        if (offer.kind === "refuse") {
+          showRenameNote(offer.reason);
+          return;
+        }
+        setMenu(null);
+        setRenameField({
+          place: at,
+          oldName: found.text,
+          value: offer.placeholder ?? found.text,
+          line: docLine.number,
+          character,
+          docVersion: version,
+          caveat: offer.caveat,
+          confirmed: false,
+          error: null,
+        });
+      })
+      .catch((e) => {
+        if (gen.current !== mine) return;
+        showRenameNote(api.errorMessage(e));
+      });
+  };
+
+  /**
+   * F2. Refuses, flushes, or opens — in that order.
+   *
+   * The flush is the whole point: the debounce is cancelled and the buffer sent
+   * *now*, and the field opens only from that promise's `.then`. A rejection is
+   * the refusal reason, which is why `sendChange` rethrows.
+   */
+  const startRename = () => {
+    if (!viewRef.current) return;
+    const readiness = renameReadiness({
+      lspEnabled,
+      opened: opened.current,
+      changePending: changeTimer.current !== null,
+      docVersion: docVersion.current,
+      syncedVersion: syncedVersion.current,
+      syncError: syncError.current,
+    });
+    if (readiness.kind === "refuse") {
+      showRenameNote(readiness.reason);
+      return;
+    }
+    if (readiness.kind === "ready") {
+      openRenameField();
+      return;
+    }
+    if (changeTimer.current !== null) {
+      window.clearTimeout(changeTimer.current);
+      changeTimer.current = null;
+    }
+    const mine = gen.current;
+    sendChange()
+      .then(() => {
+        if (gen.current !== mine) return;
+        openRenameField();
+      })
+      .catch((e) => {
+        if (gen.current !== mine) return;
+        showRenameNote(
+          "This file could not be sent to the language server, so a rename would be computed " +
+            `against text it has never seen: ${api.errorMessage(e)}`,
+        );
+      });
+  };
+
+  /** Enter in the rename field. */
+  const commitRename = (field: RenameField) => {
+    const accepted = acceptedNewName(field.value, field.oldName);
+    if (accepted.kind === "reject") {
+      setRenameField({ ...field, error: accepted.reason });
+      return;
+    }
+    // Re-checked at Enter, not only at F2: a reveal, a jump or another editor's
+    // rename can move this document while the focus is in the input, and the
+    // position the question is aimed at was read from the older text.
+    if (
+      field.docVersion !== docVersion.current ||
+      docVersion.current !== syncedVersion.current ||
+      changeTimer.current !== null
+    ) {
+      setRenameField({
+        ...field,
+        error:
+          "The file changed while you were typing, so this position may no longer be the " +
+          "symbol. Press Escape and try again.",
+      });
+      return;
+    }
+    // The one case that gets a confirmation, because the user chose no preview
+    // for the normal path and this is not the normal path: a server promoted at
+    // the readiness ceiling may have **missed call sites**, which leaves the old
+    // name behind in files that then do not compile.
+    if (field.caveat !== null && !field.confirmed) {
+      const warning = provisionalRenameWarning({ outcome: "ready", message: field.caveat });
+      setRenameField({
+        ...field,
+        confirmed: true,
+        error: `${warning ?? field.caveat} Press Enter again to rename anyway.`,
+      });
+      return;
+    }
+
+    setRenameField(null);
+    viewRef.current?.focus();
+    const oldName = field.oldName;
+    const newName = accepted.name;
+    api
+      .lspRename(identity, field.line, field.character, oldName, newName)
+      .then((result) => {
+        // Deliberately **not** guarded on the generation. The writes have already
+        // happened by the time this resolves, so a tab closed mid-rename must not
+        // discard the report — it is the only record that files on disk changed.
+        // Nothing below touches this component's state, so a late call is safe.
+        handlers.current.onRenameApplied?.({ oldName, newName, result });
+      })
+      .catch((e) => {
+        handlers.current.onRenameNote?.({
+          kind: "error",
+          title: `${oldName} was not renamed`,
+          detail: api.errorMessage(e),
+        });
+      });
+  };
+
+  /**
+   * Apply another editor's rename to this buffer, as one transaction.
+   *
+   * One transaction so Ctrl+Z in *this* tab reverts *this* file's part of the
+   * rename in a single step. A multi-file rename is not one undo and this app
+   * does not pretend it is — see the notification `renameSummary` writes.
+   *
+   * The stale-mirror check runs here because this is the only layer that has the
+   * buffer's text. It refuses the file only when **no** edit lands on the old
+   * name: a single non-matching edit is routinely legitimate (a rename inside a
+   * comment, a TypeScript shorthand property being expanded), and refusing over
+   * one would refuse correct renames.
+   */
+  const applyRenameEdits = (pending: PendingRenameEdits) => {
+    const view = viewRef.current;
+    if (!view) {
+      handlers.current.onRenameNote?.({
+        kind: "error",
+        title: "Part of a rename was not applied",
+        detail:
+          `${pending.path} is open but its editor is not ready, so ${pending.edits.length} ` +
+          "edits were not applied and it still holds the old name.",
+      });
+      return;
+    }
+    const doc = view.state.doc;
+    // Before any position arithmetic: `lineToPos` and `posAt` both clamp, so an
+    // edit naming a line this buffer does not have would be applied *somewhere*
+    // rather than refused. That is the condition `edits::apply` refuses outright
+    // for a closed file, and the buffer is the copy holding unsaved work.
+    const bounds = documentBoundsVerdict(doc.lines, pending.edits, pending.path);
+    if (bounds.kind === "refuse") {
+      handlers.current.onRenameNote?.({
+        kind: "error",
+        title: "Part of a rename was refused",
+        detail: bounds.reason,
+      });
+      return;
+    }
+    const spans = pending.edits.map((edit) => {
+      const startLine = doc.line(lineToPos(doc.lines, edit.startLine));
+      const endLine = doc.line(lineToPos(doc.lines, edit.endLine));
+      return {
+        from: posAt(startLine.from, startLine.length, edit.startCharacter),
+        to: posAt(endLine.from, endLine.length, edit.endCharacter),
+        insert: edit.newText,
+        startText: startLine.text,
+        startCharacter: edit.startCharacter,
+      };
+    });
+    const verdict = bufferVerdict(
+      spans.map((span) =>
+        replacedTextMatches(span.startText, span.startCharacter, pending.oldName),
+      ),
+      pending.path,
+    );
+    if (verdict.kind === "refuse") {
+      handlers.current.onRenameNote?.({
+        kind: "error",
+        title: "Part of a rename was refused",
+        detail: verdict.reason,
+      });
+      return;
+    }
+    if (spans.length > 0) {
+      view.dispatch({
+        changes: spans.map((span) => ({ from: span.from, to: span.to, insert: span.insert })),
+      });
+    }
+    if (verdict.note !== null) {
+      handlers.current.onRenameNote?.({
+        kind: "warning",
+        title: "Renamed, with something worth checking",
+        detail: verdict.note,
+      });
+    }
+  };
+
   /**
    * The callbacks the extension is given, read through a ref.
    *
@@ -646,8 +1047,24 @@ export function FileEditor({
    * rather than the closures of one render, or every callback would see the
    * state as it was at mount.
    */
-  const lsp = useRef({ openUsages, goto, pushRows, requestVisible, flushChange });
-  lsp.current = { openUsages, goto, pushRows, requestVisible, flushChange };
+  const lsp = useRef({
+    openUsages,
+    goto,
+    pushRows,
+    requestVisible,
+    flushChange,
+    startRename,
+    applyRenameEdits,
+  });
+  lsp.current = {
+    openUsages,
+    goto,
+    pushRows,
+    requestVisible,
+    flushChange,
+    startRename,
+    applyRenameEdits,
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -853,6 +1270,61 @@ export function FileEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity]);
 
+  /**
+   * F2, for whichever of these editors is actually on screen.
+   *
+   * Several `FileEditor`s are mounted at once inside `display: none` wrappers,
+   * so every one of them registers this handler and `shouldHandleRename` is what
+   * keeps exactly one of them acting. `executeCommand` walks handlers
+   * newest-first and takes the first that does not return `false`, which is the
+   * same fall-through `SqlView`'s own `run.run` handler uses.
+   *
+   * Visibility is `getClientRects().length > 0` and **not** `offsetParent`,
+   * which is `null` for a `position: fixed` element. Measured on the frame
+   * rather than on the CodeMirror host, because the Project tab hides the whole
+   * editor area behind a diff tab.
+   *
+   * Registered once, and it reads the current closures through `lsp.current` —
+   * the same indirection the extension's callbacks use, for the same reason.
+   */
+  useEffect(
+    () =>
+      registerCommand("refactor.rename", () => {
+        const rendered = (wrapRef.current?.getClientRects().length ?? 0) > 0;
+        // F2 is `allowInText`, so it arrives with focus in a terminal, the Notes
+        // textarea or the search box — none of which unmount this editor. The
+        // list is `askLogic.TEXT_ENTRY_ANCESTORS`'s rule, `.xterm` included for
+        // the same measured reason; anything inside this editor's own frame is
+        // this editor and does not count.
+        const active = document.activeElement;
+        const focusElsewhere =
+          active !== null &&
+          !(wrapRef.current?.contains(active) ?? false) &&
+          active.closest('.xterm, input, textarea, select, [contenteditable="true"]') !== null;
+        if (!shouldHandleRename({ rendered, focusElsewhere })) return false;
+        lsp.current.startRename();
+        return true;
+      }),
+    [],
+  );
+
+  /**
+   * Another editor's rename, sliced to this file.
+   *
+   * Keyed on the token rather than on the value: a second rename of the same
+   * symbol produces an identical `pendingEdits` object and would otherwise never
+   * be applied. The token is monotonic and owned by `RunView`.
+   */
+  useEffect(() => {
+    if (!pendingEdits || pendingEditsToken === appliedEditsToken.current) return;
+    appliedEditsToken.current = pendingEditsToken;
+    lsp.current.applyRenameEdits(pendingEdits);
+    // Consumed whatever the outcome was — applied, refused or reported. The
+    // entry has had its one chance at this file, and a rename that has already
+    // been reported must not be re-applied to a later mount of the same tab.
+    handlers.current.onPendingEditsConsumed?.(pendingEdits.path);
+  }, [pendingEdits, pendingEditsToken]);
+
   // CodeMirror caches character metrics; a CSS font-size change needs saying
   // out loud (see `editorFontSize.ts`).
   useEffect(() => onEditorFontSizeChange(() => viewRef.current?.requestMeasure()), []);
@@ -887,6 +1359,46 @@ export function FileEditor({
       {note && (
         <div className="usages-note" title={note.detail ?? undefined}>
           {note.text}
+        </div>
+      )}
+
+      {/* The rename field: an ordinary positioned `<input>`, deliberately not a
+          CodeMirror widget and deliberately not a document mutation — see
+          `RenameField`'s own doc for both reasons.
+
+          Enter commits, and Escape **and blur** both cancel. Blur cancels
+          because a blur can be a stray click somewhere else in the app, and
+          committing a rename on a stray click is unrecoverable. */}
+      {renameField && (
+        <div className="rename-field" style={{ left: renameField.place.left, top: renameField.place.top }}>
+          <input
+            autoFocus
+            className="rename-input"
+            value={renameField.value}
+            aria-label={`Rename ${renameField.oldName}`}
+            onFocus={(event) => event.currentTarget.select()}
+            onChange={(event) =>
+              setRenameField({ ...renameField, value: event.target.value, error: null })
+            }
+            onBlur={() => setRenameField(null)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commitRename(renameField);
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                // Stopped here so the window-level Escape listener that closes
+                // the overlay does not also fire; this input owns the key while
+                // it is open.
+                event.stopPropagation();
+                setRenameField(null);
+                viewRef.current?.focus();
+              }
+            }}
+          />
+          {renameField.error !== null && (
+            <div className="rename-error">{renameField.error}</div>
+          )}
         </div>
       )}
 

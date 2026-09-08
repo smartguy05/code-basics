@@ -1905,6 +1905,156 @@ export interface ServerStatus {
   hint: string | null;
 }
 
+/**
+ * A rename that happened, or the reason none did.
+ *
+ * **Two lists of edits, because the work is split.** Rust wrote every file
+ * nobody has open (`written`); the open buffers' edits come back in `buffers`
+ * for the editor to dispatch, one transaction per file. A disk write behind an
+ * open tab is invisible to its CodeMirror buffer — the build effect is keyed on
+ * identity alone, there is no file watcher and there is no autosave — and is
+ * clobbered by the next `Mod-s`, which is why the backend must not write those.
+ *
+ * **Dispatch `buffers` synchronously**, in the `.then` of the call, and
+ * *report* any entry with no receiving editor rather than dropping it: between
+ * the disk writes and that dispatch is the one window this design cannot close,
+ * and it is one promise resolution wide.
+ *
+ * **A multi-file rename is not one undo.** Each open buffer gets one
+ * transaction, so `Ctrl+Z` in that tab reverts that file's part; `written` files
+ * have no undo at all. Say so — the Changes tab's line-level revert is the real
+ * answer — rather than implying an undo that does not exist.
+ *
+ * Every key is present on every result, `null` where there is no value: the Rust
+ * struct carries no `skip_serializing_if`. Pinned by
+ * `rename_result_serialises_with_the_keys_the_ui_reads` and
+ * `a_rename_that_could_not_be_asked_carries_the_total_key_as_null` in
+ * `crates/core/src/lsp/model_tests.rs`.
+ */
+export interface RenameResult {
+  outcome: Availability;
+  /**
+   * How many edits the rename accounted for, across every file.
+   *
+   * `null` unless `outcome` is `"ready"`; `0` means the server answered that
+   * there is nothing to change, which is a real answer and not the same as
+   * nobody being asked — so branch on `total === null`, not on falsiness.
+   */
+  total: number | null;
+  /** The closed files the backend wrote, in write order. */
+  written: RenamedFile[];
+  /** The open buffers' edits, for the editor to apply. */
+  buffers: BufferEdits[];
+  /**
+   * Files that could not be written, or could not be restored. Non-empty means
+   * the rename did not complete; an entry with `unrecoverable` set must be
+   * escalated rather than listed.
+   */
+  failures: RenameFailure[];
+  /**
+   * Why, when `outcome` is not `"ready"` — **and the qualification when it is.**
+   *
+   * A `"ready"` rename carries a message when the answer needs one: the server
+   * never finished priming (so call sites may have been *missed*, which is worse
+   * than a low count and worth showing before the user moves on), or some edits
+   * landed on text that merely contains the identifier, such as a comment. See
+   * {@link UsageResult.message}.
+   */
+  message: string | null;
+  /** Which server answered, for a status line. `null` when none did. */
+  server: string | null;
+}
+
+/**
+ * One span of one document, and the text that replaces it.
+ *
+ * **1-based `line`, 0-based UTF-16 `character`** on both ends — the same
+ * asymmetry as {@link Target.character}, restated because this is the only type
+ * on this surface carrying an *end* position. The range is half-open: `end` is
+ * exclusive, so a zero-width range is an insertion and an empty `newText` is a
+ * deletion. Insertions are the **normal** case, not an edge one: the real Roslyn
+ * server answers a rename with a minimal diff, so renaming `Walker` to
+ * `HeapWalker` arrives as an insertion of `"Heap"`.
+ *
+ * No byte offsets, deliberately — the backend has no text for an open buffer, so
+ * converting these to document positions is the editor's job.
+ */
+export interface RangeEdit {
+  startLine: number;
+  startCharacter: number;
+  endLine: number;
+  endCharacter: number;
+  newText: string;
+}
+
+/** A closed file that was written to disk. */
+export interface RenamedFile {
+  /** Workspace-relative, forward slashes — ready for the open-a-file chain. */
+  path: string;
+  /** How many edits this file received. */
+  edits: number;
+}
+
+/** One open buffer's edits, to apply as a single transaction. */
+export interface BufferEdits {
+  /**
+   * Workspace-relative, forward slashes. Match it with `sameWorkspaceFile(tab,
+   * path)` and never `file.id === path`: a diff tab carries a `path` too, and
+   * applying a rename into a diff buffer writes it over the real file.
+   */
+  path: string;
+  /** In document order and non-overlapping; the backend proved that. */
+  edits: RangeEdit[];
+}
+
+/** A file the rename could not finish with. */
+export interface RenameFailure {
+  /** Workspace-relative, forward slashes. */
+  path: string;
+  /** What went wrong, in the words of whatever refused. */
+  detail: string;
+  /**
+   * Whether this file is beyond anything the app can do about it — a write
+   * failed *and* restoring an earlier file failed too, so it holds part of a
+   * rename with no copy of its previous contents anywhere.
+   *
+   * A boolean rather than prose because this has to be escalated without
+   * parsing English: send the user to git, immediately, not to a list.
+   */
+  unrecoverable: boolean;
+}
+
+/**
+ * Whether the caret is on something renameable, and where its identifier is.
+ *
+ * `renameable: false` with `outcome: "ready"` is a **real answer about the
+ * caret** — it is on a keyword, a comment or a literal — and must decline the
+ * rename rather than report a broken server. Never open the field on it, and
+ * never open it empty.
+ *
+ * The four position fields are `null` together. A server may say the caret is
+ * renameable while naming no range (`defaultBehavior`), and the real Roslyn
+ * server names a range with **no `placeholder`** — so the field's prefill comes
+ * from the buffer (`renameLogic.identifierAt`) and that is the live path for C#,
+ * not a fallback.
+ */
+export interface PrepareRenameResult {
+  outcome: Availability;
+  /** False for every outcome that is not `"ready"`, and for a `null` answer. */
+  renameable: boolean;
+  /** **1-based**; see {@link RangeEdit}. `null` unless the server named a range. */
+  startLine: number | null;
+  /** **0-based UTF-16 code units**; see {@link Target.character}. */
+  startCharacter: number | null;
+  endLine: number | null;
+  endCharacter: number | null;
+  /** What to prefill with, when the server offered it — `null` for Roslyn. */
+  placeholder: string | null;
+  /** Why there is no answer, or the qualification a `"ready"` one needs. */
+  message: string | null;
+  server: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Debugging (`cb_core::dap::model`)
 // ---------------------------------------------------------------------------
@@ -2081,6 +2231,12 @@ export interface SqlConnectionProfile {
    */
   allowWrites: boolean;
   /**
+   * Sent and **ignored**, for the same reason and a stronger one: only
+   * `sqlSetExposeToAgents` moves this, so a form round-trip cannot hand a
+   * database to an agent.
+   */
+  exposeToAgents: boolean;
+  /**
    * Sent and **ignored**, for the same reason: only `sqlRenameConnection` sets
    * this, so a re-save carrying a derived name cannot undo a rename.
    */
@@ -2099,6 +2255,13 @@ export interface SqlConnectionView {
   holdsASecret: boolean;
   workspaceRoot: string | null;
   allowWrites: boolean;
+  /**
+   * Whether an agent may see this connection at all, through the MCP server.
+   * A separate fact from `allowWrites` and never derived from it: the agent
+   * path forces read-only regardless, so this answers only *may an agent read
+   * here*. Default off; moved only by `sqlSetExposeToAgents`.
+   */
+  exposeToAgents: boolean;
   /**
    * Whether the user typed `name`. When they did, `savedConnectionLabel` shows
    * it verbatim; when they did not, it composes `project · source · key` from

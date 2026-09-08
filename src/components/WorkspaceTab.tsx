@@ -8,6 +8,7 @@ import { RunView } from "../views/RunView";
 import { ReviewPanel } from "./ReviewPanel";
 import { SearchEverywhere } from "./SearchEverywhere";
 import { SetupPrompt } from "./SetupPrompt";
+import { McpServerPanel } from "./McpServerPanel";
 import { SqlPanel } from "./SqlPanel";
 import { shouldPrompt, setDismissed } from "./setupPromptLogic";
 import { TerminalPanel } from "./TerminalPanel";
@@ -109,6 +110,16 @@ export interface WorkspaceTabHandle {
    * no caller has to re-derive it.
    */
   openAsk(): void;
+  /**
+   * Open the SQL MCP server installer for this codebase.
+   *
+   * Part of the handle for the same reason `openSql` and `openAsk` are: the
+   * Plugins menu is global titlebar chrome and this acts on the foreground
+   * codebase (a project-scope install writes `.mcp.json` at its root). The gate
+   * is inside the tab — calling it while the `mcpSqlServer` feature is off does
+   * nothing.
+   */
+  openMcp(): void;
 }
 
 /**
@@ -147,6 +158,7 @@ export function WorkspaceTab({
   onLspPollKeyChange,
   onEditorTabsChange,
   onSignal,
+  onNotify,
   features,
 }: {
   workspace: Workspace;
@@ -197,6 +209,15 @@ export function WorkspaceTab({
    */
   onSignal: (root: string, signal: TabSignal) => void;
   /**
+   * Raise an app-wide notification.
+   *
+   * Passed straight through to `RunView`. A tab signal cannot carry this: the
+   * files a rename wrote may belong to no codebase the user has in front of
+   * them, and "these were written to disk and are not undoable here" has to be
+   * readable after switching away.
+   */
+  onNotify: (report: { kind: "error" | "warning" | "info"; title: string; detail: string }) => void;
+  /**
    * The optional features that are switched on, or `null` while the startup load
    * is in flight. Passed down rather than fetched here so every open codebase
    * renders the same answer from one read, and so the strip never flickers.
@@ -233,6 +254,20 @@ export function WorkspaceTab({
   useEffect(() => {
     setSqlPanel((state) => sqlPanelAfterFeatureChange(state, sqlEnabled));
   }, [sqlEnabled]);
+
+  /**
+   * The SQL MCP server installer: a transient modal, so a plain boolean is
+   * enough — unlike the SQL console there is no live state to preserve, and
+   * re-opening it is a fresh read of the install status either way.
+   */
+  const [mcpPanelOpen, setMcpPanelOpen] = useState(false);
+  const mcpEnabled = featureEnabled(features, "mcpSqlServer");
+  const openMcp = () => setMcpPanelOpen(true);
+  // Switching the feature off closes the panel rather than leaving a modal on
+  // screen for a feature the user just turned off.
+  useEffect(() => {
+    if (!mcpEnabled) setMcpPanelOpen(false);
+  }, [mcpEnabled]);
 
   /**
    * Keep the selected tab on something that still exists. Turning off the
@@ -272,9 +307,13 @@ export function WorkspaceTab({
     // console. Registered only while the feature is on, exactly as it was only
     // registered while the tab survived the gate.
     if (sqlEnabled) registrations.push(registerCommand("view.sql", openSql));
+    // Registered only while its feature is on, exactly as `view.sql` is: a
+    // command advertised in Settings must have a handler, and a command whose
+    // feature is off must not act.
+    if (mcpEnabled) registrations.push(registerCommand("plugin.mcp", openMcp));
     return () => registrations.forEach((unregister) => unregister());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, shownTabs, sqlEnabled]);
+  }, [active, shownTabs, sqlEnabled, mcpEnabled]);
   const [showSetup, setShowSetup] = useState(false);
   const [inspectRequest, setInspectRequest] = useState<InspectRequest | null>(null);
   const [openRequest, setOpenRequest] = useState<OpenFileRequest | null>(null);
@@ -564,6 +603,7 @@ export function WorkspaceTab({
     openNoteInAgent,
     openSql,
     openAsk,
+    openMcp,
   });
   handleRef.current = {
     openTerminal,
@@ -574,6 +614,7 @@ export function WorkspaceTab({
     openNoteInAgent,
     openSql,
     openAsk,
+    openMcp,
   };
   useEffect(() => {
     const stable: WorkspaceTabHandle = {
@@ -586,6 +627,7 @@ export function WorkspaceTab({
       openNoteInAgent: (note) => handleRef.current.openNoteInAgent(note),
       openSql: () => handleRef.current.openSql(),
       openAsk: () => handleRef.current.openAsk(),
+      openMcp: () => handleRef.current.openMcp(),
     };
     onRegister(workspace.root, stable);
     return () => onRegister(workspace.root, null);
@@ -645,6 +687,7 @@ export function WorkspaceTab({
           onOpenReview={openReview}
           onRunBehavioral={(configId, httpFiles) => openBehavioral(configId, httpFiles, false)}
           onVerifyClaims={(configId, httpFiles) => openBehavioral(configId, httpFiles, true)}
+          onNotify={onNotify}
         />
       </div>
       <div className="body" hidden={tab !== "tests"}>
@@ -759,6 +802,13 @@ export function WorkspaceTab({
           restoreRequest={sqlPanel.restoreToken}
           onClose={() => setSqlPanel(closeSqlPanel)}
         />
+      )}
+
+      {/* Mounted only while open *and* the feature is on — a modal, so closing
+          it is an unmount and nothing is lost by that. The feature gate is here
+          rather than at the call site so no caller has to re-derive it. */}
+      {mcpPanelOpen && mcpEnabled && (
+        <McpServerPanel onClose={() => setMcpPanelOpen(false)} />
       )}
 
       {terminals.map((t, index) => (

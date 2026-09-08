@@ -358,37 +358,45 @@ fn nsis_seed_json(script: &str, choices: &[(FeatureId, bool)]) -> String {
     out
 }
 
-/// Every combination of the two checkboxes, so neither an inverted branch nor a
-/// missing comma can hide behind the all-on case.
-fn every_choice() -> Vec<(bool, bool)> {
-    vec![(true, true), (false, false), (true, false), (false, true)]
+/// Every combination of the page's checkboxes, so neither an inverted branch nor
+/// a missing comma can hide behind the all-on case.
+///
+/// Enumerated over `FeatureId::ALL` rather than written out by hand: a feature
+/// added to the page must widen this coverage on its own, or the combination
+/// that goes wrong is exactly the one nobody remembered to add.
+fn every_choice() -> Vec<Vec<(FeatureId, bool)>> {
+    let bits = FeatureId::ALL.len();
+    (0..(1u32 << bits))
+        .map(|mask| {
+            FeatureId::ALL
+                .into_iter()
+                .enumerate()
+                .map(|(i, feature)| (feature, mask & (1 << i) != 0))
+                .collect()
+        })
+        .collect()
 }
 
 #[test]
 fn the_windows_installer_writes_json_the_app_can_parse() {
     let nsi = read_repo_file(NSI_PATH);
 
-    for (sql, ask) in every_choice() {
-        let json = nsis_seed_json(
-            &nsi,
-            &[(FeatureId::SqlConsole, sql), (FeatureId::AskCodebase, ask)],
-        );
+    for choice in every_choice() {
+        let json = nsis_seed_json(&nsi, &choice);
 
         let parsed: FeaturesFile = serde_json::from_str(&json).unwrap_or_else(|e| {
             panic!("the NSIS page writes {json:?}, which FeaturesFile cannot parse: {e}")
         });
 
         assert_eq!(parsed.version, 1, "seed {json}");
-        assert_eq!(
-            parsed.is_enabled(FeatureId::SqlConsole),
-            sql,
-            "SQL console state lost or inverted in {json}"
-        );
-        assert_eq!(
-            parsed.is_enabled(FeatureId::AskCodebase),
-            ask,
-            "Ask the codebase state lost or inverted in {json}"
-        );
+        for (feature, on) in &choice {
+            assert_eq!(
+                parsed.is_enabled(*feature),
+                *on,
+                "{} state lost or inverted in {json}",
+                feature.id()
+            );
+        }
         assert_eq!(
             parsed.enabled.len(),
             FeatureId::ALL.len(),
@@ -404,21 +412,15 @@ fn first_launch_adopts_the_bytes_the_windows_installer_writes() {
     let nsi = read_repo_file(NSI_PATH);
     let dir = scratch("nsis-adopt");
 
-    for (i, (sql, ask)) in every_choice().into_iter().enumerate() {
+    for (i, choice) in every_choice().into_iter().enumerate() {
         let store = dir.with_file_name(format!("store-{i}.json"));
         let seed = dir.with_file_name(format!("seed-{i}.json"));
-        fs::write(
-            &seed,
-            nsis_seed_json(
-                &nsi,
-                &[(FeatureId::SqlConsole, sql), (FeatureId::AskCodebase, ask)],
-            ),
-        )
-        .unwrap();
+        fs::write(&seed, nsis_seed_json(&nsi, &choice)).unwrap();
 
         let features = ensure_seeded(&store, Some(&seed)).unwrap();
-        assert_eq!(features.is_enabled(FeatureId::SqlConsole), sql);
-        assert_eq!(features.is_enabled(FeatureId::AskCodebase), ask);
+        for (feature, on) in &choice {
+            assert_eq!(features.is_enabled(*feature), *on, "{}", feature.id());
+        }
         assert_eq!(load(&store), features, "the seed was written through");
     }
 

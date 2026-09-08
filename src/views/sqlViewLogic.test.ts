@@ -14,6 +14,7 @@ import {
   stopLine,
   stoppedNote,
   writesConfirm,
+  exposureConfirm,
   clampSqlEditorHeight,
   SQL_EDITOR_MIN_HEIGHT,
   SQL_RESULTS_MIN_HEIGHT,
@@ -28,6 +29,7 @@ function connection(overrides: Partial<SqlConnectionView> = {}): SqlConnectionVi
     holdsASecret: false,
     workspaceRoot: null,
     allowWrites: false,
+    exposeToAgents: false,
     userNamed: false,
     createdAtMs: 0,
     lastUsedMs: null,
@@ -87,6 +89,46 @@ describe("enforcementBadge", () => {
         expect(text).not.toContain("guaranteed read-only");
       }
     }
+  });
+});
+
+describe("exposureConfirm", () => {
+  it("owes no confirmation for hiding a connection from agents", () => {
+    // The same asymmetry as writesConfirm, and for the same reason: withdrawing
+    // consent is the safe direction, and a modal in front of it teaches the
+    // habit of clicking through the one that matters.
+    expect(exposureConfirm(connection({ exposeToAgents: true }), false)).toBeNull();
+  });
+
+  it("states that exposing grants reading and that read-only cannot be lifted", () => {
+    const confirm = exposureConfirm(connection(), true);
+    expect(confirm?.guard).toContain("read-only");
+    expect(confirm?.guard).toContain("read");
+  });
+
+  it("states the hole this cannot close rather than softening it", () => {
+    // An agent with read access can read credentials the database itself
+    // stores. That is inherent, and the confirmation is the one place the user
+    // can act on knowing it.
+    const confirm = exposureConfirm(connection(), true);
+    const text = `${confirm?.guard} ${confirm?.driverGiveUp ?? ""}`;
+    expect(text).toContain("credentials");
+    expect(text).toContain("read access");
+  });
+
+  it("names the connection it is about and labels the button with the action", () => {
+    const confirm = exposureConfirm(connection({ name: "Reporting" }), true);
+    expect(confirm?.title).toContain("Reporting");
+    expect(confirm?.confirmLabel.toLowerCase()).toContain("expose");
+  });
+
+  it("promises no protection it does not have", () => {
+    // `driverGiveUp` is the *stronger than the guard* slot. Exposure gives up
+    // nothing of the kind, so it must stay empty rather than be filled with
+    // reassurance — and its lead must go with it.
+    const confirm = exposureConfirm(connection({ engine: "sqlite" }), true);
+    expect(confirm?.driverGiveUp).toBeNull();
+    expect(confirm?.driverGiveUpLead).toBeNull();
   });
 });
 

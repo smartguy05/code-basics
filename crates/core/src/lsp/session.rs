@@ -85,7 +85,7 @@
 //! whereas a request that overtakes the edits before it asks about a buffer the
 //! server believes is two edits old.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -95,11 +95,13 @@ use tokio::sync::{mpsc, oneshot};
 use super::client::{Client, ReadyState, RequestError, StartFailure};
 use super::documents::{Documents, ServerId, SyncAction};
 use super::model::{
-    AnchorResult, Availability, DefinitionResult, LspStatus, ServerStatus, UsageResult,
+    AnchorResult, Availability, DefinitionResult, LspStatus, PrepareRenameResult, RenameResult,
+    ServerStatus, UsageResult,
 };
-use super::positions::to_lsp_line;
-use super::protocol::{Location, Position};
+use super::positions::{to_editor_line, to_lsp_line};
+use super::protocol::{Location, Position, PrepareRenameResponse};
 use super::registry::{self, Language, Probe, RealProbe, Resolution, ServerSpec};
+use super::rename::{self, RealFiles};
 use super::results::{self, TextProvider};
 use super::settings::LspConfig;
 use super::transport::{Death, RestartDecision, RestartPolicy};
@@ -293,6 +295,62 @@ impl LspHandle {
         .await
     }
 
+    /// Whether the symbol at `line`/`character` can be renamed, and where it is.
+    ///
+    /// `line` is **1-based** and `character` is **0-based UTF-16 code units**, as
+    /// everywhere else on this surface.
+    pub async fn prepare_rename(
+        &self,
+        path: &Path,
+        line: u32,
+        character: u32,
+    ) -> PrepareRenameResult {
+        self.ask(
+            |reply| Message::PrepareRename {
+                path: path.to_path_buf(),
+                line,
+                character,
+                reply,
+            },
+            || PrepareRenameResult::unavailable(Availability::Failed, TORN_DOWN),
+        )
+        .await
+    }
+
+    /// Rename the symbol at `line`/`character`, writing the files nobody has open.
+    ///
+    /// `old_name` is what the identifier is called *now*, and it is not decoration:
+    /// it is the stale-mirror check in [`rename::apply_workspace_edit`], which
+    /// requires every edit to land on that identifier before a byte is written.
+    /// The caller has it — the frontend read it out of the buffer to prefill the
+    /// field — and this layer cannot re-derive it for an open buffer it has no
+    /// text for.
+    ///
+    /// Closed files are written here; the open buffers' edits come back in
+    /// [`RenameResult::buffers`] for the editor to dispatch. See that type's docs
+    /// for why the work is split.
+    pub async fn rename(
+        &self,
+        path: &Path,
+        line: u32,
+        character: u32,
+        old_name: &str,
+        new_name: &str,
+    ) -> RenameResult {
+        self.ask(
+            |reply| Message::Rename {
+                path: path.to_path_buf(),
+                line,
+                character,
+                old_name: old_name.to_string(),
+                new_name: new_name.to_string(),
+                reply,
+            },
+            || RenameResult::unavailable(Availability::Failed, TORN_DOWN),
+        )
+        .await
+    }
+
     /// Enqueue a notification, or drop it because there is nobody left to tell.
     fn tell(&self, message: Message) {
         let _ = self.tx.send(message);
@@ -406,6 +464,20 @@ enum Message {
         path: PathBuf,
         reply: oneshot::Sender<AnchorResult>,
     },
+    PrepareRename {
+        path: PathBuf,
+        line: u32,
+        character: u32,
+        reply: oneshot::Sender<PrepareRenameResult>,
+    },
+    Rename {
+        path: PathBuf,
+        line: u32,
+        character: u32,
+        old_name: String,
+        new_name: String,
+        reply: oneshot::Sender<RenameResult>,
+    },
     /// A start attempt finished. Boxed because a [`Client`] is far larger than
     /// every other variant here.
     Started {
@@ -505,6 +577,20 @@ impl Session {
                     reply,
                 } => self.on_definition(path, line, character, reply),
                 Message::Anchors { path, reply } => self.on_anchors(path, reply),
+                Message::PrepareRename {
+                    path,
+                    line,
+                    character,
+                    reply,
+                } => self.on_prepare_rename(path, line, character, reply),
+                Message::Rename {
+                    path,
+                    line,
+                    character,
+                    old_name,
+                    new_name,
+                    reply,
+                } => self.on_rename(path, line, character, old_name, new_name, reply),
                 Message::Started {
                     language,
                     epoch,
@@ -945,6 +1031,115 @@ impl Session {
         });
     }
 
+    /// Whether the caret is on something renameable.
+    ///
+    /// `Needs::OpenDocument` for the same reason [`Session::on_rename`] uses it,
+    /// and for one more: this answer's *range* is handed to the editor to place a
+    /// field over, so it has to have been computed from the text the editor is
+    /// showing.
+    fn on_prepare_rename(
+        &mut self,
+        path: PathBuf,
+        line: u32,
+        character: u32,
+        reply: oneshot::Sender<PrepareRenameResult>,
+    ) {
+        let prepared = match self.prepare(&path, Needs::OpenDocument) {
+            Ok(prepared) => prepared,
+            Err(unready) => {
+                let _ = reply.send(unready.prepare_rename());
+                return;
+            }
+        };
+        let Prepared {
+            client,
+            server,
+            path,
+            caveat,
+            ..
+        } = prepared;
+        let position = request_position(line, character);
+
+        tokio::spawn(async move {
+            let result = match client.prepare_rename(&path, position).await {
+                Ok(response) => prepare_rename_answer(response, server, caveat.as_deref()),
+                Err(error) => {
+                    PrepareRenameResult::unavailable(availability_for(&error), error.to_string())
+                        .with_server(server)
+                }
+            };
+            let _ = reply.send(result);
+        });
+    }
+
+    /// Rename the symbol at a position, and apply what comes back.
+    ///
+    /// # `Needs::OpenDocument`, and it is the most important line in the feature
+    ///
+    /// `references` may proceed against a file the server knows only from the
+    /// project, because a maybe beats a no: the worst case is a count taken from
+    /// disk rather than from the buffer, and the row it draws is merely read. A
+    /// rename may not. **The ranges coming back are applied to our text, so they
+    /// must have been computed from our text.** A server answering from disk
+    /// about a buffer with unsaved edits returns ranges that are plausible and
+    /// wrong, and writing them corrupts the file — the same defect class as
+    /// `.memories/bugs/didchange-range-from-wrong-text`, one level worse, because
+    /// there a stale mirror produced a wrong *count* and here it produces wrong
+    /// *ranges*.
+    fn on_rename(
+        &mut self,
+        path: PathBuf,
+        line: u32,
+        character: u32,
+        old_name: String,
+        new_name: String,
+        reply: oneshot::Sender<RenameResult>,
+    ) {
+        let prepared = match self.prepare(&path, Needs::OpenDocument) {
+            Ok(prepared) => prepared,
+            Err(unready) => {
+                let _ = reply.send(unready.rename());
+                return;
+            }
+        };
+        // Snapshotted on the actor, before the request is spawned: which buffers
+        // the editor has open decides which files may be written, and reading it
+        // later would race the user closing a tab.
+        let open = self.open_paths();
+        let Prepared {
+            client,
+            server,
+            root,
+            path,
+            caveat,
+            ..
+        } = prepared;
+        let position = request_position(line, character);
+
+        tokio::spawn(async move {
+            let result = match client.rename(&path, position, &new_name).await {
+                Ok(edit) => {
+                    let mut files = RealFiles::new(root.clone());
+                    let mut result =
+                        rename::apply_workspace_edit(&root, &edit, &open, &old_name, &mut files)
+                            .with_server(server);
+                    // The caveat matters more here than for a count: a rename from
+                    // a server that never finished priming may have **missed call
+                    // sites**, and the files it did change have already been
+                    // written. `caveat_note`'s wording is reused rather than
+                    // rephrased so one server state cannot be described two ways.
+                    result.message = with_caveat(result.message.take(), caveat.as_deref());
+                    result
+                }
+                Err(error) => {
+                    RenameResult::unavailable(availability_for(&error), error.to_string())
+                        .with_server(server)
+                }
+            };
+            let _ = reply.send(result);
+        });
+    }
+
     /// Everything a request needs, or the reason it cannot be asked.
     ///
     /// Runs on the actor, so every document notification it emits is written to
@@ -1122,6 +1317,23 @@ impl Session {
     /// Every open buffer, for the snippet reader. The buffer rather than the file
     /// on disk, because an unsaved edit is the normal state of a file somebody is
     /// asking questions about.
+    /// The absolute paths of every buffer the editor has open.
+    ///
+    /// Absolute because that is how [`Documents`] keys its mirrors, and
+    /// [`rename::apply_workspace_edit`] compares against the path a uri resolved
+    /// to — converting either side to a relative spelling first would add a
+    /// step that can fail, in the one place a miss means writing over an open
+    /// buffer.
+    fn open_paths(&self) -> BTreeSet<PathBuf> {
+        let mut open = BTreeSet::new();
+        for documents in self.documents.values() {
+            for path in documents.open_paths() {
+                open.insert(path.to_path_buf());
+            }
+        }
+        open
+    }
+
     fn buffers(&self) -> BTreeMap<PathBuf, String> {
         let mut buffers = BTreeMap::new();
         for documents in self.documents.values() {
@@ -1341,6 +1553,22 @@ impl Unready {
     fn anchors(self) -> AnchorResult {
         AnchorResult::unavailable(self.outcome, self.message)
     }
+
+    fn rename(self) -> RenameResult {
+        let result = RenameResult::unavailable(self.outcome, self.message);
+        match self.server {
+            Some(server) => result.with_server(server),
+            None => result,
+        }
+    }
+
+    fn prepare_rename(self) -> PrepareRenameResult {
+        let result = PrepareRenameResult::unavailable(self.outcome, self.message);
+        match self.server {
+            Some(server) => result.with_server(server),
+            None => result,
+        }
+    }
 }
 
 /// One goto group's locations, or nothing plus a note saying why nothing.
@@ -1367,11 +1595,15 @@ fn group(
 /// Where to aim a request, converting the one direction of the IPC convention
 /// that a scripted test cannot see.
 ///
-/// Extracted from the two call sites so it can be *pinned*: every reply in the
+/// Extracted from the four call sites — `references`, the three gotos,
+/// `prepareRename` and `rename` — so it can be *pinned*: every reply in the
 /// integration tests is scripted independently of the position asked about, so a
 /// call site that forgot [`to_lsp_line`] would aim every request one line below
 /// the caret with the whole suite still green — and a server that resolves no
 /// symbol at that position answers `[]`, which arrives as a confident "0 usages".
+/// For a rename it is worse still: nothing resolves, so the answer is an empty
+/// edit, which arrives as a confident "renamed 0 things" about a symbol with
+/// forty call sites.
 ///
 /// `line` is **1-based** (the editor gutter) and `character` is **0-based UTF-16
 /// code units** (what CodeMirror hands over). The asymmetry is deliberate and is
@@ -1485,6 +1717,79 @@ fn with_caveat(message: Option<String>, caveat: Option<&str>) -> Option<String> 
         (Some(message), None) => Some(message),
         (None, Some(caveat)) => Some(caveat.to_string()),
         (None, None) => None,
+    }
+}
+
+/// The fact half of a qualified refusal: what the server said, with none of the
+/// advice the frontend's own fallback adds. "Put the caret on the symbol's name"
+/// is the right next step for a primed server and the wrong one for a server
+/// that never finished priming, so it is deliberately not repeated here.
+const NO_RENAME_HERE: &str = "The language server does not offer a rename at this position.";
+
+/// Turn one `textDocument/prepareRename` answer into the result the editor reads.
+///
+/// A free function rather than three arms inside the spawned task, because this
+/// is the decision: three server answers, three different claims about the
+/// caret, and a caveat that has to survive all of them.
+fn prepare_rename_answer(
+    response: PrepareRenameResponse,
+    server: String,
+    caveat: Option<&str>,
+) -> PrepareRenameResult {
+    match response {
+        // `null` is a real answer about the caret — it is on a keyword, a
+        // comment or a literal — and not a failure of the server. Mapping it to
+        // `Failed` would report a broken language server that is working
+        // perfectly, which is this feature's version of the `Some(0)` / `None`
+        // distinction.
+        PrepareRenameResponse::NotRenameable => {
+            let refusal = PrepareRenameResult::not_renameable(server);
+            match caveat {
+                // A primed server's refusal is left bare, which is
+                // `PrepareRenameResult::not_renameable`'s whole rule: the
+                // frontend declines the rename in its own words and says nothing
+                // about the server.
+                None => refusal,
+                // A promoted server's refusal is not. This is the branch where
+                // the caveat matters most: "nothing renameable here" from a
+                // server that never finished reading the workspace is a
+                // statement about the loading state, and unqualified it reaches
+                // the user as `renameOffer`'s fallback — advice to move their
+                // caret. The refusal has to be spelled out here rather than left
+                // to that fallback, because the frontend shows `message`
+                // **instead of** its own sentence, not beside it.
+                Some(caveat) => PrepareRenameResult {
+                    message: with_caveat(Some(NO_RENAME_HERE.to_string()), Some(caveat)),
+                    ..refusal
+                },
+            }
+        }
+        PrepareRenameResponse::Range { range, placeholder } => PrepareRenameResult {
+            outcome: Availability::Ready,
+            renameable: true,
+            start_line: Some(to_editor_line(range.start.line)),
+            start_character: Some(range.start.character),
+            end_line: Some(to_editor_line(range.end.line)),
+            end_character: Some(range.end.character),
+            placeholder,
+            message: with_caveat(None, caveat),
+            server: Some(server),
+        },
+        // The server says the caret is renameable and declines to say where.
+        // That is renameable with no range, not a refusal: the frontend reads
+        // the identifier out of the buffer, which it has to do for the real
+        // Roslyn server anyway.
+        PrepareRenameResponse::DefaultBehavior => PrepareRenameResult {
+            outcome: Availability::Ready,
+            renameable: true,
+            start_line: None,
+            start_character: None,
+            end_line: None,
+            end_character: None,
+            placeholder: None,
+            message: with_caveat(None, caveat),
+            server: Some(server),
+        },
     }
 }
 

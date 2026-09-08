@@ -371,6 +371,7 @@ const connection = (over: Partial<SqlConnectionView> = {}): SqlConnectionView =>
   userNamed: false,
   workspaceRoot: null,
   allowWrites: false,
+  exposeToAgents: false,
   createdAtMs: 0,
   lastUsedMs: null,
   ...over,

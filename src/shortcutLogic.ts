@@ -37,6 +37,7 @@ export interface CommandDefinition {
 export const PLUGIN_LABELS: Record<string, string> = {
   sqlConsole: "SQL Console",
   askCodebase: "Ask the codebase",
+  mcpSqlServer: "SQL MCP server",
 };
 
 const chord = (key: string, over: Partial<Omit<ShortcutChord, "key">> = {}): ShortcutChord => ({
@@ -62,6 +63,11 @@ export const COMMANDS: CommandDefinition[] = [
   { id: "panel.running", label: "Show running processes", category: "Panels", context: "global", defaultBinding: null },
   { id: "terminal.new", label: "New terminal", category: "Terminal", context: "workspace", defaultBinding: null },
   { id: "agent.ask", label: "Ask the codebase", category: "Agent", context: "workspace", defaultBinding: chord("/", { ctrl: true }), plugin: "askCodebase" },
+  // The installer panel, not the server: the server is a subcommand of this
+  // executable that an agent spawns. Tagged `plugin` so `commandSections` files
+  // it under its own heading in Settings and `pluginMenuRows` can name it from
+  // `PLUGIN_LABELS` rather than showing the raw feature id.
+  { id: "plugin.mcp", label: "SQL MCP server", category: "Agent", context: "workspace", defaultBinding: null, plugin: "mcpSqlServer" },
   { id: "agent.review", label: "Review changes", category: "Agent", context: "workspace", defaultBinding: null },
   { id: "search.all", label: "Search All", category: "Search", context: "workspace", defaultBinding: chord("n", { ctrl: true }) },
   { id: "search.symbols", label: "Search Symbols", category: "Search", context: "workspace", defaultBinding: null },
@@ -70,6 +76,19 @@ export const COMMANDS: CommandDefinition[] = [
   { id: "tree.reveal", label: "Select opened file", category: "Navigation", context: "view", defaultBinding: chord("F1", { alt: true }) },
   { id: "tree.collapse", label: "Collapse file tree", category: "Navigation", context: "view", defaultBinding: null },
   { id: "console.find", label: "Find in console", category: "Console", context: "view", defaultBinding: chord("f", { ctrl: true }), allowInText: true },
+  // F2, the rename key every IDE this replaces uses.
+  //
+  // `allowInText` because the caret is *by definition* inside `.cm-editor` when
+  // this is pressed — the same reason `run.run`, `console.find` and
+  // `change.next` carry it. Without it `eventIsTyping` would filter the command
+  // out of `dispatchShortcut` and F2 would reach the WebView instead.
+  //
+  // And note what `dispatchShortcut` returns: whether a binding **matched**, not
+  // whether the command acted. The caller uses that to `preventDefault`, and the
+  // two differ exactly where it hurts — F5 bound to Run fell through a disabled
+  // Run button and reloaded the whole application. A rename that refuses (no
+  // server, a file with no editor on screen) must still consume the key.
+  { id: "refactor.rename", label: "Rename symbol", category: "Refactor", context: "view", defaultBinding: chord("F2"), allowInText: true },
   { id: "change.next", label: "Next change", category: "Changes", context: "view", defaultBinding: chord("F7"), allowInText: true },
   { id: "change.previous", label: "Previous change", category: "Changes", context: "view", defaultBinding: chord("F7", { shift: true }), allowInText: true },
   { id: "font.code.increase", label: "Increase code size", category: "Appearance", context: "global", defaultBinding: chord("=", { ctrl: true }), allowInText: true },

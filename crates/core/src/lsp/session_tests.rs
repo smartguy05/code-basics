@@ -334,6 +334,52 @@ fn a_caveat_is_added_to_whatever_the_answer_already_had_to_say() {
     assert_eq!(with_caveat(None, None), None);
 }
 
+#[test]
+fn a_prepare_rename_refusal_from_a_promoted_server_keeps_its_caveat() {
+    // The branch where the caveat matters most, and the one that dropped it.
+    // `prepare()` lets a request through for `ReadyWithCaveat`, so a half-loaded
+    // server can answer `null` — "nothing renameable here" — about a workspace it
+    // never finished reading. With no message the frontend falls back to "put the
+    // caret on the symbol's name and try again", which blames the user's caret
+    // for the server's loading state. Every sibling answer merges the caveat; a
+    // refusal must too, and it must still *say* it is a refusal, because
+    // `renameOffer` shows `message` **instead of** its own sentence rather than
+    // beside it.
+    let caveat = caveat_note(&ReadyState::ReadyWithCaveat {
+        detail: "the project load never finished".to_string(),
+    });
+    let refused = prepare_rename_answer(
+        PrepareRenameResponse::NotRenameable,
+        "typescript".to_string(),
+        caveat.as_deref(),
+    );
+    assert_eq!(refused.outcome, Availability::Ready, "a real answer");
+    assert!(!refused.renameable);
+    let message = refused
+        .message
+        .as_deref()
+        .expect("a refusal from a server that never finished priming has to say so");
+    assert!(
+        message.contains("the project load never finished"),
+        "the server's own reason has to survive: {message}"
+    );
+    assert!(
+        message.contains("rename"),
+        "and the refusal itself must survive being qualified: {message}"
+    );
+
+    // A primed server's refusal is left bare, so `not_renameable`'s rule holds:
+    // the frontend declines the rename in its own words and nothing is said
+    // about the server.
+    let primed = prepare_rename_answer(
+        PrepareRenameResponse::NotRenameable,
+        "typescript".to_string(),
+        None,
+    );
+    assert_eq!(primed.message, None, "a good answer is not qualified");
+    assert!(!primed.renameable);
+}
+
 // ---------------------------------------------------------------------------
 // The shapes an unavailable answer takes
 // ---------------------------------------------------------------------------

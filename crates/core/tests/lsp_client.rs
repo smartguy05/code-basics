@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cb_core::lsp::client::{Client, ReadyState, RequestError, StartFailure};
-use cb_core::lsp::protocol::{Position, SymbolKind, SyncKind};
+use cb_core::lsp::protocol::{Position, PrepareRenameResponse, SymbolKind, SyncKind};
 use cb_core::lsp::registry::{Language, Readiness, ServerSpec, Timeouts};
 use cb_core::lsp::transport::{DeathReason, RequestFailure};
 use cb_core::lsp::uri::UriStyle;
@@ -215,6 +215,14 @@ async fn the_real_roslyn_handshake_is_accepted_and_read_correctly() {
         assert!(capabilities.implementation);
         assert!(capabilities.type_definition);
         assert!(capabilities.document_symbol);
+        assert!(
+            capabilities.rename,
+            "`renameProvider` really is `{{\"prepareProvider\": true}}` here — measured against the live server 2026-09-04, which is why this fixture is evidence rather than noise"
+        );
+        assert!(
+            capabilities.prepare_rename,
+            "and the `prepareProvider` inside it is the separate fact that decides whether `prepareRename` may be sent at all"
+        );
         assert_eq!(capabilities.sync, SyncKind::Incremental);
         assert_eq!(capabilities.position_encoding, None);
         assert_eq!(session.client.readiness(), ReadyState::Ready);
@@ -1322,4 +1330,335 @@ fn pid_alive(pid: u32) -> bool {
         let _ = pid;
         false
     }
+}
+
+// ---------------------------------------------------------------------------
+// Rename
+// ---------------------------------------------------------------------------
+
+/// The real Roslyn rename answer for `Walker` → `HeapWalker`, captured
+/// 2026-09-04: `documentChanges` (which the client declared it did *not* want),
+/// `"version": null`, and every edit a zero-width insertion carrying a minimal
+/// diff.
+fn rename_result() -> Value {
+    json!({
+        "documentChanges": [
+            {
+                "textDocument": { "uri": "file:///c:/w/Program.cs", "version": null },
+                "edits": [{
+                    "range": {
+                        "start": { "line": 160, "character": 29 },
+                        "end": { "line": 160, "character": 29 }
+                    },
+                    "newText": "Heap"
+                }]
+            }
+        ]
+    })
+}
+
+#[tokio::test]
+async fn a_rename_is_refused_before_a_byte_goes_out_when_the_server_never_advertised_it() {
+    // The step would **hang forever** if the request were sent, so this proves
+    // the refusal happens at the capability check and not at the answer. That
+    // matters more here than for find-usages: a rename that reaches a server
+    // which does not do renames comes back as a failure the user reads as "the
+    // rename did not work", when the truth is that it was never possible.
+    bounded!(async {
+        let mut capabilities = roslyn_capabilities();
+        capabilities
+            .as_object_mut()
+            .unwrap()
+            .remove("renameProvider");
+
+        let session = start(fake(json!({
+            "capabilities": capabilities,
+            "steps": [
+                { "on": "textDocument/rename", "misbehave": "never" },
+                { "on": "textDocument/prepareRename", "misbehave": "never" }
+            ]
+        })))
+        .await;
+        let file = a_file(&session);
+
+        let started = std::time::Instant::now();
+        assert_eq!(
+            session.client.rename(&file, anywhere(), "HeapWalker").await,
+            Err(RequestError::Unsupported {
+                method: "textDocument/rename",
+                capability: "renameProvider",
+            })
+        );
+        assert_eq!(
+            session.client.prepare_rename(&file, anywhere()).await,
+            Err(RequestError::Unsupported {
+                method: "textDocument/prepareRename",
+                capability: "renameProvider.prepareProvider",
+            })
+        );
+        assert!(
+            started.elapsed() < SHORT,
+            "both refusals must be immediate — a wait means the request went \
+             out to a server scripted never to answer it"
+        );
+    });
+}
+
+#[tokio::test]
+async fn a_server_that_renames_but_cannot_prepare_still_renames() {
+    // The whole reason `rename` and `prepare_rename` are two capability fields.
+    // A server advertising `renameProvider: true` answers `-32601` to
+    // `prepareRename`; gating the rename on that failure would refuse a rename
+    // that works. Here the fake is scripted never to answer `prepareRename`, so
+    // a client that sent it would hang.
+    bounded!(async {
+        let session = start(fake(json!({
+            "capabilities": { "textDocumentSync": 2, "renameProvider": true },
+            "steps": [
+                { "on": "textDocument/rename", "reply": rename_result() },
+                { "on": "textDocument/prepareRename", "misbehave": "never" }
+            ]
+        })))
+        .await;
+        let file = a_file(&session);
+
+        assert_eq!(
+            session.client.prepare_rename(&file, anywhere()).await,
+            Err(RequestError::Unsupported {
+                method: "textDocument/prepareRename",
+                capability: "renameProvider.prepareProvider",
+            })
+        );
+
+        let edit = session
+            .client
+            .rename(&file, anywhere(), "HeapWalker")
+            .await
+            .expect("the rename itself was advertised and must work");
+        assert_eq!(1, edit.documents.len());
+        assert!(edit.resource_operations.is_empty());
+    });
+}
+
+#[tokio::test]
+async fn the_rename_request_carries_the_caret_position_and_the_new_name() {
+    // Read off the wire, because nothing else can see it. `rename` is a
+    // *request*, so the notification journal does not cover it, and the reply is
+    // read back through a decoder that discards every key it does not know — so
+    // echoing the params into the answer would prove nothing either. A position
+    // one line off resolves nothing and arrives as a confident "renamed 0
+    // things", and a misspelled `newName` renames the symbol to nothing; both
+    // are invisible from every other angle.
+    bounded!(async {
+        let session = start(fake(json!({
+            "capabilities": roslyn_capabilities(),
+            "steps": [{
+                "on": "textDocument/rename",
+                "misbehave": "echoParams",
+                "paramsFile": "rename-params.json",
+                "reply": rename_result()
+            }]
+        })))
+        .await;
+        let file = a_file(&session);
+
+        session
+            .client
+            .rename(
+                &file,
+                Position {
+                    line: 30,
+                    character: 22,
+                },
+                "HeapWalker",
+            )
+            .await
+            .expect("the fake answers");
+
+        let recorded: Value = serde_json::from_slice(
+            &std::fs::read(session.client.root().join("rename-params.json"))
+                .expect("the fake records the params it was sent"),
+        )
+        .expect("json");
+
+        assert_eq!(
+            json!({ "line": 30, "character": 22 }),
+            recorded["position"],
+            "the caret goes out exactly as the caller gave it — 0-based line, \
+             0-based UTF-16 column"
+        );
+        assert_eq!(
+            json!("HeapWalker"),
+            recorded["newName"],
+            "spelled `newName`, not `new_name`: a server silently ignores the \
+             misspelling and answers an edit renaming the symbol to nothing"
+        );
+        assert!(
+            recorded["textDocument"]["uri"]
+                .as_str()
+                .expect("a uri")
+                .ends_with("Collections.cs"),
+            "and it names the file the caller asked about: {recorded}"
+        );
+    });
+}
+
+#[tokio::test]
+async fn the_prepare_rename_request_carries_the_caret_position() {
+    bounded!(async {
+        let session = start(fake(json!({
+            "capabilities": roslyn_capabilities(),
+            "steps": [{
+                "on": "textDocument/prepareRename",
+                "misbehave": "echoParams",
+                "paramsFile": "prepare-params.json",
+                "reply": Value::Null
+            }]
+        })))
+        .await;
+        let file = a_file(&session);
+
+        assert_eq!(
+            session
+                .client
+                .prepare_rename(
+                    &file,
+                    Position {
+                        line: 30,
+                        character: 22,
+                    },
+                )
+                .await,
+            Ok(PrepareRenameResponse::NotRenameable),
+            "`null` is the answer that the caret is not on something \
+             renameable — a real answer, and not a failure"
+        );
+
+        let recorded: Value = serde_json::from_slice(
+            &std::fs::read(session.client.root().join("prepare-params.json")).expect("recorded"),
+        )
+        .expect("json");
+        assert_eq!(json!({ "line": 30, "character": 22 }), recorded["position"]);
+        assert!(
+            recorded.get("newName").is_none(),
+            "prepareRename carries no new name: {recorded}"
+        );
+    });
+}
+
+#[tokio::test]
+async fn the_real_roslyn_rename_answer_reaches_the_caller_through_the_client() {
+    // The client's job is to hand the decoded answer back unaltered, and the
+    // shape that arrives is the one the client declared it did not want.
+    bounded!(async {
+        let session = start(fake(json!({
+            "capabilities": roslyn_capabilities(),
+            "steps": [{ "on": "textDocument/rename", "reply": rename_result() }]
+        })))
+        .await;
+
+        let edit = session
+            .client
+            .rename(&a_file(&session), anywhere(), "HeapWalker")
+            .await
+            .expect("decodes");
+
+        assert_eq!(1, edit.documents.len());
+        assert_eq!("file:///c:/w/Program.cs", edit.documents[0].uri);
+        assert_eq!(1, edit.documents[0].edits.len());
+        assert_eq!("Heap", edit.documents[0].edits[0].new_text);
+        assert!(
+            edit.resource_operations.is_empty(),
+            "no file operation came back, so there is nothing to decline"
+        );
+    });
+}
+
+#[tokio::test]
+async fn a_rename_answer_of_null_is_an_empty_edit_and_not_a_failure() {
+    bounded!(async {
+        let session = start(fake(json!({
+            "capabilities": roslyn_capabilities(),
+            "steps": [{ "on": "textDocument/rename", "reply": Value::Null }]
+        })))
+        .await;
+
+        let edit = session
+            .client
+            .rename(&a_file(&session), anywhere(), "HeapWalker")
+            .await
+            .expect("null is an answer, not an error");
+        assert!(edit.documents.is_empty());
+        assert!(edit.resource_operations.is_empty());
+    });
+}
+
+#[tokio::test]
+async fn an_unreadable_rename_answer_names_rename_and_not_another_request() {
+    // `malformed` exists because a decoder that serves several requests
+    // hard-codes one method name in its error. Rename has its own decoder, and
+    // this pins that the sentence still names the question the user asked.
+    bounded!(async {
+        let session = start(fake(json!({
+            "capabilities": roslyn_capabilities(),
+            "steps": [{ "on": "textDocument/rename", "reply": 7 }]
+        })))
+        .await;
+
+        let failure = session
+            .client
+            .rename(&a_file(&session), anywhere(), "HeapWalker")
+            .await
+            .expect_err("a number is not a workspace edit");
+        let rendered = failure.to_string();
+        assert!(
+            rendered.contains("textDocument/rename"),
+            "the message must name the request that went unanswered: {rendered}"
+        );
+        assert!(
+            !rendered.contains("definition"),
+            "and must not name another one: {rendered}"
+        );
+    });
+}
+
+#[tokio::test]
+async fn a_rename_answer_carrying_a_file_operation_reaches_the_caller_to_be_declined() {
+    // The client does not decide this — the refusal is the caller's, where the
+    // user-facing sentence is written. What the client must not do is drop the
+    // operation, which would leave the caller looking at a text-only edit set
+    // that is perfectly applicable and would apply half a rename.
+    bounded!(async {
+        let session = start(fake(json!({
+            "capabilities": roslyn_capabilities(),
+            "steps": [{
+                "on": "textDocument/rename",
+                "reply": {
+                    "documentChanges": [
+                        { "kind": "rename",
+                          "oldUri": "file:///c:/w/Walker.cs",
+                          "newUri": "file:///c:/w/HeapWalker.cs" },
+                        { "textDocument": { "uri": "file:///c:/w/Walker.cs" },
+                          "edits": [{
+                              "range": { "start": { "line": 30, "character": 22 },
+                                         "end": { "line": 30, "character": 22 } },
+                              "newText": "Heap" }] }
+                    ]
+                }
+            }]
+        })))
+        .await;
+
+        let edit = session
+            .client
+            .rename(&a_file(&session), anywhere(), "HeapWalker")
+            .await
+            .expect("legible, even though the caller will decline it");
+        assert_eq!(1, edit.documents.len());
+        assert_eq!(
+            vec!["file:///c:/w/Walker.cs", "file:///c:/w/HeapWalker.cs"],
+            edit.resource_operations[0].uris
+        );
+        assert_eq!("rename", edit.resource_operations[0].kind);
+    });
 }

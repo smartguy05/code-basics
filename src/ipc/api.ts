@@ -44,9 +44,11 @@ import type {
   ProjectSecrets,
   PromptInfo,
   PromptRuns,
+  PrepareRenameResult,
   ProviderId,
   ProviderStatus,
   RejectSummary,
+  RenameResult,
   RetireSummary,
   ReviewAgentInfo,
   RiderImportPreview,
@@ -863,6 +865,35 @@ export const qualityGateUninstallPlan = (provider: ProviderId, scope: InstallSco
 export const uninstallQualityGate = (provider: ProviderId, scope: InstallScope) =>
   invoke<InstallScope | null>("uninstall_quality_gate", { provider, scope });
 
+// ---------------------------------------------------------------------------
+// The SQL MCP server (`mcp/install/`) — the same preview-then-apply shape as the
+// quality gate, and deliberately over the same four IPC types: a status is
+// exactly `InstallScope | null`, so nothing new crosses the boundary.
+// ---------------------------------------------------------------------------
+
+/** Where the SQL MCP server is installed for this workspace and provider, if anywhere. */
+export const mcpServerStatus = (provider: ProviderId) =>
+  invoke<InstallScope | null>("mcp_server_status", { provider });
+
+/** Exactly what installing the SQL MCP server would write. Touches nothing. */
+export const mcpServerInstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("mcp_server_install_plan", { provider, scope });
+
+/** Perform an install the user has confirmed; returns the new status. */
+export const installMcpServer = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("install_mcp_server", { provider, scope });
+
+/**
+ * Exactly what removing the SQL MCP server would rewrite. Touches nothing. An
+ * empty `writes` means that configuration holds no entry of ours.
+ */
+export const mcpServerUninstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("mcp_server_uninstall_plan", { provider, scope });
+
+/** Perform a removal the user has confirmed; returns the new status. */
+export const uninstallMcpServer = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("uninstall_mcp_server", { provider, scope });
+
 /** First-open setup: exactly what installing every hook at `scope` would write. */
 export const setupInstallPlan = (scope: InstallScope) =>
   invoke<InstallPlan>("setup_install_plan", { scope });
@@ -1162,6 +1193,51 @@ export const lspGotoDefinition = (
 export const lspDeclarationAnchors = (path: string) =>
   invoke<AnchorResult>("lsp_declaration_anchors", { path });
 
+/**
+ * Whether the symbol at `line`/`character` can be renamed, and over what span.
+ *
+ * Same position convention as {@link lspFindUsages}. Ask this *before* opening
+ * the rename field, and treat three answers as distinct:
+ *
+ * * `outcome !== "ready"` — nobody could be asked. Say why; do not open a field.
+ * * `outcome === "ready"` with `renameable: false` — the server says this is not
+ *   a rename site. A refusal, never an empty box.
+ * * `outcome === "ready"` with `renameable: true` — go ahead. The four position
+ *   fields may all be `null` (the `defaultBehavior` shape) and `placeholder` is
+ *   `null` for real Roslyn, so the field's prefill comes from the buffer
+ *   (`renameLogic.identifierAt`) rather than from this answer.
+ */
+export const lspPrepareRename = (path: string, line: number, character: number) =>
+  invoke<PrepareRenameResult>("lsp_prepare_rename", { path, line, character });
+
+/**
+ * Rename the symbol at `line`/`character`.
+ *
+ * Same position convention as {@link lspFindUsages}. **Flush any owed
+ * `lspChangeDocument` before calling this and wait for it to resolve**: the
+ * ranges coming back are applied to the editor's text, so they must have been
+ * computed from the editor's text. A server answering about a buffer two edits
+ * old returns ranges that are plausible and wrong.
+ *
+ * `oldName` is the identifier the field was prefilled with. It is the backend's
+ * stale-mirror check — each edit must land on a token of that name — and `""` is
+ * a documented abstention from that check rather than a convenient default.
+ *
+ * **The answer is split and both halves must be honoured.** `written` names the
+ * closed files the backend already wrote to disk; `buffers` carries the edits for
+ * files this editor has open, which only the editor can apply without clobbering
+ * an unsaved buffer. Dispatch those synchronously in the `.then`, and *report* a
+ * `buffers` entry no editor received rather than dropping it — that gap is the
+ * one window the design cannot close.
+ */
+export const lspRename = (
+  path: string,
+  line: number,
+  character: number,
+  oldName: string,
+  newName: string,
+) => invoke<RenameResult>("lsp_rename", { path, line, character, oldName, newName });
+
 // ---------------------------------------------------------------------------
 // The SQL console
 // ---------------------------------------------------------------------------
@@ -1227,6 +1303,23 @@ export const sqlRenameConnection = (id: string, name: string) =>
  */
 export const sqlSetAllowWrites = (id: string, allowWrites: boolean) =>
   invoke<SqlConnectionView[]>("sql_set_allow_writes", { id, allowWrites });
+
+/**
+ * Expose or un-expose one connection to agents through the MCP server — the
+ * second consent action, and the stronger one.
+ *
+ * Orthogonal to {@link sqlSetAllowWrites}: the agent path forces read-only
+ * regardless of `allowWrites`, so no combination of the two lets an agent
+ * write. What this grants is *reading*, and an agent with read access can read
+ * anything that login can read — including credentials the database itself
+ * stores. Expose only connections whose login you would give a colleague read
+ * access to.
+ *
+ * Un-exposing takes effect on the next call: the server re-reads the store per
+ * request and caches no connection.
+ */
+export const sqlSetExposeToAgents = (id: string, exposeToAgents: boolean) =>
+  invoke<SqlConnectionView[]>("sql_set_expose_to_agents", { id, exposeToAgents });
 
 /**
  * Open the connection, prove a database is behind it, ask its version, and

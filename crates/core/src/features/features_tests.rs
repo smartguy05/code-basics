@@ -7,7 +7,7 @@ fn every_feature_has_a_distinct_stable_id() {
     let count = ids.len();
     ids.dedup();
     assert_eq!(ids.len(), count, "two features share an id");
-    assert_eq!(ids, vec!["askCodebase", "sqlConsole"]);
+    assert_eq!(ids, vec!["askCodebase", "mcpSqlServer", "sqlConsole"]);
 }
 
 #[test]
@@ -90,4 +90,25 @@ fn serialisation_shape_pins_the_wire_keys() {
     let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
     keys.sort();
     assert_eq!(keys, vec!["description", "enabled", "id", "label"]);
+}
+
+#[test]
+fn every_feature_states_its_own_default() {
+    // `default_enabled` used to be a blanket `true`, which meant a new feature
+    // inherited an answer nobody had considered for it. It is now an exhaustive
+    // match, so adding a variant is a compile error until somebody decides. This
+    // test is the reader-facing half of that: it names each feature and the
+    // answer chosen for it, so a change to one is a change to this list.
+    let stated: Vec<(&str, bool)> = FeatureId::ALL
+        .iter()
+        .map(|f| (f.id(), f.default_enabled()))
+        .collect();
+    assert_eq!(
+        stated,
+        vec![
+            ("sqlConsole", true),
+            ("askCodebase", true),
+            ("mcpSqlServer", true),
+        ]
+    );
 }

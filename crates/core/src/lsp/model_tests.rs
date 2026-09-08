@@ -426,3 +426,183 @@ fn every_result_type_round_trips_through_json() {
     let round = serde_json::from_value::<LspStatus>(serde_json::to_value(&status).unwrap());
     assert_eq!(round.unwrap(), status);
 }
+
+// ---------------------------------------------------------------------------
+// Rename
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rename_result_serialises_with_the_keys_the_ui_reads() {
+    let result = RenameResult {
+        outcome: Availability::Ready,
+        total: Some(3),
+        written: vec![RenamedFile {
+            path: PathBuf::from("src/order.rs"),
+            edits: 2,
+        }],
+        buffers: vec![BufferEdits {
+            path: PathBuf::from("src/main.rs"),
+            edits: vec![RangeEdit {
+                start_line: 12,
+                start_character: 4,
+                end_line: 12,
+                end_character: 9,
+                new_text: "Total".into(),
+            }],
+        }],
+        failures: vec![],
+        message: None,
+        server: Some("rust".into()),
+    };
+    let value = serde_json::to_value(&result).unwrap();
+
+    assert_eq!(
+        keys(&value),
+        ["buffers", "failures", "message", "outcome", "server", "total", "written"]
+    );
+    present_and_null(&value, "message");
+    assert_eq!(value["written"][0]["path"], json!("src/order.rs"));
+    assert_eq!(value["written"][0]["edits"], json!(2));
+    assert_eq!(
+        keys(&value["buffers"][0]["edits"][0]),
+        [
+            "endCharacter",
+            "endLine",
+            "newText",
+            "startCharacter",
+            "startLine"
+        ]
+    );
+}
+
+#[test]
+fn a_rename_that_could_not_be_asked_carries_the_total_key_as_null() {
+    // The `Some(0)` / `None` split, which for a rename is the difference between
+    // "the symbol is used nowhere else" and "nobody could be asked".
+    let result = RenameResult::unavailable(Availability::Unsupported, "no renameProvider");
+    let value = serde_json::to_value(&result).unwrap();
+    present_and_null(&value, "total");
+    assert_eq!(value["written"], json!([]));
+    assert_eq!(value["buffers"], json!([]));
+    assert_eq!(value["failures"], json!([]));
+    present_and_null(&value, "server");
+}
+
+#[test]
+fn a_rename_failure_says_whether_the_file_is_beyond_recovery() {
+    // The one genuinely unrecoverable state in the feature: a write failed, and
+    // restoring the pre-image of an *earlier* write failed too. A boolean rather
+    // than prose, because the UI has to escalate on it without parsing English.
+    let failure = RenameFailure {
+        path: PathBuf::from("src/a.rs"),
+        detail: "the file is read-only".into(),
+        unrecoverable: true,
+    };
+    let value = serde_json::to_value(&failure).unwrap();
+    assert_eq!(keys(&value), ["detail", "path", "unrecoverable"]);
+    assert_eq!(value["unrecoverable"], json!(true));
+}
+
+#[test]
+fn prepare_rename_result_serialises_with_the_keys_the_ui_reads() {
+    let result = PrepareRenameResult {
+        outcome: Availability::Ready,
+        renameable: true,
+        start_line: Some(31),
+        start_character: Some(22),
+        end_line: Some(31),
+        end_character: Some(28),
+        placeholder: None,
+        message: None,
+        server: Some("csharp".into()),
+    };
+    let value = serde_json::to_value(&result).unwrap();
+
+    assert_eq!(
+        keys(&value),
+        [
+            "endCharacter",
+            "endLine",
+            "message",
+            "outcome",
+            "placeholder",
+            "renameable",
+            "server",
+            "startCharacter",
+            "startLine"
+        ]
+    );
+    // Roslyn answers a bare range with no placeholder, so this is the live path
+    // for C# and the prefill comes from the buffer.
+    present_and_null(&value, "placeholder");
+}
+
+#[test]
+fn a_symbol_that_cannot_be_renamed_is_ready_and_says_so_rather_than_failing() {
+    // `prepareRename` answering `null` is a real answer about the caret, not a
+    // failure of the server — so the outcome stays `ready` and `renameable` is
+    // what carries the news. Collapsing it into `failed` would tell the user
+    // their language server is broken when it is working perfectly.
+    let result = PrepareRenameResult::not_renameable("csharp");
+    let value = serde_json::to_value(&result).unwrap();
+    assert_eq!(value["outcome"], json!("ready"));
+    assert_eq!(value["renameable"], json!(false));
+    for key in ["startLine", "startCharacter", "endLine", "endCharacter"] {
+        present_and_null(&value, key);
+    }
+}
+
+#[test]
+fn a_prepare_rename_that_could_not_be_asked_is_not_renameable_and_carries_no_range() {
+    let result = PrepareRenameResult::unavailable(Availability::Loading, "still loading");
+    let value = serde_json::to_value(&result).unwrap();
+    assert_eq!(value["renameable"], json!(false));
+    present_and_null(&value, "startLine");
+    assert!(value["message"].is_string());
+}
+
+#[test]
+fn every_rename_type_round_trips_through_json() {
+    let result = RenameResult {
+        outcome: Availability::Failed,
+        total: None,
+        written: vec![RenamedFile {
+            path: PathBuf::from("a.rs"),
+            edits: 1,
+        }],
+        buffers: vec![BufferEdits {
+            path: PathBuf::from("b.rs"),
+            edits: vec![RangeEdit {
+                start_line: 1,
+                start_character: 0,
+                end_line: 1,
+                end_character: 1,
+                new_text: String::new(),
+            }],
+        }],
+        failures: vec![RenameFailure {
+            path: PathBuf::from("c.rs"),
+            detail: "boom".into(),
+            unrecoverable: false,
+        }],
+        message: Some("something".into()),
+        server: None,
+    };
+    let round = serde_json::from_value::<RenameResult>(serde_json::to_value(&result).unwrap());
+    assert_eq!(round.unwrap(), result);
+
+    let prepare = PrepareRenameResult {
+        outcome: Availability::Ready,
+        renameable: true,
+        start_line: Some(1),
+        start_character: Some(2),
+        end_line: Some(1),
+        end_character: Some(5),
+        placeholder: Some("Foo".into()),
+        message: None,
+        server: Some("typescript".into()),
+    };
+    let round =
+        serde_json::from_value::<PrepareRenameResult>(serde_json::to_value(&prepare).unwrap());
+    assert_eq!(round.unwrap(), prepare);
+}

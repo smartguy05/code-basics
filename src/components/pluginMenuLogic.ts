@@ -16,7 +16,7 @@ import { PLUGIN_LABELS } from "../shortcutLogic";
 import type { FeatureInfo } from "../ipc/types";
 
 /** What clicking a plugin row does. One variant per plugin. */
-export type PluginAction = { kind: "sql" } | { kind: "ask" };
+export type PluginAction = { kind: "sql" } | { kind: "ask" } | { kind: "mcp" };
 
 export interface PluginRow {
   /** The command id this row corresponds to, and the React key. */
@@ -69,6 +69,18 @@ const PLUGINS: PluginEntry[] = [
     needsWorkspace: true,
     ready: "Ask an agent a question about the active codebase",
     noWorkspace: "Open a codebase to ask a question about it",
+  },
+  {
+    // Needs a codebase because the project-scope install writes `.mcp.json` at a
+    // repository root and the status is read per repository. The panel itself
+    // could open without one, but it would then be able to offer only half of
+    // what it exists to offer, with no way to say why.
+    feature: "mcpSqlServer",
+    commandId: "plugin.mcp",
+    action: { kind: "mcp" },
+    needsWorkspace: true,
+    ready: "Let a coding agent read the databases you expose, over MCP",
+    noWorkspace: "Open a codebase to install the SQL MCP server for it",
   },
 ];
 

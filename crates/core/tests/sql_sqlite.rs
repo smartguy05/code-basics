@@ -1004,3 +1004,70 @@ async fn every_connection_this_driver_opens_carries_a_deadline() {
         "the deadline must not have changed how the handle was opened"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The catalog queries, against a real engine
+// ---------------------------------------------------------------------------
+
+/// `catalog::column_catalog_query` is pure and its unit tests only ever read
+/// the string it builds, so a statement that is *valid text and invalid SQL*
+/// passes every one of them. This is the case that found it: `notnull` is a
+/// postfix operator in SQLite, so the unquoted `notnull = 0` the query used to
+/// carry is a syntax error, and the whole column listing failed at execute —
+/// on the explorer's tree and on the MCP server's `sql.describe_table` alike.
+///
+/// The lesson worth keeping: a query builder is only tested by an engine.
+#[tokio::test]
+async fn the_sqlite_column_catalog_query_is_valid_sql_and_describes_the_table() {
+    use cb_core::sql::catalog;
+    use cb_core::sql::dsn::SqlEngine;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = make_db(dir.path());
+    let mut writer = open(&path, true).await;
+    ok(
+        &mut writer,
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT NOT NULL)",
+    )
+    .await;
+    drop(writer);
+
+    let mut conn = open(&path, false).await;
+    let query = catalog::column_catalog_query(SqlEngine::Sqlite, None, "orders");
+    let result = ok(&mut conn, &query).await;
+    let columns = catalog::table_columns(&result).expect("the rows must be the shape it reads");
+
+    assert_eq!(
+        columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        vec!["id", "customer"]
+    );
+    assert_eq!(
+        columns[1].nullable,
+        Some(false),
+        "a NOT NULL column must be reported as not nullable — the very fact the \
+         broken expression was computing"
+    );
+    assert_eq!(columns[0].primary_key, Some(true));
+    assert_eq!(columns[0].ordinal, 1);
+}
+
+/// The object catalog's counterpart, for the same reason.
+#[tokio::test]
+async fn the_sqlite_object_catalog_query_is_valid_sql_and_lists_the_tables() {
+    use cb_core::sql::catalog;
+    use cb_core::sql::dsn::SqlEngine;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = make_db(dir.path());
+    let mut writer = open(&path, true).await;
+    ok(&mut writer, "CREATE TABLE orders (id INTEGER)").await;
+    drop(writer);
+
+    let mut conn = open(&path, false).await;
+    let result = ok(&mut conn, catalog::object_catalog_query(SqlEngine::Sqlite)).await;
+    let objects = catalog::table_objects(&result).expect("the rows must be the shape it reads");
+    assert!(
+        objects.iter().any(|o| o.name == "orders"),
+        "got {objects:?}"
+    );
+}

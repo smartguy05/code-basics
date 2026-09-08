@@ -168,6 +168,40 @@ export function writesConfirm(connection: SqlConnectionView, next: boolean): Wri
   };
 }
 
+/**
+ * The confirmation for an exposure toggle, or `null` when none is owed.
+ *
+ * The same asymmetry as {@link writesConfirm} and for the same reason: taking
+ * consent back is the safe direction, and a modal in front of it is a modal
+ * people learn to dismiss.
+ *
+ * It reuses {@link WritesConfirm}'s shape so one modal renders both, and it
+ * leaves `driverGiveUp` empty — that slot means *a protection stronger than the
+ * guard is being given up*, and exposure gives up nothing of the kind. Filling
+ * it with reassurance would put a promise where a warning belongs.
+ *
+ * The second paragraph states the hole the MCP server's own docs state and
+ * cannot close: an agent with read access can read credentials the **database**
+ * stores — a `pg_stat_activity`, a foreign-data-wrapper user mapping — which no
+ * amount of care in this app removes. This dialog is the one place the user can
+ * act on knowing it.
+ */
+export function exposureConfirm(
+  connection: SqlConnectionView,
+  next: boolean,
+): WritesConfirm | null {
+  if (!next) return null;
+
+  return {
+    title: `Expose ${connection.name} to agents?`,
+    guard:
+      "An agent reaching this connection through the MCP server can read anything this login can read. Every statement it sends is forced read-only — there is no setting here and no argument there that lifts that, and allowing writes on this connection does not change it. But read access is the whole of what you are granting, and it includes credentials the database itself stores, which nothing in this app can keep out of a query. Expose only connections whose login you would give a colleague read access to.",
+    driverGiveUp: null,
+    driverGiveUpLead: null,
+    confirmLabel: "Expose to agents",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // What a Run press submits
 // ---------------------------------------------------------------------------
@@ -367,6 +401,10 @@ export function profileFromCandidate(
     secret: candidate.source,
     workspaceRoot,
     allowWrites: false,
+    // Both consents are sent and ignored: the backend forces them off for a
+    // new profile. Exposure especially — a connection the user has just
+    // saved has not been offered to an agent.
+    exposeToAgents: false,
     // Derived from the candidate, so the picker keeps composing a label for it
     // until the user renames it.
     userNamed: false,
@@ -397,6 +435,7 @@ export function profileFromManual(
     secret: { kind: "literal", connectionString: draft.connectionString },
     workspaceRoot: draft.global ? null : workspaceRoot,
     allowWrites: false,
+    exposeToAgents: false,
     // The user typed this name in the manual form, so nothing derives over it.
     // (A literal secret was never decorated anyway — this states the fact rather
     // than relying on the label function's variant arm to keep saying so.)

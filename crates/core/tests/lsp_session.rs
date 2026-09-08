@@ -130,6 +130,10 @@ fn capabilities(without: &[&str]) -> Value {
         "implementationProvider": true,
         "referencesProvider": { "workDoneProgress": true },
         "documentSymbolProvider": true,
+        // Spelled as the real Roslyn server spells it (measured 2026-09-04): an
+        // options object, with `prepareProvider` inside it rather than a second
+        // top-level key.
+        "renameProvider": { "prepareProvider": true },
     });
     for key in without {
         capabilities.as_object_mut().unwrap().remove(*key);
@@ -958,5 +962,437 @@ async fn a_handle_reports_the_root_and_generation_it_was_started_for() {
         let harness = bare_workspace();
         assert_eq!(harness.handle.root(), harness.root());
         assert_eq!(harness.handle.generation(), 1);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Rename: the answers that are not renames
+// ---------------------------------------------------------------------------
+
+/// A `documentChanges` answer, which is the only shape the real Roslyn server
+/// sends — it ignores this client's declared `documentChanges: false` outright.
+fn workspace_edit(entries: Vec<(PathBuf, Vec<Value>)>) -> Value {
+    let changes: Vec<Value> = entries
+        .into_iter()
+        .map(|(path, edits)| {
+            json!({
+                "textDocument": {
+                    "uri": to_file_uri(&path, UriStyle::Encoded).expect("an absolute path"),
+                    // Null, as the real server sends it — which is why the
+                    // version cannot be used to detect a stale mirror.
+                    "version": Value::Null
+                },
+                "edits": edits
+            })
+        })
+        .collect();
+    json!({ "documentChanges": changes })
+}
+
+/// One whole-identifier replacement (0-based, LSP's own numbering).
+fn text_edit(line: u32, start: u32, end: u32, new_text: &str) -> Value {
+    json!({
+        "range": {
+            "start": { "line": line, "character": start },
+            "end": { "line": line, "character": end }
+        },
+        "newText": new_text
+    })
+}
+
+#[tokio::test]
+async fn a_rename_with_no_server_installed_is_not_configured_and_renames_nothing() {
+    // The rename equivalent of the first test in this file, and a worse failure
+    // than a wrong count: an empty `Ready` here would report a successful rename
+    // of a symbol nothing was asked about.
+    bounded!(async {
+        let harness = bare_workspace();
+        let answer = harness
+            .handle
+            .rename(&harness.file("app.ts"), 1, 0, "Old", "New")
+            .await;
+
+        assert_eq!(answer.outcome, Availability::NotConfigured);
+        assert_eq!(
+            answer.total, None,
+            "nobody was asked, so there is no count of edits"
+        );
+        assert!(answer.written.is_empty());
+        assert!(answer.buffers.is_empty());
+        assert!(answer.failures.is_empty());
+        assert!(answer
+            .message
+            .expect("a reason")
+            .contains("language server"));
+
+        let prepared = harness
+            .handle
+            .prepare_rename(&harness.file("app.ts"), 1, 0)
+            .await;
+        assert_eq!(prepared.outcome, Availability::NotConfigured);
+        assert!(
+            !prepared.renameable,
+            "an unconfigured server has not said the symbol is renameable"
+        );
+        assert!(prepared.start_line.is_none());
+    });
+}
+
+#[tokio::test]
+async fn a_rename_that_starts_the_server_says_starting_rather_than_renaming_nothing() {
+    bounded!(async {
+        let harness = harness(json!({ "capabilities": capabilities(&[]) }));
+        let answer = harness
+            .handle
+            .rename(&harness.file("app.ts"), 1, 0, "Old", "New")
+            .await;
+
+        assert_eq!(answer.outcome, Availability::Starting);
+        assert_eq!(answer.total, None, "starting is not a rename");
+        assert!(answer.written.is_empty());
+        until(|| harness.typescript_state() == Some(Availability::Ready)).await;
+    });
+}
+
+#[tokio::test]
+async fn a_rename_a_server_does_not_advertise_is_unsupported_and_not_an_empty_edit() {
+    // `Unsupported` is the one outcome that tells the user retrying is
+    // pointless, and it must not arrive as a successful rename of nothing. The
+    // fake is scripted to answer anyway, so the only thing that can empty this
+    // is the missing capability.
+    bounded!(async {
+        let harness = harness(json!({
+            "capabilities": capabilities(&["renameProvider"]),
+            "steps": [
+                { "on": "textDocument/rename", "reply": { "changes": {} } },
+                { "on": "textDocument/prepareRename", "reply": Value::Null }
+            ]
+        }));
+        std::fs::write(harness.file("main.ts"), "export const a = 1;\n").expect("write");
+        started(&harness).await;
+
+        let answer = harness
+            .handle
+            .rename(&harness.file("main.ts"), 1, 13, "a", "b")
+            .await;
+        assert_eq!(answer.outcome, Availability::Unsupported);
+        assert_eq!(answer.total, None);
+        assert!(answer.written.is_empty());
+        assert!(answer.buffers.is_empty());
+
+        let prepared = harness
+            .handle
+            .prepare_rename(&harness.file("main.ts"), 1, 13)
+            .await;
+        assert_eq!(prepared.outcome, Availability::Unsupported);
+        assert!(!prepared.renameable);
+    });
+}
+
+#[tokio::test]
+async fn a_server_that_renames_but_cannot_prepare_is_unsupported_only_for_the_prepare() {
+    // Two capability fields rather than one. A server advertising
+    // `renameProvider: true` with no `prepareProvider` answers `-32601` to
+    // `prepareRename`, and reading that as "this server cannot rename" would
+    // refuse a rename that works perfectly well.
+    bounded!(async {
+        let mut caps = capabilities(&["renameProvider"]);
+        caps.as_object_mut()
+            .unwrap()
+            .insert("renameProvider".into(), json!(true));
+        let harness = harness(json!({
+            "capabilities": caps,
+            "steps": [{ "on": "textDocument/rename", "reply": { "changes": {} } }]
+        }));
+        std::fs::write(harness.file("main.ts"), "export const a = 1;\n").expect("write");
+        started(&harness).await;
+
+        let prepared = harness
+            .handle
+            .prepare_rename(&harness.file("main.ts"), 1, 13)
+            .await;
+        assert_eq!(prepared.outcome, Availability::Unsupported);
+        assert!(!prepared.renameable);
+
+        let answer = harness
+            .handle
+            .rename(&harness.file("main.ts"), 1, 13, "a", "b")
+            .await;
+        assert_eq!(
+            answer.outcome,
+            Availability::Ready,
+            "the rename itself is available: {answer:?}"
+        );
+        assert_eq!(answer.total, Some(0));
+    });
+}
+
+#[tokio::test]
+async fn a_server_that_answers_an_empty_edit_is_ready_with_zero_edits() {
+    // `Some(0)` and `None` again. A server may genuinely find nothing to change,
+    // and that is a real answer — not the same thing as nobody being asked, and
+    // not a failure.
+    bounded!(async {
+        let harness = harness(json!({
+            "capabilities": capabilities(&[]),
+            "steps": [{ "on": "textDocument/rename", "reply": Value::Null }]
+        }));
+        std::fs::write(harness.file("main.ts"), "export const a = 1;\n").expect("write");
+        started(&harness).await;
+
+        let answer = harness
+            .handle
+            .rename(&harness.file("main.ts"), 1, 13, "a", "b")
+            .await;
+        assert_eq!(answer.outcome, Availability::Ready, "{answer:?}");
+        assert_eq!(answer.total, Some(0));
+        assert!(answer.written.is_empty());
+        assert!(answer.buffers.is_empty());
+        assert!(answer.failures.is_empty());
+        assert_eq!(answer.message, None);
+        assert_eq!(answer.server.as_deref(), Some("typescript"));
+    });
+}
+
+#[tokio::test]
+async fn a_rename_for_a_document_the_server_was_never_told_about_is_refused_not_answered() {
+    // The single most important line in the feature, from the outside. A rename
+    // uses `Needs::OpenDocument` where `references` uses `Needs::Position`,
+    // because the ranges coming back are applied to *our* text and so must have
+    // been computed from our text.
+    //
+    // The fake is scripted to **never answer** a rename, so a request that went
+    // out would hang until the request deadline — which is what makes this a test
+    // of the refusal *preceding the send* rather than of what happens to the
+    // answer afterwards. Written the obvious way (a scripted reply naming an
+    // unreadable file) it passed under `Needs::Position` too, because `rename.rs`
+    // then refuses the unreadable file on its own and says something similar.
+    // Hence both halves here: a short deadline, and the phrase only the session's
+    // own refusal uses.
+    bounded!(async {
+        let harness = harness(json!({
+            "capabilities": capabilities(&[]),
+            "steps": [{ "on": "textDocument/rename", "misbehave": "never" }]
+        }));
+        started(&harness).await;
+
+        // `absent.ts` is neither on disk nor in any buffer, so no server could be
+        // told about it.
+        let answer = tokio::time::timeout(
+            Duration::from_secs(5),
+            harness
+                .handle
+                .rename(&harness.file("absent.ts"), 1, 0, "Old", "New"),
+        )
+        .await
+        .expect(
+            "the rename must be refused without asking the server — this hung, so the \
+             request went out about a document the server was never told about",
+        );
+
+        assert_eq!(answer.outcome, Availability::Failed, "{answer:?}");
+        assert_eq!(answer.total, None);
+        assert!(answer.written.is_empty());
+        assert!(answer.buffers.is_empty());
+        let message = answer.message.expect("a refusal must say what happened");
+        assert!(
+            message.contains("absent.ts") && message.contains("no server could be told about it"),
+            "the reason must be the session's own refusal to ask, naming the file: {message}"
+        );
+    });
+}
+
+#[tokio::test]
+async fn a_server_that_dies_mid_rename_reports_the_death_and_never_an_empty_edit() {
+    bounded!(async {
+        let harness = harness(json!({
+            "capabilities": capabilities(&[]),
+            "steps": [{ "on": "textDocument/rename", "misbehave": "exitBeforeReply" }]
+        }));
+        std::fs::write(harness.file("main.ts"), "export const a = 1;\n").expect("write");
+        started(&harness).await;
+
+        let answer = harness
+            .handle
+            .rename(&harness.file("main.ts"), 1, 13, "a", "b")
+            .await;
+        assert_eq!(answer.outcome, Availability::Failed);
+        assert_eq!(
+            answer.total, None,
+            "a dead server has not told us there was nothing to rename"
+        );
+        assert!(answer.written.is_empty());
+        assert!(answer.message.is_some());
+    });
+}
+
+#[tokio::test]
+async fn a_prepare_rename_answering_null_is_ready_and_simply_not_renameable() {
+    // The caret is on a keyword, a comment or a literal. That is a true answer
+    // about the caret, so the outcome stays `ready` and `renameable` carries the
+    // news — reporting `failed` would tell the user their language server is
+    // broken while it is working perfectly.
+    bounded!(async {
+        let harness = harness(json!({
+            "capabilities": capabilities(&[]),
+            "steps": [{ "on": "textDocument/prepareRename", "reply": Value::Null }]
+        }));
+        std::fs::write(harness.file("main.ts"), "export const a = 1;\n").expect("write");
+        started(&harness).await;
+
+        let prepared = harness
+            .handle
+            .prepare_rename(&harness.file("main.ts"), 1, 0)
+            .await;
+        assert_eq!(prepared.outcome, Availability::Ready, "{prepared:?}");
+        assert!(!prepared.renameable);
+        assert_eq!(prepared.message, None, "there is nothing wrong to report");
+        assert_eq!(prepared.server.as_deref(), Some("typescript"));
+        assert!(prepared.start_line.is_none());
+    });
+}
+
+#[tokio::test]
+async fn a_prepare_rename_range_arrives_one_based_with_no_placeholder() {
+    // The measured Roslyn shape: a bare `{start, end}` with no placeholder at
+    // all, which is why the field's prefill is read out of the buffer.
+    bounded!(async {
+        let harness = harness(json!({
+            "capabilities": capabilities(&[]),
+            "steps": [{
+                "on": "textDocument/prepareRename",
+                "reply": {
+                    "start": { "line": 0, "character": 13 },
+                    "end": { "line": 0, "character": 14 }
+                }
+            }]
+        }));
+        std::fs::write(harness.file("main.ts"), "export const a = 1;\n").expect("write");
+        started(&harness).await;
+
+        let prepared = harness
+            .handle
+            .prepare_rename(&harness.file("main.ts"), 1, 13)
+            .await;
+        assert_eq!(prepared.outcome, Availability::Ready, "{prepared:?}");
+        assert!(prepared.renameable);
+        assert_eq!(
+            (prepared.start_line, prepared.start_character),
+            (Some(1), Some(13)),
+            "1-based line, 0-based UTF-16 character"
+        );
+        assert_eq!(
+            (prepared.end_line, prepared.end_character),
+            (Some(1), Some(14))
+        );
+        assert_eq!(prepared.placeholder, None);
+    });
+}
+
+#[tokio::test]
+async fn a_rename_writes_the_closed_file_and_hands_the_open_buffer_back() {
+    // The split, end to end: Rust writes what nobody has open, and the editor is
+    // handed the rest. A disk write behind an open tab is invisible to the
+    // buffer and clobbered by the next save, which is why the two halves cannot
+    // be done in one place.
+    bounded!(async {
+        let harness = built(FAKE, |root| {
+            json!({
+                "capabilities": capabilities(&[]),
+                "steps": [{
+                    "on": "textDocument/rename",
+                    "reply": workspace_edit(vec![
+                        (root.join("main.ts"), vec![text_edit(0, 13, 23, "renamedSymbol")]),
+                        (root.join("used.ts"), vec![text_edit(0, 14, 24, "renamedSymbol")]),
+                    ])
+                }]
+            })
+        });
+        std::fs::write(harness.file("used.ts"), "const other = usedSymbol;\n").expect("write");
+        started(&harness).await;
+
+        // `main.ts` is an open buffer and has never been written to disk.
+        harness
+            .handle
+            .open_document(&harness.file("main.ts"), "export const usedSymbol = 1;\n")
+            .await;
+
+        let answer = harness
+            .handle
+            .rename(
+                &harness.file("main.ts"),
+                1,
+                13,
+                "usedSymbol",
+                "renamedSymbol",
+            )
+            .await;
+
+        assert_eq!(answer.outcome, Availability::Ready, "{answer:?}");
+        assert_eq!(answer.total, Some(2));
+        assert!(answer.failures.is_empty());
+        assert_eq!(answer.server.as_deref(), Some("typescript"));
+
+        assert_eq!(answer.written.len(), 1, "{answer:?}");
+        assert_eq!(answer.written[0].path, Path::new("used.ts"));
+        assert_eq!(answer.written[0].edits, 1);
+        assert_eq!(
+            std::fs::read_to_string(harness.file("used.ts")).expect("read"),
+            "const other = renamedSymbol;\n"
+        );
+
+        assert_eq!(answer.buffers.len(), 1, "{answer:?}");
+        assert_eq!(answer.buffers[0].path, Path::new("main.ts"));
+        let edit = &answer.buffers[0].edits[0];
+        assert_eq!(
+            (edit.start_line, edit.start_character),
+            (1, 13),
+            "1-based line, 0-based UTF-16 character"
+        );
+        assert_eq!((edit.end_line, edit.end_character), (1, 23));
+        assert_eq!(edit.new_text, "renamedSymbol");
+        assert!(
+            !harness.file("main.ts").exists(),
+            "the open buffer must never be written to disk"
+        );
+    });
+}
+
+#[tokio::test]
+async fn a_torn_down_session_refuses_a_rename_rather_than_reporting_one() {
+    bounded!(async {
+        let harness = harness(json!({
+            "capabilities": capabilities(&[]),
+            "steps": [{ "on": "textDocument/rename", "reply": Value::Null }]
+        }));
+        std::fs::write(harness.file("main.ts"), "export const a = 1;\n").expect("write");
+        started(&harness).await;
+        harness.handle.request_teardown();
+
+        let answer = harness
+            .handle
+            .rename(&harness.file("main.ts"), 1, 13, "a", "b")
+            .await;
+        assert_eq!(answer.outcome, Availability::Failed);
+        assert_eq!(answer.total, None);
+        assert!(answer.written.is_empty());
+        assert!(
+            answer
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("shut down")),
+            "the reason must be the shutdown and not a made-up server failure: {answer:?}"
+        );
+
+        let prepared = harness
+            .handle
+            .prepare_rename(&harness.file("main.ts"), 1, 13)
+            .await;
+        assert_eq!(prepared.outcome, Availability::Failed);
+        assert!(!prepared.renameable);
+        assert!(prepared
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("shut down")));
     });
 }

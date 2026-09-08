@@ -22,6 +22,7 @@ mod commands {
     pub mod intents;
     pub mod launcher;
     pub mod lsp;
+    pub mod mcp;
     pub mod notes;
     pub mod qgate;
     pub mod review;
@@ -36,6 +37,7 @@ mod commands {
     pub mod workspace;
 }
 
+mod mcp_sql;
 mod qgate_run;
 mod recorder;
 
@@ -74,6 +76,14 @@ pub fn run() {
     if qgate_run::is_quality_gate_invocation() {
         qgate_run::run();
         return;
+    }
+
+    // The third self-dispatch mode: an MCP client (Claude Code, Codex) starts
+    // this executable as a stdio server rather than as an application. Like the
+    // other two it must never create a window — and unlike them it must never
+    // write to stdout either, which is the transport.
+    if mcp_sql::is_mcp_sql_invocation() {
+        mcp_sql::run();
     }
 
     let state = AppState::default();
@@ -223,6 +233,11 @@ pub fn run() {
             commands::intents::set_card_intent,
             commands::intents::clear_card_intent,
             commands::intents::move_card_edits,
+            commands::mcp::mcp_server_status,
+            commands::mcp::mcp_server_install_plan,
+            commands::mcp::install_mcp_server,
+            commands::mcp::mcp_server_uninstall_plan,
+            commands::mcp::uninstall_mcp_server,
             commands::qgate::quality_gate_status,
             commands::qgate::quality_gate_install_plan,
             commands::qgate::install_quality_gate,
@@ -259,6 +274,8 @@ pub fn run() {
             commands::lsp::lsp_find_usages,
             commands::lsp::lsp_goto_definition,
             commands::lsp::lsp_declaration_anchors,
+            commands::lsp::lsp_prepare_rename,
+            commands::lsp::lsp_rename,
             commands::terminal::terminal_open,
             commands::terminal::terminal_write,
             commands::terminal::terminal_resize,
@@ -274,6 +291,7 @@ pub fn run() {
             commands::sql::sql_delete_connection,
             commands::sql::sql_rename_connection,
             commands::sql::sql_set_allow_writes,
+            commands::sql::sql_set_expose_to_agents,
             commands::sql::sql_test_connection,
             commands::sql::sql_test_connection_string,
             commands::sql::sql_list_objects,

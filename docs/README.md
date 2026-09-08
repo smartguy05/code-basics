@@ -24,6 +24,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 - [Rider import](guides/rider-import.md) — how JetBrains Rider run configurations are converted
 - [Agent intent capture](guides/agent-intent-capture.md) — grouping a diff into the decisions behind it, with Claude Code or Codex
 - [Instruction enhancements](guides/instruction-enhancements.md) — adding reusable instruction sections to CLAUDE.md / AGENTS.md from a menu of `.md` templates
+- [The SQL MCP server](guides/sql-mcp-server.md) - letting an agent read the databases you are already connected to, read-only and by explicit per-connection consent
 - [Inspecting objects](guides/inspecting-objects.md) — reading the real heap of a crash dump, and what crash dump capture costs
 - [Language servers](guides/language-servers.md) — which server per language, how to install each, and how to point config at one
 

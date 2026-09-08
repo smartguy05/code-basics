@@ -426,7 +426,7 @@ FunctionEnd
 ; needs $INSTDIR to be settled) and before MUI_PAGE_INSTFILES, giving
 ; Welcome -> License -> Directory -> Optional features -> Install -> Finish.
 ;
-; Both boxes are checked by default because the store's defaults are on
+; Every box is checked by default because the store's defaults are on
 ; (FeatureId::default_enabled). The installer's job is to let someone turn a
 ; feature *off*, never to be the only thing that can turn one on -- a cargo
 ; run, a dev checkout and an AppImage never see this page at all.
@@ -441,8 +441,10 @@ FunctionEnd
 ; initialisation is needed, and an unvisited page cannot read as "off".
 Var FeatureSqlConsole
 Var FeatureAskCodebase
+Var FeatureMcpSqlServer
 Var FeatureSqlConsoleCheckbox
 Var FeatureAskCodebaseCheckbox
+Var FeatureMcpSqlServerCheckbox
 
 Page custom PageFeatures PageLeaveFeatures
 
@@ -480,11 +482,19 @@ Function PageFeatures
   ${NSD_CreateLabel} 14u 68u -14u 20u "Ctrl+/ asks a coding agent about this codebase in a live terminal."
   Pop $0
 
+  ${NSD_CreateCheckBox} 0 86u 100% 10u "SQL MCP server"
+  Pop $FeatureMcpSqlServerCheckbox
+  ${NSD_CreateLabel} 14u 98u -14u 20u "Let a coding agent read the databases you expose, over MCP."
+  Pop $0
+
   ${If} $FeatureSqlConsole != "0"
     ${NSD_Check} $FeatureSqlConsoleCheckbox
   ${EndIf}
   ${If} $FeatureAskCodebase != "0"
     ${NSD_Check} $FeatureAskCodebaseCheckbox
+  ${EndIf}
+  ${If} $FeatureMcpSqlServer != "0"
+    ${NSD_Check} $FeatureMcpSqlServerCheckbox
   ${EndIf}
 
   ${NSD_SetFocus} $FeatureSqlConsoleCheckbox
@@ -505,6 +515,13 @@ Function PageLeaveFeatures
   ${Else}
     StrCpy $FeatureAskCodebase 0
   ${EndIf}
+
+  ${NSD_GetState} $FeatureMcpSqlServerCheckbox $0
+  ${If} $0 = ${BST_CHECKED}
+    StrCpy $FeatureMcpSqlServer 1
+  ${Else}
+    StrCpy $FeatureMcpSqlServer 0
+  ${EndIf}
 FunctionEnd
 
 ; Writes the installer seed that cb_core::features::store reads exactly once:
@@ -512,7 +529,7 @@ FunctionEnd
 ; then writes it through to <config>\code-basics\features.json.
 ;
 ; The bytes are exactly this, with no trailing newline:
-;   {"version":1,"enabled":{"sqlConsole":true,"askCodebase":true}}
+;   {"version":1,"enabled":{"sqlConsole":true,"askCodebase":true,"mcpSqlServer":true}}
 ;
 ; Two encoding notes. FileWrite in a Unicode installer writes the string as
 ; ANSI (the active codepage), not UTF-16 -- which is what is wanted here,
@@ -544,6 +561,12 @@ Function WriteFeaturesSeed
   ${EndIf}
   FileWrite $9 ',"askCodebase":'
   ${If} $FeatureAskCodebase == "0"
+    FileWrite $9 'false'
+  ${Else}
+    FileWrite $9 'true'
+  ${EndIf}
+  FileWrite $9 ',"mcpSqlServer":'
+  ${If} $FeatureMcpSqlServer == "0"
     FileWrite $9 'false'
   ${Else}
     FileWrite $9 'true'

@@ -22,6 +22,7 @@ fn typed(id: &str, name: &str, connection_string: &str) -> SqlConnection {
         },
         workspace_root: Some(PathBuf::from("C:/code/shop")),
         allow_writes: false,
+        expose_to_agents: false,
         user_named: false,
         created_at_ms: 1_000,
         last_used_ms: Some(2_000),
@@ -189,6 +190,7 @@ fn a_saved_connection_round_trips() {
                 },
                 workspace_root: Some(PathBuf::from("C:/code/shop")),
                 allow_writes: false,
+                expose_to_agents: false,
                 user_named: false,
                 created_at_ms: 3_000,
                 last_used_ms: None,
@@ -385,6 +387,67 @@ fn the_env_override_wins() {
 
 // ---------------------------------------------------------------------------
 // The wire contract
+#[test]
+fn expose_to_agents_defaults_to_false() {
+    // Consent for an agent to see a connection at all. Every profile saved
+    // before this key existed was created by a user who was never asked, so an
+    // absent key must load as *withheld* — and the entry must still load, or a
+    // silently dropped connection would look exactly like one that was never
+    // saved.
+    let path = scratch("expose-default");
+    fs::write(
+        &path,
+        r#"{
+          "version": 1,
+          "connections": [
+            {
+              "id": "c1",
+              "name": "Orders",
+              "engine": "postgres",
+              "secret": { "kind": "literal", "connectionString": "postgres://u:p@h/db" },
+              "workspaceRoot": "C:/code/shop",
+              "allowWrites": true,
+              "userNamed": true,
+              "createdAtMs": 1000,
+              "lastUsedMs": null
+            }
+          ]
+        }"#,
+    )
+    .unwrap();
+
+    let loaded = load(&path);
+    assert_eq!(
+        loaded.connections.len(),
+        1,
+        "the entry must still load with exposeToAgents absent"
+    );
+    assert!(
+        !loaded.connections[0].expose_to_agents,
+        "a store that does not mention exposeToAgents must not expose the connection"
+    );
+    // And the flag really is orthogonal: writes were on in that file.
+    assert!(loaded.connections[0].allow_writes);
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn expose_to_agents_survives_a_round_trip_when_granted() {
+    // Otherwise the grant would hold until the next launch and then quietly
+    // revert, and the user would re-grant it every session until they stopped
+    // reading the dialog.
+    let path = scratch("expose-granted");
+    let mut entry = typed("c1", "Local", "postgres://u:p@h/db");
+    entry.expose_to_agents = true;
+    let file = SqlConnectionsFile {
+        version: 1,
+        connections: vec![entry],
+    };
+    save(&path, &file).unwrap();
+    assert!(load(&path).connections[0].expose_to_agents);
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 // ---------------------------------------------------------------------------
 
 /// The exact camelCase keys the TypeScript side reads, and the confinement rule
@@ -419,6 +482,7 @@ fn serialisation_shape_pins_the_wire_keys() {
             "allowWrites",
             "createdAtMs",
             "engine",
+            "exposeToAgents",
             "id",
             "lastUsedMs",
             "name",

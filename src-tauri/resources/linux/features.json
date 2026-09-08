@@ -1,1 +1,1 @@
-{"version":1,"enabled":{"sqlConsole":true,"askCodebase":true}}
+{"version":1,"enabled":{"sqlConsole":true,"askCodebase":true,"mcpSqlServer":true}}

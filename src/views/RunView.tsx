@@ -17,7 +17,8 @@ import {
   projectTarget,
   selectedBuildConfiguration,
 } from "../components/configLogic";
-import { FileEditor } from "../components/FileEditor";
+import { FileEditor, type PendingRenameEdits } from "../components/FileEditor";
+import { consumeRenameEdits, renameSummary, type RenameReport } from "../components/renameLogic";
 import { FileTree } from "../components/FileTree";
 import { lspPollKeyFor } from "../components/lspStatusLogic";
 import { RiderImportDialog } from "../components/RiderImportDialog";
@@ -80,6 +81,7 @@ import type {
   DebugEvent,
   InspectStatus,
   ProcessEvent,
+  RenameResult,
   RunConfig,
   RunDump,
   RunningReport,
@@ -237,6 +239,7 @@ export function RunView({
   onOpenReview,
   onRunBehavioral,
   onVerifyClaims,
+  onNotify,
 }: {
   workspace: Workspace;
   onWorkspaceChange: (workspace: Workspace) => void;
@@ -282,6 +285,15 @@ export function RunView({
    * one path in — see the comment on `OpenFileRequest`.
    */
   onNavigate?: (path: string, name: string, line?: number) => void;
+  /**
+   * Raise an app-wide notification.
+   *
+   * Routed all the way up to `App`, which owns the stack, for the same reason
+   * `onSignal` is: a rename writes closed files that may belong to no tab the
+   * user is looking at, and the message that they are on disk and not undoable
+   * here has to survive the user switching codebases.
+   */
+  onNotify?: (report: RenameReport) => void;
   /** A configuration the search palette chose. Selected, never started. */
   pendingSelect?: SelectConfigRequest | null;
   onSelectConsumed?: () => void;
@@ -533,6 +545,61 @@ export function RunView({
     line: number;
     token: number;
   } | null>(null);
+
+  /**
+   * The open-buffer half of a rename, waiting for its editors.
+   *
+   * **Rust applies the closed files; this applies the open buffers.** A disk
+   * write behind an open tab is invisible to that tab and clobbered by its next
+   * Ctrl+S, so `RenameResult.buffers` deliberately comes back unapplied and only
+   * an editor can honour it.
+   *
+   * A monotonic `token` rather than a bare map, the request-and-consume pattern
+   * `reveal` already uses: renaming the same symbol twice produces an identical
+   * map and nothing a consumer could compare, so a second rename would silently
+   * do nothing.
+   */
+  const [renameEdits, setRenameEdits] = useState<{
+    token: number;
+    byPath: Record<string, PendingRenameEdits>;
+  }>({ token: 0, byPath: {} });
+  const renameSeq = useRef(0);
+
+  /**
+   * Take a finished rename apart: hand each open buffer its own edits, and
+   * report the whole thing once.
+   *
+   * The slice is on `sameWorkspaceFile(file, path)` and **never** on
+   * `file.id === path`: a diff tab carries a `path` too, and routing a rename
+   * into a diff buffer would write it over the real file on the next flush.
+   *
+   * `received` is the list of buffers that actually found an editor, and it is
+   * compared against what the backend asked for. That gap — the window between
+   * Rust's writes and this dispatch, one promise resolution wide — is the one
+   * thing this design cannot close, so a buffer with no editor is **reported**
+   * rather than dropped: the alternative is a file left holding the old name
+   * with nothing anywhere saying so.
+   */
+  function distributeRename(rename: {
+    oldName: string;
+    newName: string;
+    result: RenameResult;
+  }) {
+    const byPath: Record<string, PendingRenameEdits> = {};
+    const received: string[] = [];
+    for (const buffer of rename.result.buffers) {
+      if (!openFiles.some((file) => sameWorkspaceFile(file, buffer.path))) continue;
+      received.push(buffer.path);
+      byPath[buffer.path] = {
+        path: buffer.path,
+        oldName: rename.oldName,
+        edits: buffer.edits,
+      };
+    }
+    renameSeq.current += 1;
+    setRenameEdits({ token: renameSeq.current, byPath });
+    onNotify?.(renameSummary(rename.oldName, rename.newName, rename.result, received));
+  }
 
   /**
    * One monotonic source for every reveal token in this view.
@@ -2115,6 +2182,17 @@ export function RunView({
                           onNavigate={(target, name, line) =>
                             onNavigate?.(target, name, line)
                           }
+                          pendingEdits={
+                            file.source.kind === "workspace"
+                              ? (renameEdits.byPath[file.source.path] ?? null)
+                              : null
+                          }
+                          pendingEditsToken={renameEdits.token}
+                          onPendingEditsConsumed={(path) =>
+                            setRenameEdits((state) => consumeRenameEdits(state, path))
+                          }
+                          onRenameApplied={distributeRename}
+                          onRenameNote={(report) => onNotify?.(report)}
                         />
                       </div>
                       ),

@@ -280,7 +280,11 @@ fn caveats(scope: InstallScope) -> Vec<String> {
 /// may not exist for anyone else, and a hook whose command cannot be found
 /// simply does not run. Surfaced for the same reason the Codex trust caveat is:
 /// silent no-ops are worse than refusals.
-const SHARED_EXE_PATH_NOTE: &str =
+///
+/// Public because [`crate::mcp::install::plan`] states the same condition about
+/// the same executable path and must **share** the sentence rather than copy
+/// it — a drifting copy would start describing different behaviour.
+pub const SHARED_EXE_PATH_NOTE: &str =
     "The hook command is the full path to this copy of code-basics. Teammates who \
      do not have it installed at the same path will silently get no gate.";
 

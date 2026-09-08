@@ -43,6 +43,7 @@ import {
   stopLine,
   stoppedNote,
   writesConfirm,
+  exposureConfirm,
   type SqlPhaseLine,
   type StoppedNote,
   type WritesConfirm,
@@ -91,7 +92,14 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
     id: string;
     outcome: SqlTestOutcome;
   } | null>(null);
+  /**
+   * The pending consent confirmation. `kind` says which consent it is: the two
+   * are separate facts about a connection and are applied by different
+   * commands, so a shared modal must carry which one it is asking about rather
+   * than inferring it from the connection.
+   */
   const [confirm, setConfirm] = useState<{
+    kind: "writes" | "exposure";
     connection: SqlConnectionView;
     next: boolean;
     copy: WritesConfirm;
@@ -421,12 +429,36 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
       void applyAllowWrites(target, next);
       return;
     }
-    setConfirm({ connection: target, next, copy });
+    setConfirm({ kind: "writes", connection: target, next, copy });
   };
 
   const applyAllowWrites = (target: SqlConnectionView, next: boolean) =>
     api
       .sqlSetAllowWrites(target.id, next)
+      .then((rows) => {
+        setConnections(rows);
+        setError(null);
+      })
+      .catch((e) => setError(api.errorMessage(e)));
+
+  /**
+   * The second consent action, and the stronger one: whether an agent may see
+   * this connection at all through the MCP server. Confirmed in the granting
+   * direction only, exactly as writes are — `exposureConfirm` returns null for
+   * the withdrawing one.
+   */
+  const requestExposeToAgents = (target: SqlConnectionView, next: boolean) => {
+    const copy = exposureConfirm(target, next);
+    if (copy === null) {
+      void applyExposeToAgents(target, next);
+      return;
+    }
+    setConfirm({ kind: "exposure", connection: target, next, copy });
+  };
+
+  const applyExposeToAgents = (target: SqlConnectionView, next: boolean) =>
+    api
+      .sqlSetExposeToAgents(target.id, next)
       .then((rows) => {
         setConnections(rows);
         setError(null);
@@ -870,6 +902,7 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
           onDelete={(target) => void remove(target)}
           onRename={(target, name) => void rename(target, name)}
           onSetAllowWrites={requestAllowWrites}
+          onSetExposeToAgents={requestExposeToAgents}
           onRefreshDiscovery={refreshDiscovery}
           testOutcome={testOutcome}
           error={error}
@@ -882,7 +915,11 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
           copy={confirm.copy}
           onCancel={() => setConfirm(null)}
           onConfirm={() => {
-            void applyAllowWrites(confirm.connection, confirm.next);
+            if (confirm.kind === "writes") {
+              void applyAllowWrites(confirm.connection, confirm.next);
+            } else {
+              void applyExposeToAgents(confirm.connection, confirm.next);
+            }
             setConfirm(null);
           }}
         />
