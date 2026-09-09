@@ -1,7 +1,10 @@
+import { ChevronsDownUp, LocateFixed } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import * as api from "../ipc/api";
 import type { DirEntry } from "../ipc/types";
+import { registerCommand } from "../shortcuts";
 import { ContextMenu } from "./ContextMenu";
+import { FileIcon } from "./FileIcon";
 import {
   baseName,
   createPath,
@@ -12,6 +15,7 @@ import {
   validateName,
   type MenuTarget,
 } from "./fileTreeLogic";
+import { revealPlan } from "./fileTreeRevealLogic";
 
 /** What the name box is being used for; `null` when it is not showing. */
 type Prompt =
@@ -59,6 +63,17 @@ export function FileTree({
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<MenuTarget | null>(null);
   const nameInput = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const activeRow = useRef<HTMLButtonElement>(null);
+  /**
+   * Bumped by a completed reveal, and read by nothing but the effect that
+   * scrolls. Scrolling cannot happen inside `reveal` itself: the row for a file
+   * in a directory that was still collapsed does not exist until React has
+   * committed the expansion, so `activeRow` is null at that moment. A token
+   * rather than a boolean because revealing the same file twice must scroll
+   * twice — the user may well have scrolled away in between.
+   */
+  const [revealToken, setRevealToken] = useState(0);
 
   async function load(dir: string) {
     try {
@@ -85,6 +100,87 @@ export function FileTree({
   useEffect(() => {
     if (prompt) nameInput.current?.focus();
   }, [prompt]);
+
+  /**
+   * Open every directory between the root and the file the editor is showing,
+   * fetching the listings that are missing on the way down.
+   *
+   * The walk is sequential and outermost-first because the tree is lazy: a
+   * directory's listing is what proves its children exist, so fetching
+   * `src/views` before `src` would render a row with no parent to hang under.
+   * A failure stops the walk and surfaces through the same `error` banner every
+   * other backend call here uses — half an expansion with no explanation reads
+   * as the button doing nothing.
+   */
+  async function reveal() {
+    // A stale `listings` snapshot can only *under*-report what is cached, which
+    // costs a redundant fetch and never a wrong tree, so reading it directly is
+    // fine here just as it is in the refresh effect.
+    const plan = revealPlan(activePath, listings.keys());
+
+    try {
+      const fetched = new Map<string, DirEntry[]>();
+      for (const dir of plan.load) {
+        fetched.set(dir, await api.fsListDir(dir));
+      }
+      if (fetched.size > 0) {
+        setListings((previous) => {
+          const next = new Map(previous);
+          for (const [dir, entries] of fetched) next.set(dir, entries);
+          return next;
+        });
+      }
+      if (plan.expand.length > 0) {
+        setExpanded((previous) => {
+          const next = new Set(previous);
+          for (const dir of plan.expand) next.add(dir);
+          return next;
+        });
+      }
+      setError(null);
+      // Bumped even when the plan was empty: a top-level file needs no
+      // expansion but still deserves to be scrolled to.
+      setRevealToken((previous) => previous + 1);
+    } catch (e) {
+      setError(api.errorMessage(e));
+    }
+  }
+
+  // `reveal` closes over `activePath` and `listings`, both of which change far
+  // more often than the registration should. Holding the latest one in a ref
+  // keeps the command registered exactly once for the life of the component.
+  const revealRef = useRef(reveal);
+  revealRef.current = reveal;
+  const activePathRef = useRef(activePath);
+  activePathRef.current = activePath;
+
+  useEffect(() => {
+    return registerCommand("tree.reveal", () => {
+      // The Run tab stays mounted while hidden and there is one tree per open
+      // codebase, so several are registered at once. Only the visible one
+      // answers; returning false lets the dispatcher try the next.
+      if (rootRef.current === null || rootRef.current.offsetParent === null) return false;
+      if (activePathRef.current === null) return false;
+      void revealRef.current();
+      return true;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (revealToken === 0) return;
+    activeRow.current?.scrollIntoView({ block: "nearest" });
+  }, [revealToken]);
+
+  /**
+   * Close every folder, keeping the listings.
+   *
+   * They are a cache of what the backend said, not a record of what is open, so
+   * discarding them would make the next expansion pay for a round trip it has
+   * already made.
+   */
+  function collapseAll() {
+    setExpanded(new Set());
+  }
 
   function toggle(entry: DirEntry) {
     setExpanded((previous) => {
@@ -216,6 +312,7 @@ export function FileTree({
             title={`${entry.path} — right-click to add, rename or delete`}
           >
             <span className="twisty">{expanded.has(entry.path) ? "▾" : "▸"}</span>
+            <FileIcon name={entry.name} isDir expanded={expanded.has(entry.path)} />
             <span className="tree-name">{entry.name}</span>
           </button>
           {expanded.has(entry.path) && renderDir(entry.path, depth + 1)}
@@ -223,13 +320,19 @@ export function FileTree({
       ) : (
         <button
           key={entry.path}
+          // Only the open file carries the ref, so it is the one row the reveal
+          // effect can scroll to — and there is never more than one.
+          ref={entry.path === activePath ? activeRow : undefined}
           className={`row tree-row ${entry.path === activePath ? "selected" : ""}`}
           style={{ paddingLeft: 6 + depth * 14 }}
           onClick={() => onOpenFile(entry.path, entry.name)}
           onContextMenu={(e) => openMenu(e, { path: entry.path, isDir: false })}
           title={`${entry.path} — right-click to add, rename or delete`}
         >
+          {/* The empty twisty is kept as a spacer: it is what lines a file row
+              up under its siblings' arrows. */}
           <span className="twisty" />
+          <FileIcon name={entry.name} />
           <span className="tree-name">{entry.name}</span>
         </button>
       ),
@@ -247,11 +350,42 @@ export function FileTree({
 
   return (
     <div
+      ref={rootRef}
       className="file-tree"
       // Right-clicking the empty space below the rows targets the root, so a
       // workspace with nothing in it can still have its first file made.
       onContextMenu={(e) => openMenu(e, null)}
     >
+      {/* Above the rows rather than below them: the tree is as long as the
+          repository, and a bar under it would scroll out of reach. Both are
+          glyph-only, so both carry an `aria-label` as well as the sentence in
+          the tooltip. */}
+      <div className="tree-actions">
+        <button
+          data-command="tree.reveal"
+          className="tree-action"
+          onClick={() => void reveal()}
+          disabled={activePath === null}
+          title={
+            activePath === null
+              ? "Open a file first — there is nothing to select in the tree."
+              : "Expand the tree down to the file open in the editor and scroll to it."
+          }
+          aria-label="Select opened file"
+        >
+          <LocateFixed />
+        </button>
+        <button
+          data-command="tree.collapse"
+          className="tree-action"
+          onClick={collapseAll}
+          title="Close every folder in the tree."
+          aria-label="Collapse file tree"
+        >
+          <ChevronsDownUp />
+        </button>
+      </div>
+
       {error && (
         <div className="error" style={{ fontSize: 12 }}>
           {error}

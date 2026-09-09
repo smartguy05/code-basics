@@ -22,7 +22,7 @@ The app writes `.code-basics/.gitignore` covering everything transient (`results
 
 ## Agent intent (`intents/`)
 
-Two JSON-lines files recording what a coding agent did and why, so the Changes tab can group hunks into the decisions behind them. Written by hooks the agent runs, or imported from its session history. Full walkthrough: [Agent intent capture](../guides/agent-intent-capture.md).
+Two JSON-lines files recording what a coding agent did and why, so the Changes pane can group hunks into the decisions behind them. Written by hooks the agent runs, or imported from its session history. Full walkthrough: [Agent intent capture](../guides/agent-intent-capture.md).
 
 ```
 intents/
@@ -83,7 +83,7 @@ Named buckets for working-tree files, in the spirit of JetBrains' changelists �
 
 - **Gitignored on purpose.** Groups describe one person's work in progress; committing them would impose that structure on everyone.
 - **A file belongs to at most one group.** Assigning it somewhere removes it from wherever it was.
-- **Groups hold unstaged work only.** Once something is staged, the index is the grouping that matters, so the Changes tab lists it under Staged. A partially staged file appears in *both* Staged and its group — the same way `git status` lists it under both headings.
+- **Groups hold unstaged work only.** Once something is staged, the index is the grouping that matters, so the Changes pane lists it under Staged. A partially staged file appears in *both* Staged and its group — the same way `git status` lists it under both headings.
 - **Assignments outlive a file becoming clean**, so a file that is committed and later edited again returns to its group rather than being silently forgotten.
 - Deleting a group leaves its files ungrouped rather than discarding anything.
 
@@ -91,7 +91,7 @@ Named buckets for working-tree files, in the spirit of JetBrains' changelists �
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "configs": [ /* RunConfig objects */ ],
   "favorites": [ /* config ids, optional */ ],
   "order": [ /* config ids, optional */ ],
@@ -102,7 +102,7 @@ Named buckets for working-tree files, in the spirit of JetBrains' changelists �
 }
 ```
 
-- `version` exists so a future format change can migrate rather than fail (currently `1`).
+- `version` exists so format changes can migrate rather than fail (currently `2`). Version 1 Rider imports are upgraded on load from their old display-name id to a project-and-configuration id; favourites, ordering, and compound references are rewritten with them.
 - Meant to be **checked in**, sharing run configurations the way Rider's `.run/` directory does.
 - Only user-created and imported configurations are written here. Auto-detected ones are re-derived on every scan, which keeps the file small and lets detection keep working as projects change. On open/rescan, saved configs are merged over detected ones.
 - `favorites` holds starred config ids; they sort before everything else in the UI. `order` is the user's preferred ordering — ids listed there sort by position, anything unlisted follows in name order. Both keys are omitted while empty.
@@ -123,7 +123,7 @@ Per-workspace settings for the object inspector. The whole section is optional a
 }
 ```
 
-- `captureDumps` opts this workspace into writing a crash dump when a run crashes. **Off unless explicitly enabled**, and treated as off whenever the section is absent. A dump is a verbatim copy of process memory — connection strings, tokens, whatever the application had in flight — so nothing infers this setting from anything else. Dumps land in a gitignored directory and never reach the shared history. **This file is checked in**, so enabling it here enables it for everyone who works in the repository; every armed run therefore carries a warning saying so in the Run tab.
+- `captureDumps` opts this workspace into writing a crash dump when a run crashes. **Off unless explicitly enabled**, and treated as off whenever the section is absent. A dump is a verbatim copy of process memory — connection strings, tokens, whatever the application had in flight — so nothing infers this setting from anything else. Dumps land in a gitignored directory and never reach the shared history. **This file is checked in**, so enabling it here enables it for everyone who works in the repository; every armed run therefore carries a warning saying so in the Project tab.
 - `caps` bounds how much of an object graph a capture walks. Each key falls back to its built-in default (shown above) on its own, so writing only `{ "maxDepth": 2 }` is valid — a partly written section must never be the reason a workspace will not open.
 - `keepDumps` defaults to `3` — enough to compare a repeated crash against its two predecessors.
 - `maxDumpMegabytes` defaults to `2048`. This is the limit that actually binds: a dump of a trivial console app measured 9.3 MB and a real application's runs to hundreds of megabytes, so bytes run out long before the file count does. It is applied before every .NET run as well as after every capture, so a workspace that crashes repeatedly and is never inspected is still bounded, and it covers both the dumps in `.code-basics/dumps/` and the ones VSTest's blame collector leaves in `.code-basics/results/`.
@@ -191,7 +191,7 @@ enough to stop a panel opening.
 
 ## .NET user secrets
 
-Secrets are deliberately **not** part of `config.json` (which is checked in). The Run tab's **Secrets…** button opens the standard .NET user-secrets store as an ordinary editor tab: the project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere), which the .NET configuration system reads at runtime. Saving secrets for a project without an id adds one to the `.csproj`, exactly like `dotnet user-secrets init`. Core logic: `crates/core/src/secrets.rs`.
+Secrets are deliberately **not** part of `config.json` (which is checked in). The Project tab's **Secrets…** button opens the standard .NET user-secrets store as an ordinary editor tab: the project's `<UserSecretsId>` names a `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere), which the .NET configuration system reads at runtime. Saving secrets for a project without an id adds one to the `.csproj`, exactly like `dotnet user-secrets init`. Core logic: `crates/core/src/secrets.rs`.
 
 Saving validates against the same JSON dialect .NET's configuration loader accepts, rather than strict JSON — `//` and `/* */` comments, trailing commas, and a leading UTF-8 byte-order mark all pass, because `dotnet user-secrets` and Rider write files containing them and rejecting your own tooling's output would be worse than a late failure. A file that really is malformed is refused with the line number **and the offending line quoted**, since the invisible causes (that byte-order mark, most of all) are otherwise indistinguishable from whatever else is unusual in the file.
 
@@ -201,7 +201,7 @@ Defined in `crates/core/src/model.rs`, mirrored in `src/ipc/types.ts`. Optional 
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `id` | string | Unique id. Detected configs use stable shapes like `<project>:<eco>:test` |
+| `id` | string | Unique id. Detected configs use stable shapes like `<project>:<eco>:test`; Rider imports include the project and configuration identity, so two projects may both have a `Development` configuration without overwriting each other |
 | `name` | string | Display name |
 | `kind` | `"app"` \| `"test"` | Launch vs. test run |
 | `ecosystem` | string | `"dotnet"`, `"node"`, or a manifest id |

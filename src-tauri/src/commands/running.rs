@@ -47,7 +47,13 @@ pub async fn kill_running(
         // A configuration run/build lives in its codebase's supervisor; cancel it
         // there so the exit is reported as a cancellation, not a failure.
         RunKind::Run | RunKind::Build => match state.slot(&PathBuf::from(&root)) {
-            Some(slot) => Ok(slot.supervisor.cancel(&key).await),
+            Some(slot) => {
+                if slot.debug.cancel(&key).await {
+                    Ok(true)
+                } else {
+                    Ok(slot.supervisor.cancel(&key).await)
+                }
+            }
             None => Ok(false),
         },
         // A terminal closes through the PTY manager (tree-kills its shell's

@@ -27,6 +27,9 @@ pub struct Note {
     pub title: String,
     /// The note text.
     pub body: String,
+    /// Optional user-chosen colour for this note's tab and minimized bar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     /// When the note was created, milliseconds since the Unix epoch. A number so
     /// the frontend can format it however it likes; the clock is the caller's.
     pub created_at_ms: u64,
@@ -47,7 +50,7 @@ pub struct NotesFile {
 }
 
 fn default_version() -> u32 {
-    1
+    2
 }
 
 impl Default for NotesFile {

@@ -26,7 +26,7 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 
 ## Workspace files
 
-`src-tauri/src/commands/files.rs` — backs the Run tab's directory tree and file editor. All paths are workspace-relative; paths that would escape the root (absolute, `..`) are rejected.
+`src-tauri/src/commands/files.rs` — backs the Project tab's directory tree and file editor. All paths are workspace-relative; paths that would escape the root (absolute, `..`) are rejected.
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
@@ -65,6 +65,16 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `read_notes` | — | `NotesFile` | The global notes; a missing or unreadable file is an empty set, not an error |
 | `write_notes` | `file: NotesFile` | `()` | Overwrite the global notes file, creating its directory if absent |
 
+## About
+
+`src-tauri/src/commands/about.rs` — what build is running, behind **Help → About**. Takes no `AppState` (process metadata belongs to the process, not a workspace), and its `AboutInfo` struct is **local to the command module** rather than in `cb-core`, because it carries no decision the core crate needs to make; the camelCase keys are pinned by `about_info_serialises_with_the_keys_the_ui_reads` in the same file.
+
+The **application and Tauri versions are not here** — the frontend reads those from `@tauri-apps/api/app`, which `core:default` already permits — so this command covers only what that API cannot answer.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `about_info` | — | `AboutInfo` (`appVersion`, `os`, `arch`, `gitSha`, `buildDate`) | Cannot fail. `appVersion` is `cb-app`'s crate version (the Cargo workspace couples it; `aboutLogic.versionDrift` reports a disagreement with the bundle's rather than picking one to believe). `gitSha` and `buildDate` are stamped in by `src-tauri/build.rs`, which **never fails the build**: no `.git` or no `git` on `PATH` emits the literal `unknown`, and a modified working tree is marked `-dirty` — an unmarked sha on a dirty tree would be a *wrong* answer about which code is running. `-unverified` is the third answer, for a known commit whose cleanliness could not be checked. `buildDate` is UNIX epoch **seconds** as a decimal string, not a formatted date: date arithmetic in a build script is the one place in the tree no test can reach, so `aboutLogic.formatBuildDate` renders it (and abstains to `unknown` on anything it cannot parse) |
+
 ## Optional features
 
 `src-tauri/src/commands/features.rs` — which optional features are switched on. Like notes, the store is **user-global, not per-workspace** (`code-basics/features.json` under the user config directory; `CB_FEATURES_PATH` overrides the whole path), so neither command touches `AppState`.
@@ -91,12 +101,26 @@ One binary ships every feature, so these decide only what is *shown*. An install
 
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
-| `start_run` | `config_id: String`, `channel: Channel<ProcessEvent>`, `env: Map?`, `build_configuration: String?` | `()` | Streams output; resolves on exit. `env` is layered over the config's own for this run only (the Run tab's environment picker), and `build_configuration` overrides `Debug`/`Release` the same way (the toolbar's picker). An empty string is ignored rather than emitting a bare `-c` |
+| `start_run` | `config_id: String`, `channel: Channel<ProcessEvent>`, `env: Map?`, `build_configuration: String?` | `()` | Streams output; resolves on exit. `env` is layered over the config's own for this run only (the Project tab's environment picker), and `build_configuration` overrides `Debug`/`Release` the same way (the toolbar's picker). An empty string is ignored rather than emitting a bare `-c` |
 | `build_project` | `config_id: String`, `action: "build" \| "rebuild" \| "clean"`, `channel: Channel<ProcessEvent>`, `build_configuration: String?` | `()` | .NET only; runs `dotnet build` / `build --no-incremental` / `clean`, registered as `<config_id>:build`. Takes the same override as `start_run` so a build produces the binaries the next run will start |
 | `cancel_run` | `config_id: String`, `root?: String` | `bool` | Kills the process **tree**. `root` targets a specific (possibly background) workspace; defaults to the active one |
 | `running_ids` | `root?: String` | `String[]` | Config ids currently running in `root`'s workspace, or the active one |
 | `run_tests` | `config_id: String`, `only_failed: bool`, `channel: Channel<ProcessEvent>` | `TestRunOutcome` | Streams output, then parses the report; `only_failed` filters to the previous run's failures |
 | `last_test_run` | `config_id: String` | `TestRunOutcome \| null` | Most recent result for this config |
+
+## Debug launches
+
+`src-tauri/src/commands/debug.rs`
+
+Launch-attached debugging only: console output, lifecycle state and Stop. There is no breakpoint, stack or stepping surface yet. A missing adapter is **reported, never worked around** — the application is not started as an ordinary run, because a debugger changes observable behaviour the user is launching Debug to get.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `start_debug` | `config_id: String`, `channel: Channel<DebugEvent>`, `env: Map?`, `build_configuration: String?` | `()` | App configurations only. `.NET` builds first and asks MSBuild for the real `TargetPath`, then launches it under `netcoredbg` over stdio; Node translates its package-manager invocation into a `pwa-node` launch against the standalone js-debug server over loopback TCP. `env`/`build_configuration` layer exactly as in `start_run`. A compound resolves and prepares **every** member before any adapter starts, so one unsupported member launches nothing |
+| `stop_debug` | `config_id: String` | `bool` | Kills the adapter's process **tree** (which takes the debuggee with it) and any in-flight `<id>:debug-build`. For a compound, does the same for every member |
+| `debug_ids` | `root?: String` | `String[]` | Config ids currently under a debug adapter in `root`'s workspace, or the active one. A compound whose members are debugging is listed alongside them |
+
+Both adapters are **bundled with the installer** (`pnpm debuggers:fetch` vendors them into `resources/debuggers/`). Resolution order is `CB_DAP_DOTNET`/`CB_DAP_NODE`, then the bundle, then `PATH`. Node debugging additionally needs `node` on `PATH`, and its absence is reported at resolution rather than left to fail at spawn. See [`dap`](../architecture/core-crate.md#dap).
 
 ## Adversarial review
 
@@ -121,6 +145,28 @@ One binary ships every feature, so these decide only what is *shown*. An install
 | `terminal_close` | `id: String` | `bool` | Kills the process **tree** (so a shell's `claude`/`node` children die too); `false` if nothing was open |
 | `terminal_list` | – | `String[]` | Ids of every open terminal |
 | `terminal_set_label` | `id: String`, `root: String`, `label: String` | `()` | Updates a terminal's title in the running-process registry after a rename, so the Running panel shows it |
+| `list_shells` | – | `DetectedShells` (`shells`, `defaultId`) | The shells found on this machine, in preference order, each with its **resolved absolute path** as `program` — what a picker passes back to `terminal_open`. Read-only: nothing is spawned. A candidate that cannot be found, whose path `cmd.exe` would re-read, or which is really the WSL `bash.exe` launcher is **omitted** rather than offered broken or disabled, so an empty list is a legitimate answer (terminals still open on `default_shell`). `defaultId` is the id `default_shell` resolves to, or an explicit `null` when it matches nothing detected. `wsl` and `git-bash.exe` are deliberately never listed |
+
+## Embedded browser
+
+`src-tauri/src/commands/browser.rs` over `src-tauri/src/browser/` and `cb_core::browser` — the floating browser panel. The page is a **raw wry** child webview, not a Tauri one, and never a Tauri one: Tauri injects `__TAURI_INTERNALS__` into every webview it creates and the `plugin:__TAURI_CHANNEL__|fetch` handler reads a process-global channel queue without checking ownership, so remote content in a Tauri-created webview could read this app's PTY, process, debug and SQL channels. The host's module doc has the full argument.
+
+**Every command here is `async`**, and that is not style: Tauri warns that webview creation deadlocks from a synchronous command on Windows, and the host reaches a main-thread-affine `!Send` `WebView` through `run_on_main_thread` plus a `oneshot`.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `browser_open` | `rect: BrowserRect`, `url: String?` | `BrowserSnapshot` | Creates the child webview at `rect` (**logical** px, client-area relative), or re-places and re-shows one that was only minimized — never recreates it, which would throw away the page, its session and its scroll position. `url` is raw user input, normalised by `cb_core::browser::url` |
+| `browser_close` | `pluginDisabled: bool` | `BrowserSnapshot` | **Drops** the webview, taking the WebView2 process tree with it. `pluginDisabled` says why, because "the plugin is off" and "the panel is closed" are one click apart and an agent acts on the difference |
+| `browser_set_bounds` | `rect: BrowserRect` | `()` | Moves and resizes the page to follow the panel. Refuses a non-finite or zero-size rect rather than placing an OS surface at an unpredictable position; a no-op when no page is open |
+| `browser_set_visible` | `visible: bool` | `()` | The minimize mechanism. A child HWND composites above the DOM, so a React `hidden` cannot hide it |
+| `browser_navigate` | `input: String` | `BrowserSnapshot` | Normalises what the user typed (a bare host becomes `https`, `localhost:PORT` becomes `http`) and loads it. **A search phrase is refused, not searched** — this is not a search box. Refuses `javascript:`, `data:`, `file:`, every custom scheme, every `about:` page but `blank`, and the app's own origins |
+| `browser_back` / `browser_forward` | – | `()` | `history.back()` / `history.forward()`: wry 0.55.1 exposes no `go_back`/`go_forward`. A page with empty history does nothing and reports success, because the DOM gives no answer either way |
+| `browser_reload` | – | `()` | Reloads the current page |
+| `browser_state` | – | `BrowserSnapshot` | Availability (six variants, never collapsed), url, title, origin, consent, and the refused-navigation and rejected-message counters. A pure data read — never touches the main thread, so it is cheap to poll |
+| `browser_console` | `cursor: u64` | `BrowserConsoleBatch` | Captured `console.*`, `onerror` and `unhandledrejection` after `cursor`, plus `missed` — rows evicted before this read, never a silent gap. An unrecognised console method ranks as `other`, never `error` |
+| `browser_network` | `cursor: u64` | `BrowserNetworkBatch` | Observed requests after `cursor`. **Not DevTools' network panel**, and every answer carries `coverage` saying so: a patched `fetch`/`XHR` plus a `PerformanceObserver`, so no headers, no bodies, statuses only for fetch/XHR rows, and nothing at all from before the init script ran |
+| `browser_page_text` | – | `BrowserPageText` | `document.body.innerText`, truncated in Rust so `totalChars` is the **real** page length. Refused unless the page is `ready`: a page mid-load yields text that is wrong rather than absent |
+| `browser_set_automation_consent` | `reads: bool`, `writes: bool` | `BrowserSnapshot` | The only thing that moves automation consent. Scoped to the page's origin and dropped on an origin change, so navigating never grants it and never renews it; `writes` implies `reads`; refused when the page is not `ready` or has an opaque origin. Not persisted |
 
 ## The app launcher
 
@@ -133,9 +179,9 @@ the codebase it was started from does not stop it.
 | Command | Parameters | Returns | Notes |
 |---------|-----------|---------|-------|
 | `list_launchables` | – | `LauncherGroups` | `{ thisCodebase, global }` — remembered commands, the open codebase's first (grouped by each entry's `cwd`); pinned first, then most recently run |
-| `launch_command` | `command: String`, `cwd: String?`, `shell: bool`, `label: String?`, `key: String?`, `channel: Channel<ProcessEvent>` | `LaunchedApp` | Splits the command line (`launcher::program_and_args`) and spawns it headless; resolves as soon as it is running, not at exit. An unquoted `\|`, `>`, `<`, `&` or `;` is **refused** unless `shell` is set — a bare argv would pass it to the program as an argument. `cwd` defaults to the open workspace, else home. `key` is normally supplied by the frontend so its console has a destination before this returns; a blank one is minted. Recorded into the recents only once it resolves to a real command |
+| `launch_command` | `command: String`, `cwd: String?`, `shell: bool`, `label: String?`, `key: String?`, `channel: Channel<ProcessEvent>` | `LaunchedApp` | Splits the command line (`launcher::program_and_args`) and spawns it with no console window of its own; resolves as soon as it is running, not at exit. (Distinct from the `headless` flag on a saved launchable, which is frontend-only and decides whether an output *tab* is minted — every launch streams to the channel the caller supplies either way.) An unquoted `\|`, `>`, `<`, `&` or `;` is **refused** unless `shell` is set — a bare argv would pass it to the program as an argument. `cwd` defaults to the open workspace, else home. `key` is normally supplied by the frontend so its console has a destination before this returns; a blank one is minted. Recorded into the recents only once it resolves to a real command |
 | `stop_command` | `key: String` | `bool` | Cancels a launched app through the global supervisor; the output tab and its exit line stay |
-| `save_launchable` | `id: String`, `label: String?`, `pinned: bool?` | `LauncherFile` | Rename (a blank name clears the rename) and/or pin. Pinned entries are exempt from the 30-entry recents cap |
+| `save_launchable` | `id: String`, `label: String?`, `pinned: bool?`, `shortcut: bool?`, `persistent: bool?`, `headless: bool?` | `LauncherFile` | Partial update: an omitted field is left alone. Rename (a blank name clears the rename), pin, publish as a named terminal-menu command (`shortcut`), mark as a long-running service (`persistent`, never auto-restarted), or run with no output tab (`headless`). Pinned entries **and** shortcuts are exempt from the 30-entry recents cap |
 | `delete_launchable` | `id: String` | `LauncherFile` | Forgets one remembered command |
 
 ## Running processes
@@ -169,7 +215,7 @@ The Running panel: what the app has running now (across every open codebase) plu
 | `git_checkout_branch` | `name: String` | `()` | |
 | `git_checkout_remote_branch` | `name: String` | `()` | Like `git switch`: creates the local tracking branch (or reuses it), then switches |
 | `git_delete_branch` | `name: String` | `()` | |
-| `git_merge_branch` | `name: String` | `MergeReport` | Merge a branch into the current one. Refuses to start with modified tracked files or another operation in progress. Conflicts do not error: they come back as `outcome: "conflicted"` with the paths, and the merge is **left in progress** to resolve in the Changes tab |
+| `git_merge_branch` | `name: String` | `MergeReport` | Merge a branch into the current one. Refuses to start with modified tracked files or another operation in progress. Conflicts do not error: they come back as `outcome: "conflicted"` with the paths, and the merge is **left in progress** to resolve in the Changes pane |
 | `git_abort_merge` | | `()` | Discard an in-progress merge and return to the pre-merge commit |
 | `git_changelists` | | `Changelists` | The workspace's change groups |
 | `git_create_changelist` | `name: String` | `Changelists` | Add an empty group; rejects a duplicate or blank name |
@@ -181,6 +227,7 @@ The Running panel: what the app has running now (across every open codebase) plu
 | `git_commit_file_contents` | `id: String, path: String` | `FileContents` | Both sides of one file as a commit changed it, for the History diff viewer. Either side is null when the file did not exist there (added, deleted, or a root commit) |
 | `git_commit_file_why` | `id: String, path: String` | `LineIntent[]` | The recorded reason behind each line of a file as a past commit left it, resolved from the durable git note. Content-keyed, so it survives reformatting/rebase; empty when the commit has no note or no line matches (never a guessed reason) |
 | `git_stash_save` | `message: String` | `()` | Stash the working tree (including untracked) under a message |
+| `git_stash_paths` | `message: String`, `paths: string[]` | `string` | Stash only the named files, leaving every other change in place; returns the stash commit id |
 | `git_stash_list` | – | `StashEntry[]` | Every stash, newest first; `id` is the stash commit for previewing via `git_commit_diff` |
 | `git_stash_pop` | `index: usize` | `()` | Apply `stash@{index}` and remove it |
 | `git_stash_apply` | `index: usize` | `()` | Apply `stash@{index}`, keeping it in the list |
@@ -222,6 +269,27 @@ The Running panel: what the app has running now (across every open codebase) plu
 | `install_quality_gate` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install. Additive and backed up first; a distinct marker lets it coexist with the intent recorder's `Stop` entry. Returns the new status |
 | `quality_gate_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change turning the gate off would make. **Touches nothing.** An empty `writes` means there was nothing to remove. Removes only the gate's own marked `Stop` entry; the intent recorder's `Stop` entry (distinct marker) survives |
 | `uninstall_quality_gate` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed uninstall, backing the file up first. Returns the new status (`null` once removed) |
+
+## SQL MCP server
+
+`src-tauri/src/commands/mcp.rs` — installing the read-only SQL MCP server into an agent's configuration, previewed exactly as the hooks are. Decisions live in `cb_core::mcp::install`.
+
+Nothing new crosses IPC: a status is exactly `InstallScope | null`, and the plan is the same `InstallPlan`/`PlannedWrite` the hook installers use. Writes go through `providers::apply_writes_atomically` (temp file + rename), because `~/.claude.json` is large and is rewritten continuously by a running Claude Code.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `mcp_server_status` | `provider: ProviderId` | `InstallScope \| null` | Where the server is installed for this workspace and provider (project wins over user), or `null` |
+| `mcp_server_install_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact final contents of the write — Claude Code `<root>/.mcp.json` (project) or `~/.claude.json` (user), Codex `$CODEX_HOME/config.toml` (user only). **Touches nothing** — what the preview renders, caveats included |
+| `install_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install. The entry is `command` = this executable + `args` = `["mcp-sql"]` (plus `--workspace <root>` at project scope), so no path is ever quoted into a string. Returns the new status |
+| `mcp_server_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change removing the server would make. **Touches nothing.** An empty `writes` means that configuration holds no entry of ours — the panel says so rather than disabling a button. Every other configured server survives |
+| `uninstall_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed removal, backing the file up first. Returns the new status (`null` once removed) |
+| `browser_mcp_status` | `provider: ProviderId` | `InstallScope \| null` | Where the **browser** MCP server is installed for this workspace and provider (project wins over user), or `null`. A different server name from the SQL one, so the two are reported separately |
+| `browser_mcp_install_plan` | `provider`, `scope` | `InstallPlan` | Exactly what installing the browser server would write. Touches nothing. The caveats are the browser feature own ones, not the SQL server ones: what an agent gains here is the page the user is looking at, in their own logged-in session |
+| `install_browser_mcp` | `provider`, `scope` | `InstallScope \| null` | Applies a confirmed browser-server install through `apply_writes_atomically`, then re-reads the status from disk |
+| `browser_mcp_uninstall_plan` | `provider`, `scope` | `InstallPlan` | What removing it would rewrite. Zero writes means no entry of ours was there |
+| `uninstall_browser_mcp` | `provider`, `scope` | `InstallScope \| null` | Applies a confirmed removal, then re-reads the status |
+
+Codex has no project scope: `mcp_server_install_plan(codex, project)` is an error naming `$CODEX_HOME/config.toml`, rather than inventing a `<root>/.codex/config.toml` that would look installed and never be read.
 
 ## First-open setup
 
@@ -316,6 +384,8 @@ Every one of these returns an `outcome: Availability` — `notConfigured`, `star
 | `lsp_find_usages` | `path: String`, `line: u32`, `character: u32` | `UsageResult` | Every use site of the symbol at that position, `includeDeclaration: false` — the inline row is drawn *on* the declaration, so counting it would report "1 usage" for a symbol nothing uses. `total` is the true count and is **not** capped even when `usages` is (500 rows); `truncated` says so. A row whose location is outside the workspace or in a `source-generated:`/metadata URI keeps `path: null` — still listed and still counted, just not openable |
 | `lsp_goto_definition` | `path: String`, `line: u32`, `character: u32` | `DefinitionResult` | `declarations`, `implementations` and `typeDefinitions` as three lists, asked concurrently. An empty list plus a `message` is "nobody could be asked"; an empty list with `outcome: ready` and no note about that group is "there are none" |
 | `lsp_declaration_anchors` | `path: String` | `AnchorResult` | Which declarations in one file deserve an inline "N usages" row. Each anchor's `character` aims at the **identifier**, not the start of the declaration, and `selectionLine` is the identifier's own line — attributes and doc comments push it below `line`. `id` is stable within a file so a widget can be keyed on it |
+| `lsp_prepare_rename` | `path: String`, `line: u32`, `character: u32` | `PrepareRenameResult` | Whether the symbol at that position can be renamed, and over what span. `renameable: false` under `outcome: ready` is a real answer — the server says this position is not a rename site — and is not the same as nobody being asked. `renameable: true` with all four position fields `null` is the `defaultBehavior` shape and is **also** a real answer; real Roslyn instead sends a bare range with `placeholder: null`, so the prefill is derived from the buffer either way |
+| `lsp_rename` | `path: String`, `line: u32`, `character: u32`, `old_name: String`, `new_name: String` | `RenameResult` | Renames the symbol, refusing whole rather than partially. The answer is **split**: `written` names the closed files the backend has already written to disk (workspace-relative, in write order, each reindexed for the search palette), `buffers` carries the edits for files the editor has open — a disk write behind an open tab is invisible to it and clobbered by the next Ctrl+S, so the editor applies those itself, one transaction per file. `old_name` feeds the stale-mirror check (each edit must land on a token of that name; `""` abstains from the check). Any create/rename/delete resource operation from the server refuses the whole rename. `total: Some(0)` is "the server found nothing to change"; a `ready` result carrying a `message` means the answer is qualified — a server promoted at the readiness ceiling may have **missed call sites**, and the writes have already happened |
 
 `line` is **1-based** in both directions, matching the editor gutter, `SymbolIndex::line` and the existing open-a-file-at-a-line chain. `character` is **0-based UTF-16 code units** in both directions, because that is what CodeMirror hands over and there is no 1-based column convention anywhere in this app. `Highlight.start`/`end` are UTF-16 offsets into `snippet` for the same reason. The asymmetry is deliberate; `cb_core::lsp::positions` is the only place either conversion happens.
 
@@ -352,7 +422,9 @@ Phase 1 ships **SQLite only**. "The engine could not be determined" and "this bu
 | `sql_discover` | `root: String` | `SqlDiscovery` | The connections a workspace mentions (appsettings, .NET user secrets, `.env`). Reads files only: connects to nothing, saves nothing. Uses the already-scanned workspace when that root is open. Each candidate carries a *reference*, never a value, and a `state` of `ready` / `engineUnknown` / `unresolved` |
 | `sql_save_connection` | `connection: SqlConnectionProfile` | `SqlConnectionView[]` | Add or update. The incoming `allowWrites` is **ignored** and a new profile starts at `false`; an update also keeps the stored `createdAtMs`/`lastUsedMs` |
 | `sql_delete_connection` | `id: String` | `SqlConnectionView[]` | Forget one. An id naming nothing is an error, not a silent success |
+| `sql_rename_connection` | `id: String`, `name: String` | `SqlConnectionView[]` | **Rename a connection, and record that the user chose the name.** Its own verb rather than a `sql_save_connection` round-trip, and not for tidiness: a `SqlConnectionView` carries a *redacted* secret, so the only profile a caller holding one can rebuild has the display form where the password was. Sets `userNamed`, which stops the picker composing `project · source · key` over the top of the name |
 | `sql_set_allow_writes` | `id: String`, `allowWrites: bool` | `SqlConnectionView[]` | **The consent action, and the only thing that moves `allowWrites`.** Its own verb on purpose: burying it in `sql_save_connection` would let a form round-trip turn the read-only guard off without the user saying so. It lifts the guard for *recognised writes* only — a `Refused` verdict is never lifted — and gives up the driver's own read-only open mode |
+| `sql_set_expose_to_agents` | `id: String`, `exposeToAgents: bool` | `SqlConnectionView[]` | **The agent-exposure action, and the only thing that moves `exposeToAgents`.** Whether an agent may see this connection at all through the MCP server. Orthogonal to `allowWrites`: the agent path forces read-only regardless, so no combination of the two lets an agent write. An agent with read access can read anything that login can read, including credentials the database itself stores. Un-exposing takes effect on the next call — the server re-reads the store per request |
 | `sql_test_connection` | `id: String` | `SqlTestOutcome` | Opens the handle the profile would actually get, reads a page to prove a database is behind it, asks the engine its version, and closes. A **variant enum, not a bool**: `ok` / `authFailed` / `unreachable` / `cannotOpenFile` / `notADatabase` / `tlsFailed` / `timeout` / `engineUnknown` / `engineUnsupported` / `secretUnresolved` / `failed`. `notADatabase` is why the probe exists — sqlite3 defers its header check to the first page read, so a handle over a `README.md` opens and answers `select sqlite_version()`, and "I connected" is not "this is a database". `cannotOpenFile` is a wrong path, deliberately not `unreachable`, which would send the reader to check a network. `failed` is the abstention for a driver message this build has no rule for; `timeout.afterMs` is `null` when the *driver* reported the timeout, since its duration is not ours to invent, and the app's own deadline covers the whole probe rather than only the connect |
 | `sql_execute` | `queryId: String`, `connectionId: String`, `sql: String`, `channel: Channel<SqlEvent>` | `()` | Guards the text (`sql::guard`), resolves the secret from wherever the profile says it lives, connects, and streams. Run as **one** statement at index 0 — there is no splitter, and cutting a script on `;` would split a string literal or a `BEGIN … END` block. The `rows` events are the rows: `completed` carries a `SqlCompletion` (count, cap, affected, elapsed) and **not** a second copy of the result set. A `notice` delivers the guard's sentence about an allowed write, which is neither a refusal nor a failure. `finished` is always the last event, after everything the driver produced |
 | `sql_cancel` | `queryId: String` | `SqlStopOutcome` | **Stopping is not cancelling**: it stops this side reading and drops the connection; the server may still be executing. `signalled` / `alreadyStopping` / `notFound` stay apart, so a Stop racing a statement that just finished does not look like a working stop |
@@ -361,6 +433,6 @@ Rejections (an `Err`, not an event) are reserved for the caller getting it wrong
 
 ## Streaming commands
 
-`start_run`, `run_tests`, `git_network`, and `inspect_capture` take a `Channel<ProcessEvent>` and push output events (stdout/stderr chunks, exit) while their promise stays pending. `sql_execute` is the same shape over `Channel<SqlEvent>`: rows arrive as they are read, and the promise resolves after the terminal `finished` event. `terminal_open` is the bidirectional variant: it pushes `TerminalEvent`s over its channel (one merged stream) while keystrokes flow back through `terminal_write`. The `api.ts` wrappers hide the channel behind an `onEvent` callback.
+`start_run`, `run_tests`, `git_network`, and `inspect_capture` take a `Channel<ProcessEvent>` and push output events (stdout/stderr chunks, exit) while their promise stays pending. `sql_execute` is the same shape over `Channel<SqlEvent>`: rows arrive as they are read, and the promise resolves after the terminal `finished` event. `terminal_open` is the bidirectional variant: it pushes `TerminalEvent`s over its channel (one merged stream) while keystrokes flow back through `terminal_write`. `start_debug` is the same shape over `Channel<DebugEvent>`: adapter output and the six `DebugState` variants arrive on one channel while the promise stays pending until the session ends. The `api.ts` wrappers hide the channel behind an `onEvent` callback.
 
 Related: [Tauri shell](../architecture/tauri-shell.md) · [adding a command end-to-end](../guides/development.md#adding-a-tauri-command-end-to-end).

@@ -26,7 +26,20 @@
 //! [`dsn::redact`] again on the way out, because the cost of the second pass is
 //! nothing and the cost of missing one is permanent.
 //!
-//! # Writes consent is its own verb
+//! # What moved to `cb-core`, and why it had to
+//!
+//! [`cb_core::sql::plan`] holds `Plan`, `Refusal` and `execution_plan`;
+//! [`cb_core::sql::catalog`] holds the explorer's queries, its row readers and
+//! the wire types this module re-exports under their old names. They are not
+//! there merely because a command body must not decide anything: the MCP server
+//! is a **separate process with no `AppState`**, so it cannot call any
+//! `#[tauri::command]`, and anything the human console and an agent must agree
+//! about has to sit where both can reach it. What stays here is the wrapping
+//! that only this layer can do — [`refusal_event`] turns a refusal into a
+//! redacted [`SqlEvent`]; the words themselves come from [`Refusal::sentence`],
+//! so the two surfaces cannot describe one refusal differently.
+//!
+//! # Consent is its own verb — twice
 //!
 //! [`sql_set_allow_writes`] exists so that turning off the read-only guard is a
 //! thing the user does deliberately, and [`upsert`] is what makes that true
@@ -35,6 +48,13 @@
 //! rename — or any UI round-trip that posted the profile back — could raise
 //! consent silently, which is exactly what a separate verb is supposed to
 //! prevent.
+//!
+//! [`sql_set_expose_to_agents`] is the second, and the stronger: it decides
+//! whether an agent may see a connection **at all**. [`upsert`] guards it the
+//! same way — `expose_to_agents` is forced to `false` for a new profile and
+//! left untouched on an update — and the two flags are orthogonal, because the
+//! agent path forces `writes_allowed: false` regardless of `allow_writes`. No
+//! combination of them lets an agent write.
 //!
 //! # One statement, index 0
 //!
@@ -69,12 +89,14 @@
 
 use std::path::PathBuf;
 
+use cb_core::mcp::answer::ConnectionStatusKind;
+use cb_core::sql::catalog;
 use cb_core::sql::discover::{self, Discovery, DiscoveryOptions};
 use cb_core::sql::dotenv::EnvValue;
 use cb_core::sql::driver::{ConnectSpec, DriverError, Limits, SqlDriver, StatementOutcome};
 use cb_core::sql::dsn::{self, SqlConnectionDisplay, SqlEngine};
-use cb_core::sql::guard;
 use cb_core::sql::model::{SqlEvent, SqlResultSet, SqlValue};
+use cb_core::sql::plan::{engine_name, execution_plan, Plan, Refusal};
 use cb_core::sql::session::{RegisterError, SqlSessions, StopOutcome};
 use cb_core::sql::store::{
     self, SecretSource, SqlConnection as StoredConnection, SqlConnectionsFile,
@@ -86,6 +108,21 @@ use tauri::State;
 use tokio::sync::mpsc;
 
 use crate::state::AppState;
+
+// ---------------------------------------------------------------------------
+// The explorer's wire types, which now live in `cb-core`
+// ---------------------------------------------------------------------------
+
+// Re-exported under the names the frontend already reads, so the emitted JSON
+// is byte-identical and `src/ipc/types.ts` needs no edit. They moved to
+// [`cb_core::sql::catalog`] because the MCP server is a separate process with
+// no `AppState` and cannot call a command to obtain them.
+pub use cb_core::sql::catalog::SqlColumn as SqlColumnView;
+pub use cb_core::sql::catalog::SqlObject as SqlObjectView;
+// Part of `SqlObjectView`'s public shape even where this crate does not name
+// it, so it is re-exported alongside.
+#[allow(unused_imports)]
+pub use cb_core::sql::catalog::SqlObjectKind;
 
 // ---------------------------------------------------------------------------
 // The redacted view of a saved profile
@@ -142,6 +179,18 @@ pub struct SqlConnectionView {
     pub holds_a_secret: bool,
     pub workspace_root: Option<PathBuf>,
     pub allow_writes: bool,
+    /// Whether an agent may see this connection at all, through the MCP server.
+    ///
+    /// A separate fact from `allow_writes` and never derived from it: the agent
+    /// path forces `writes_allowed: false` regardless, so this answers only
+    /// *may an agent read here*. It crosses so the picker can badge it and
+    /// offer the toggle.
+    pub expose_to_agents: bool,
+    /// Whether the user typed this name. The picker derives a composite label
+    /// from the reference when it did not, and shows `name` verbatim when it
+    /// did — so this has to cross, or the derivation would reappear on a
+    /// renamed connection the moment the list is re-read.
+    pub user_named: bool,
     pub created_at_ms: u64,
     pub last_used_ms: Option<u64>,
 }
@@ -177,6 +226,8 @@ pub(crate) fn redact_connection(stored: &StoredConnection) -> SqlConnectionView 
         holds_a_secret: stored.secret.holds_a_secret(),
         workspace_root: stored.workspace_root.clone(),
         allow_writes: stored.allow_writes,
+        expose_to_agents: stored.expose_to_agents,
+        user_named: stored.user_named,
         created_at_ms: stored.created_at_ms,
         last_used_ms: stored.last_used_ms,
     }
@@ -199,7 +250,13 @@ fn views(file: &SqlConnectionsFile) -> Vec<SqlConnectionView> {
 pub(crate) fn upsert(file: &mut SqlConnectionsFile, incoming: StoredConnection) {
     match file.connections.iter_mut().find(|c| c.id == incoming.id) {
         Some(existing) => {
-            existing.name = incoming.name;
+            // A name the user typed outranks the one the payload carries, for
+            // the same reason consent does: re-adopting a discovered connection
+            // (a rescan, a re-save from the form) must not silently undo a
+            // rename. `user_named` is likewise only ever set by [`rename`].
+            if !existing.user_named {
+                existing.name = incoming.name;
+            }
             existing.engine = incoming.engine;
             existing.secret = incoming.secret;
             existing.workspace_root = incoming.workspace_root;
@@ -207,6 +264,13 @@ pub(crate) fn upsert(file: &mut SqlConnectionsFile, incoming: StoredConnection) 
         None => {
             let mut fresh = incoming;
             fresh.allow_writes = false;
+            // Agent exposure is consent too, and a stronger one: it is the
+            // whole of what an agent may see. A new profile therefore starts
+            // unexposed whatever the payload claims, exactly as `allow_writes`
+            // does — and the `Some` arm says nothing about it at all, so no
+            // save or rename round-trip can raise it either.
+            fresh.expose_to_agents = false;
+            fresh.user_named = false;
             file.connections.push(fresh);
         }
     }
@@ -220,11 +284,51 @@ pub(crate) fn remove(file: &mut SqlConnectionsFile, id: &str) -> bool {
     file.connections.len() != before
 }
 
+/// The rename action, and the only thing that sets `user_named`.
+///
+/// Its own verb rather than a round-trip through [`upsert`], and not for tidiness:
+/// a [`SqlConnectionView`] carries a **redacted** secret, so a caller holding one
+/// cannot rebuild the [`StoredConnection`] an upsert needs — a rename posted that
+/// way would replace a stored password with its own display form and break the
+/// connection. Taking only the two fields a rename is about makes that impossible
+/// rather than merely unlikely.
+///
+/// `name` is stored as given. The cleaning and refusal rule lives at the one
+/// frontend seam (`acceptedConnectionName`), so a name that reaches here has
+/// already been accepted; the store's job is to keep it.
+pub(crate) fn rename(file: &mut SqlConnectionsFile, id: &str, name: String) -> bool {
+    match file.connections.iter_mut().find(|c| c.id == id) {
+        Some(entry) => {
+            entry.name = name;
+            entry.user_named = true;
+            true
+        }
+        None => false,
+    }
+}
+
 /// The consent action, and the only thing that moves `allow_writes`.
 pub(crate) fn set_allow_writes(file: &mut SqlConnectionsFile, id: &str, allow: bool) -> bool {
     match file.connections.iter_mut().find(|c| c.id == id) {
         Some(entry) => {
             entry.allow_writes = allow;
+            true
+        }
+        None => false,
+    }
+}
+
+/// The agent-exposure action, and the only thing that moves
+/// `expose_to_agents`.
+///
+/// Its own verb for the same reason [`set_allow_writes`] is one, and the reason
+/// is sharper here: exposure is what an agent may see *at all*, and burying it
+/// in [`sql_save_connection`] would let a form round-trip hand a database to an
+/// agent without the user ever saying so.
+pub(crate) fn set_expose_to_agents(file: &mut SqlConnectionsFile, id: &str, expose: bool) -> bool {
+    match file.connections.iter_mut().find(|c| c.id == id) {
+        Some(entry) => {
+            entry.expose_to_agents = expose;
             true
         }
         None => false,
@@ -246,16 +350,6 @@ pub(crate) fn driver_for(engine: SqlEngine) -> Option<Box<dyn SqlDriver>> {
     cb_core::sql::driver::for_engine(engine)
 }
 
-/// The dialect the guard parses with. A total mapping: a new engine must be
-/// given a dialect here, not defaulted into somebody else's.
-pub(crate) fn guard_engine(engine: SqlEngine) -> guard::Engine {
-    match engine {
-        SqlEngine::Sqlite => guard::Engine::Sqlite,
-        SqlEngine::SqlServer => guard::Engine::SqlServer,
-        SqlEngine::Postgres => guard::Engine::Postgres,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Resolving the secret
 // ---------------------------------------------------------------------------
@@ -266,6 +360,9 @@ pub(crate) fn guard_engine(engine: SqlEngine) -> guard::Engine {
 /// read, and it is redacted on the way out anyway.
 pub(crate) fn resolve_dsn(source: &SecretSource) -> Result<String, String> {
     match discover::read_value(source, &DiscoveryOptions::default()) {
+        Ok(EnvValue::Literal { text }) if text.trim().is_empty() => {
+            Err("the configured connection string is empty".to_string())
+        }
         Ok(EnvValue::Literal { text }) => Ok(text),
         // The value is still a `${...}` reference: there is nothing to connect
         // *to* yet, which is not the same as a connection that failed.
@@ -275,126 +372,32 @@ pub(crate) fn resolve_dsn(source: &SecretSource) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
-// The execution plan
+// The execution plan, which now lives in `cb-core`
 // ---------------------------------------------------------------------------
 
-/// A statement that may be sent.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Plan {
-    pub engine: SqlEngine,
-    pub sql: String,
-    /// What the connection's consent says, passed to the driver so it can open
-    /// a handle that itself refuses writes where the engine has one.
-    pub writes_allowed: bool,
-    /// The guard's own sentence for anything that is not a plain read —
-    /// including an *allowed* write, which still says what it is. [`None`] for
-    /// a read.
-    pub note: Option<String>,
-}
-
-/// Why a statement will not be sent. Never "blocked": the three reasons are
-/// acted on differently, and only the last one reached the guard at all.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Refusal {
-    /// The profile's engine was never determined, so there is no dialect to
-    /// parse with and no driver to open. The user picks an engine.
-    EngineUnknown,
-    /// The engine is known and this build has no driver for it.
-    EngineUnsupported { engine: SqlEngine },
-    /// The read-only guard refused. `reason` is the guard's own sentence, which
-    /// names itself as a text heuristic.
-    Guard { reason: String },
-}
-
-impl Refusal {
-    /// The wire event for this refusal.
-    ///
-    /// Only the guard's refusal is a [`SqlEvent::Refused`] — that variant means
-    /// *the guard refused, so nothing was sent to the database*. An engine that
-    /// could not be resolved never reached the guard, so it is a
-    /// [`SqlEvent::Failed`] with `statement_index: None`, the shape that means
-    /// "before any statement ran".
-    pub(crate) fn to_event(&self) -> SqlEvent {
-        match self {
-            Refusal::Guard { reason } => SqlEvent::Refused {
-                statement_index: 0,
-                reason: reason.clone(),
-            },
-            // Through [`failed_event`] and never around it: that is the one
-            // constructor this module's docs promise, and it is where the
-            // redaction lives.
-            Refusal::EngineUnknown => failed_event(
-                None,
-                "This connection's engine has not been determined, so there is no dialect to \
-                 check the SQL against and no driver to open. Choose an engine for it and try \
-                 again.",
-            ),
-            Refusal::EngineUnsupported { engine } => failed_event(
-                None,
-                &format!(
-                    "This build has no driver for {}. SQLite is the only engine currently \
-                     supported.",
-                    engine_name(*engine)
-                ),
-            ),
-        }
-    }
-}
-
-/// The engine's name for a sentence a human reads.
-pub(crate) fn engine_name(engine: SqlEngine) -> &'static str {
-    match engine {
-        SqlEngine::Sqlite => "SQLite",
-        SqlEngine::SqlServer => "SQL Server",
-        SqlEngine::Postgres => "PostgreSQL",
-    }
-}
-
-/// Decide whether a statement may be sent, and with what.
+/// The wire event for a refusal.
 ///
-/// `allow_writes` is a parameter rather than being read off `connection` so the
-/// resolution can be tested against both settings without building two
-/// profiles — the caller passes the stored consent.
-pub(crate) fn execution_plan(
-    connection: &StoredConnection,
-    sql: &str,
-    allow_writes: bool,
-) -> Result<Plan, Refusal> {
-    let Some(engine) = connection.engine else {
-        return Err(Refusal::EngineUnknown);
-    };
-    if driver_for(engine).is_none() {
-        return Err(Refusal::EngineUnsupported { engine });
-    }
-
-    let decision = guard::guard(sql, guard_engine(engine), allow_writes);
-    if !decision.allowed {
-        return Err(Refusal::Guard {
-            reason: refusal_reason(&decision),
-        });
-    }
-    Ok(Plan {
-        engine,
-        sql: sql.to_string(),
-        writes_allowed: allow_writes,
-        note: decision.message,
-    })
-}
-
-/// The sentence a refusal carries.
+/// The *words* live in [`Refusal::sentence`], in `cb-core`, so the console and
+/// an agent cannot describe one refusal two different ways. Only the wrapping
+/// is here, because only this layer has [`SqlEvent`] and the redacting
+/// constructor every failure message must pass through.
 ///
-/// The guard always supplies one; the fallback exists so that a future verdict
-/// with no message cannot produce an empty refusal, which would read as
-/// "blocked" with no reason — the one thing the guard's own docs forbid. It
-/// still carries [`guard::HEURISTIC_NOTE`], so a refusal never claims the
-/// database would have stopped the statement.
-fn refusal_reason(decision: &guard::Decision) -> String {
-    decision.message.clone().unwrap_or_else(|| {
-        format!(
-            "This statement was not recognised as a read. {}",
-            guard::HEURISTIC_NOTE
-        )
-    })
+/// Only the guard's refusal is a [`SqlEvent::Refused`] — that variant means
+/// *the guard refused, so nothing was sent to the database*. An engine that
+/// could not be resolved never reached the guard, so it is a
+/// [`SqlEvent::Failed`] with `statement_index: None`, the shape that means
+/// "before any statement ran".
+pub(crate) fn refusal_event(refusal: &Refusal) -> SqlEvent {
+    match refusal {
+        Refusal::Guard { reason } => SqlEvent::Refused {
+            statement_index: 0,
+            reason: reason.clone(),
+        },
+        // Through [`failed_event`] and never around it: that is the one
+        // constructor this module's docs promise, and it is where the
+        // redaction lives.
+        other => failed_event(None, &other.sentence()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +490,42 @@ pub enum SqlTestOutcome {
     Failed {
         message: String,
     },
+}
+
+/// The message-free counterpart of an outcome, for the MCP server.
+///
+/// Seven of the variants above carry a `message`, and every one of those
+/// messages came from a database driver. That is right for the human console —
+/// it is the user's own machine and their own database — and wrong for an agent,
+/// which will paste what it is told into a transcript, a commit message and a
+/// model provider's logs. `dsn::redact` is a keyword heuristic, so this mapping
+/// does not filter the words: it **drops them**, and what crosses is a variant.
+///
+/// The mapping is an exhaustive `match` with no catch-all arm, so a new outcome
+/// fails to compile here rather than being quietly filed under
+/// [`ConnectionStatusKind::Failed`] — which would be the one arm that could
+/// carry a message and does not.
+///
+/// This lives in the bridge rather than in `cb-core` because
+/// [`SqlTestOutcome`] does: the classification needs the driver's words, and
+/// only this layer ever has them.
+/// Reached from the MCP runner ([`crate::mcp_sql`]) as well as this module's
+/// own tests: the mapping is what a future variant has to pass through, and it
+/// fails to compile rather than leaking a message.
+pub(crate) fn connection_status_kind(outcome: &SqlTestOutcome) -> ConnectionStatusKind {
+    match outcome {
+        SqlTestOutcome::Ok { .. } => ConnectionStatusKind::Ok,
+        SqlTestOutcome::AuthFailed { .. } => ConnectionStatusKind::AuthFailed,
+        SqlTestOutcome::Unreachable { .. } => ConnectionStatusKind::Unreachable,
+        SqlTestOutcome::CannotOpenFile { .. } => ConnectionStatusKind::CannotOpenFile,
+        SqlTestOutcome::NotADatabase { .. } => ConnectionStatusKind::NotADatabase,
+        SqlTestOutcome::TlsFailed { .. } => ConnectionStatusKind::TlsFailed,
+        SqlTestOutcome::Timeout { .. } => ConnectionStatusKind::Timeout,
+        SqlTestOutcome::EngineUnknown => ConnectionStatusKind::EngineUnknown,
+        SqlTestOutcome::EngineUnsupported { .. } => ConnectionStatusKind::EngineUnsupported,
+        SqlTestOutcome::SecretUnresolved { .. } => ConnectionStatusKind::SecretUnresolved,
+        SqlTestOutcome::Failed { .. } => ConnectionStatusKind::Failed,
+    }
 }
 
 /// How long a connection test waits before reporting a timeout.
@@ -713,18 +752,11 @@ pub async fn sql_list_connections() -> Result<Vec<SqlConnectionView>, String> {
 /// The connections a workspace mentions. Reads files; connects to nothing and
 /// saves nothing.
 #[tauri::command]
-pub async fn sql_discover(state: State<'_, AppState>, root: String) -> Result<Discovery, String> {
+pub async fn sql_discover(root: String) -> Result<Discovery, String> {
     let path = PathBuf::from(&root);
-    // The scanned copy when that root is open — the same projects, without
-    // re-walking the tree. Otherwise scan it, so a root that is not open (or a
-    // path that was just typed) still answers.
-    let workspace = match state
-        .slot(&path)
-        .or_else(|| dunce::canonicalize(&path).ok().and_then(|c| state.slot(&c)))
-    {
-        Some(slot) => slot.workspace(),
-        None => cb_core::workspace::workspace_from_dir(&path).map_err(|e| format!("{e:#}"))?,
-    };
+    // Rescan means a fresh walk: the open workspace snapshot cannot know about
+    // a project added since the tab opened.
+    let workspace = cb_core::workspace::workspace_from_dir(&path).map_err(|e| format!("{e:#}"))?;
     Ok(discover::discover(&workspace, &DiscoveryOptions::default()))
 }
 
@@ -755,6 +787,24 @@ pub async fn sql_delete_connection(id: String) -> Result<Vec<SqlConnectionView>,
     Ok(views(&file))
 }
 
+/// Rename a saved connection.
+///
+/// Hands back the whole redacted list, as every other mutation here does, so the
+/// picker replaces its state from one answer rather than patching a row.
+#[tauri::command]
+pub async fn sql_rename_connection(
+    id: String,
+    name: String,
+) -> Result<Vec<SqlConnectionView>, String> {
+    let path = store::sql_connections_path();
+    let mut file = store::load(&path);
+    if !rename(&mut file, &id, name) {
+        return Err(format!("no connection named {id}"));
+    }
+    store::save(&path, &file).map_err(|e| format!("{e:#}"))?;
+    Ok(views(&file))
+}
+
 /// Allow or disallow writes on one connection.
 ///
 /// Its own verb on purpose: this is the consent action, and burying it inside
@@ -768,6 +818,31 @@ pub async fn sql_set_allow_writes(
     let path = store::sql_connections_path();
     let mut file = store::load(&path);
     if !set_allow_writes(&mut file, &id, allow_writes) {
+        return Err(format!("no connection named {id}"));
+    }
+    store::save(&path, &file).map_err(|e| format!("{e:#}"))?;
+    Ok(views(&file))
+}
+
+/// Expose or un-expose one connection to agents through the MCP server.
+///
+/// Its own verb on purpose, mirroring [`sql_set_allow_writes`]. The two flags
+/// are orthogonal: the agent path forces `writes_allowed: false` regardless of
+/// `allow_writes`, so no combination of them lets an agent write. What this one
+/// grants is *reading*, and an agent with read access can read anything that
+/// login can read — including credentials the database itself stores. Expose
+/// only connections whose login you would give a colleague read access to.
+///
+/// Un-exposing takes effect on the next call: the MCP server re-reads the store
+/// per request and caches no connection.
+#[tauri::command]
+pub async fn sql_set_expose_to_agents(
+    id: String,
+    expose_to_agents: bool,
+) -> Result<Vec<SqlConnectionView>, String> {
+    let path = store::sql_connections_path();
+    let mut file = store::load(&path);
+    if !set_expose_to_agents(&mut file, &id, expose_to_agents) {
         return Err(format!("no connection named {id}"));
     }
     store::save(&path, &file).map_err(|e| format!("{e:#}"))?;
@@ -862,7 +937,7 @@ async fn probe_connection(
 /// The streamed events are drained and discarded — the row loop streams, and a
 /// full channel would block it forever — so the caller reads the assembled
 /// result off the returned outcome.
-async fn run_discarding_rows(
+pub(crate) async fn run_discarding_rows(
     connection: &mut dyn cb_core::sql::driver::SqlConnection,
     sql: &str,
 ) -> Result<StatementOutcome, DriverError> {
@@ -892,6 +967,111 @@ pub async fn sql_test_connection(id: String) -> Result<SqlTestOutcome, String> {
     Ok(test_outcome(connection, TEST_TIMEOUT_MS).await)
 }
 
+/// Test a literal connection before it is saved. The temporary profile exists
+/// only for this call; no store is read or written, and the result cannot carry
+/// the connection string back to the frontend.
+#[tauri::command]
+pub async fn sql_test_connection_string(
+    engine: SqlEngine,
+    connection_string: String,
+) -> Result<SqlTestOutcome, String> {
+    let connection = StoredConnection {
+        id: String::new(),
+        name: String::new(),
+        engine: Some(engine),
+        secret: SecretSource::Literal { connection_string },
+        workspace_root: None,
+        allow_writes: false,
+        expose_to_agents: false,
+        user_named: false,
+        created_at_ms: 0,
+        last_used_ms: None,
+    };
+    Ok(test_outcome(&connection, TEST_TIMEOUT_MS).await)
+}
+
+/// The catalog query for one table's columns, or the refusal that stopped it
+/// being built.
+///
+/// A decision, so it is a free function rather than a line inside the command:
+/// a schema or table name now arrives from an agent as well as from a row this
+/// app itself read out of the catalog, and [`catalog::identifier`] refuses the
+/// hazards the `''` doubling underneath it does not close. See that module's
+/// docs — refusing is not parameter binding.
+pub(crate) fn column_query_for(
+    engine: SqlEngine,
+    schema: Option<&str>,
+    table: &str,
+) -> Result<String, String> {
+    if let Some(schema) = schema {
+        catalog::identifier(schema).map_err(|refusal| refusal.sentence())?;
+    }
+    catalog::identifier(table).map_err(|refusal| refusal.sentence())?;
+    Ok(catalog::column_catalog_query(engine, schema, table))
+}
+
+/// List objects for the explorer. Tables are the first supported category;
+/// adding another category does not require replacing this command's shape.
+#[tauri::command]
+pub async fn sql_list_objects(connection_id: String) -> Result<Vec<SqlObjectView>, String> {
+    let file = store::load(&store::sql_connections_path());
+    let connection = file
+        .connections
+        .iter()
+        .find(|c| c.id == connection_id)
+        .ok_or_else(|| format!("no connection named {connection_id}"))?;
+    let engine = connection
+        .engine
+        .ok_or_else(|| "the connection's engine has not been determined".to_string())?;
+    let driver = driver_for(engine)
+        .ok_or_else(|| format!("this build has no driver for {}", engine_name(engine)))?;
+    let dsn = resolve_dsn(&connection.secret)?;
+    let mut live = driver
+        .connect(&ConnectSpec {
+            dsn,
+            writes_allowed: false,
+        })
+        .await
+        .map_err(|error| dsn::redact(&error.message))?;
+    let outcome = run_discarding_rows(live.as_mut(), catalog::object_catalog_query(engine))
+        .await
+        .map_err(|error| dsn::redact(&error.message))?;
+    catalog::table_objects(outcome.result())
+}
+
+/// Lazily load a table's columns when its explorer node is opened.
+#[tauri::command]
+pub async fn sql_list_columns(
+    connection_id: String,
+    schema: Option<String>,
+    table: String,
+) -> Result<Vec<SqlColumnView>, String> {
+    let file = store::load(&store::sql_connections_path());
+    let connection = file
+        .connections
+        .iter()
+        .find(|c| c.id == connection_id)
+        .ok_or_else(|| format!("no connection named {connection_id}"))?;
+    let engine = connection
+        .engine
+        .ok_or_else(|| "the connection's engine has not been determined".to_string())?;
+    let driver = driver_for(engine)
+        .ok_or_else(|| format!("this build has no driver for {}", engine_name(engine)))?;
+    let dsn = resolve_dsn(&connection.secret)?;
+    let mut live = driver
+        .connect(&ConnectSpec {
+            dsn,
+            writes_allowed: false,
+        })
+        .await
+        .map_err(|error| dsn::redact(&error.message))?;
+    let query = column_query_for(engine, schema.as_deref(), &table)?;
+    let outcome = run_discarding_rows(live.as_mut(), &query)
+        .await
+        .map_err(|error| dsn::redact(&error.message))?;
+    catalog::table_columns(outcome.result())
+}
+
 /// Run a statement, streaming its rows to `channel`.
 #[tauri::command]
 pub async fn sql_execute(
@@ -911,7 +1091,7 @@ pub async fn sql_execute(
     let plan = match execution_plan(connection, &sql, connection.allow_writes) {
         Ok(plan) => plan,
         Err(refusal) => {
-            let _ = channel.send(refusal.to_event());
+            let _ = channel.send(refusal_event(&refusal));
             let _ = channel.send(SqlEvent::Finished { cancelled: false });
             return Ok(());
         }
@@ -1019,6 +1199,8 @@ mod tests {
             },
             workspace_root: None,
             allow_writes: false,
+            expose_to_agents: false,
+            user_named: false,
             created_at_ms: 10,
             last_used_ms: None,
         }
@@ -1049,6 +1231,47 @@ mod tests {
             elapsed_ms: 1,
             statement_index: 0,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // The catalog query the explorer builds
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn an_ordinary_table_builds_its_column_query() {
+        let query = column_query_for(SqlEngine::Postgres, Some("sales"), "orders").unwrap();
+        assert!(query.contains("'sales'"), "{query}");
+        assert!(query.contains("'orders'"), "{query}");
+    }
+
+    /// The first layer bites before the doubling underneath it. A name this app
+    /// cannot look up safely is refused, not repaired — a repaired name would
+    /// return rows about a different object.
+    #[test]
+    fn a_hazardous_identifier_is_refused_and_the_refusal_says_which_rule() {
+        let cases: [(Option<&str>, String, &str); 4] = [
+            (None, "orders\\".to_string(), "backslash"),
+            (None, "or'ders".to_string(), "single quote"),
+            (Some("sales"), "or\0ders".to_string(), "NUL"),
+            (None, "or\nders".to_string(), "line break"),
+        ];
+        for (schema, table, needle) in cases {
+            let error = column_query_for(SqlEngine::Sqlite, schema, &table)
+                .expect_err("this name must be refused");
+            assert!(
+                error.to_lowercase().contains(&needle.to_lowercase()),
+                "the refusal must name the rule that bit ({needle}): {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_schema_is_refused_rather_than_matching_every_schema() {
+        // `None` means *this engine does not qualify by schema*; `Some("")` is
+        // a name nobody has, and interpolating it would silently match nothing
+        // while looking like a working lookup.
+        assert!(column_query_for(SqlEngine::Postgres, Some(""), "orders").is_err());
+        assert!(column_query_for(SqlEngine::Sqlite, None, "orders").is_ok());
     }
 
     // -----------------------------------------------------------------------
@@ -1127,6 +1350,98 @@ mod tests {
     }
 
     #[test]
+    fn a_save_cannot_raise_agent_exposure() {
+        // Exposure is the stronger of the two consents — it decides whether an
+        // agent may read this database at all — so it moves through
+        // `sql_set_expose_to_agents` and nowhere else. A form round-trip
+        // claiming it must change nothing, in either direction.
+        let mut file = SqlConnectionsFile::default();
+        upsert(&mut file, literal("Data Source=app.db"));
+        assert!(!file.connections[0].expose_to_agents);
+
+        let mut claiming = literal("Data Source=app.db");
+        claiming.name = "Renamed".into();
+        claiming.expose_to_agents = true;
+        upsert(&mut file, claiming);
+
+        assert_eq!(file.connections[0].name, "Renamed");
+        assert!(
+            !file.connections[0].expose_to_agents,
+            "a save granted agent exposure, which only sql_set_expose_to_agents may do"
+        );
+
+        // And the same in reverse: a payload that happens to say `false` must
+        // not revoke a grant the user made, or every save would silently
+        // un-expose and the toggle would look broken.
+        set_expose_to_agents(&mut file, "c1", true);
+        let mut denying = literal("Data Source=app.db");
+        denying.expose_to_agents = false;
+        upsert(&mut file, denying);
+        assert!(
+            file.connections[0].expose_to_agents,
+            "a save revoked agent exposure, which only sql_set_expose_to_agents may do"
+        );
+    }
+
+    #[test]
+    fn a_new_profile_starts_unexposed_even_if_the_payload_says_otherwise() {
+        let mut file = SqlConnectionsFile::default();
+        let mut incoming = literal("Data Source=app.db");
+        incoming.expose_to_agents = true;
+        upsert(&mut file, incoming);
+        assert!(
+            !file.connections[0].expose_to_agents,
+            "a connection the user has just created has not been offered to an agent"
+        );
+    }
+
+    #[test]
+    fn a_rename_is_not_an_exposure_decision() {
+        // `rename` takes the two fields a rename is about. Naming a connection
+        // says nothing about who may read it, in either direction.
+        let mut file = SqlConnectionsFile::default();
+        upsert(&mut file, literal("Data Source=app.db"));
+        assert!(rename(&mut file, "c1", "Orders (prod)".into()));
+        assert!(!file.connections[0].expose_to_agents);
+
+        set_expose_to_agents(&mut file, "c1", true);
+        assert!(rename(&mut file, "c1", "Orders (prod, read-only)".into()));
+        assert!(
+            file.connections[0].expose_to_agents,
+            "a rename revoked agent exposure"
+        );
+    }
+
+    #[test]
+    fn exposing_an_unknown_id_reports_it_rather_than_inventing_an_entry() {
+        let mut file = SqlConnectionsFile::default();
+        assert!(!set_expose_to_agents(&mut file, "nope", true));
+        assert!(file.connections.is_empty());
+    }
+
+    /// The two consents are separate facts, and the picker renders them
+    /// separately. Deriving one from the other anywhere would make the MCP
+    /// server's forced `writes_allowed: false` look like the only thing
+    /// standing between an agent and a write.
+    #[test]
+    fn the_two_consents_do_not_move_each_other() {
+        let mut file = SqlConnectionsFile::default();
+        upsert(&mut file, literal("Data Source=app.db"));
+
+        set_allow_writes(&mut file, "c1", true);
+        assert!(!file.connections[0].expose_to_agents);
+
+        set_expose_to_agents(&mut file, "c1", true);
+        set_allow_writes(&mut file, "c1", false);
+        assert!(file.connections[0].expose_to_agents);
+
+        set_expose_to_agents(&mut file, "c1", false);
+        set_allow_writes(&mut file, "c1", true);
+        assert!(!file.connections[0].expose_to_agents);
+        assert!(file.connections[0].allow_writes);
+    }
+
+    #[test]
     fn an_update_keeps_the_record_fields_and_replaces_the_form_fields() {
         let mut file = SqlConnectionsFile::default();
         upsert(&mut file, literal("Data Source=app.db"));
@@ -1161,6 +1476,77 @@ mod tests {
         let mut file = SqlConnectionsFile::default();
         assert!(!set_allow_writes(&mut file, "nope", true));
         assert!(file.connections.is_empty());
+    }
+
+    #[test]
+    fn renaming_records_that_the_user_chose_the_name() {
+        // Both halves matter: the name the picker shows, and the flag that stops
+        // it composing `project · source · key` over the top of it.
+        let mut file = SqlConnectionsFile::default();
+        upsert(&mut file, literal("Data Source=app.db"));
+        assert!(!file.connections[0].user_named);
+
+        assert!(rename(&mut file, "c1", "Shop (live)".into()));
+        assert_eq!(file.connections[0].name, "Shop (live)");
+        assert!(file.connections[0].user_named);
+    }
+
+    #[test]
+    fn renaming_an_unknown_id_reports_it_rather_than_inventing_an_entry() {
+        let mut file = SqlConnectionsFile::default();
+        assert!(!rename(&mut file, "nope", "Shop".into()));
+        assert!(file.connections.is_empty());
+    }
+
+    #[test]
+    fn renaming_touches_nothing_but_the_name() {
+        // In particular not the secret: a rename that went through `upsert`
+        // would need a whole profile, and the only one a caller holding a
+        // redacted view can build has the *display form* where the password was.
+        let mut file = SqlConnectionsFile::default();
+        upsert(&mut file, literal("Data Source=app.db"));
+        set_allow_writes(&mut file, "c1", true);
+
+        rename(&mut file, "c1", "Shop".into());
+
+        let entry = &file.connections[0];
+        assert_eq!(
+            entry.secret,
+            SecretSource::Literal {
+                connection_string: "Data Source=app.db".into()
+            }
+        );
+        assert!(entry.allow_writes, "a rename is not a consent decision");
+        assert_eq!(entry.created_at_ms, 10);
+    }
+
+    #[test]
+    fn a_save_cannot_undo_a_rename() {
+        // Re-adopting a discovered connection — a rescan, or a re-save from the
+        // form — carries the *derived* name. Letting it win would revert the
+        // rename, and the flag would then disagree with the name it guards.
+        let mut file = SqlConnectionsFile::default();
+        upsert(&mut file, literal("Data Source=app.db"));
+        rename(&mut file, "c1", "Shop (live)".into());
+
+        let mut rediscovered = literal("Data Source=app.db");
+        rediscovered.name = "Api · Default · Orders".into();
+        rediscovered.user_named = false;
+        upsert(&mut file, rediscovered);
+
+        assert_eq!(file.connections[0].name, "Shop (live)");
+        assert!(file.connections[0].user_named);
+    }
+
+    #[test]
+    fn a_save_cannot_claim_the_user_named_a_new_profile() {
+        // The same rule as consent: only the rename verb sets this, so a payload
+        // asserting it cannot freeze a derived label on a brand-new entry.
+        let mut file = SqlConnectionsFile::default();
+        let mut incoming = literal("Data Source=app.db");
+        incoming.user_named = true;
+        upsert(&mut file, incoming);
+        assert!(!file.connections[0].user_named);
     }
 
     // -----------------------------------------------------------------------
@@ -1235,10 +1621,9 @@ mod tests {
     fn only_the_guards_refusal_is_a_refused_event() {
         // `Refused` means the guard refused, so nothing was sent. An engine
         // that could not be resolved never reached the guard.
-        let refused = Refusal::Guard {
+        let refused = refusal_event(&Refusal::Guard {
             reason: "no".into(),
-        }
-        .to_event();
+        });
         assert!(matches!(
             refused,
             SqlEvent::Refused {
@@ -1253,7 +1638,7 @@ mod tests {
                 engine: SqlEngine::Postgres,
             },
         ] {
-            let event = refusal.to_event();
+            let event = refusal_event(&refusal);
             let SqlEvent::Failed {
                 statement_index,
                 message,
@@ -1310,6 +1695,15 @@ mod tests {
             .unwrap(),
             "Data Source=app.db"
         );
+    }
+
+    #[test]
+    fn an_empty_literal_is_unresolved_before_any_driver_is_opened() {
+        let error = resolve_dsn(&SecretSource::Literal {
+            connection_string: "   ".into(),
+        })
+        .unwrap_err();
+        assert!(error.contains("empty"), "{error}");
     }
 
     #[test]
@@ -1456,11 +1850,13 @@ mod tests {
                 "allowWrites",
                 "createdAtMs",
                 "engine",
+                "exposeToAgents",
                 "holdsASecret",
                 "id",
                 "lastUsedMs",
                 "name",
                 "secret",
+                "userNamed",
                 "workspaceRoot",
             ]
         );
@@ -1937,5 +2333,79 @@ mod tests {
             vec![only],
             "the only construction may be the one inside `failed_event`"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // What may cross to an agent
+    // -----------------------------------------------------------------------
+
+    /// One of every `SqlTestOutcome`, with a sentinel in every message field.
+    ///
+    /// Written out rather than generated, so adding a variant to the enum means
+    /// adding it here — and the count assertion below is what makes forgetting
+    /// to a failure rather than a silent gap.
+    fn every_outcome() -> Vec<SqlTestOutcome> {
+        let message = || SENTINEL.to_string();
+        vec![
+            SqlTestOutcome::Ok {
+                server_version: Some(message()),
+            },
+            SqlTestOutcome::AuthFailed { message: message() },
+            SqlTestOutcome::Unreachable { message: message() },
+            SqlTestOutcome::CannotOpenFile { message: message() },
+            SqlTestOutcome::NotADatabase { message: message() },
+            SqlTestOutcome::TlsFailed { message: message() },
+            SqlTestOutcome::Timeout { after_ms: Some(10) },
+            SqlTestOutcome::EngineUnknown,
+            SqlTestOutcome::EngineUnsupported {
+                engine: SqlEngine::Postgres,
+            },
+            SqlTestOutcome::SecretUnresolved { reason: message() },
+            SqlTestOutcome::Failed { message: message() },
+        ]
+    }
+
+    /// A string a driver message would carry that must never reach an agent.
+    const SENTINEL: &str = "Server=db;Password=hunter2-SENTINEL";
+
+    #[test]
+    fn every_test_outcome_maps_to_an_agent_kind_and_none_carries_its_message() {
+        let outcomes = every_outcome();
+        assert_eq!(
+            outcomes.len(),
+            ConnectionStatusKind::ALL.len(),
+            "a variant was added to SqlTestOutcome or ConnectionStatusKind and not to the other"
+        );
+
+        let mut mapped: Vec<&'static str> = Vec::new();
+        for outcome in &outcomes {
+            let kind = connection_status_kind(outcome);
+            let rendered = cb_core::mcp::render::status(kind);
+            assert!(
+                !rendered.contains("SENTINEL"),
+                "{outcome:?} leaked its message: {rendered}"
+            );
+            mapped.push(kind.name());
+        }
+
+        // Every kind is reachable and no two outcomes share one: a mapping that
+        // collapsed two answers would be as wrong as one that leaked a message.
+        let mut sorted = mapped.clone();
+        sorted.sort_unstable();
+        let mut unique = sorted.clone();
+        unique.dedup();
+        assert_eq!(sorted, unique, "two outcomes map to one agent kind");
+        assert_eq!(sorted.len(), ConnectionStatusKind::ALL.len());
+    }
+
+    #[test]
+    fn an_ok_outcomes_server_version_does_not_cross_either() {
+        // `server_version` is not an error message, and it is still the
+        // server's own text: it names a product and a build number.
+        let kind = connection_status_kind(&SqlTestOutcome::Ok {
+            server_version: Some("PostgreSQL 16.2 SENTINEL".into()),
+        });
+        assert_eq!(kind, ConnectionStatusKind::Ok);
+        assert!(!cb_core::mcp::render::status(kind).contains("SENTINEL"));
     }
 }

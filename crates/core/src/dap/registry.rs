@@ -3,8 +3,8 @@
 //!
 //! Nothing is bundled, exactly as with [`crate::lsp::registry`]: a debugger is
 //! hundreds of megabytes, is licensed per-editor in at least one case, and is
-//! already installed on the machine of anybody who has ever debugged this code
-//! in VS Code or Visual Studio. So this looks, and reports.
+//! commonly installed separately by developers who need them. So this looks,
+//! and reports.
 //!
 //! It reuses that module's [`Probe`] rather than defining a second environment
 //! abstraction. Both need the same four questions answered about a machine, and
@@ -23,25 +23,22 @@
 //!
 //! # What is supported, honestly
 //!
-//! **.NET is supported.** `vsdbg-ui` ships inside the VS Code C# extension —
-//! verified present on the development machine at
-//! `.vscode/extensions/ms-dotnettools.csharp-<version>-win32-x64/.debugger/x86_64/vsdbg-ui.exe`
-//! — and `netcoredbg` is a drop-in alternative on PATH. Both speak DAP over
-//! stdio with `--interpreter=vscode`.
+//! **.NET is supported through NetCoreDbg.** It is open source and speaks DAP
+//! over stdio with `--interpreter=vscode`. The proprietary debugger bundled
+//! with Microsoft's C# extension is not reused outside the Visual Studio
+//! product family its runtime licence names.
 //!
-//! **Node is not, yet, and this module says so rather than pretending.** The
+//! **Node uses the standalone js-debug server.** The
 //! js-debug adapter bundled with VS Code has no standalone entry point — it is
 //! compiled into the extension host and runs in-process — so the copy on a
 //! machine with VS Code installed cannot be launched as an adapter. The
 //! standalone build (the `js-debug-dap` release asset) can, but it speaks DAP
-//! over a **TCP port** rather than stdio, and this app has no socket transport.
-//! So [`resolve`] returns [`Resolution::NotFound`] for Node with that stated in
-//! the hint. Inventing a path that would fail at spawn time would move the same
-//! failure to a place with less information at it.
+//! over a **TCP port**, which the session layer supports. [`resolve`] looks for
+//! that standalone launcher only and explains how to configure it when absent.
 
 use std::path::{Path, PathBuf};
 
-use crate::lsp::registry::{parse_extension_version, Probe, CSHARP_EXTENSION_PREFIX, EDITOR_DIRS};
+use crate::lsp::registry::Probe;
 
 /// Which debugger an ecosystem needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -81,8 +78,8 @@ impl Debuggee {
 pub struct AdapterSpec {
     pub program: PathBuf,
     pub args: Vec<String>,
-    /// Which of the candidates this was, for the status line — "vsdbg from the
-    /// VS Code C# extension" is a more useful thing to show than a path.
+    /// Which candidate this was, for a useful status line rather than a bare
+    /// filesystem path.
     pub description: String,
 }
 
@@ -112,60 +109,62 @@ pub const DOTNET_ADAPTER_ENV: &str = "CB_DAP_DOTNET";
 /// Environment variable pinning the Node adapter.
 pub const NODE_ADAPTER_ENV: &str = "CB_DAP_NODE";
 
-/// The two spellings of vsdbg's DAP front end, preferred first.
-///
-/// `vsdbg-ui` is the one VS Code launches for a debug session; `vsdbg` is the
-/// engine beneath it and also accepts `--interpreter=vscode`. Both are tried
-/// because a trimmed install may carry only one, and the fallback costs a
-/// `is_file` call.
-const VSDBG_NAMES: &[&str] = &["vsdbg-ui.exe", "vsdbg-ui", "vsdbg.exe", "vsdbg"];
-
-/// Architecture directories inside the extension's `.debugger`, preferred first.
-const VSDBG_ARCH_DIRS: &[&str] = &["x86_64", "arm64", "x86"];
-
 /// The argument that puts either debugger into DAP mode.
 const DAP_INTERPRETER: &str = "--interpreter=vscode";
 
+/// Where each adapter sits inside the bundled resource directory.
+///
+/// These are the paths `scripts/fetch-debuggers.mjs` writes. The two must move
+/// together — a mismatch un-bundles an adapter *silently*, since the resolver
+/// simply falls through to PATH and reports "not installed" while the files sit
+/// in the install directory. `registry_tests` pins both spellings for that
+/// reason.
+const BUNDLED_DOTNET: &[&str] = &["netcoredbg/netcoredbg.exe", "netcoredbg/netcoredbg"];
+const BUNDLED_NODE: &str = "js-debug/src/dapDebugServer.js";
+
 /// Find the adapter for a debuggee.
-pub fn resolve(debuggee: Debuggee, probe: &dyn Probe) -> Resolution {
+///
+/// `bundled_dir` is the installer's `resources/debuggers/`, or `None` when
+/// there is none — a `cargo build` produces no resource directory, and a build
+/// made with no network produces an empty one. Both are ordinary answers, and
+/// the search continues to PATH in either case.
+///
+/// Order is **pin, bundle, PATH**. The pin is an explicit instruction and wins
+/// outright. The bundle comes next because it is the version this app was built
+/// against and is known to work with it; a copy on PATH is any version at all,
+/// so it is the fallback rather than the default — and `CB_DAP_*` remains the
+/// way to insist on your own.
+pub fn resolve(debuggee: Debuggee, probe: &dyn Probe, bundled_dir: Option<&Path>) -> Resolution {
     match debuggee {
-        Debuggee::DotNet => resolve_dotnet(probe),
-        Debuggee::Node => resolve_node(probe),
+        Debuggee::DotNet => resolve_dotnet(probe, bundled_dir),
+        Debuggee::Node => resolve_node(probe, bundled_dir),
     }
 }
 
-fn resolve_dotnet(probe: &dyn Probe) -> Resolution {
+fn resolve_dotnet(probe: &dyn Probe, bundled_dir: Option<&Path>) -> Resolution {
     if let Some(pinned) = probe.env(DOTNET_ADAPTER_ENV) {
         return pinned_adapter(&pinned, probe, DOTNET_ADAPTER_ENV);
     }
 
     let mut looked_for = Vec::new();
 
-    // The C# extension first: it is the copy a .NET developer on this machine
-    // already has, and it is version-matched to nothing, so no SDK question
-    // arises. Editor order decides, then version within an editor — the rule
-    // `lsp::registry` already applies, for the same reason.
-    match probe.home() {
-        Some(home) => {
-            for editor in EDITOR_DIRS {
-                let extensions = home.join(editor).join("extensions");
-                if !probe.is_dir(&extensions) {
-                    looked_for.push(format!("{} (not present)", extensions.display()));
-                    continue;
-                }
-                if let Some(spec) = best_vsdbg_in(&extensions, probe, &mut looked_for) {
-                    return Resolution::Found(spec);
-                }
-            }
+    for relative in BUNDLED_DOTNET {
+        let Some(candidate) = bundled_dir.map(|dir| dir.join(relative)) else {
+            break;
+        };
+        if probe.is_file(&candidate) {
+            return Resolution::Found(AdapterSpec {
+                description: "netcoredbg (bundled with code-basics)".to_string(),
+                program: candidate,
+                args: vec![DAP_INTERPRETER.to_string()],
+            });
         }
-        None => looked_for.push(
-            "the home directory could not be determined, so no editor extensions were searched"
-                .to_string(),
-        ),
+        looked_for.push(format!("{} (not bundled)", candidate.display()));
     }
 
-    // Then PATH, for netcoredbg — the open-source alternative, and the only
-    // option on a machine with no VS Code.
+    // NetCoreDbg is open source. The vsdbg copy inside Microsoft's C# extension
+    // is deliberately not discovered because its runtime licence restricts it
+    // to the Visual Studio product family.
     for name in ["netcoredbg", "netcoredbg.exe"] {
         match probe.on_path(name) {
             Some(program) => {
@@ -181,79 +180,35 @@ fn resolve_dotnet(probe: &dyn Probe) -> Resolution {
 
     Resolution::NotFound {
         looked_for,
-        hint: "Install the C# extension for VS Code (it ships the vsdbg debugger), \
-               or put `netcoredbg` on PATH. Set CB_DAP_DOTNET to point at either one directly."
+        hint: "Install NetCoreDbg and put `netcoredbg` on PATH, or set \
+               CB_DAP_DOTNET to its executable."
             .to_string(),
     }
 }
 
-/// The newest C# extension's debugger, under one editor's extensions directory.
-///
-/// Mirrors `lsp::registry::best_roslyn_in`, including the two decisions that
-/// module learned the hard way: the children are sorted so that two unparseable
-/// names do not pick differently run to run, and versions are compared as
-/// numbers so `2.140.9` beats `2.9.0`.
-fn best_vsdbg_in(
-    extensions: &Path,
-    probe: &dyn Probe,
-    looked_for: &mut Vec<String>,
-) -> Option<AdapterSpec> {
-    let mut children = probe.read_dir(extensions);
-    children.sort();
-
-    let mut best: Option<(Option<Vec<u64>>, PathBuf)> = None;
-    for child in children {
-        let Some(name) = child.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if !name.starts_with(CSHARP_EXTENSION_PREFIX) {
-            continue;
-        }
-
-        let debugger = child.join(".debugger");
-        let exe = VSDBG_ARCH_DIRS
-            .iter()
-            .map(|arch| debugger.join(arch))
-            // The pre-arch layout put the executables straight in `.debugger`.
-            .chain(std::iter::once(debugger.clone()))
-            .flat_map(|dir| VSDBG_NAMES.iter().map(move |n| dir.join(n)))
-            .find(|candidate| probe.is_file(candidate));
-
-        let Some(exe) = exe else {
-            // Reported rather than skipped: otherwise the user is told nothing
-            // was found while looking straight at an installed C# extension.
-            looked_for.push(format!(
-                "{} contains no vsdbg executable",
-                debugger.display()
-            ));
-            continue;
-        };
-
-        let version = parse_extension_version(name);
-        if best.as_ref().is_none_or(|(seen, _)| version > *seen) {
-            best = Some((version, exe));
-        }
-    }
-
-    best.map(|(_, program)| AdapterSpec {
-        description: format!(
-            "vsdbg from the VS Code C# extension ({})",
-            program.display()
-        ),
-        program,
-        args: vec![DAP_INTERPRETER.to_string()],
-    })
-}
-
-fn resolve_node(probe: &dyn Probe) -> Resolution {
+fn resolve_node(probe: &dyn Probe, bundled_dir: Option<&Path>) -> Resolution {
     if let Some(pinned) = probe.env(NODE_ADAPTER_ENV) {
-        return pinned_adapter(&pinned, probe, NODE_ADAPTER_ENV);
+        return needs_node(pinned_adapter(&pinned, probe, NODE_ADAPTER_ENV), probe);
     }
 
     let mut looked_for = vec![
         "js-debug-adapter on PATH".to_string(),
         format!("{NODE_ADAPTER_ENV} (not set)"),
     ];
+
+    if let Some(candidate) = bundled_dir.map(|dir| dir.join(BUNDLED_NODE)) {
+        if probe.is_file(&candidate) {
+            return needs_node(
+                Resolution::Found(AdapterSpec {
+                    description: "js-debug (bundled with code-basics)".to_string(),
+                    program: candidate,
+                    args: Vec::new(),
+                }),
+                probe,
+            );
+        }
+        looked_for.push(format!("{} (not bundled)", candidate.display()));
+    }
 
     // The standalone build is the only launchable one, and it is not commonly
     // installed. Checked anyway so that somebody who *has* installed it is not
@@ -276,10 +231,40 @@ fn resolve_node(probe: &dyn Probe) -> Resolution {
 
     Resolution::NotFound {
         looked_for,
-        hint: "Node debugging needs the standalone js-debug adapter, and this app cannot \
-               speak to it yet: it serves DAP over a TCP port and only stdio adapters are \
-               supported here. Set CB_DAP_NODE if you have a stdio-speaking adapter."
-            .to_string(),
+        hint:
+            "Download the standalone vscode-js-debug DAP server and put its launcher on \
+               PATH as `js-debug-adapter`, or set CB_DAP_NODE to its executable or .js entry point."
+                .to_string(),
+    }
+}
+
+/// Refuse a JavaScript adapter when there is no Node to run it.
+///
+/// js-debug's standalone server is a `.js` file, so the spawn layer runs it as
+/// `node <script>`. Without Node that fails with "program not found" naming
+/// *node* — from a layer that has no idea why this app wanted Node at all. The
+/// reason is known here, so the refusal belongs here: an adapter that cannot
+/// start is not found, and saying so early keeps the six-answer rule intact
+/// rather than collapsing a missing runtime into a generic launch failure.
+fn needs_node(resolution: Resolution, probe: &dyn Probe) -> Resolution {
+    let Resolution::Found(spec) = &resolution else {
+        return resolution;
+    };
+    if spec.program.extension().and_then(|e| e.to_str()) != Some("js") {
+        return resolution;
+    }
+    if probe.on_path("node").is_some() {
+        return resolution;
+    }
+    Resolution::NotFound {
+        looked_for: vec![
+            format!("{} (present)", spec.program.display()),
+            "node on PATH (not found)".to_string(),
+        ],
+        hint: format!(
+            "The js-debug adapter at {} is a JavaScript program and needs Node.js to run it.              Install Node and put `node` on PATH.",
+            spec.program.display()
+        ),
     }
 }
 
@@ -297,14 +282,22 @@ fn pinned_adapter(pinned: &str, probe: &dyn Probe, var: &str) -> Resolution {
         return Resolution::Found(AdapterSpec {
             description: format!("{var}={trimmed}"),
             program: path,
-            args: vec![DAP_INTERPRETER.to_string()],
+            args: if var == DOTNET_ADAPTER_ENV {
+                vec![DAP_INTERPRETER.to_string()]
+            } else {
+                Vec::new()
+            },
         });
     }
     if let Some(program) = probe.on_path(trimmed) {
         return Resolution::Found(AdapterSpec {
             description: format!("{var}={trimmed} (resolved on PATH)"),
             program,
-            args: vec![DAP_INTERPRETER.to_string()],
+            args: if var == DOTNET_ADAPTER_ENV {
+                vec![DAP_INTERPRETER.to_string()]
+            } else {
+                Vec::new()
+            },
         });
     }
 

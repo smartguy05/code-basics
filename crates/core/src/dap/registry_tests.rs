@@ -9,6 +9,7 @@
 use super::*;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 /// Paths compared as forward-slashed strings, so these tests do not depend on
 /// which separator `Path::join` produces.
@@ -39,19 +40,6 @@ impl Fake {
     /// A file, plus every directory above it.
     fn file(mut self, path: &str) -> Self {
         self.files.insert(path.to_string());
-        let mut cursor = path;
-        while let Some((parent, _)) = cursor.rsplit_once('/') {
-            if parent.is_empty() {
-                break;
-            }
-            self.dirs.insert(parent.to_string());
-            cursor = parent;
-        }
-        self
-    }
-
-    fn dir(mut self, path: &str) -> Self {
-        self.dirs.insert(path.to_string());
         let mut cursor = path;
         while let Some((parent, _)) = cursor.rsplit_once('/') {
             if parent.is_empty() {
@@ -155,139 +143,33 @@ fn the_two_supported_ecosystems_map_to_their_adapter_ids() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn vsdbg_is_found_inside_the_vs_code_csharp_extension() {
-    let path = vsdbg_at("/home/me", ".vscode", "2.140.9-win32-x64");
-    let probe = Fake::new().home("/home/me").file(&path);
-
-    let spec = found(resolve(Debuggee::DotNet, &probe));
-
-    assert_eq!(norm(&spec.program), path);
-    assert_eq!(spec.args, vec!["--interpreter=vscode"]);
-    assert!(spec.description.contains("C# extension"), "{spec:?}");
-}
-
-#[test]
-fn the_newest_extension_wins_and_versions_are_compared_as_numbers() {
-    // Lexically "2.9.0" sorts above "2.140.9". The same bug `lsp::registry`
-    // has a test for, and the same fix.
-    let old = vsdbg_at("/home/me", ".vscode", "2.9.0-win32-x64");
-    let new = vsdbg_at("/home/me", ".vscode", "2.140.9-win32-x64");
-    let probe = Fake::new().home("/home/me").file(&old).file(&new);
-
-    assert_eq!(norm(&found(resolve(Debuggee::DotNet, &probe)).program), new);
-}
-
-#[test]
-fn editor_order_decides_before_version_does() {
-    // A Windsurf-installed debugger must not be launched for somebody working
-    // in VS Code, however new it is.
-    let vscode = vsdbg_at("/home/me", ".vscode", "2.1.0-win32-x64");
-    let windsurf = vsdbg_at("/home/me", ".windsurf", "9.9.9-win32-x64");
-    let probe = Fake::new().home("/home/me").file(&vscode).file(&windsurf);
-
-    assert_eq!(
-        norm(&found(resolve(Debuggee::DotNet, &probe)).program),
-        vscode
-    );
-}
-
-#[test]
-fn the_pre_arch_layout_is_still_found() {
-    let path = "/home/me/.vscode/extensions/ms-dotnettools.csharp-1.0.0/.debugger/vsdbg-ui.exe";
-    let probe = Fake::new().home("/home/me").file(path);
-
-    assert_eq!(
-        norm(&found(resolve(Debuggee::DotNet, &probe)).program),
-        path
-    );
-}
-
-#[test]
-fn vsdbg_is_accepted_when_the_ui_front_end_is_absent() {
-    let path = "/home/me/.vscode/extensions/ms-dotnettools.csharp-2.0.0/.debugger/x86_64/vsdbg.exe";
-    let probe = Fake::new().home("/home/me").file(path);
-
-    assert_eq!(
-        norm(&found(resolve(Debuggee::DotNet, &probe)).program),
-        path
-    );
-}
-
-#[test]
-fn netcoredbg_on_path_is_used_when_no_extension_has_a_debugger() {
+fn netcoredbg_on_path_is_used() {
     let probe = Fake::new()
         .home("/home/me")
         .program("netcoredbg", "/usr/local/bin/netcoredbg");
 
-    let spec = found(resolve(Debuggee::DotNet, &probe));
+    let spec = found(resolve(Debuggee::DotNet, &probe, None));
 
     assert_eq!(norm(&spec.program), "/usr/local/bin/netcoredbg");
     assert_eq!(spec.args, vec!["--interpreter=vscode"]);
 }
 
 #[test]
-fn the_extension_is_preferred_over_path() {
-    // It is the copy a .NET developer on this machine already has, and it
-    // raises no SDK-version question.
-    let path = vsdbg_at("/home/me", ".vscode", "2.0.0-win32-x64");
-    let probe = Fake::new()
-        .home("/home/me")
-        .file(&path)
-        .program("netcoredbg", "/usr/local/bin/netcoredbg");
-
-    assert_eq!(
-        norm(&found(resolve(Debuggee::DotNet, &probe)).program),
-        path
-    );
-}
-
-#[test]
-fn an_installed_extension_with_no_debugger_is_named_rather_than_skipped_silently() {
-    // Otherwise the user is told nothing was found while looking straight at
-    // an installed C# extension.
-    let probe = Fake::new()
-        .home("/home/me")
-        .dir("/home/me/.vscode/extensions/ms-dotnettools.csharp-2.0.0/.debugger");
-
-    let (looked_for, _) = not_found(resolve(Debuggee::DotNet, &probe));
-
-    assert!(
-        looked_for
-            .iter()
-            .any(|entry| entry.contains("contains no vsdbg executable")),
-        "{looked_for:?}"
-    );
-}
-
-#[test]
 fn nothing_installed_reports_every_candidate_and_how_to_fix_it() {
     let probe = Fake::new().home("/home/me");
 
-    let (looked_for, hint) = not_found(resolve(Debuggee::DotNet, &probe));
+    let (looked_for, hint) = not_found(resolve(Debuggee::DotNet, &probe, None));
 
     assert!(
         looked_for.iter().any(|e| e.contains("netcoredbg on PATH")),
         "{looked_for:?}"
     );
     assert!(
-        looked_for.iter().any(|e| e.contains(".vscode")),
+        !looked_for.iter().any(|e| e.contains(".vscode")),
         "{looked_for:?}"
     );
-    assert!(hint.contains("C# extension"), "{hint}");
+    assert!(hint.contains("NetCoreDbg"), "{hint}");
     assert!(hint.contains(DOTNET_ADAPTER_ENV), "{hint}");
-}
-
-#[test]
-fn an_unknown_home_is_a_different_problem_from_nothing_installed() {
-    let probe = Fake::new();
-    let (looked_for, _) = not_found(resolve(Debuggee::DotNet, &probe));
-
-    assert!(
-        looked_for
-            .iter()
-            .any(|e| e.contains("home directory could not be determined")),
-        "{looked_for:?}"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -301,7 +183,7 @@ fn a_pinned_adapter_is_used_as_given() {
         .file("/opt/dbg/netcoredbg")
         .with_env(DOTNET_ADAPTER_ENV, "/opt/dbg/netcoredbg");
 
-    let spec = found(resolve(Debuggee::DotNet, &probe));
+    let spec = found(resolve(Debuggee::DotNet, &probe, None));
     assert_eq!(norm(&spec.program), "/opt/dbg/netcoredbg");
 }
 
@@ -313,7 +195,7 @@ fn a_pinned_adapter_may_be_a_bare_name_on_path() {
         .with_env(DOTNET_ADAPTER_ENV, "mydbg");
 
     assert_eq!(
-        norm(&found(resolve(Debuggee::DotNet, &probe)).program),
+        norm(&found(resolve(Debuggee::DotNet, &probe, None)).program),
         "/usr/bin/mydbg"
     );
 }
@@ -328,7 +210,7 @@ fn a_pinned_adapter_that_does_not_resolve_never_falls_through_to_discovery() {
         .file(&installed)
         .with_env(DOTNET_ADAPTER_ENV, "/nowhere/dbg");
 
-    match resolve(Debuggee::DotNet, &probe) {
+    match resolve(Debuggee::DotNet, &probe, None) {
         Resolution::Misconfigured { detail } => {
             assert!(detail.contains("/nowhere/dbg"), "{detail}");
             assert!(detail.contains(DOTNET_ADAPTER_ENV), "{detail}");
@@ -344,7 +226,7 @@ fn an_empty_override_is_misconfigured_rather_than_ignored() {
         .with_env(DOTNET_ADAPTER_ENV, "   ");
 
     assert!(matches!(
-        resolve(Debuggee::DotNet, &probe),
+        resolve(Debuggee::DotNet, &probe, None),
         Resolution::Misconfigured { .. }
     ));
 }
@@ -354,12 +236,10 @@ fn an_empty_override_is_misconfigured_rather_than_ignored() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn node_reports_why_it_cannot_be_debugged_rather_than_inventing_a_path() {
-    // The js-debug bundled with VS Code has no standalone entry point, and the
-    // standalone build serves DAP over TCP, which this app cannot speak.
+fn node_reports_how_to_install_the_standalone_server() {
     let probe = Fake::new().home("/home/me");
 
-    let (looked_for, hint) = not_found(resolve(Debuggee::Node, &probe));
+    let (looked_for, hint) = not_found(resolve(Debuggee::Node, &probe, None));
 
     assert!(
         looked_for.iter().any(|e| e.contains("js-debug-adapter")),
@@ -371,7 +251,7 @@ fn node_reports_why_it_cannot_be_debugged_rather_than_inventing_a_path() {
             .any(|e| e.contains("no standalone entry point")),
         "{looked_for:?}"
     );
-    assert!(hint.contains("TCP port"), "{hint}");
+    assert!(hint.contains("standalone"), "{hint}");
     assert!(hint.contains(NODE_ADAPTER_ENV), "{hint}");
 }
 
@@ -382,7 +262,7 @@ fn a_standalone_node_adapter_on_path_is_used_if_somebody_has_one() {
         .home("/home/me")
         .program("js-debug-adapter", "/usr/local/bin/js-debug-adapter");
 
-    let spec = found(resolve(Debuggee::Node, &probe));
+    let spec = found(resolve(Debuggee::Node, &probe, None));
     assert_eq!(norm(&spec.program), "/usr/local/bin/js-debug-adapter");
 }
 
@@ -394,7 +274,7 @@ fn node_honours_its_own_override_and_not_the_dotnet_one() {
         .with_env(NODE_ADAPTER_ENV, "/opt/node-dbg");
 
     assert_eq!(
-        norm(&found(resolve(Debuggee::Node, &probe)).program),
+        norm(&found(resolve(Debuggee::Node, &probe, None)).program),
         "/opt/node-dbg"
     );
 
@@ -403,7 +283,125 @@ fn node_honours_its_own_override_and_not_the_dotnet_one() {
         .file("/opt/node-dbg")
         .with_env(DOTNET_ADAPTER_ENV, "/opt/node-dbg");
     assert!(matches!(
-        resolve(Debuggee::Node, &wrong_var),
+        resolve(Debuggee::Node, &wrong_var, None),
         Resolution::NotFound { .. }
     ));
+}
+
+// ---------------------------------------------------------------------------
+// The bundled adapters
+//
+// `pnpm debuggers:fetch` vendors both into `resources/debuggers/`, which the
+// installer ships. These pin the layout the script writes and the resolver
+// reads: change one without the other and Debug silently stops finding an
+// adapter that is sitting right there in the install directory.
+// ---------------------------------------------------------------------------
+
+const BUNDLE: &str = "/app/resources/debuggers";
+
+#[test]
+fn the_bundled_netcoredbg_is_found() {
+    let probe = Fake::new().file("/app/resources/debuggers/netcoredbg/netcoredbg.exe");
+
+    let spec = found(resolve(Debuggee::DotNet, &probe, Some(Path::new(BUNDLE))));
+
+    assert_eq!(
+        norm(&spec.program),
+        "/app/resources/debuggers/netcoredbg/netcoredbg.exe"
+    );
+    assert_eq!(spec.args, vec!["--interpreter=vscode"]);
+    assert!(spec.description.contains("bundled"), "{spec:?}");
+}
+
+#[test]
+fn the_bundled_copy_is_preferred_over_one_on_path() {
+    // The bundled copy is the version this app was built and tested against.
+    // A stranger on PATH may be any version at all, so it is the fallback —
+    // and `CB_DAP_DOTNET` is the escape hatch for anyone who wants theirs.
+    let probe = Fake::new()
+        .file("/app/resources/debuggers/netcoredbg/netcoredbg.exe")
+        .program("netcoredbg", "/usr/local/bin/netcoredbg");
+
+    assert_eq!(
+        norm(&found(resolve(Debuggee::DotNet, &probe, Some(Path::new(BUNDLE)))).program),
+        "/app/resources/debuggers/netcoredbg/netcoredbg.exe"
+    );
+}
+
+#[test]
+fn an_env_pin_still_beats_the_bundled_copy() {
+    let probe = Fake::new()
+        .file("/app/resources/debuggers/netcoredbg/netcoredbg.exe")
+        .file("/opt/mine/netcoredbg")
+        .with_env(DOTNET_ADAPTER_ENV, "/opt/mine/netcoredbg");
+
+    assert_eq!(
+        norm(&found(resolve(Debuggee::DotNet, &probe, Some(Path::new(BUNDLE)))).program),
+        "/opt/mine/netcoredbg"
+    );
+}
+
+#[test]
+fn a_resource_directory_without_the_adapter_falls_back_to_path() {
+    // A build made with no network has the resource directory and no adapter
+    // in it. That must not shadow a working copy the user installed.
+    let probe = Fake::new().program("netcoredbg", "/usr/local/bin/netcoredbg");
+
+    assert_eq!(
+        norm(&found(resolve(Debuggee::DotNet, &probe, Some(Path::new(BUNDLE)))).program),
+        "/usr/local/bin/netcoredbg"
+    );
+}
+
+#[test]
+fn the_bundled_js_debug_entry_point_is_found() {
+    let probe = Fake::new()
+        .file("/app/resources/debuggers/js-debug/src/dapDebugServer.js")
+        .program("node", "/usr/bin/node");
+
+    let spec = found(resolve(Debuggee::Node, &probe, Some(Path::new(BUNDLE))));
+
+    assert_eq!(
+        norm(&spec.program),
+        "/app/resources/debuggers/js-debug/src/dapDebugServer.js"
+    );
+    assert!(spec.description.contains("bundled"), "{spec:?}");
+}
+
+#[test]
+fn a_javascript_adapter_with_no_node_names_node_rather_than_failing_at_spawn() {
+    // The adapter is a script, so Node runs it. Without Node the spawn fails
+    // with "program not found" naming *node*, from a layer that cannot explain
+    // why this app wanted it. Say it here instead, where the reason is known.
+    let probe = Fake::new().file("/app/resources/debuggers/js-debug/src/dapDebugServer.js");
+
+    let (looked_for, hint) = not_found(resolve(Debuggee::Node, &probe, Some(Path::new(BUNDLE))));
+
+    assert!(
+        looked_for.iter().any(|entry| entry.contains("node")),
+        "{looked_for:?}"
+    );
+    assert!(hint.to_lowercase().contains("node"), "{hint}");
+}
+
+#[test]
+fn a_pinned_javascript_adapter_also_needs_node() {
+    let probe = Fake::new()
+        .file("/opt/js-debug/src/dapDebugServer.js")
+        .with_env(NODE_ADAPTER_ENV, "/opt/js-debug/src/dapDebugServer.js");
+
+    not_found(resolve(Debuggee::Node, &probe, None));
+}
+
+#[test]
+fn a_pinned_javascript_adapter_resolves_when_node_is_present() {
+    let probe = Fake::new()
+        .file("/opt/js-debug/src/dapDebugServer.js")
+        .program("node", "/usr/bin/node")
+        .with_env(NODE_ADAPTER_ENV, "/opt/js-debug/src/dapDebugServer.js");
+
+    assert_eq!(
+        norm(&found(resolve(Debuggee::Node, &probe, None)).program),
+        "/opt/js-debug/src/dapDebugServer.js"
+    );
 }

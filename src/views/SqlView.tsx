@@ -5,12 +5,20 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { editorColors } from "../components/language";
 import { SqlConnectionPicker } from "../components/SqlConnectionPicker";
+import {
+  savedConnectionLabel,
+  type ManualConnectionDraft,
+} from "../components/sqlPickerLogic";
 import { SqlResultGrid } from "../components/SqlResultGrid";
+import { registerCommand, useShortcutHint } from "../shortcuts";
+import { withShortcut } from "../shortcutLogic";
 import * as api from "../ipc/api";
 import type {
   SqlCandidate,
+  SqlColumnView,
   SqlConnectionView,
   SqlDiscovery,
+  SqlObjectView,
   SqlTestOutcome,
   Workspace,
 } from "../ipc/types";
@@ -28,15 +36,20 @@ import {
   mintQueryId,
   phaseLine,
   profileFromCandidate,
+  profileFromManual,
   runTarget,
   selectedConnection,
   statementTitle,
   stopLine,
   stoppedNote,
   writesConfirm,
+  exposureConfirm,
   type SqlPhaseLine,
   type StoppedNote,
   type WritesConfirm,
+  clampSqlEditorHeight,
+  SQL_EDITOR_DEFAULT_HEIGHT,
+  SQL_EDITOR_MIN_HEIGHT,
 } from "./sqlViewLogic";
 
 /**
@@ -79,11 +92,34 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
     id: string;
     outcome: SqlTestOutcome;
   } | null>(null);
+  /**
+   * The pending consent confirmation. `kind` says which consent it is: the two
+   * are separate facts about a connection and are applied by different
+   * commands, so a shared modal must carry which one it is asking about rather
+   * than inferring it from the connection.
+   */
   const [confirm, setConfirm] = useState<{
+    kind: "writes" | "exposure";
     connection: SqlConnectionView;
     next: boolean;
     copy: WritesConfirm;
   } | null>(null);
+  const [objects, setObjects] = useState<SqlObjectView[]>([]);
+  const [objectsLoading, setObjectsLoading] = useState(false);
+  const [objectsError, setObjectsError] = useState<string | null>(null);
+  const [explorerOpen, setExplorerOpen] = useState(true);
+  const [explorerWidth, setExplorerWidth] = useState(250);
+  /** The query editor's height; the divider below it sets this. */
+  const [editorHeight, setEditorHeight] = useState(SQL_EDITOR_DEFAULT_HEIGHT);
+  const splitDragRef = useRef<{ startY: number; startHeight: number; container: number } | null>(null);
+  const consoleMainRef = useRef<HTMLDivElement>(null);
+  const viewRootRef = useRef<HTMLDivElement>(null);
+  /** Whatever Run is bound to now, so the tooltips cannot advertise a stale key. */
+  const runKey = useShortcutHint("run.run");
+  const explorerDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const [tableColumns, setTableColumns] = useState<
+    Record<string, { expanded: boolean; loading: boolean; error: string | null; columns: SqlColumnView[]; openColumns: string[] }>
+  >({});
 
   const [state, setState] = useState<SqlState>(initialSqlState);
   /**
@@ -96,6 +132,79 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
 
   const connection = selectedConnection(connections, selectedId);
   const badge = enforcementBadge(connection);
+
+  const loadObjects = (connectionId: string) => {
+    setObjectsLoading(true);
+    setObjectsError(null);
+    setTableColumns({});
+    return api
+      .sqlListObjects(connectionId)
+      .then(setObjects)
+      .catch((e) => {
+        setObjects([]);
+        setObjectsError(api.errorMessage(e));
+      })
+      .finally(() => setObjectsLoading(false));
+  };
+
+  const tableKey = (object: SqlObjectView) =>
+    `${object.kind}:${object.schema ?? ""}:${object.name}`;
+
+  const toggleTable = (object: SqlObjectView) => {
+    if (connection === null) return;
+    const key = tableKey(object);
+    const current = tableColumns[key];
+    if (current !== undefined) {
+      setTableColumns((all) => ({ ...all, [key]: { ...current, expanded: !current.expanded } }));
+      return;
+    }
+    setTableColumns((all) => ({
+      ...all,
+      [key]: { expanded: true, loading: true, error: null, columns: [], openColumns: [] },
+    }));
+    api
+      .sqlListColumns(connection.id, object.schema, object.name)
+      .then((columns) =>
+        setTableColumns((all) => ({
+          ...all,
+          [key]: { expanded: true, loading: false, error: null, columns, openColumns: [] },
+        })),
+      )
+      .catch((e) =>
+        setTableColumns((all) => ({
+          ...all,
+          [key]: {
+            expanded: true,
+            loading: false,
+            error: api.errorMessage(e),
+            columns: [],
+            openColumns: [],
+          },
+        })),
+      );
+  };
+
+  const toggleColumn = (key: string, name: string) => {
+    setTableColumns((all) => {
+      const table = all[key];
+      if (table === undefined) return all;
+      const openColumns = table.openColumns.includes(name)
+        ? table.openColumns.filter((column) => column !== name)
+        : [...table.openColumns, name];
+      return { ...all, [key]: { ...table, openColumns } };
+    });
+  };
+
+  useEffect(() => {
+    if (selectedId === null) {
+      setObjects([]);
+      setObjectsError(null);
+      return;
+    }
+    void loadObjects(selectedId);
+    // Loading is intentionally keyed only by the saved profile identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
 
   // ------------------------------------------------------------------
   // The editor
@@ -225,12 +334,13 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickerOpen]);
 
-  const adopt = (candidate: SqlCandidate) => {
+  const adopt = (candidate: SqlCandidate, engineOverride?: NonNullable<SqlConnectionView["engine"]>) => {
     const profile = profileFromCandidate(
       candidate,
       workspace.root,
       connections.map((c) => c.id),
       Date.now(),
+      engineOverride,
     );
     api
       .sqlSaveConnection(profile)
@@ -240,6 +350,34 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
         setError(null);
       })
       .catch((e) => setError(api.errorMessage(e)));
+  };
+
+  const addManual = async (draft: ManualConnectionDraft): Promise<SqlTestOutcome> => {
+    if (draft.engine === null) {
+      throw new Error("Choose a database engine.");
+    }
+    try {
+      const outcome = await api.sqlTestConnectionString(draft.engine, draft.connectionString);
+      if (outcome.kind !== "ok") {
+        setError(null);
+        return outcome;
+      }
+      const profile = profileFromManual(
+        { ...draft, engine: draft.engine },
+        workspace.root,
+        connections.map((connection) => connection.id),
+        Date.now(),
+      );
+      const rows = await api.sqlSaveConnection(profile);
+      setConnections(rows);
+      setSelectedId(profile.id);
+      setPickerOpen(false);
+      setError(null);
+      return outcome;
+    } catch (cause) {
+      setError(api.errorMessage(cause));
+      throw cause;
+    }
   };
 
   const test = (target: SqlConnectionView) =>
@@ -261,6 +399,24 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
       .catch((e) => setError(api.errorMessage(e)));
 
   /**
+   * Rename one connection.
+   *
+   * Its own command rather than a `sqlSaveConnection` round-trip: the profiles
+   * this view holds are **redacted views**, so rebuilding one to re-save would
+   * put the display form where a stored password was. It hands back the whole
+   * list, like every other mutation here, so the state is replaced from one
+   * answer rather than patched.
+   */
+  const rename = (target: SqlConnectionView, name: string) =>
+    api
+      .sqlRenameConnection(target.id, name)
+      .then((rows) => {
+        setConnections(rows);
+        setError(null);
+      })
+      .catch((e) => setError(api.errorMessage(e)));
+
+  /**
    * The consent action. Never applied straight from a click: turning writes on
    * is routed through a confirmation that says what the guard is and is not,
    * and — on SQLite — what stronger protection is being given up. Turning them
@@ -273,12 +429,36 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
       void applyAllowWrites(target, next);
       return;
     }
-    setConfirm({ connection: target, next, copy });
+    setConfirm({ kind: "writes", connection: target, next, copy });
   };
 
   const applyAllowWrites = (target: SqlConnectionView, next: boolean) =>
     api
       .sqlSetAllowWrites(target.id, next)
+      .then((rows) => {
+        setConnections(rows);
+        setError(null);
+      })
+      .catch((e) => setError(api.errorMessage(e)));
+
+  /**
+   * The second consent action, and the stronger one: whether an agent may see
+   * this connection at all through the MCP server. Confirmed in the granting
+   * direction only, exactly as writes are — `exposureConfirm` returns null for
+   * the withdrawing one.
+   */
+  const requestExposeToAgents = (target: SqlConnectionView, next: boolean) => {
+    const copy = exposureConfirm(target, next);
+    if (copy === null) {
+      void applyExposeToAgents(target, next);
+      return;
+    }
+    setConfirm({ kind: "exposure", connection: target, next, copy });
+  };
+
+  const applyExposeToAgents = (target: SqlConnectionView, next: boolean) =>
+    api
+      .sqlSetExposeToAgents(target.id, next)
       .then((rows) => {
         setConnections(rows);
         setError(null);
@@ -296,6 +476,37 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
+  /**
+   * F5 runs the query — but only while the user is actually in this console.
+   *
+   * F5 is bound to `run.run`, the Run toolbar's command, and that is the
+   * right owner: there is one Run key and it should do whatever Run means
+   * where you are standing. `executeCommand` walks registered handlers
+   * newest-first and treats `false` as *not handled*, so returning `false`
+   * when focus is elsewhere hands the key straight back to the Run toolbar.
+   * That is the same fall-through `FileTree` uses for `tree.reveal`.
+   *
+   * Binding F5 to `sql.run` instead would not work: `dispatchShortcut` finds
+   * the *first* command whose chord matches, so two commands sharing a key
+   * means one of them never fires.
+   */
+  useEffect(() => {
+    return registerCommand("run.run", () => {
+      const root = viewRootRef.current;
+      const active = document.activeElement;
+      if (root === null || !(active instanceof Node) || !root.contains(active)) return false;
+      // Refuse the same way the button does rather than running anyway: a
+      // second run while one is in flight, or with no connection, is exactly
+      // what `runDisabledReason` exists to stop.
+      if (disabledRef.current !== null) return true;
+      runRef.current("all");
+      return true;
+    });
+  }, []);
+
+  // `runRef` is declared with the editor's extensions above and is already
+  // kept current; only the refusal reason needs its own ref here.
+  const disabledRef = useRef<string | null>(null);
   const run = (mode: "all" | "selection") => {
     const view = viewRef.current;
     const full = view === null ? sql : view.state.doc.toString();
@@ -366,6 +577,8 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
 
   const running = state.phase.kind === "running";
   const disabled = runDisabledReason({ connection, sql, phase: state.phase });
+  // Kept current every render so the F5 registration can stay mounted once.
+  disabledRef.current = disabled;
   const phase = phaseLine(state.phase);
   const tested =
     testOutcome !== null && connection !== null && testOutcome.id === connection.id
@@ -373,10 +586,10 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
       : null;
 
   return (
-    <div className="sql-view">
+    <div className="sql-view" ref={viewRootRef}>
       <div className="sql-bar">
         <button data-command="sql.connections" className="sql-conn-button" onClick={() => setPickerOpen(true)}>
-          {connection === null ? "Choose a connection…" : connection.name}
+          {connection === null ? "Choose a connection…" : savedConnectionLabel(connection)}
         </button>
 
         {connection !== null && connection.engine !== null && (
@@ -414,6 +627,14 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
           </button>
         )}
 
+        <button
+          onClick={() => setExplorerOpen((open) => !open)}
+          disabled={connection === null}
+          title="Show or hide database objects"
+        >
+          {explorerOpen ? "Hide objects" : "Objects"}
+        </button>
+
         <span className="sql-bar-spacer" />
 
         <button
@@ -421,14 +642,14 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
           className="primary"
           onClick={() => run("all")}
           disabled={disabled !== null}
-          title={disabled ?? "Run everything in the editor (Ctrl+Enter)"}
+          title={disabled ?? withShortcut("Run everything in the editor", runKey, "Ctrl+Enter")}
         >
           Run
         </button>
         <button
           onClick={() => run("selection")}
           disabled={running || connection === null}
-          title="Run only the selected text (Ctrl+Shift+Enter)"
+          title={withShortcut("Run only the selected text", "Ctrl+Shift+Enter")}
         >
           Run selection
         </button>
@@ -452,9 +673,179 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
 
       {error !== null && <div className="sql-bar-detail sql-tone-error">{error}</div>}
 
-      <div className="sql-editor" ref={hostRef} />
+      <div className="sql-work-area">
+        {explorerOpen && connection !== null && (
+          <aside
+            className="sql-object-explorer"
+            aria-label="Database object explorer"
+            style={{ width: explorerWidth }}
+          >
+            <div className="sql-object-header">
+              <div className="sql-object-title">
+                <span className="sql-object-title-icon" aria-hidden="true" />
+                <div>
+                  <strong>Database objects</strong>
+                  <span>{connection.name}</span>
+                </div>
+              </div>
+              <button
+                className="sql-object-refresh"
+                onClick={() => void loadObjects(connection.id)}
+                disabled={objectsLoading}
+                title="Refresh database objects"
+              >
+                <span aria-hidden="true">&#8635;</span>
+                <span>{objectsLoading ? "Loading..." : "Refresh"}</span>
+              </button>
+            </div>
+            <div className="sql-object-kind">
+              <span>Tables</span>
+              {!objectsLoading && objectsError === null && <span className="sql-object-count">{objects.length}</span>}
+            </div>
+            {objectsError !== null && <div className="sql-object-error">{objectsError}</div>}
+            {!objectsLoading && objectsError === null && objects.length === 0 && (
+              <div className="sql-object-empty">No tables found.</div>
+            )}
+            <div className="sql-object-list">
+              {objects.map((object) => {
+                const qualified = object.schema === null ? object.name : `${object.schema}.${object.name}`;
+                const key = tableKey(object);
+                const table = tableColumns[key];
+                return (
+                  <div className="sql-object-node" key={key}>
+                    <button
+                      className="sql-object-row"
+                      title={qualified}
+                      aria-expanded={table?.expanded === true}
+                      onClick={() => toggleTable(object)}
+                    >
+                      <span className="sql-object-chevron" data-open={table?.expanded === true} aria-hidden="true" />
+                      <span className="sql-object-icon" aria-hidden="true" />
+                      <span className="sql-object-label">
+                        {object.schema !== null && <span className="sql-object-schema">{object.schema}.</span>}
+                        <span>{object.name}</span>
+                      </span>
+                    </button>
+                    {table?.expanded && (
+                      <div className="sql-column-list">
+                        {table.loading && <div className="sql-object-empty">Loading columns...</div>}
+                        {table.error !== null && <div className="sql-object-error">{table.error}</div>}
+                        {!table.loading && table.error === null && table.columns.length === 0 && (
+                          <div className="sql-object-empty">No columns found.</div>
+                        )}
+                        {table.columns.map((column) => {
+                          const open = table.openColumns.includes(column.name);
+                          return (
+                            <div className="sql-column-node" key={`${column.ordinal}:${column.name}`}>
+                              <button
+                                className="sql-column-row"
+                                aria-expanded={open}
+                                onClick={() => toggleColumn(key, column.name)}
+                              >
+                                <span className="sql-object-chevron" data-open={open} aria-hidden="true" />
+                                <span className="sql-column-icon" aria-hidden="true" />
+                                <span className="sql-column-name">{column.name}</span>
+                              </button>
+                              {open && <ColumnDetails column={column} />}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div
+              className="sql-object-resizer"
+              role="separator"
+              aria-label="Resize database object explorer"
+              aria-orientation="vertical"
+              aria-valuemin={170}
+              aria-valuemax={600}
+              aria-valuenow={explorerWidth}
+              tabIndex={0}
+              onPointerDown={(event) => {
+                explorerDragRef.current = { startX: event.clientX, startWidth: explorerWidth };
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                const drag = explorerDragRef.current;
+                if (drag === null) return;
+                setExplorerWidth(Math.min(600, Math.max(170, drag.startWidth + event.clientX - drag.startX)));
+              }}
+              onPointerUp={(event) => {
+                explorerDragRef.current = null;
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }}
+              onPointerCancel={() => {
+                explorerDragRef.current = null;
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                setExplorerWidth((width) =>
+                  Math.min(600, Math.max(170, width + (event.key === "ArrowLeft" ? -16 : 16))),
+                );
+              }}
+            />
+          </aside>
+        )}
 
-      <div className="sql-results">
+        <div className="sql-console-main" ref={consoleMainRef}>
+          <div className="sql-editor" ref={hostRef} style={{ height: editorHeight }} />
+
+          {/* The divider between the query and its results. Mirrors the object
+              explorer's resizer above — pointer capture so a fast drag cannot
+              outrun the handle, and arrow keys so it is reachable without a
+              mouse. The clamp is `sqlViewLogic.clampSqlEditorHeight`, which is
+              what stops either pane being dragged out of existence. */}
+          <div
+            className="sql-split-resizer"
+            role="separator"
+            aria-label="Resize the query editor"
+            aria-orientation="horizontal"
+            aria-valuemin={SQL_EDITOR_MIN_HEIGHT}
+            aria-valuenow={editorHeight}
+            tabIndex={0}
+            onPointerDown={(event) => {
+              splitDragRef.current = {
+                startY: event.clientY,
+                startHeight: editorHeight,
+                // Measured once, at the start: reading it on every move would
+                // re-measure a box this drag is itself resizing.
+                container: consoleMainRef.current?.clientHeight ?? 0,
+              };
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              const drag = splitDragRef.current;
+              if (drag === null) return;
+              setEditorHeight(
+                clampSqlEditorHeight(
+                  drag.startHeight + event.clientY - drag.startY,
+                  drag.container,
+                ),
+              );
+            }}
+            onPointerUp={(event) => {
+              splitDragRef.current = null;
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }}
+            onPointerCancel={() => {
+              splitDragRef.current = null;
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+              event.preventDefault();
+              const container = consoleMainRef.current?.clientHeight ?? 0;
+              setEditorHeight((height) =>
+                clampSqlEditorHeight(height + (event.key === "ArrowUp" ? -16 : 16), container),
+              );
+            }}
+          />
+
+          <div className="sql-results">
         <div className="sql-results-bar">
           <span className={`sql-phase sql-tone-${phase.tone}`}>{phase.text}</span>
           {notice !== null && (
@@ -470,7 +861,8 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
 
         {state.statements.length === 0 && state.connectionError === null && (
           <div className="sql-results-empty">
-            Nothing to show yet. Ctrl+Enter runs the editor; Ctrl+Shift+Enter runs the selection.
+            Nothing to show yet. {withShortcut("Run the editor", runKey, "Ctrl+Enter")};{" "}
+            {withShortcut("run the selection", "Ctrl+Shift+Enter")}.
           </div>
         )}
 
@@ -489,6 +881,8 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
             )}
           />
         ))}
+          </div>
+        </div>
       </div>
 
       {pickerOpen && (
@@ -503,9 +897,12 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
             setPickerOpen(false);
           }}
           onAdopt={adopt}
+          onAddManual={addManual}
           onTest={(target) => void test(target)}
           onDelete={(target) => void remove(target)}
+          onRename={(target, name) => void rename(target, name)}
           onSetAllowWrites={requestAllowWrites}
+          onSetExposeToAgents={requestExposeToAgents}
           onRefreshDiscovery={refreshDiscovery}
           testOutcome={testOutcome}
           error={error}
@@ -518,12 +915,35 @@ export function SqlView({ workspace }: { workspace: Workspace }) {
           copy={confirm.copy}
           onCancel={() => setConfirm(null)}
           onConfirm={() => {
-            void applyAllowWrites(confirm.connection, confirm.next);
+            if (confirm.kind === "writes") {
+              void applyAllowWrites(confirm.connection, confirm.next);
+            } else {
+              void applyExposeToAgents(confirm.connection, confirm.next);
+            }
             setConfirm(null);
           }}
         />
       )}
     </div>
+  );
+}
+
+function ColumnDetails({ column }: { column: SqlColumnView }) {
+  const size =
+    column.maxLength !== null
+      ? `length ${column.maxLength}`
+      : column.numericPrecision !== null
+        ? `precision ${column.numericPrecision}${column.numericScale === null ? "" : `, scale ${column.numericScale}`}`
+        : null;
+  return (
+    <dl className="sql-column-details">
+      <div><dt>Type</dt><dd><code>{column.dataType}</code></dd></div>
+      <div><dt>Nullable</dt><dd><span className={`sql-column-badge ${column.nullable ? "is-nullable" : ""}`}>{column.nullable === null ? "Not reported" : column.nullable ? "Yes" : "No"}</span></dd></div>
+      <div><dt>Position</dt><dd>{column.ordinal}</dd></div>
+      {size !== null && <div><dt>Size</dt><dd>{size}</dd></div>}
+      {column.primaryKey !== null && <div><dt>Primary key</dt><dd><span className={`sql-column-badge ${column.primaryKey ? "is-key" : ""}`}>{column.primaryKey ? "Yes" : "No"}</span></dd></div>}
+      {column.defaultValue !== null && <div><dt>Default</dt><dd><code>{column.defaultValue}</code></dd></div>}
+    </dl>
   );
 }
 

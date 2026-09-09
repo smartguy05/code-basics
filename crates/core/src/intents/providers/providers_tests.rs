@@ -978,3 +978,117 @@ fn applying_a_plan_that_creates_a_file_writes_no_backup() {
     assert!(path.exists());
     assert!(!dir.path().join("hooks.json.bak").exists());
 }
+
+/// `apply_writes` is `fs::write`, which truncates before it writes. Over a file
+/// another process is reading — `~/.claude.json` is 122 KB and a running Claude
+/// Code rewrites it continuously — that leaves a window in which the file is
+/// empty or half-written, and a crash in that window loses it entirely. The
+/// atomic variant never truncates the real path at all.
+mod atomic_writes {
+    use super::super::{apply_writes_atomically, PlannedWrite};
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn write(path: std::path::PathBuf, content: &str, merges: bool) -> PlannedWrite {
+        PlannedWrite {
+            path,
+            content: content.to_string(),
+            merges_existing: merges,
+        }
+    }
+
+    #[test]
+    fn an_existing_file_is_backed_up_and_replaced_without_a_truncation_window() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("claude.json");
+        fs::write(&path, "{\"old\": true}\n").unwrap();
+
+        apply_writes_atomically(&[write(path.clone(), "{\"new\": true}\n", true)]).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"new\": true}\n");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("claude.json.bak")).unwrap(),
+            "{\"old\": true}\n"
+        );
+
+        // No temp sibling survives a successful write.
+        let leftovers: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    /// The destination is **never** written directly: the content goes to a
+    /// sibling temp file first and arrives by rename.
+    ///
+    /// Observed rather than asserted about the source, by planting a file at
+    /// the exact temp path this process would choose and watching it be
+    /// consumed. Without this, writing straight to the destination passes every
+    /// other test here — `rename(p, p)` succeeds, so the backup and the
+    /// no-leftovers checks cannot tell the two apart. Verified by mutation.
+    #[test]
+    fn the_content_reaches_the_destination_by_rename_and_not_by_writing_it() {
+        use super::super::temp_extension;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("claude.json");
+        fs::write(&path, "{\"old\": true}\n").unwrap();
+
+        let temp = path.with_extension(temp_extension(&path, std::process::id()));
+        fs::write(&temp, "junk left by an earlier attempt").unwrap();
+
+        apply_writes_atomically(&[write(path.clone(), "{\"new\": true}\n", true)]).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"new\": true}\n");
+        assert!(
+            !temp.exists(),
+            "the temp sibling was not consumed by a rename, so the destination \
+             was written directly: {}",
+            temp.display()
+        );
+    }
+
+    /// The atomicity itself is a property of `rename`, not of anything a
+    /// single-threaded test can observe — but the one decision that *makes* it
+    /// a rename rather than a cross-device copy is testable: the temp file must
+    /// be a **sibling** of the destination, in the same directory, and must not
+    /// collide with a second installer running concurrently.
+    #[test]
+    fn the_temp_file_is_a_sibling_that_two_installers_cannot_collide_on() {
+        use super::super::temp_extension;
+        use std::path::Path;
+
+        let path = Path::new("C:\\Users\\me\\.claude.json");
+        let mine = path.with_extension(temp_extension(path, 100));
+        let theirs = path.with_extension(temp_extension(path, 200));
+
+        assert_eq!(mine.parent(), path.parent(), "same directory, so a rename");
+        assert_ne!(mine, theirs, "two processes take different temp names");
+        assert_ne!(&mine, path, "the destination is never written directly");
+        assert!(mine.to_string_lossy().ends_with(".tmp"), "{mine:?}");
+        assert!(
+            mine.to_string_lossy().contains("json"),
+            "the original extension is kept so a stray temp file is identifiable: {mine:?}"
+        );
+
+        // A path with no extension still gets a sibling temp name.
+        let bare = Path::new("C:\\Users\\me\\config");
+        let bare_temp = bare.with_extension(temp_extension(bare, 100));
+        assert_eq!(bare_temp.parent(), bare.parent());
+        assert_ne!(&bare_temp, bare);
+    }
+
+    #[test]
+    fn a_new_file_is_created_with_no_backup() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nested").join(".mcp.json");
+
+        apply_writes_atomically(&[write(path.clone(), "{}\n", false)]).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{}\n");
+        assert!(!dir.path().join("nested").join(".mcp.json.bak").exists());
+    }
+}

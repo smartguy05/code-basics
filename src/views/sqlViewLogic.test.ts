@@ -7,12 +7,17 @@ import {
   mintQueryId,
   phaseLine,
   profileFromCandidate,
+  profileFromManual,
   runTarget,
   selectedConnection,
   statementTitle,
   stopLine,
   stoppedNote,
   writesConfirm,
+  exposureConfirm,
+  clampSqlEditorHeight,
+  SQL_EDITOR_MIN_HEIGHT,
+  SQL_RESULTS_MIN_HEIGHT,
 } from "./sqlViewLogic";
 
 function connection(overrides: Partial<SqlConnectionView> = {}): SqlConnectionView {
@@ -24,6 +29,8 @@ function connection(overrides: Partial<SqlConnectionView> = {}): SqlConnectionVi
     holdsASecret: false,
     workspaceRoot: null,
     allowWrites: false,
+    exposeToAgents: false,
+    userNamed: false,
     createdAtMs: 0,
     lastUsedMs: null,
     ...overrides,
@@ -82,6 +89,46 @@ describe("enforcementBadge", () => {
         expect(text).not.toContain("guaranteed read-only");
       }
     }
+  });
+});
+
+describe("exposureConfirm", () => {
+  it("owes no confirmation for hiding a connection from agents", () => {
+    // The same asymmetry as writesConfirm, and for the same reason: withdrawing
+    // consent is the safe direction, and a modal in front of it teaches the
+    // habit of clicking through the one that matters.
+    expect(exposureConfirm(connection({ exposeToAgents: true }), false)).toBeNull();
+  });
+
+  it("states that exposing grants reading and that read-only cannot be lifted", () => {
+    const confirm = exposureConfirm(connection(), true);
+    expect(confirm?.guard).toContain("read-only");
+    expect(confirm?.guard).toContain("read");
+  });
+
+  it("states the hole this cannot close rather than softening it", () => {
+    // An agent with read access can read credentials the database itself
+    // stores. That is inherent, and the confirmation is the one place the user
+    // can act on knowing it.
+    const confirm = exposureConfirm(connection(), true);
+    const text = `${confirm?.guard} ${confirm?.driverGiveUp ?? ""}`;
+    expect(text).toContain("credentials");
+    expect(text).toContain("read access");
+  });
+
+  it("names the connection it is about and labels the button with the action", () => {
+    const confirm = exposureConfirm(connection({ name: "Reporting" }), true);
+    expect(confirm?.title).toContain("Reporting");
+    expect(confirm?.confirmLabel.toLowerCase()).toContain("expose");
+  });
+
+  it("promises no protection it does not have", () => {
+    // `driverGiveUp` is the *stronger than the guard* slot. Exposure gives up
+    // nothing of the kind, so it must stay empty rather than be filled with
+    // reassurance — and its lead must go with it.
+    const confirm = exposureConfirm(connection({ engine: "sqlite" }), true);
+    expect(confirm?.driverGiveUp).toBeNull();
+    expect(confirm?.driverGiveUpLead).toBeNull();
   });
 });
 
@@ -297,6 +344,47 @@ describe("profileFromCandidate", () => {
     expect(profileFromCandidate(candidate, null, ["env:DB"], 5).id).toBe("env:DB-2");
     expect(profileFromCandidate(candidate, null, ["env:DB", "env:DB-2"], 5).id).toBe("env:DB-3");
   });
+
+  it("uses an explicit engine for a candidate whose DSN was ambiguous", () => {
+    const unknown = {
+      ...candidate,
+      engine: null,
+      state: { kind: "engineUnknown", reason: "" } as const,
+    };
+    expect(profileFromCandidate(unknown, "C:/repo", [], 5, "postgres").engine).toBe("postgres");
+  });
+});
+
+describe("profileFromManual", () => {
+  const draft = {
+    name: "  Orders  ",
+    engine: "postgres" as const,
+    connectionString: " Host=localhost;Database=orders ",
+    global: false,
+  };
+
+  it("stores the exact literal under the current codebase and starts read-only", () => {
+    const profile = profileFromManual(draft, "C:/repo", [], 50);
+    expect(profile).toMatchObject({
+      id: "manual:50",
+      name: "Orders",
+      engine: "postgres",
+      workspaceRoot: "C:/repo",
+      allowWrites: false,
+      secret: { kind: "literal", connectionString: draft.connectionString },
+    });
+  });
+
+  it("can be global and avoids existing ids", () => {
+    const profile = profileFromManual(
+      { ...draft, global: true },
+      "C:/repo",
+      ["manual:50", "manual:50-2"],
+      50,
+    );
+    expect(profile.id).toBe("manual:50-3");
+    expect(profile.workspaceRoot).toBe(null);
+  });
 });
 
 describe("stoppedNote", () => {
@@ -340,5 +428,37 @@ describe("stoppedNote", () => {
     expect(stoppedNote(stopped, 0, 2)).toBeNull();
     expect(stoppedNote(stopped, 1, 2)).toBeNull();
     expect(stoppedNote(stopped, 2, 2)).not.toBeNull();
+  });
+});
+
+describe("clampSqlEditorHeight", () => {
+  const TALL = 800;
+
+  it("leaves a comfortable height alone", () => {
+    expect(clampSqlEditorHeight(300, TALL)).toBe(300);
+  });
+
+  it("keeps the editor tall enough to type in", () => {
+    expect(clampSqlEditorHeight(10, TALL)).toBe(SQL_EDITOR_MIN_HEIGHT);
+  });
+
+  it("never lets the results be dragged away entirely", () => {
+    // A pane that can vanish leaves no handle to bring it back, and the
+    // console would look like it had stopped returning rows.
+    expect(clampSqlEditorHeight(TALL, TALL)).toBe(TALL - SQL_RESULTS_MIN_HEIGHT);
+  });
+
+  it("gives the editor its floor when the window cannot honour both", () => {
+    // The caret has to stay visible or the console cannot be typed into;
+    // the results merely scroll, so they are the pane that gives way.
+    const tiny = SQL_EDITOR_MIN_HEIGHT + SQL_RESULTS_MIN_HEIGHT - 40;
+    expect(clampSqlEditorHeight(500, tiny)).toBe(SQL_EDITOR_MIN_HEIGHT);
+    expect(clampSqlEditorHeight(10, tiny)).toBe(SQL_EDITOR_MIN_HEIGHT);
+  });
+
+  it("is stable when re-applied to its own answer", () => {
+    // The drag handler feeds this its previous result on every pointer move.
+    const once = clampSqlEditorHeight(5000, TALL);
+    expect(clampSqlEditorHeight(once, TALL)).toBe(once);
   });
 });

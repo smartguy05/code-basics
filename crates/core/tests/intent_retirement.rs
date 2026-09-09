@@ -260,9 +260,7 @@ fn an_amend_moves_head_and_prunes() {
 }
 
 #[test]
-fn the_first_look_records_head_and_prunes_nothing() {
-    // With no baseline, "HEAD moved" is unknowable. The backlog is cleaned by the
-    // explicit, previewed action instead — never silently on first launch.
+fn the_first_look_conservatively_cleans_an_absorbed_backlog() {
     let dir = init_repo(&[("a.rs", "fn main() {}\n")]);
     let root = dir.path();
     let body = block();
@@ -274,30 +272,18 @@ fn the_first_look_records_head_and_prunes_nothing() {
 
     let repo = Repo::open(root).unwrap();
     let summary = retire::run_if_head_moved(&repo, root).unwrap();
-    assert!(!summary.pruned);
-    assert_eq!(summary.records_retired, 0);
+    assert!(summary.pruned);
+    assert_eq!(summary.records_retired, 1);
     assert_eq!(
         intents::load(root, &LoadOptions::default())
             .unwrap()
             .records
             .len(),
-        1
-    );
-
-    // And the explicit action is what clears it.
-    let preview = retire::preview(&repo, root).unwrap();
-    assert_eq!(preview.records_retired, 1);
-    assert!(!preview.pruned, "a preview must write nothing");
-    assert_eq!(
-        intents::load(root, &LoadOptions::default())
-            .unwrap()
-            .records
-            .len(),
-        1
+        0
     );
 
     let done = retire::run_now(&repo, root).unwrap();
-    assert_eq!(done.records_retired, 1);
+    assert_eq!(done.records_retired, 0);
     assert!(intents::load(root, &LoadOptions::default())
         .unwrap()
         .records

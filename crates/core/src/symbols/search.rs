@@ -179,6 +179,45 @@ pub fn search(index: &SymbolIndex, configs: &[RunConfig], query: &Query) -> Vec<
         return Vec::new();
     }
 
+    // Search All is the palette's default. Give every population a fair first
+    // pass so a symbol-heavy workspace cannot push matching files (including
+    // Razor views) completely out of the bounded result set.
+    if query.scope == SearchScope::All {
+        let scopes = [
+            SearchScope::Files,
+            SearchScope::Symbols,
+            SearchScope::Actions,
+        ];
+        let mut populations: Vec<Vec<SearchHit>> = scopes
+            .into_iter()
+            .map(|scope| {
+                search(
+                    index,
+                    configs,
+                    &Query {
+                        text: query.text.clone(),
+                        scope,
+                        limit: query.limit,
+                    },
+                )
+            })
+            .filter(|hits| !hits.is_empty())
+            .collect();
+
+        let reserve = query.limit / populations.len().max(1);
+        let mut selected = Vec::with_capacity(query.limit);
+        let mut remainder = Vec::new();
+        for hits in &mut populations {
+            let rest = hits.split_off(reserve.min(hits.len()));
+            selected.append(hits);
+            remainder.extend(rest);
+        }
+        remainder.sort_by(|a, b| ranked(b).cmp(&ranked(a)));
+        selected.extend(remainder.into_iter().take(query.limit - selected.len()));
+        selected.sort_by(|a, b| ranked(b).cmp(&ranked(a)));
+        return selected;
+    }
+
     let (text, line) = split_line_suffix(&query.text);
     let mut heap: BinaryHeap<Reverse<Ranked>> = BinaryHeap::with_capacity(query.limit + 1);
 
@@ -249,6 +288,38 @@ pub fn search(index: &SymbolIndex, configs: &[RunConfig], query: &Query) -> Vec<
     out.sort_by(|a, b| b.cmp(a));
     out.into_iter().map(|r| r.hit).collect()
 }
+
+fn ranked(hit: &SearchHit) -> RankedRef<'_> {
+    RankedRef {
+        hit,
+        label_chars: hit.label.chars().count(),
+    }
+}
+
+struct RankedRef<'a> {
+    hit: &'a SearchHit,
+    label_chars: usize,
+}
+
+impl Ord for RankedRef<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        compare_rank(self.hit, self.label_chars, other.hit, other.label_chars)
+    }
+}
+
+impl PartialOrd for RankedRef<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for RankedRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for RankedRef<'_> {}
 
 /// Score one file, name first and path second.
 ///
@@ -336,16 +407,19 @@ impl Ord for Ranked {
     /// every field that could still differ is compared, and two rows that
     /// survive all of them are equal values whose order cannot be observed.
     fn cmp(&self, other: &Self) -> Ordering {
-        self.hit
-            .score
-            .cmp(&other.hit.score)
-            .then_with(|| other.label_chars.cmp(&self.label_chars))
-            .then_with(|| kind_rank(self.hit.kind).cmp(&kind_rank(other.hit.kind)))
-            .then_with(|| other.hit.label.cmp(&self.hit.label))
-            .then_with(|| other.hit.detail.cmp(&self.hit.detail))
-            .then_with(|| other.hit.line.cmp(&self.hit.line))
-            .then_with(|| other.hit.action_id.cmp(&self.hit.action_id))
+        compare_rank(&self.hit, self.label_chars, &other.hit, other.label_chars)
     }
+}
+
+fn compare_rank(a: &SearchHit, a_chars: usize, b: &SearchHit, b_chars: usize) -> Ordering {
+    a.score
+        .cmp(&b.score)
+        .then_with(|| b_chars.cmp(&a_chars))
+        .then_with(|| kind_rank(a.kind).cmp(&kind_rank(b.kind)))
+        .then_with(|| b.label.cmp(&a.label))
+        .then_with(|| b.detail.cmp(&a.detail))
+        .then_with(|| b.line.cmp(&a.line))
+        .then_with(|| b.action_id.cmp(&a.action_id))
 }
 
 impl PartialOrd for Ranked {

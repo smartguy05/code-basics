@@ -173,27 +173,13 @@ fn relativise(value: &str, workspace_root: &Path) -> PathBuf {
         .unwrap_or(path)
 }
 
-fn id_for(name: &str) -> String {
-    let slug: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    format!("rider:{}", slug.trim_matches('-'))
-}
-
 /// Translate one Rider configuration into ours.
 ///
 /// Returns `None` for configuration types this app cannot launch — Docker
 /// Compose, IIS Express, remote debugging and so on — since offering a button
 /// that cannot work is worse than omitting it.
 pub fn convert(config: &RiderConfiguration, workspace_root: &Path) -> Option<RunConfig> {
-    match config.kind.as_str() {
+    let mut converted = match config.kind.as_str() {
         "DotNetProject" | "DotNetExe" => Some(convert_dotnet(config, workspace_root)),
         // Rider has written both type names for launch-settings profiles.
         "DotNetLaunchSettings" | "LaunchSettings" => {
@@ -209,12 +195,14 @@ pub fn convert(config: &RiderConfiguration, workspace_root: &Path) -> Option<Run
             Some(convert_unit_test(config, workspace_root))
         }
         _ => None,
-    }
+    }?;
+    converted.id = crate::config::rider_config_id(&converted);
+    Some(converted)
 }
 
 fn base(config: &RiderConfiguration, ecosystem: &str, kind: RunKind) -> RunConfig {
     let mut out = RunConfig::new(
-        id_for(&config.name),
+        "rider:pending",
         config.name.clone(),
         kind,
         ecosystem,
@@ -389,11 +377,13 @@ fn convert_compound(config: &RiderConfiguration) -> RunConfig {
 /// launch profile. Members that resolve nowhere are dropped with a warning, so
 /// the review step shows exactly what the compound will launch.
 pub fn resolve_compounds(imported: &mut [RunConfig], existing: &[RunConfig]) {
-    let by_rider_name: BTreeMap<String, String> = imported
-        .iter()
-        .filter(|c| c.compound.is_empty())
-        .map(|c| (c.name.clone(), c.id.clone()))
-        .collect();
+    let mut by_rider_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for config in imported.iter().filter(|c| c.compound.is_empty()) {
+        by_rider_name
+            .entry(config.name.clone())
+            .or_default()
+            .push(config.id.clone());
+    }
 
     let targets_project = |c: &RunConfig, project: &str| {
         c.project
@@ -403,8 +393,11 @@ pub fn resolve_compounds(imported: &mut [RunConfig], existing: &[RunConfig]) {
     };
 
     let resolve = |member: &str| -> Option<String> {
-        if let Some(id) = by_rider_name.get(member) {
-            return Some(id.clone());
+        if let Some(ids) = by_rider_name.get(member) {
+            if ids.len() == 1 {
+                return ids.first().cloned();
+            }
+            return None;
         }
         if let Some(found) = existing.iter().find(|c| c.name == member) {
             return Some(found.id.clone());
@@ -488,6 +481,24 @@ pub fn import(workspace_root: &Path) -> ImportResult {
     }
 
     result.configs.sort_by(|a, b| a.name.cmp(&b.name));
+    // `.run/` is scanned first and is Rider's current shared location. Keep
+    // that definition when a legacy `.idea/**/runConfigurations/` copy has the
+    // same project-scoped identity, and make disagreement visible in review.
+    let mut deduped: Vec<RunConfig> = Vec::with_capacity(result.configs.len());
+    for config in std::mem::take(&mut result.configs) {
+        if let Some(existing) = deduped.iter_mut().find(|seen| seen.id == config.id) {
+            if *existing != config {
+                existing.warnings.push(
+                    "A second Rider file defines this same project configuration differently; \
+                     the .run definition was kept."
+                        .to_string(),
+                );
+            }
+        } else {
+            deduped.push(config);
+        }
+    }
+    result.configs = deduped;
     result.skipped.sort();
     result
 }

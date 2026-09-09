@@ -255,9 +255,23 @@ fn refusing_an_oversized_binary_value_names_the_two_sizes_and_nothing_else() {
 /// is the one wrapped by `within_connect_deadline`; a future edit that lifts it
 /// out restores an unbounded connect, which is invisible until a database
 /// stops answering.
+///
+/// # Why the source is normalised first
+///
+/// `include_str!` embeds the file's bytes verbatim — it does **not** normalise
+/// line endings — and this repository has no `.gitattributes` rule for `*.rs`,
+/// so on a Windows checkout with `core.autocrlf=true` every line here ends
+/// `\r\n`. A needle spelling the break as `\n` therefore cannot match, and the
+/// test fails on a correct tree while reporting that the open had escaped the
+/// deadline. Stripping `\r` removes a dependency on checkout configuration; the
+/// structural claim below is unchanged, and is still the whole point.
+///
+/// The sibling pins avoid this a different way and are fine as they are:
+/// `postgres_tests.rs` matches single-line needles, and the `commands::sql` one
+/// goes through `str::lines`, which already drops a trailing `\r`.
 #[test]
 fn the_only_call_that_opens_a_handle_is_the_one_under_the_deadline() {
-    let source = include_str!("sqlite.rs");
+    let source = include_str!("sqlite.rs").replace("\r\n", "\n");
     let opens: Vec<&str> = source
         .match_indices("connect_with(")
         .map(|(_, m)| m)

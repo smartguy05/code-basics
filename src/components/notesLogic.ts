@@ -38,6 +38,7 @@ export function makeNote(seq: number, now: number): Note {
     id: `note-${seq}`,
     title: `Note ${seq}`,
     body: "",
+    color: undefined,
     createdAtMs: now,
     updatedAtMs: now,
   };

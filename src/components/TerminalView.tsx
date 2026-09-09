@@ -3,7 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { terminalKeyAction } from "./terminalLogic";
+import { terminalKeyAction, terminalKeyEffect } from "./terminalLogic";
 import { onAppearanceChange, terminalAppearance } from "../appearance";
 
 /** Imperative surface the hosting panel drives. */
@@ -83,23 +83,42 @@ export const TerminalView = forwardRef<
     const dataSub = term.onData((data) => onDataRef.current(data));
 
     // Copy/paste. A raw PTY terminal has none of its own, and Ctrl+C must stay
-    // the interrupt, so the usual terminal chords do it instead (see
-    // `terminalKeyAction`). Returning false stops xterm forwarding the chord to
-    // the shell; the clipboard calls are best-effort.
+    // the interrupt, so the usual terminal chords do it instead. Both halves of
+    // the decision are `terminalLogic`'s: which chord this is
+    // (`terminalKeyAction`) and what to do about it (`terminalKeyEffect`) — this
+    // handler only carries the effect out, because a `.tsx` is not loadable by
+    // the test suite and the `preventDefault` below is the part that matters.
     term.attachCustomKeyEventHandler((event) => {
       const action = terminalKeyAction(event, term.hasSelection());
-      if (action === "copy") {
+      const effect = terminalKeyEffect(action);
+      // Returning false stops only xterm's own key *translation* — it does not
+      // stop the webview running its native editing command for the chord. For
+      // a paste that meant a second, unbracketed and unnormalized write to the
+      // PTY (see `terminalKeyEffect`); for a copy it races our `writeText`
+      // against a native copy of the hidden textarea's selection. So the
+      // handled chords are prevented outright, and a passthrough never is:
+      // Ctrl+C is the shell interrupt and F5 is an app shortcut.
+      if (effect.preventDefault) event.preventDefault();
+      if (effect.copy) {
         const selection = term.getSelection();
         if (selection) void navigator.clipboard?.writeText(selection).catch(() => {});
         return false;
       }
-      if (action === "paste") {
+      if (effect.paste) {
+        // `term.paste` is the same helper xterm's own paste path uses, so the
+        // text is CRLF-normalized and bracketed exactly once and the app has
+        // one paste behaviour rather than two. The read is async and
+        // permission-gated, and now that the native path is prevented a
+        // rejection means nothing pastes at all — so it is logged rather than
+        // swallowed, since a silently dead chord is the harder bug to find.
         void navigator.clipboard
           ?.readText()
           .then((text) => {
-            if (text) onDataRef.current(text);
+            if (text) term.paste(text);
           })
-          .catch(() => {});
+          .catch((e) =>
+            console.error("code-basics: clipboard read failed; nothing was pasted", e),
+          );
         return false;
       }
       return true;

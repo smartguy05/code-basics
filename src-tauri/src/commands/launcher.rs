@@ -212,13 +212,23 @@ pub async fn stop_command(state: State<'_, AppState>, key: String) -> Result<boo
     Ok(state.supervisor.cancel(&key).await)
 }
 
-/// Pin/unpin and rename a remembered command. Both in one command because both
-/// are a read-modify-write of the same file and the panel offers them together.
+/// Apply a partial update to a remembered command: its rename, its pin, and the
+/// shortcut/persistent/headless flags. One command rather than several because
+/// every one of them is a read-modify-write of the same file, and two concurrent
+/// commands would each load, change one field and write the whole file back —
+/// the later save silently discarding the earlier one's change.
+///
+/// Every field is optional and absent means "leave it alone". A caller therefore
+/// sends only what the user actually changed, which is what keeps a panel that
+/// knows about the pin from clearing a shortcut it has never heard of.
 #[tauri::command]
 pub async fn save_launchable(
     id: String,
     label: Option<String>,
     pinned: Option<bool>,
+    shortcut: Option<bool>,
+    persistent: Option<bool>,
+    headless: Option<bool>,
 ) -> Result<LauncherFile, String> {
     let path = launcher::launchers_path();
     let mut file = launcher::load(&path);
@@ -227,6 +237,9 @@ pub async fn save_launchable(
     }
     if let Some(pinned) = pinned {
         launcher::set_pinned(&mut file, &id, pinned);
+    }
+    if shortcut.is_some() || persistent.is_some() || headless.is_some() {
+        launcher::set_flags(&mut file, &id, shortcut, persistent, headless);
     }
     launcher::save(&path, &file).map_err(|e| format!("{e:#}"))?;
     Ok(file)

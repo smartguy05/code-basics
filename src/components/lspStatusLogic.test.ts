@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   LSP_POLL_FAST_MS,
+  LSP_POLL_KEY_SEP,
   LSP_POLL_SLOW_MS,
   MIN_LSP_READS,
+  activeLspPollKey,
   lspPollDelay,
+  lspPollKeyFor,
+  lspWatching,
   summariseLspStatus,
   shouldPollLspAgain,
   toneFor,
@@ -315,5 +319,91 @@ describe("lspPollDelay", () => {
 
   it("is slower when settled than when busy, so the idle cost is bounded", () => {
     expect(LSP_POLL_SLOW_MS).toBeGreaterThan(LSP_POLL_FAST_MS);
+  });
+});
+
+describe("lspPollKeyFor", () => {
+  it("is empty when nothing is open, which is what stops the polling", () => {
+    expect(lspPollKeyFor([])).toBe("");
+    expect(lspPollDelay(null, 1, lspPollKeyFor([]).length > 0)).toBeNull();
+  });
+
+  it("changes when the file set changes but its size does not", () => {
+    // Closing one file and opening another is exactly the moment a new server
+    // can appear, and a count would not notice it.
+    expect(lspPollKeyFor(["a.ts"])).not.toBe(lspPollKeyFor(["b.ts"]));
+  });
+
+  it("does not let two file sets collide through a character a path may contain", () => {
+    // "Program Files" is why the separator is not a space, and the same argument
+    // rules out every other printable character: only NUL cannot appear in a
+    // path or an editor id.
+    expect(lspPollKeyFor(["a b", "c"])).not.toBe(lspPollKeyFor(["a", "b c"]));
+    expect(LSP_POLL_KEY_SEP).toBe("\u0000");
+  });
+});
+
+describe("activeLspPollKey", () => {
+  it("says nothing to watch when no codebase is active", () => {
+    expect(activeLspPollKey(null, { "/a": "one.ts" })).toBe("");
+  });
+
+  it("still names the codebase when it has no file open", () => {
+    // The key is *identity*, not "is there anything to watch" — `lspWatching`
+    // answers that. Returning "" here made two file-less codebases produce the
+    // same key: the effect never re-armed, and the previous codebase's server
+    // list stayed on screen under the new one's name.
+    expect(activeLspPollKey("/a", {})).not.toBe("");
+    // "no entry yet" and "an empty entry" are the same fact and must agree.
+    expect(activeLspPollKey("/a", {})).toBe(activeLspPollKey("/a", { "/a": "" }));
+  });
+
+  it("differs between two codebases that both have nothing open", () => {
+    // The exact regression: with no files there was nothing left in the key to
+    // tell the two apart.
+    expect(activeLspPollKey("/a", {})).not.toBe(activeLspPollKey("/b", {}));
+  });
+
+  it("reads only the active codebase, ignoring what the background ones hold", () => {
+    expect(activeLspPollKey("/a", { "/a": "one.ts", "/b": "two.ts" })).toContain("one.ts");
+    expect(activeLspPollKey("/a", { "/a": "one.ts", "/b": "two.ts" })).not.toContain("two.ts");
+  });
+
+  it("differs between two codebases holding the same file open", () => {
+    // The regression this function exists for: `lsp_status` answers for the
+    // active workspace slot, so switching tabs must re-arm the read. Keyed on
+    // the file set alone these two are byte-identical and nothing would.
+    const byRoot = { "/a": "src/index.ts", "/b": "src/index.ts" };
+    expect(activeLspPollKey("/a", byRoot)).not.toBe(activeLspPollKey("/b", byRoot));
+  });
+
+  it("is stable while nothing changes, so a re-render does not re-arm the poll", () => {
+    const byRoot = { "/a": "one.ts" };
+    expect(activeLspPollKey("/a", byRoot)).toBe(activeLspPollKey("/a", { ...byRoot }));
+  });
+});
+
+describe("lspWatching", () => {
+  it("is false with no active codebase", () => {
+    expect(lspWatching(null, { "/a": "one.ts" })).toBe(false);
+  });
+
+  it("is false when the active codebase has no editor open", () => {
+    // A server is started by the `didOpen` a FileEditor sends, so with nothing
+    // open nothing could have started one and `lspPollDelay` stops rather than
+    // polling for the life of the app.
+    expect(lspWatching("/a", {})).toBe(false);
+    expect(lspWatching("/a", { "/a": "" })).toBe(false);
+  });
+
+  it("is true once the active codebase has a file open", () => {
+    expect(lspWatching("/a", { "/a": "one.ts" })).toBe(true);
+  });
+
+  it("ignores what background codebases hold open", () => {
+    // They have their own servers, but `lsp_status` answers for the active
+    // workspace slot only — polling on their behalf would report the wrong
+    // codebase's servers.
+    expect(lspWatching("/a", { "/a": "", "/b": "two.ts" })).toBe(false);
   });
 });

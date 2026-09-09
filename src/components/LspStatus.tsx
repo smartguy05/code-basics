@@ -18,8 +18,24 @@ import type { LspStatus } from "../ipc/types";
  * that was ready and then died would otherwise leave this surface silent — the
  * summary of an all-ready status is nothing at all — until the file set changed.
  * `lspStatusLogic.lspPollDelay` owns both decisions, including when to stop.
+ *
+ * The key itself is `lspStatusLogic.activeLspPollKey`: the *active* codebase's
+ * open files, root included. `lsp_status` answers for the active workspace slot,
+ * so switching codebases changes the answer, and a key made of file names alone
+ * would not notice two codebases holding the same file open.
+ *
+ * `watching` is a *second* prop and not something derived from the key, because
+ * the two answer different questions — which codebase, versus whether anything
+ * there could have started a server. See `lspStatusLogic.lspWatching`.
  */
-export function LspStatusIndicator({ pollKey }: { pollKey: string }) {
+export function LspStatusIndicator({
+  pollKey,
+  watching,
+}: {
+  pollKey: string;
+  /** Whether the active codebase has an editor open; drives when polling stops. */
+  watching: boolean;
+}) {
   const [status, setStatus] = useState<LspStatus | null>(null);
   const [open, setOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -42,6 +58,13 @@ export function LspStatusIndicator({ pollKey }: { pollKey: string }) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
 
+    // Drop the previous key's answer before asking for this one. There is one
+    // indicator for the whole app now, so without this a codebase switch shows
+    // the *previous* codebase's servers under the new one's name until the
+    // first read lands — a wrong answer where the rule everywhere else in this
+    // file is to show none.
+    setStatus(null);
+
     const read = () => {
       api
         .lspStatus()
@@ -49,7 +72,7 @@ export function LspStatusIndicator({ pollKey }: { pollKey: string }) {
           if (cancelled) return;
           attempt += 1;
           setStatus(next);
-          const delay = lspPollDelay(next, attempt, pollKey.length > 0);
+          const delay = lspPollDelay(next, attempt, watching);
           if (delay !== null) timer = setTimeout(read, delay);
         })
         .catch(() => {
@@ -65,13 +88,18 @@ export function LspStatusIndicator({ pollKey }: { pollKey: string }) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [pollKey]);
+  }, [pollKey, watching]);
 
   const summary = summariseLspStatus(status);
   if (!summary) return null;
 
   return (
-    <div className="dropdown">
+    // `lsp-status` is a placement hook, not a look: this indicator is mounted in
+    // the app's bottom status bar, where `.dropdown-menu`'s downward `top` would
+    // open the panel below the window edge. `styles.css` flips it upward for
+    // this class *inside `.statusbar`* only, so mounting it anywhere else keeps
+    // the ordinary downward menu.
+    <div className="dropdown lsp-status">
       <button
         onClick={() => setOpen((was) => !was)}
         title={summary.title}
@@ -90,10 +118,11 @@ export function LspStatusIndicator({ pollKey }: { pollKey: string }) {
       {open && (
         <>
           <div className="dropdown-backdrop" onClick={() => setOpen(false)} />
-          {/* Anchored to its right edge: this button sits near the end of the
-              toolbar, and `.dropdown-menu`'s own `left: 0` would run a wide row
-              of paths off the window. Inline because `styles.css` is not this
-              round's to edit. */}
+          {/* Anchored to its right edge: this button sits at the end of its row,
+              and `.dropdown-menu`'s own `left: 0` would run a wide row of paths
+              off the window. Kept inline rather than moved into the `lsp-status`
+              rules because it holds wherever the indicator is mounted, while the
+              upward flip is true only in the status bar. */}
           <div
             className="dropdown-menu"
             style={{ left: "auto", right: 0, maxWidth: 460 }}

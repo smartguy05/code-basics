@@ -22,6 +22,24 @@ Changes preview immediately while Settings is open. **Apply** saves them;
 **Cancel** restores the appearance that was active before the dialog opened.
 Deleting the active custom theme selects a built-in theme instead.
 
+### Window opacity
+
+Beneath the theme colours is a **Window** section with an opacity slider. It
+applies **only while no file or diff is open** — the moment you open one the
+window is fully opaque again, so nothing you are reading is ever shown through.
+Floating panels are unaffected: a terminal, the Notes panel, the SQL console and
+the agent panel all stay solid over a translucent window, which is the point.
+
+The default is 100%, which is exactly the window as it was before the setting
+existed. The slider stops at 30% so the file tree and console labels stay
+readable whatever is behind them.
+
+Transparency needs support from the window manager, so the slider is available
+on Windows and is **disabled with the reason stated** elsewhere — on macOS it
+would require a private API this build does not enable, and on Linux it needs a
+compositing window manager that cannot be detected reliably. Where it is
+disabled the window is simply opaque; nothing else changes.
+
 ### Moving a theme between computers
 
 Use **Export** to download the selected custom theme as JSON. **Import** accepts
@@ -59,6 +77,29 @@ Some keyboard behavior belongs to CodeMirror or the interactive terminal rather
 than to code-basics. The **Native keys** tab lists those bindings for reference;
 they are not editable in this settings dialog. Destructive commands still show
 their normal confirmation after they are invoked from a custom shortcut.
+
+## Terminal
+
+The Terminal tab chooses the shell new terminals run. It lists what was actually
+found on this machine, each with the resolved path it would launch, plus a
+**System default** entry — which names the platform default when it can, and
+stays unlabelled rather than guessing when it cannot.
+
+Three states are kept distinct, because they mean different things: while the
+list is still being read the tab says so; a machine where no shell could be
+found says *that*, rather than showing an empty picker that would claim none
+exist; and a choice whose shell has since vanished is reported without being
+erased. A shell can be missing because `PATH` is temporarily broken or a tool is
+mid-upgrade, and silently dropping your choice over a transient absence is not
+recoverable — so the preference is kept, new terminals fall back to the platform
+default, and this tab tells you which shell it could not find.
+
+Unlike every other control in this dialog, this one has no live preview. There
+is nothing to preview: a terminal's shell is fixed when the terminal opens, and a
+running session cannot have one swapped underneath it. The setting applies to
+terminals you open next. To open a single terminal in a different shell without
+changing the default, use **New terminal in** in the terminal button's caret
+menu.
 
 ## Project attention signals
 

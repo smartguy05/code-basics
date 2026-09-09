@@ -18,6 +18,24 @@
 //! rest of the crate: a check only runs when the change set and the repo's
 //! tooling both call for it, so a user-scope gate that fires in every
 //! repository stays silent where it does not apply.
+//!
+//! # A non-zero exit is not always a verdict
+//!
+//! The sharpest form of that rule lives in [`read_gate_output`]. A gate can fail
+//! for reasons that have nothing to do with the change set — an unreadable pnpm
+//! junction, a running executable the linker cannot replace — and its output
+//! then describes *this machine*, not the code. Blocking a turn on that is the
+//! same guess as blocking on a check that never spawned, and it is worse than
+//! useless: the turn cannot be unblocked by any edit.
+//!
+//! So a failed run resolves to one of **three** answers, not two, and the third
+//! neither blocks nor passes silently — it reports that nothing was checked.
+//! Two rules keep it honest. It never sifts a broken run for the "real" errors
+//! among the cascade, because once the dependency tree is unreachable the
+//! `any`-poisoned diagnostics are indistinguishable from genuine ones and
+//! choosing between them would be the guess this crate refuses. And a missing
+//! package is environmental *only* if `package.json` already declares it —
+//! importing something never installed stays the ordinary failure it looks like.
 
 pub mod install;
 
@@ -159,6 +177,214 @@ pub fn erosion_reminder(report: &ErosionReport) -> Option<String> {
         lines.push(format!("  ...and {} more", total - EROSION_FLAG_CAP));
     }
     Some(lines.join("\n"))
+}
+
+// ---------------------------------------------------------------------------
+// Reading a failed gate's output
+// ---------------------------------------------------------------------------
+
+/// What a gate's output means.
+///
+/// The distinction that matters is the third variant. A gate that exits non-zero
+/// has said *something*, but not always about the code: if it could not reach
+/// its own dependencies, its diagnostics describe the machine. Blocking a turn
+/// on those is the same guess as blocking on a check that never spawned — which
+/// the runner already refuses to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GateVerdict {
+    /// The check ran and found nothing.
+    Passed,
+    /// The check ran and found problems. Carries its output **whole**.
+    Failed(String),
+    /// The check ran but could not reach what it needed to judge the code, so
+    /// it rendered no verdict at all. Never blocks; always says so out loud.
+    Unrunnable {
+        /// What happened and what it does *not* mean, for the model to read.
+        summary: String,
+        /// The output that led here, capped — it is noise by construction.
+        detail: String,
+    },
+}
+
+/// How many lines of an [`GateVerdict::Unrunnable`] output are shown before the
+/// rest is summarised as a count.
+///
+/// A broken dependency tree cascades: the incident this cap exists for produced
+/// roughly five thousand diagnostics from one unreadable directory. Handing all
+/// of them back is its own failure mode, and none of them were verdicts.
+/// A genuine [`GateVerdict::Failed`] is deliberately **not** capped — the one
+/// line that matters could be anywhere in it.
+pub const UNRUNNABLE_DETAIL_LINES: usize = 20;
+
+/// Quoted-specifier prefixes that mean "a module could not be resolved". Both
+/// TypeScript's wordings and Node's `ERR_MODULE_NOT_FOUND`, since a `typecheck`
+/// script may be either.
+const UNRESOLVED_PREFIXES: &[&str] = &[
+    "Cannot find module '",
+    "Could not find a declaration file for module '",
+    "Cannot find type definition file for '",
+    "Cannot find package '",
+];
+
+/// Substrings that mean the toolchain itself could not be reached, whatever the
+/// gate. Each is a message from the operating system rather than from a
+/// compiler, and each is a documented local hazard rather than a code defect:
+/// an unreadable pnpm junction, and a running executable that Windows will not
+/// let the linker replace.
+const TOOLCHAIN_BLOCKED: &[&str] = &[
+    "untrusted mount point",
+    "os error 448",
+    "Access is denied. (os error 5)",
+    "Permission denied (os error 13)",
+];
+
+/// The package a module specifier belongs to, or `None` when the specifier is
+/// not a package at all.
+///
+/// A relative or absolute path is never environmental: a missing sibling file is
+/// the author's own doing however the dependency tree is laid out, so it must
+/// keep blocking. A scoped name keeps both segments; a subpath and a `?query`
+/// (Vite's `?raw`, say) are stripped, because it is the *package* that is either
+/// reachable or not.
+fn package_of(specifier: &str) -> Option<String> {
+    let spec = specifier.trim();
+    if spec.is_empty() || spec.starts_with('.') || spec.starts_with('/') || spec.starts_with('\\') {
+        return None;
+    }
+    // A Windows drive prefix ("C:/repo/thing") is a path, not a package.
+    if spec.as_bytes().get(1) == Some(&b':') {
+        return None;
+    }
+    let without_query = spec.split('?').next().unwrap_or(spec);
+    let mut segments = without_query.split('/');
+    let first = segments.next().filter(|s| !s.is_empty())?;
+    if let Some(scope) = first.strip_prefix('@') {
+        if scope.is_empty() {
+            return None;
+        }
+        let name = segments.next().filter(|s| !s.is_empty())?;
+        return Some(format!("{first}/{name}"));
+    }
+    Some(first.to_string())
+}
+
+/// Every package a gate's output said it could not resolve, deduplicated and
+/// sorted. Scans by hand rather than pulling in a regex, matching
+/// [`has_unresolved_rejection`].
+pub fn unresolved_packages(output: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for prefix in UNRESOLVED_PREFIXES {
+        let mut from = 0;
+        while let Some(rel) = output[from..].find(prefix) {
+            let start = from + rel + prefix.len();
+            let Some(end) = output[start..].find('\'') else {
+                break;
+            };
+            if let Some(package) = package_of(&output[start..start + end]) {
+                if !found.contains(&package) {
+                    found.push(package);
+                }
+            }
+            from = start + end;
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The package names a `package.json` promises are installed — `dependencies`
+/// and `devDependencies` together.
+///
+/// This is what separates "the install is unreachable" from "you imported
+/// something that was never added": only a package the manifest already
+/// declares can be an environment problem. Abstains to an empty list on a
+/// manifest that will not parse, so an unreadable file can never *widen* what
+/// the gate forgives.
+pub fn declared_dependencies(package_json: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(package_json) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for field in ["dependencies", "devDependencies"] {
+        if let Some(map) = value.get(field).and_then(Value::as_object) {
+            names.extend(map.keys().cloned());
+        }
+    }
+    names
+}
+
+/// Cap an output at [`UNRUNNABLE_DETAIL_LINES`], saying what was dropped.
+fn capped(output: &str) -> String {
+    let lines: Vec<&str> = output.trim().lines().collect();
+    if lines.len() <= UNRUNNABLE_DETAIL_LINES {
+        return lines.join("\n");
+    }
+    let dropped = lines.len() - UNRUNNABLE_DETAIL_LINES;
+    let mut shown = lines[..UNRUNNABLE_DETAIL_LINES].join("\n");
+    shown.push_str(&format!(
+        "\n  ...and {dropped} more line{}",
+        if dropped == 1 { "" } else { "s" }
+    ));
+    shown
+}
+
+/// Build the "could not run" verdict, including the warning that must travel
+/// with it: this is not a pass, and a genuine problem may be sitting in the
+/// noise unread.
+fn unrunnable(gate: Gate, reason: &str, output: &str) -> GateVerdict {
+    GateVerdict::Unrunnable {
+        summary: format!(
+            "{} could not run: {reason}.\n\
+             Its output describes this machine, not this turn's changes, so the gate is \
+             not blocking — but it has also checked nothing. A real problem may be hidden \
+             in the output below: read it, and do not report the gate as passing.",
+            gate.label()
+        ),
+        detail: capped(output),
+    }
+}
+
+/// Read what a gate's run means: a verdict on the code, or on the machine.
+///
+/// `declared` is the package list from `package.json` (see
+/// [`declared_dependencies`]); an empty list simply means no unresolved module
+/// can be forgiven, which is the safe direction.
+///
+/// **The gate never sifts a broken run for real errors.** Once the dependency
+/// tree is unreachable, `any` poisoning invents diagnostics that would vanish in
+/// a healthy tree, so telling the two apart would be exactly the guess this
+/// crate refuses everywhere else. It abstains from the whole run instead, keeps
+/// the output, and says a real problem may be hidden in it.
+pub fn read_gate_output(
+    gate: Gate,
+    success: bool,
+    output: &str,
+    declared: &[String],
+) -> GateVerdict {
+    if success {
+        return GateVerdict::Passed;
+    }
+    if let Some(marker) = TOOLCHAIN_BLOCKED.iter().find(|m| output.contains(**m)) {
+        return unrunnable(
+            gate,
+            &format!("the toolchain reported \"{marker}\""),
+            output,
+        );
+    }
+    let unreachable: Vec<String> = unresolved_packages(output)
+        .into_iter()
+        .filter(|package| declared.iter().any(|d| d == package))
+        .collect();
+    if !unreachable.is_empty() {
+        let reason = format!(
+            "{} installed package{} could not be resolved ({})",
+            unreachable.len(),
+            if unreachable.len() == 1 { "" } else { "s" },
+            unreachable.join(", ")
+        );
+        return unrunnable(gate, &reason, output);
+    }
+    GateVerdict::Failed(output.trim().to_string())
 }
 
 /// The AI-REJECTED head-line token, assembled so this source file does not

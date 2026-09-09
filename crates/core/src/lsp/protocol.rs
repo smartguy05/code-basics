@@ -34,6 +34,8 @@
 //! [`super::uri`] — a URI is an opaque `String` in here on purpose, because
 //! identity is decided on paths and never on URI strings.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -67,6 +69,16 @@ pub mod method {
     pub const IMPLEMENTATION: &str = "textDocument/implementation";
     pub const TYPE_DEFINITION: &str = "textDocument/typeDefinition";
     pub const DOCUMENT_SYMBOL: &str = "textDocument/documentSymbol";
+    /// Ask what the identifier under the caret is, and whether it can be
+    /// renamed at all. Gated on `renameProvider.prepareProvider`, separately
+    /// from [`RENAME`]: a server may offer one and not the other.
+    pub const PREPARE_RENAME: &str = "textDocument/prepareRename";
+    /// Ask for the edits that would rename the symbol under the caret.
+    ///
+    /// A *pull*: nothing about sending this invites the server to originate a
+    /// message. Contrast [`APPLY_EDIT`], which is a server *pushing* an edit and
+    /// stays declared `false`.
+    pub const RENAME: &str = "textDocument/rename";
     pub const CANCEL_REQUEST: &str = "$/cancelRequest";
 
     // Server → client **requests**: each one must be answered or the server
@@ -111,6 +123,21 @@ pub struct Position {
 pub struct Range {
     pub start: Position,
     pub end: Position,
+}
+
+/// One replacement: a span, and the text that takes its place.
+///
+/// `range` is half-open like every other [`Range`] here, so an edit whose
+/// `start` equals another's `end` does not overlap it — a distinction the
+/// applier depends on, since a server routinely returns adjacent edits.
+///
+/// A zero-width `range` is an insertion, and an empty `new_text` is a deletion;
+/// both are ordinary and neither is a signal of anything.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextEdit {
+    pub range: Range,
+    pub new_text: String,
 }
 
 /// A range in a named document.
@@ -232,6 +259,252 @@ pub fn decode_goto(value: Value) -> Result<Vec<Location>, DecodeError> {
         // without claiming to know which request this was.
         Err(_) => Err(DecodeError::shape(method::DEFINITION, &value)),
     }
+}
+
+/// Every edit for one document, keyed by the server's own spelling of its uri.
+///
+/// `uri` stays a `String` for the reason [`Location`] gives: identity is decided
+/// on paths, never on uri strings. The edits are in the order the server listed
+/// them and are **not** sorted here — [`super::edits::plan`] is the one place
+/// that orders and proves a set applicable, and doing half of that job in a
+/// decoder would leave two functions with an opinion about it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentEdits {
+    pub uri: String,
+    pub edits: Vec<TextEdit>,
+}
+
+/// A create, rename or delete of a *file* that the server wants performed.
+///
+/// This app performs none of them, and this type exists so that it can *decline*
+/// rather than silently ignore: moving a file invalidates open tab ids, the
+/// symbol index and every `EditorSource`, and applying the text edits beside a
+/// dropped file operation would leave half a rename — which does not compile.
+///
+/// `kind` is kept as the server's own string rather than an enum. A kind added
+/// to the protocol after this was written must still arrive here and still be
+/// declined; an enum would make it either an unreadable shape (wrong — it is
+/// perfectly legible) or an unmatched arm somebody defaults to nothing (worse).
+///
+/// `uris` holds `uri` for a create or delete, and `oldUri` then `newUri` for a
+/// rename, so the refusal can name what the server wanted to move.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceOperation {
+    pub kind: String,
+    pub uris: Vec<String>,
+}
+
+/// A whole `WorkspaceEdit`, flattened into the two things a caller must decide
+/// about separately.
+///
+/// Both shapes the protocol allows — the legacy `changes` map and
+/// `documentChanges` — collapse into `documents`, because the *difference*
+/// between them carries nothing this app acts on. What does not collapse is
+/// `resource_operations`: an answer containing one is refused whole, and that
+/// decision cannot be made if the operations were folded in with the text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceEdit {
+    /// Ordered by `uri`, always.
+    ///
+    /// The order a `serde_json::Map` iterates in is a function of a dependency's
+    /// feature flags, and the order of a `documentChanges` array is the
+    /// server's. Neither may reach a caller that counts or lists files.
+    pub documents: Vec<DocumentEdits>,
+    pub resource_operations: Vec<ResourceOperation>,
+}
+
+/// Read a `textDocument/rename` answer, whichever shape arrived.
+///
+/// Handles every shape a shipped server sends, and the permissiveness is not
+/// theoretical: **the real Roslyn server answers `documentChanges` even though
+/// this client declares `documentChanges: false`** (measured 2026-09-04, with no
+/// `changes` map present at all). So the declaration is a true statement about
+/// this client and *not* a safeguard — the safeguard is that every file
+/// operation lands in [`WorkspaceEdit::resource_operations`] and the caller
+/// refuses the answer whole when that list is non-empty, whatever was declared.
+///
+/// `null` is an **empty edit and not an error**, the same rule
+/// [`decode_goto`] follows: the server said there is nothing to change, and an
+/// `Err` would report a failed rename instead. A key present but `null` is read
+/// as absent for the same reason. An object with neither key is also empty —
+/// every field of a `WorkspaceEdit` is optional.
+///
+/// Both keys present prefers `documentChanges`: a server sending both has
+/// already decided which is authoritative, and the two need not agree.
+pub fn decode_workspace_edit(value: Value) -> Result<WorkspaceEdit, DecodeError> {
+    let refuse = || DecodeError::shape(method::RENAME, &value);
+    let Some(map) = value.as_object() else {
+        // `null` is the one non-object that is an answer.
+        return if value.is_null() {
+            Ok(WorkspaceEdit::default())
+        } else {
+            Err(refuse())
+        };
+    };
+
+    if let Some(changes) = map.get("documentChanges").filter(|v| !v.is_null()) {
+        return decode_document_changes(changes).ok_or_else(refuse);
+    }
+    if let Some(changes) = map.get("changes").filter(|v| !v.is_null()) {
+        return decode_changes_map(changes).ok_or_else(refuse);
+    }
+    Ok(WorkspaceEdit::default())
+}
+
+/// The legacy shape: `{ "<uri>": TextEdit[] }`.
+fn decode_changes_map(value: &Value) -> Option<WorkspaceEdit> {
+    let map = value.as_object()?;
+    let mut by_uri: BTreeMap<String, Vec<TextEdit>> = BTreeMap::new();
+    for (uri, edits) in map {
+        let list = edits.as_array()?;
+        let entry = by_uri.entry(uri.clone()).or_default();
+        for edit in list {
+            entry.push(decode_text_edit(edit)?);
+        }
+    }
+    Some(WorkspaceEdit {
+        documents: documents_of(by_uri),
+        resource_operations: Vec::new(),
+    })
+}
+
+/// The richer shape: an array mixing `TextDocumentEdit`s with file operations.
+fn decode_document_changes(value: &Value) -> Option<WorkspaceEdit> {
+    let items = value.as_array()?;
+    let mut by_uri: BTreeMap<String, Vec<TextEdit>> = BTreeMap::new();
+    let mut resource_operations = Vec::new();
+
+    for item in items {
+        // A `kind` is what distinguishes a file operation from a document edit,
+        // and it is checked *first*: an operation carrying a `textDocument` too
+        // must still be declined, not read as an edit set.
+        if let Some(kind) = item.get("kind").and_then(Value::as_str) {
+            resource_operations.push(ResourceOperation {
+                kind: kind.to_string(),
+                uris: operation_uris(item),
+            });
+            continue;
+        }
+
+        let uri = item.pointer("/textDocument/uri")?.as_str()?.to_string();
+        let edits = item.get("edits")?.as_array()?;
+        // Merged rather than pushed as a second entry: two entries naming one
+        // file would be planned and applied separately, so the second would be
+        // computed against text the first had already changed. Merging is what
+        // lets `edits::plan` see the whole set for a file at once and refuse an
+        // overlap it would otherwise never be shown.
+        let entry = by_uri.entry(uri).or_default();
+        for edit in edits {
+            entry.push(decode_text_edit(edit)?);
+        }
+    }
+
+    Some(WorkspaceEdit {
+        documents: documents_of(by_uri),
+        resource_operations,
+    })
+}
+
+/// The uris a file operation names, old before new.
+///
+/// Nothing is invented: an operation that names no uri yields an empty list and
+/// is still reported, because the refusal it triggers does not depend on being
+/// able to name the file.
+fn operation_uris(item: &Value) -> Vec<String> {
+    ["uri", "oldUri", "newUri"]
+        .iter()
+        .filter_map(|key| item.get(*key).and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+/// One edit, whether or not it carries an `annotationId`.
+///
+/// An `AnnotatedTextEdit` is a `TextEdit` plus a key naming an entry in
+/// `changeAnnotations`. Unknown fields are ignored throughout this module, so
+/// the annotation is dropped by construction — this app asks no confirmation
+/// questions, so there is nothing it could act on, and refusing the shape would
+/// refuse a legal answer.
+fn decode_text_edit(value: &Value) -> Option<TextEdit> {
+    serde_json::from_value::<TextEdit>(value.clone()).ok()
+}
+
+/// Flatten the accumulator, which is already in uri order because it is a
+/// [`BTreeMap`].
+///
+/// A document with an empty edit list is **kept**: the server named the file and
+/// said it needs no changes, and pruning it would make a caller counting
+/// documents disagree with one counting edits.
+fn documents_of(by_uri: BTreeMap<String, Vec<TextEdit>>) -> Vec<DocumentEdits> {
+    by_uri
+        .into_iter()
+        .map(|(uri, edits)| DocumentEdits { uri, edits })
+        .collect()
+}
+
+/// What a server says when asked whether the caret is on something renameable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrepareRenameResponse {
+    /// `null`. **A real answer**, not a failure and not an empty range: the
+    /// caret is on a keyword, a comment or a literal. Collapsing this into an
+    /// error or into a zero-width range is how a rename field opens empty over
+    /// something that cannot be renamed.
+    NotRenameable,
+    /// The span the server would replace, and the text to prefill the field
+    /// with if it offered one.
+    ///
+    /// `placeholder` is **absent for the real Roslyn server** (measured
+    /// 2026-09-04: a bare `{start, end}` at the top level), so deriving the
+    /// prefill from the buffer is the live path for C# rather than a fallback.
+    Range {
+        range: Range,
+        placeholder: Option<String>,
+    },
+    /// `{"defaultBehavior": …}` — the server has no special range to offer and
+    /// the client should use the identifier under the caret. `false` means the
+    /// same as `true` here: it is a statement about the *range*, not a refusal.
+    DefaultBehavior,
+}
+
+/// Read a `textDocument/prepareRename` answer.
+///
+/// Four legal shapes, and the one that matters most is `null`: see
+/// [`PrepareRenameResponse::NotRenameable`].
+pub fn decode_prepare_rename(value: Value) -> Result<PrepareRenameResponse, DecodeError> {
+    let refuse = || DecodeError::shape(method::PREPARE_RENAME, &value);
+    if value.is_null() {
+        return Ok(PrepareRenameResponse::NotRenameable);
+    }
+    let Some(map) = value.as_object() else {
+        return Err(refuse());
+    };
+
+    // Checked first: this shape carries no range at all, so looking for one
+    // would refuse it.
+    if let Some(default_behavior) = map.get("defaultBehavior") {
+        return if default_behavior.is_boolean() {
+            Ok(PrepareRenameResponse::DefaultBehavior)
+        } else {
+            Err(refuse())
+        };
+    }
+
+    // The bare shape: the range *is* the response. Reached only when there is no
+    // `range` key, so the two can never be confused. `placeholder` is read from
+    // the same object either way — a server offering one beside a bare range is
+    // not a shape to refuse over.
+    let range = match map.get("range") {
+        Some(wrapped) => wrapped.clone(),
+        None => value.clone(),
+    };
+    let placeholder = map.get("placeholder").and_then(Value::as_str);
+
+    serde_json::from_value::<Range>(range)
+        .map(|range| PrepareRenameResponse::Range {
+            range,
+            placeholder: placeholder.map(str::to_string),
+        })
+        .map_err(|_| refuse())
 }
 
 /// One declaration in a file, with the chain of declarations enclosing it.
@@ -431,6 +704,16 @@ pub struct ServerCapabilities {
     pub implementation: bool,
     pub type_definition: bool,
     pub document_symbol: bool,
+    /// Whether `textDocument/rename` may be sent.
+    pub rename: bool,
+    /// Whether `textDocument/prepareRename` may be sent — **a separate fact**,
+    /// and this is the reason there are two fields rather than one.
+    ///
+    /// A server may advertise `renameProvider: true` with no `prepareProvider`,
+    /// and it then answers `-32601` to a `prepareRename`. That arrives as a
+    /// [`super::client::RequestError::Failed`], and a caller gating the rename on
+    /// it would refuse a rename that would have worked.
+    pub prepare_rename: bool,
     pub sync: SyncKind,
     /// Exactly what the server said, `None` when it said nothing.
     ///
@@ -459,6 +742,8 @@ impl ServerCapabilities {
             implementation: provides(capabilities.get("implementationProvider")),
             type_definition: provides(capabilities.get("typeDefinitionProvider")),
             document_symbol: provides(capabilities.get("documentSymbolProvider")),
+            rename: provides(capabilities.get("renameProvider")),
+            prepare_rename: prepare_provider(capabilities.get("renameProvider")),
             sync: sync_kind(capabilities.get("textDocumentSync")),
             position_encoding: capabilities
                 .get("positionEncoding")
@@ -492,6 +777,20 @@ fn provides(field: Option<&Value>) -> bool {
         Some(Value::Object(_)) => true,
         _ => false,
     }
+}
+
+/// Does the server support `prepareRename`, given its `renameProvider` field?
+///
+/// True **only** for an options object whose `prepareProvider` is a literal
+/// `true`. `renameProvider: true` is deliberately *not* enough: it is a promise
+/// about `rename` and says nothing about `prepareRename`, and reading it as one
+/// means sending a request the server answers `-32601` to. Every other value —
+/// `false`, a string, a number, an absent key — leaves us without a claim.
+fn prepare_provider(field: Option<&Value>) -> bool {
+    matches!(
+        field.and_then(|f| f.get("prepareProvider")),
+        Some(Value::Bool(true))
+    )
 }
 
 /// Resolve `textDocumentSync`, which is legally a number or an object.
@@ -562,7 +861,12 @@ pub fn initialize_params(process_id: Option<u32>, root_uri: &str, root_name: &st
                 // `selectionRange`, which is the anchor a `references` request
                 // needs. The flat shape is still decoded, for servers that
                 // ignore this.
-                "documentSymbol": { "hierarchicalDocumentSymbolSupport": true }
+                "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
+                // `prepareSupport` says only that the answer to a
+                // `prepareRename` *we* send may carry a placeholder. Declaring
+                // rename invites no new server-originated message at all: a
+                // rename is a pull.
+                "rename": { "dynamicRegistration": false, "prepareSupport": true }
             },
             "workspace": {
                 // Roslyn *blocks* on `workspace/configuration` during start-up,
@@ -572,7 +876,42 @@ pub fn initialize_params(process_id: Option<u32>, root_uri: &str, root_name: &st
                 // Declared and false: this app never lets a server edit files
                 // behind the user's back, and saying so up front is better than
                 // refusing each request after the fact.
-                "applyEdit": false
+                //
+                // This is **not** in tension with declaring `rename` above, and
+                // the next reader is asked not to "fix" the apparent
+                // contradiction: `applyEdit` is a server *pushing* an edit at
+                // us (answered `{"applied": false}` in
+                // `super::transport::answer_for`, with its own tests), while a
+                // rename is a *pull* — we ask, the server answers, and this app
+                // decides what to do with the answer.
+                "applyEdit": false,
+                // Every field here *removes* something a rename answer would
+                // otherwise be allowed to contain, so this whole object is a
+                // narrowing.
+                //
+                // `documentChanges: false` asks for the legacy `changes` map,
+                // which cannot express a file operation. **Measured: the real
+                // Roslyn server ignores it and answers `documentChanges`
+                // anyway** (2026-09-04), so this buys no protection from that
+                // server — `decode_workspace_edit` reads both shapes and the
+                // *refusal* of any `resource_operations` entry is the safeguard.
+                // The declaration stays because it is a true statement about
+                // what this client wants; it is not a guarantee.
+                //
+                // `resourceOperations: []` is stated rather than omitted,
+                // because omission and "none" read identically to a human and
+                // only one of them is a promise — the same reason `applyEdit`
+                // is declared at all. Roslyn *did* respect this one.
+                //
+                // `failureHandling: "abort"` is the only true value.
+                // `transactional` claims all-or-nothing across files, which
+                // nothing here can promise once write 7 of 9 has landed;
+                // `undo` claims an undo this app does not have.
+                "workspaceEdit": {
+                    "documentChanges": false,
+                    "resourceOperations": [],
+                    "failureHandling": "abort"
+                }
             },
             "window": { "workDoneProgress": true }
         }
@@ -809,6 +1148,31 @@ impl ReferenceParams {
             context: ReferenceContext {
                 include_declaration,
             },
+        }
+    }
+}
+
+/// The params of `textDocument/rename`.
+///
+/// `new_name` goes on the wire as `newName`, which is what the `camelCase`
+/// rename is for — the one field here that a server silently ignores if it is
+/// misspelled, answering an edit that renames the symbol to nothing.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameParams {
+    pub text_document: TextDocumentIdentifier,
+    pub position: Position,
+    pub new_name: String,
+}
+
+impl RenameParams {
+    pub fn new(uri: &str, position: Position, new_name: &str) -> Self {
+        Self {
+            text_document: TextDocumentIdentifier {
+                uri: uri.to_string(),
+            },
+            position,
+            new_name: new_name.to_string(),
         }
     }
 }

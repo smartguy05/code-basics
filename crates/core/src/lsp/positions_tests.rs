@@ -240,3 +240,103 @@ fn a_snippet_never_splits_a_character_in_half() {
     let snippet = snippet(&line, Some((250, 251)));
     assert!(snippet.text.chars().all(|c| c == 'é'), "{}", snippet.text);
 }
+
+// ---------------------------------------------------------------------------
+// `byte_offset` — the only whole-document arithmetic in this app.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_start_of_the_document_is_offset_zero() {
+    assert_eq!(0, byte_offset("let x = 1;\nlet y = 2;\n", 0, 0));
+}
+
+#[test]
+fn a_position_inside_a_later_line_counts_the_lines_before_it() {
+    let text = "abc\ndefgh\nij\n";
+    // Line 1 starts at byte 4; character 3 is three bytes further in.
+    assert_eq!(7, byte_offset(text, 1, 3));
+}
+
+#[test]
+fn a_column_past_the_end_of_a_line_clamps_to_that_lines_end() {
+    let text = "abc\ndef\n";
+    // Not the start of the next line: a range ending "past" a line is a common
+    // spelling for end-of-line, and resolving it into the following line would
+    // silently widen every such edit by one character.
+    assert_eq!(3, byte_offset(text, 0, 99));
+}
+
+#[test]
+fn an_overrunning_column_on_a_crlf_line_stops_before_the_carriage_return() {
+    // The rule that keeps CRLF files intact. Resolving to *after* the `\r` would
+    // let a replacement land between the carriage return and the newline,
+    // leaving a lone `\r` in the middle of the file.
+    let text = "abc\r\ndef\r\n";
+    assert_eq!(3, byte_offset(text, 0, 99));
+    assert_eq!(3, byte_offset(text, 0, 3));
+}
+
+#[test]
+fn a_line_past_the_end_of_the_document_clamps_to_the_end() {
+    let text = "abc\ndef";
+    assert_eq!(text.len(), byte_offset(text, 500, 0));
+}
+
+#[test]
+fn the_empty_document_has_only_offset_zero() {
+    assert_eq!(0, byte_offset("", 0, 0));
+    assert_eq!(0, byte_offset("", 0, 20));
+    assert_eq!(0, byte_offset("", 7, 20));
+}
+
+#[test]
+fn a_document_ending_in_a_newline_has_an_addressable_final_empty_line() {
+    // `"a\n"` is two lines by LSP's counting, and the second is empty. An
+    // insertion there appends to the file, so the position must resolve.
+    let text = "a\n";
+    assert_eq!(2, byte_offset(text, 1, 0));
+}
+
+#[test]
+fn a_column_is_utf16_code_units_and_not_bytes_or_chars() {
+    // `é` is 2 bytes and 1 unit, `€` is 3 and 1, and the emoji is 4 and *2*.
+    let text = "é€\u{1F600}x";
+    assert_eq!(0, byte_offset(text, 0, 0));
+    assert_eq!(2, byte_offset(text, 0, 1));
+    assert_eq!(5, byte_offset(text, 0, 2));
+    assert_eq!(9, byte_offset(text, 0, 4));
+}
+
+#[test]
+fn a_column_landing_inside_a_surrogate_pair_clamps_back_to_the_character() {
+    // There is no byte boundary in the middle of an astral character, and the
+    // alternative to clamping is a panic inside a command.
+    let text = "\u{1F600}x";
+    assert_eq!(0, byte_offset(text, 0, 1));
+    assert_eq!(4, byte_offset(text, 0, 2));
+}
+
+#[test]
+fn a_lone_carriage_return_still_terminates_a_line() {
+    // Old-Mac line endings are rare and are not a reason to panic or to run two
+    // lines together.
+    let text = "abc\rdef";
+    assert_eq!(4, byte_offset(text, 1, 0));
+}
+
+#[test]
+fn no_position_can_panic_the_offset_lookup() {
+    let documents = ["", "\n", "\r\n", "a", "é€\u{1F600}", "a\nb\r\nc\rd\n"];
+    for text in documents {
+        for line in [0u32, 1, 2, 7, u32::MAX] {
+            for character in [0u32, 1, 3, 99, u32::MAX] {
+                let offset = byte_offset(text, line, character);
+                assert!(offset <= text.len(), "{text:?} {line} {character}");
+                assert!(
+                    text.is_char_boundary(offset),
+                    "{text:?} {line} {character} -> {offset}"
+                );
+            }
+        }
+    }
+}

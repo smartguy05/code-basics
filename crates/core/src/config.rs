@@ -5,6 +5,7 @@
 //! written here — only what the user creates or imports — so the file stays
 //! small and re-detection keeps working as projects change.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -87,8 +88,10 @@ pub struct WorkspaceConfig {
     pub lsp: Option<LspConfig>,
 }
 
+const CURRENT_VERSION: u32 = 2;
+
 fn default_version() -> u32 {
-    1
+    CURRENT_VERSION
 }
 
 fn enabled() -> bool {
@@ -195,8 +198,81 @@ pub fn load(root: &Path) -> Result<WorkspaceConfig> {
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
 
-    serde_json::from_str(&content)
-        .with_context(|| format!("{} is not valid configuration JSON", path.display()))
+    let parsed = serde_json::from_str(&content)
+        .with_context(|| format!("{} is not valid configuration JSON", path.display()))?;
+    Ok(migrate(parsed))
+}
+
+/// A stable, project-scoped identity for a converted Rider configuration.
+///
+/// Rider display names are not unique in a solution. Hash the fields that say
+/// what the configuration launches, while keeping a short readable prefix for
+/// diagnostics and hand-edited config files. FNV-1a is deliberately written
+/// out here: unlike `DefaultHasher`, its output is stable across Rust releases.
+pub fn rider_config_id(config: &RunConfig) -> String {
+    let project = config
+        .project
+        .as_deref()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default();
+    let identity = format!(
+        "{project}\0{}\0{:?}\0{}\0{}\0{}",
+        config.name,
+        config.kind,
+        config.ecosystem,
+        config.launch_profile.as_deref().unwrap_or_default(),
+        config.script.as_deref().unwrap_or_default()
+    );
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in identity.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let scope = config
+        .project
+        .as_deref()
+        .and_then(Path::file_stem)
+        .and_then(|s| s.to_str())
+        .unwrap_or("workspace")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    format!("rider:{}:{hash:016x}", scope.trim_matches('-'))
+}
+
+fn migrate(mut file: WorkspaceConfig) -> WorkspaceConfig {
+    if file.version >= CURRENT_VERSION {
+        return file;
+    }
+
+    let mut renamed = BTreeMap::new();
+    for config in &mut file.configs {
+        if config.source == ConfigSource::RiderImport {
+            let old = config.id.clone();
+            config.id = rider_config_id(config);
+            renamed.insert(old, config.id.clone());
+        }
+    }
+    let rewrite = |ids: &mut Vec<String>| {
+        for id in ids {
+            if let Some(next) = renamed.get(id) {
+                *id = next.clone();
+            }
+        }
+    };
+    rewrite(&mut file.favorites);
+    rewrite(&mut file.order);
+    for config in &mut file.configs {
+        rewrite(&mut config.compound);
+    }
+    file.version = CURRENT_VERSION;
+    file
 }
 
 /// Everything under `.code-basics/` that must never be committed.
@@ -399,7 +475,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let loaded = load(dir.path()).unwrap();
 
-        assert_eq!(loaded.version, 1);
+        assert_eq!(loaded.version, CURRENT_VERSION);
         assert!(loaded.configs.is_empty());
     }
 
@@ -608,6 +684,72 @@ mod tests {
         let saved = load(dir.path()).unwrap();
         assert_eq!(saved.configs.len(), 1);
         assert_eq!(saved.configs[0].name, "Second");
+    }
+
+    #[test]
+    fn version_one_rider_ids_migrate_per_project_and_keep_references() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(config_dir(dir.path())).unwrap();
+        let mut api = config(
+            "rider:development",
+            "Development",
+            ConfigSource::RiderImport,
+        );
+        api.project = Some("src/Api/Api.csproj".into());
+        let old = api.id.clone();
+        std::fs::write(
+            config_path(dir.path()),
+            serde_json::to_string(&serde_json::json!({
+                "version": 1,
+                "configs": [api],
+                "favorites": [old],
+                "order": [old]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let loaded = load(dir.path()).unwrap();
+        assert_eq!(loaded.version, CURRENT_VERSION);
+        assert_ne!(loaded.configs[0].id, "rider:development");
+        assert_eq!(loaded.favorites, [loaded.configs[0].id.clone()]);
+        assert_eq!(loaded.order, [loaded.configs[0].id.clone()]);
+    }
+
+    #[test]
+    fn rider_identity_separates_the_same_name_in_two_projects() {
+        let mut api = config("old", "Development", ConfigSource::RiderImport);
+        api.project = Some("src/Api/Api.csproj".into());
+        let mut worker = api.clone();
+        worker.project = Some("src/Worker/Worker.csproj".into());
+
+        assert_ne!(rider_config_id(&api), rider_config_id(&worker));
+        assert_eq!(rider_config_id(&api), rider_config_id(&api));
+    }
+
+    #[test]
+    fn same_named_rider_configs_keep_each_projects_environment_after_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut api = config("old-a", "Development", ConfigSource::RiderImport);
+        api.project = Some("src/Api/Api.csproj".into());
+        api.env.insert("REDIS_STREAM".into(), "api".into());
+        api.id = rider_config_id(&api);
+        let mut worker = config("old-b", "Development", ConfigSource::RiderImport);
+        worker.project = Some("src/Worker/Worker.csproj".into());
+        worker.env.insert("REDIS_STREAM".into(), "worker".into());
+        worker.id = rider_config_id(&worker);
+
+        upsert(dir.path(), api).unwrap();
+        upsert(dir.path(), worker).unwrap();
+
+        let saved = load(dir.path()).unwrap();
+        assert_eq!(saved.configs.len(), 2);
+        let streams: std::collections::BTreeSet<_> = saved
+            .configs
+            .iter()
+            .map(|config| config.env["REDIS_STREAM"].as_str())
+            .collect();
+        assert_eq!(streams, ["api", "worker"].into_iter().collect());
     }
 
     #[test]

@@ -37,17 +37,28 @@ pub enum FeatureId {
     SqlConsole,
     /// The "ask the codebase" question box and its agent terminal.
     AskCodebase,
+    /// The read-only SQL MCP server a coding agent can be pointed at.
+    McpSqlServer,
+    /// The embedded web browser panel.
+    WebBrowser,
 }
 
 impl FeatureId {
     /// Every feature this build knows about, in the order the picker lists them.
-    pub const ALL: [FeatureId; 2] = [FeatureId::SqlConsole, FeatureId::AskCodebase];
+    pub const ALL: [FeatureId; 4] = [
+        FeatureId::SqlConsole,
+        FeatureId::AskCodebase,
+        FeatureId::McpSqlServer,
+        FeatureId::WebBrowser,
+    ];
 
     /// Stable id used across IPC, in the store file, and by both installers.
     pub fn id(self) -> &'static str {
         match self {
             FeatureId::SqlConsole => "sqlConsole",
             FeatureId::AskCodebase => "askCodebase",
+            FeatureId::McpSqlServer => "mcpSqlServer",
+            FeatureId::WebBrowser => "webBrowser",
         }
     }
 
@@ -56,6 +67,8 @@ impl FeatureId {
         match self {
             FeatureId::SqlConsole => "SQL console",
             FeatureId::AskCodebase => "Ask the codebase",
+            FeatureId::McpSqlServer => "SQL MCP server",
+            FeatureId::WebBrowser => "Web browser",
         }
     }
 
@@ -65,6 +78,12 @@ impl FeatureId {
             FeatureId::SqlConsole => "Connect to a database and run queries.",
             FeatureId::AskCodebase => {
                 "Ctrl+/ asks a coding agent about this codebase in a live terminal."
+            }
+            FeatureId::McpSqlServer => {
+                "Let a coding agent read the databases you expose, over MCP."
+            }
+            FeatureId::WebBrowser => {
+                "A floating browser panel, for checking a deployment without leaving the app."
             }
         }
     }
@@ -76,8 +95,31 @@ impl FeatureId {
     /// AppImage. Defaulting off would make those look broken. The installer's job
     /// is to let someone turn a feature *off*, not to be the only thing that can
     /// turn it on.
+    ///
+    /// This is an exhaustive `match` and not a blanket `true` on purpose. A
+    /// blanket answer is one nobody has made for the feature being added: the
+    /// next feature whose honest default is *off* — one that costs money, opens
+    /// a port, or grants an agent access — would inherit "on" silently. Adding a
+    /// variant is now a compile error until somebody decides, and
+    /// `every_feature_states_its_own_default` names the decisions in one place.
+    ///
+    /// All three are on today for the reason above: an existing app gaining
+    /// capability, launched most often with no installer to ask the question.
+    /// The MCP server included — installing it into an agent is a separate,
+    /// previewed, per-connection consent step, so the *feature* being visible
+    /// grants nothing.
     pub fn default_enabled(self) -> bool {
-        true
+        match self {
+            FeatureId::SqlConsole => true,
+            FeatureId::AskCodebase => true,
+            FeatureId::McpSqlServer => true,
+            // On, like the other three, for the reason above: an existing app
+            // gaining capability, launched most often with no installer to ask
+            // the question. It opens no port and grants an agent nothing — the
+            // page is only what the user navigates to, and automation consent is
+            // a separate per-page click that defaults to withheld.
+            FeatureId::WebBrowser => true,
+        }
     }
 
     /// Look an id up, or `Err` naming the unknown one.

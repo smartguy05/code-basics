@@ -11,7 +11,15 @@ import {
   type PanelLayout,
   type PanelSize,
 } from "./reviewLayoutLogic";
-import { cascadeShift, outputNeedsAttention, pillBottom, terminalLayoutKey } from "./terminalLogic";
+import {
+  acceptedTerminalTitle,
+  cascadeShift,
+  outputNeedsAttention,
+  pillBottom,
+  terminalLayoutKey,
+} from "./terminalLogic";
+import { MAX_LABEL_LENGTH } from "./workspaceRenameLogic";
+import { ContextMenu } from "./ContextMenu";
 import { PillColorMenu } from "./PillColorMenu";
 
 /**
@@ -63,7 +71,8 @@ export function TerminalPanel({
    *
    * The question is an **argument, not typed keystrokes**, for two further
    * reasons. Typing a multi-line question into an agent's TUI would submit it at
-   * the first ``, asking a fragment; and this panel resolves its session id
+   * the first `
+`, asking a fragment; and this panel resolves its session id
    * asynchronously (see `sessionRef`), so anything written before
    * `terminal_open` resolves is dropped on the floor.
    *
@@ -104,7 +113,12 @@ export function TerminalPanel({
    * signal it raises expires on its own.
    */
   onCompleted?: (success: boolean) => void;
-  /** Commit a new title (the host applies the blank-title guard). */
+  /**
+   * Commit a new title. The panel deliberately sends the raw text: the host's
+   * `renameTerminal` owns the cleaning and the refusal (control/bidi stripping,
+   * whitespace collapsing, the code-point cap) so one rule decides what a
+   * terminal may be called, wherever the rename came from.
+   */
   onRename?: (title: string) => void;
   /** Set/clear the minimized-pill colour. */
   onRecolor?: (color: string | undefined) => void;
@@ -140,8 +154,24 @@ export function TerminalPanel({
   const [attention, setAttention] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exited, setExited] = useState(false);
-  // Non-null while the header title is being edited inline (double-click).
+  // True while the header title is being edited inline (double-click, or the
+  // header's right-click menu). The draft is held here rather than read off the
+  // input on commit, so the `maxLength` cap is something the user can watch stop
+  // them rather than a silent truncation applied afterwards.
   const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  /**
+   * Set while Escape is abandoning an edit.
+   *
+   * Escape unmounts a focused input, which fires `onBlur` on the way out — so
+   * without this flag the cancel path commits the very value it was cancelling,
+   * and the rename cannot be backed out of at all. The same guard, for the same
+   * reason, as the codebase-tab rename in `App.tsx`.
+   */
+  const abandoning = useRef(false);
+  // Where the header's right-click menu is, or null when closed. It exists for
+  // discoverability: nobody finds a double-click on a title by looking at it.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   minimizedRef.current = minimized;
   workspaceActiveRef.current = workspaceActive;
@@ -300,14 +330,38 @@ export function TerminalPanel({
     onClose();
   };
 
-  // Commit a rename: update the local descriptor (host applies the blank guard)
-  // and, when the title is non-blank, keep the backend running-registry record in
-  // step so the Running panel shows the new title.
+  // Begin editing the title. The draft starts as the current title, so Enter
+  // with nothing typed is a no-op rather than a blank commit.
+  const startRename = () => {
+    if (!onRename) return;
+    abandoning.current = false;
+    setDraft(title);
+    setEditing(true);
+  };
+
+  // Commit a rename: update the local descriptor (the host applies the cleaning
+  // and the refusal, `renameTerminal`) and keep the backend running-registry
+  // record in step so the Running panel shows the new title too.
+  //
+  // Both sides ask `acceptedTerminalTitle`, so the registry receives the title
+  // that was *accepted* rather than the raw text. Gating this on `value.trim()`
+  // instead let the two diverge on precisely the inputs the cleaning exists
+  // for: `trim` strips neither U+0000 nor a bidi override, so a title the header
+  // refused still renamed the Running panel row, and `"a	b"` left the header
+  // reading `a b` while the Running panel read `a	b`.
   const commitRename = (value: string) => {
+    // Escape got here first. Committing now would store the edit that was just
+    // abandoned, so this path does nothing but close the editor.
+    if (abandoning.current) {
+      abandoning.current = false;
+      setEditing(false);
+      return;
+    }
     onRename?.(value);
     const id = sessionRef.current;
-    if (id && value.trim() !== "") {
-      void api.terminalSetLabel(id, cwd, value.trim()).catch(() => {});
+    const clean = acceptedTerminalTitle(value);
+    if (id && clean !== null) {
+      void api.terminalSetLabel(id, cwd, clean).catch(() => {});
     }
     setEditing(false);
   };
@@ -316,14 +370,29 @@ export function TerminalPanel({
   // click, so the minimize/close buttons still work; the clamp is pure.
   const onHeaderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
-    if ((e.target as HTMLElement).closest("button")) return;
+    // A press on the title, on a header button, or in the rename input is not a
+    // drag. The title matters beyond the drag: the handler below takes **pointer
+    // capture** on the header, and while that is active the browser dispatches
+    // `click`/`dblclick` to the capturing element — so the `dblclick` that starts
+    // a rename never reached the `<strong>` inside at all, and the rename UI was
+    // dead. Bailing out here is what makes it reachable; dragging by the rest of
+    // the header is unchanged. It must also come *before* the focus below, or the
+    // rename input loses focus the moment it mounts.
+    if ((e.target as HTMLElement).closest("button, strong, input")) return;
     const panel = panelRef.current;
     if (!panel) return;
 
     // Clicking the title bar (to focus or to drag) puts the caret in the
     // terminal, so you can type straight away — the header is not xterm, so a
     // click here would otherwise leave focus wherever it was.
-    viewRef.current?.focus();
+    //
+    // Deferred by a frame, and that deferral is the whole fix: this runs during
+    // `pointerdown`, and the browser's default mousedown action then moves focus
+    // to the pressed element, blurring xterm's hidden textarea a moment after we
+    // focused it — so the click appeared to do nothing. `restore()` above defers
+    // for this same ordering reason. `preventDefault()` would also stop the
+    // shift, but it risks suppressing the `dblclick` the rename depends on.
+    setTimeout(() => viewRef.current?.focus(), 0);
 
     const rect = panel.getBoundingClientRect();
     const grabX = e.clientX - rect.left;
@@ -401,24 +470,43 @@ export function TerminalPanel({
         <div
           className={`review-header${attention ? " attention" : ""}`}
           onPointerDown={onHeaderPointerDown}
+          // Right-click is the discoverable route to the rename. The
+          // double-click stays; this is what tells anyone it is there.
+          onContextMenu={
+            onRename && !editing
+              ? (e) => {
+                  e.preventDefault();
+                  setMenu({ x: e.clientX, y: e.clientY });
+                }
+              : undefined
+          }
         >
           {editing ? (
             <input
               className="terminal-title-edit"
               autoFocus
-              defaultValue={title}
-              onBlur={(e) => commitRename(e.target.value)}
+              // Controlled, with the cap enforced by the field: a box that takes
+              // a pasted paragraph and silently keeps 40 characters of it reads
+              // as a bug. `renameTerminal` still cleans and caps what arrives,
+              // since this input is not the only way a title can be set.
+              value={draft}
+              maxLength={MAX_LABEL_LENGTH}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={() => commitRename(draft)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  commitRename((e.target as HTMLInputElement).value);
+                  commitRename(draft);
                 } else if (e.key === "Escape") {
+                  // Flag first: unmounting the input fires `onBlur`, and without
+                  // this the cancel would commit the edit it is cancelling.
+                  abandoning.current = true;
                   setEditing(false);
                 }
               }}
             />
           ) : (
             <strong
-              onDoubleClick={() => onRename && setEditing(true)}
+              onDoubleClick={startRename}
               title={onRename ? "Double-click to rename" : undefined}
               style={onRename ? { cursor: "text" } : undefined}
             >
@@ -446,6 +534,25 @@ export function TerminalPanel({
           <TerminalView ref={viewRef} onData={onData} onResize={onResize} />
         </div>
       </div>
+
+      {/* The header's right-click menu, through the shared ContextMenu shell, so
+          Escape-to-close and viewport clamping come with it rather than being a
+          third hand-rolled copy. `elevated` because the default band sits *below*
+          the floating panels: at 46 the menu — and its click-catching backdrop —
+          would hide behind the very terminal the menu was opened from. */}
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} elevated onClose={() => setMenu(null)}>
+          <div
+            className="dropdown-item"
+            onClick={() => {
+              setMenu(null);
+              startRename();
+            }}
+          >
+            Rename…
+          </div>
+        </ContextMenu>
+      )}
     </>
   );
 }

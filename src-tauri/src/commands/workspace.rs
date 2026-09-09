@@ -102,6 +102,9 @@ pub async fn close_workspace(
         for id in slot.supervisor.running_ids().await {
             slot.supervisor.cancel(&id).await;
         }
+        for id in slot.debug.ids().await {
+            slot.debug.cancel(&id).await;
+        }
     }
 
     Ok(new_active.map(|p| p.display().to_string()))

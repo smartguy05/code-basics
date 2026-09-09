@@ -10,6 +10,7 @@
 //! key, recents entries).
 
 import type { Workspace } from "../ipc/types";
+import { customLabel, type WorkspaceLabels } from "./workspaceRenameLogic";
 
 /**
  * Add a freshly opened workspace to the open set and choose the active root.
@@ -84,18 +85,67 @@ function segments(root: string): string[] {
  * disambiguated by prefixing the parent directory segment its root differs by,
  * so `/one/api` and `/two/api` become `one/api` and `two/api`. Non-colliding
  * names are left untouched.
+ *
+ * `custom` carries the names the user typed (see `workspaceRenameLogic.ts`),
+ * keyed by root. A renamed tab shows that name **verbatim** and takes no part
+ * in disambiguation at all — not as a candidate for a prefix, and not as
+ * evidence that another tab collides. Two rules follow from that, and the
+ * second is the one worth stating:
+ *
+ * - A renamed tab never sprouts a parent-directory prefix. The user said what
+ *   this tab is called; decorating it would be the app overruling them, and the
+ *   full path is still one hover away in the tab's `title`.
+ * - When a custom label happens to equal another tab's *derived* name, **both**
+ *   are left alone. Prefixing the derived one would mean a tab the user never
+ *   touched silently changing its label — mid-keystroke, while they type into a
+ *   different tab's rename box — for a reason that is not about it. The two
+ *   look alike, which the user can see and fix by renaming again; the honest
+ *   name is a better answer than a prefix invented from someone else's choice.
  */
-export function tabLabels(open: Workspace[]): string[] {
+export function tabLabels(open: Workspace[], custom: WorkspaceLabels = {}): string[] {
+  // Counted over *derived* names only, and over ALL of them — including tabs
+  // that carry a custom label. Skipping the renamed ones looks equivalent and
+  // is not: renaming `/one/api` drops `api` from two to one, which un-prefixes
+  // `/two/api` from `two/api` back to `api`. That is a tab the user never
+  // touched changing its label because of a rename applied to a different tab,
+  // which is the exact harm the rule above forbids.
   const counts = new Map<string, number>();
   for (const w of open) counts.set(w.name, (counts.get(w.name) ?? 0) + 1);
+
   return open.map((w) => {
+    const chosen = customLabel(custom, w.root);
+    if (chosen !== undefined) return chosen;
     if ((counts.get(w.name) ?? 0) <= 1) return w.name;
-    const segs = segments(w.root);
-    // The parent of the root (the segment before the basename) is what two
-    // same-named repos differ by; fall back to the bare name if there is none.
-    const parent = segs.length >= 2 ? segs[segs.length - 2] : undefined;
-    return parent ? `${parent}/${w.name}` : w.name;
+    return disambiguate(w, open);
   });
+}
+
+/**
+ * A label for one of several same-named roots: the fewest trailing path
+ * segments that tell it apart from the others it collides with.
+ *
+ * Walking up rather than taking the parent unconditionally, because the parent
+ * is not always the segment they differ by. The same repository checked out on
+ * two drives (`C:/repos/api` and `D:/repos/api`) shares its parent, so a single
+ * step produces `repos/api` **twice** — two identical labels, which is what
+ * disambiguation exists to prevent. The walk stops at the first depth that is
+ * actually unique, and gives up at the whole root, which is unique by
+ * definition since a root is a tab's identity.
+ */
+function disambiguate(target: Workspace, open: Workspace[]): string {
+  const rivals = open.filter((w) => w !== target && w.name === target.name);
+  const segs = segments(target.root);
+  const rivalSegs = rivals.map((w) => segments(w.root));
+
+  for (let depth = 2; depth <= segs.length; depth += 1) {
+    const tail = segs.slice(segs.length - depth).join("/");
+    const clash = rivalSegs.some((other) => other.slice(other.length - depth).join("/") === tail);
+    if (!clash) return tail;
+  }
+  // Every rival matched at every depth: the roots are spelled identically, so
+  // there is nothing left to tell them apart with. The bare name is the honest
+  // answer — these really are two tabs on the same path.
+  return target.name;
 }
 
 /**

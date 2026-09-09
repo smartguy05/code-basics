@@ -25,6 +25,16 @@ fn sniffs_postgres_from_a_host_keyword() {
 }
 
 #[test]
+fn sniffs_postgres_from_npgsql_server_alias_and_specific_keywords() {
+    assert_eq!(
+        sniff_engine(
+            "Server=pg.internal;Database=app;Port=5432;User Id=svc;Password=not-real;Ssl Mode=Require;Include Error Detail=True"
+        ),
+        Some(SqlEngine::Postgres)
+    );
+}
+
+#[test]
 fn sniffs_sql_server_from_initial_catalog() {
     assert_eq!(
         sniff_engine(

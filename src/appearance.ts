@@ -49,9 +49,24 @@ export function resetAppearance(): AppearanceSettings {
   return DEFAULT_APPEARANCE;
 }
 
-export function onAppearanceChange(listener: () => void): () => void {
-  window.addEventListener(APPEARANCE_CHANGE_EVENT, listener);
-  return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, listener);
+/**
+ * Subscribe to appearance changes.
+ *
+ * The listener receives the settings that were applied, which matters for the
+ * *unpersisted* ones: `SettingsDialog.preview()` calls `applyAppearance(next,
+ * false)`, so a listener that re-read `localStorage` would see the old values
+ * and the dialog would preview nothing. Existing listeners that only need to
+ * re-read the computed CSS variables (`OutputConsole`, `TerminalView`) take no
+ * argument and are unaffected.
+ */
+export function onAppearanceChange(
+  listener: (settings: AppearanceSettings) => void,
+): () => void {
+  const handler = (event: Event) => {
+    listener((event as CustomEvent<AppearanceSettings>).detail);
+  };
+  window.addEventListener(APPEARANCE_CHANGE_EVENT, handler);
+  return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, handler);
 }
 
 export function terminalAppearance(): { fontFamily: string; fontSize: number; theme: { background: string; foreground: string; cursor: string; selectionBackground: string } } {

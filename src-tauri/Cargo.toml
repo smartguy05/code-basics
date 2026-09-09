@@ -18,11 +18,41 @@ cb-core = { path = "../crates/core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+# The embedded browser panel. Raw wry, **not** `tauri::wry` — that re-export is
+# gated on `target_os = "android"` (tauri-2.11.5/src/lib.rs:179-184) and so does
+# not exist on Windows. Pinned to the version already in `Cargo.lock`, which is
+# the one tauri-runtime-wry resolves, so nothing new is compiled and there is no
+# second wry in the tree. See `src/browser/mod.rs` for why a Tauri-created
+# webview may never host remote content in this app.
+wry = "0.55.1"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
 dunce.workspace = true
+rmcp.workspace = true
 specta.workspace = true
 specta-typescript = "0.0.9"
+
+[dev-dependencies]
+# The browser instance registry is a real file, and `registry_tests` redirects
+# it with `CB_BROWSER_INSTANCES_PATH` rather than writing to the developer's own
+# — the mistake two of `mcp::install::plan`'s tests still make.
+tempfile = "3"
+
+# The browser control pipe, and nothing else. Pinned to the version tokio
+# already resolves (see Cargo.lock) so no second copy of `windows-sys` is
+# compiled. Only four things need Win32 here and each is unavoidable: an
+# explicit DACL on the named pipe (with a NULL security descriptor Windows
+# grants read access to Everyone — see `browser/pipe.rs`), and the three calls
+# that turn a connected client into a name the consent banner can show.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }

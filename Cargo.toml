@@ -3,7 +3,7 @@ members = ["crates/core", "src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "1.1.0"
+version = "1.4.0"
 edition = "2021"
 # Measured, not guessed, on 2026-08-30 — and this line replaces a false one.
 #
@@ -40,6 +40,18 @@ dunce = "1"
 globset = "0.4"
 walkdir = "2"
 toml = "0.8"
+
+# Format-preserving TOML editing, for the one file this tree writes that another
+# process owns: `$CODEX_HOME/config.toml`. A `toml::Value` round-trip is refused
+# here, and not merely for comment loss — that file carries single-quoted literal
+# keys holding Windows paths and colons (`[projects.'c:\users\...']`,
+# `[hooks.state.'C:\...\hooks.json:stop:1:0']`), TOML requires bare key-values
+# before tables, and Codex itself rewrites the file concurrently. A round-trip is
+# a whole-file rewrite of a file we do not own.
+#
+# Measured on 2026-09-04: `Cargo.lock` already carried `toml_edit 0.25.13`
+# transitively, so naming it directly adds **zero** packages.
+toml_edit = "0.25"
 regex = "1"
 # SQL statement parsing behind the SQL console's read-only guard. Pinned to an
 # exact minor: sqlparser is pre-1.0 and reshapes its AST between minors, and the
@@ -47,6 +59,37 @@ regex = "1"
 # which statements are classified as reads. 0.62 is the latest and declares no
 # rust-version, so nothing here raises the workspace 1.88 floor.
 sqlparser = "0.62.0"
+
+# The Model Context Protocol SDK, behind `cb-app mcp-sql`. Taken rather than
+# hand-rolled for one reason: `rmcp::model` is **dual-era**. `ProtocolVersion`
+# carries all five spec revisions from `2024-11-05` to `2026-07-28`, so which
+# era Claude Code and Codex speak today does not have to be known in advance
+# and no version string is ever typed into this tree — the constants are
+# referenced instead.
+#
+# Measured on 2026-09-04, per the `rust-version` comment's own instruction to
+# read the *first* failure: `cargo add rmcp` resolves 3.2.0, which declares
+# `rust-version = "1.88"` — **exactly** this workspace's floor, so it raises
+# nothing. `cargo check -p cb-core` then completed clean with no error at all.
+# `Cargo.lock` gained ten packages under the default feature set (`rmcp`,
+# `rmcp-macros`, `pastey`, the `futures` façade, `base64`, `schemars_derive`,
+# `serde_derive_internals` and the three `darling*` crates); `schemars`,
+# `indexmap`, `chrono`, `tokio-util` and `uuid` were already locked.
+#
+# `default-features = false` drops all three defaults, and this is a scope
+# statement rather than a size optimisation: **`cb-core` uses only
+# `rmcp::model`**, which is not behind any feature. `server` would pull in the
+# service runtime and a transport, and neither belongs in a crate with no I/O;
+# `macros` and `base64` serve derive and content types this tree does not use.
+# The process that actually speaks the protocol lives in `src-tauri`, and it
+# takes the **same** trimmed line: its transport is `cb_core::mcp::ndjson` plus
+# `cb_core::lsp::jsonrpc`, which this tree already owns and tests, so `server`
+# and `transport-io` buy a service runtime nothing here would call. If they are
+# ever turned on there, Cargo unions features per crate and `cb-core` gets them
+# too — so re-measure the lock before doing it.
+# Trimmed, `Cargo.lock` gains **two** packages rather than ten: `rmcp` and the
+# `futures` facade. Re-measure both numbers if a feature is ever turned on here.
+rmcp = { version = "3.2.0", default-features = false }
 # The SQL console's database driver. Pinned to an exact patch, and `0.9` is
 # deliberately refused: sqlx 0.9.0 declares `rust-version = "1.94"`, far above
 # anything this workspace could promise. `default-features = false` is mandatory

@@ -186,6 +186,22 @@ fn npgsql_keywords_resolve_to_the_fields_sqlx_needs() {
 }
 
 #[test]
+fn npgsql_server_alias_resolves_to_the_fields_sqlx_needs() {
+    let target = connect_target(
+        "Server=pg.internal;Database=app;Port=5432;User Id=svc;Password=not-real;Ssl Mode=Require;Include Error Detail=True",
+    )
+    .expect("Npgsql accepts Server as a Host alias");
+    let PgTarget::Keywords(k) = target else {
+        panic!("expected keywords")
+    };
+    assert_eq!(k.host, "pg.internal");
+    assert_eq!(k.port, Some(5432));
+    assert_eq!(k.database.as_deref(), Some("app"));
+    assert_eq!(k.username.as_deref(), Some("svc"));
+    assert_eq!(k.ssl_mode, Some(SslMode::Require));
+}
+
+#[test]
 fn the_user_keyword_is_accepted_in_every_spelling_npgsql_accepts() {
     for key in ["Username", "User ID", "UserId", "User Name", "User"] {
         let target = connect_target(&format!("Host=h;{key}=svc")).expect("names a host");
@@ -197,15 +213,7 @@ fn the_user_keyword_is_accepted_in_every_spelling_npgsql_accepts() {
 }
 
 #[test]
-fn a_connection_string_naming_no_host_is_refused_rather_than_guessed_at() {
-    // `Server=` is spoken by several drivers and is deliberately not read as a
-    // Postgres host: `dsn::sniff_engine` does not treat it as one either, and
-    // connecting to a plausible-looking value is the wrong server, not a near
-    // miss.
-    assert_eq!(
-        connect_target("Server=localhost;Database=app"),
-        Err(PgTargetError::NoHostNamed)
-    );
+fn a_connection_string_naming_no_host_is_refused() {
     assert_eq!(
         connect_target("Host=;Database=app"),
         Err(PgTargetError::NoHostNamed),
@@ -300,9 +308,9 @@ fn debugging_a_target_never_prints_the_password() {
 
 #[test]
 fn building_options_from_a_secret_bearing_string_never_echoes_it_on_failure() {
-    let err = PostgresDriver::options(&spec("Server=db;Password=hunter2", false)).unwrap_err();
+    let err = PostgresDriver::options(&spec("Database=db;Password=hunter2", false)).unwrap_err();
     assert!(!err.message.contains("hunter2"), "{}", err.message);
-    assert!(!err.message.contains("Server=db"), "{}", err.message);
+    assert!(!err.message.contains("Database=db"), "{}", err.message);
     assert_eq!(err.stage, crate::sql::driver::ErrorStage::Connect);
 }
 

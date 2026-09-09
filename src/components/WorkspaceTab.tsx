@@ -2,14 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { ArchitectureView } from "../views/ArchitectureView";
 import { AskPanel } from "./AskPanel";
 import { BehavioralPanel } from "./BehavioralPanel";
-import { ChangesView } from "../views/ChangesView";
 import { HistoryView } from "../views/HistoryView";
 import { InspectView } from "../views/InspectView";
 import { RunView } from "../views/RunView";
 import { ReviewPanel } from "./ReviewPanel";
 import { SearchEverywhere } from "./SearchEverywhere";
 import { SetupPrompt } from "./SetupPrompt";
-import { SqlView } from "../views/SqlView";
+import { McpServerPanel } from "./McpServerPanel";
+import { SqlPanel } from "./SqlPanel";
 import { shouldPrompt, setDismissed } from "./setupPromptLogic";
 import { TerminalPanel } from "./TerminalPanel";
 import { TestsView } from "../views/TestsView";
@@ -17,6 +17,7 @@ import { terminalTitle } from "./askLogic";
 import {
   makeAgentTerminal,
   makeTerminal,
+  nextTerminalNumber,
   raiseTerminal,
   recolorTerminal,
   renameTerminal,
@@ -24,35 +25,46 @@ import {
   syncStackOrder,
   type TerminalDescriptor,
 } from "./terminalLogic";
+import { loadTerminalShell, resolvePreferredShell } from "./terminalShellLogic";
 import { sendToAgentTitle } from "./notesLogic";
+import {
+  CLOSED_SQL_PANEL,
+  closeSqlPanel,
+  openSqlPanel,
+  sqlPanelAfterFeatureChange,
+  sqlPanelMounted,
+} from "./sqlPanelLogic";
 import type { TabSignal } from "./workspaceTabsLogic";
 import * as api from "../ipc/api";
 import type { AgentMode } from "../ipc/api";
-import type { BehavioralReport, FeatureInfo, Note, Workspace } from "../ipc/types";
+import type { BehavioralReport, FeatureInfo, Note, ShellInfo, Workspace } from "../ipc/types";
 import type { InspectRequest, OpenFileRequest, SelectConfigRequest } from "../App";
 import { featureEnabled, tabAfterDisable, visibleTabs, type FeatureKey } from "./featuresLogic";
+import type { ProjectPane } from "./projectViewLogic";
 import { registerCommand } from "../shortcuts";
 
-type Tab = "tests" | "run" | "changes" | "history" | "architecture" | "inspect" | "sql";
+type Tab = "tests" | "project" | "history" | "architecture" | "inspect";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "run", label: "Run" },
+  { id: "project", label: "Project" },
   { id: "tests", label: "Tests" },
-  { id: "changes", label: "Changes" },
   { id: "history", label: "History" },
   { id: "architecture", label: "Architecture" },
   { id: "inspect", label: "Objects" },
-  { id: "sql", label: "SQL" },
 ];
 
 /**
  * Which optional feature owns each tab. A tab absent from this map is core and
  * cannot be switched off, which is why it is a partial map rather than a field
  * on `TABS` — most tabs have no feature and should not have to say so.
+ *
+ * Empty since the SQL console became a floating window: it is no longer a tab,
+ * so `sqlConsole` now gates the *opener* (the titlebar action and the `view.sql`
+ * command) and the panel's mount, not a row in the strip. The map and the
+ * `visibleTabs`/`tabAfterDisable` wiring stay because the next optional tab will
+ * need them and because nothing about them is SQL-specific.
  */
-const FEATURE_BY_TAB: Partial<Record<Tab, FeatureKey>> = {
-  sql: "sqlConsole",
-};
+const FEATURE_BY_TAB: Partial<Record<Tab, FeatureKey>> = {};
 
 /**
  * The actions the titlebar (global chrome) and the global Notes panel route to
@@ -61,6 +73,13 @@ const FEATURE_BY_TAB: Partial<Record<Tab, FeatureKey>> = {
  */
 export interface WorkspaceTabHandle {
   openTerminal(): void;
+  /**
+   * Open a terminal in one detected shell, this once, without touching the
+   * stored preference. Part of the handle for the same reason `openTerminal`
+   * is: the titlebar is global chrome and the terminals are per-codebase, so
+   * the action has to be routed to the foreground tab.
+   */
+  openTerminalIn(shell: ShellInfo): void;
   /**
    * Open an interactive terminal in this codebase already asking `question` of
    * `agentId`. Part of the handle rather than private to the tab because the
@@ -71,6 +90,36 @@ export interface WorkspaceTabHandle {
   openRunAgent(promptId: string): void;
   openReview(): void;
   openNoteInAgent(note: Note): void;
+  /**
+   * Open the floating SQL console for this codebase, or restore it when it is
+   * already open and minimized.
+   *
+   * Part of the handle because the console stopped being a tab: the titlebar is
+   * global chrome and the panel is per-codebase, so the action has to be routed
+   * to the foreground tab like the terminal and the agent panel. Calling it
+   * while the `sqlConsole` feature is off does nothing — the gate is inside the
+   * tab, so no caller has to re-derive it.
+   */
+  openSql(): void;
+  /**
+   * Open the "Ask the codebase" box for this codebase.
+   *
+   * Part of the handle for the same reason `openSql` is: the Plugins menu is
+   * global titlebar chrome and the box is per-codebase. The gate is inside the
+   * tab — calling this while the `askCodebase` feature is off does nothing, so
+   * no caller has to re-derive it.
+   */
+  openAsk(): void;
+  /**
+   * Open the SQL MCP server installer for this codebase.
+   *
+   * Part of the handle for the same reason `openSql` and `openAsk` are: the
+   * Plugins menu is global titlebar chrome and this acts on the foreground
+   * codebase (a project-scope install writes `.mcp.json` at its root). The gate
+   * is inside the tab — calling it while the `mcpSqlServer` feature is off does
+   * nothing.
+   */
+  openMcp(): void;
 }
 
 /**
@@ -106,7 +155,10 @@ export function WorkspaceTab({
   onWorkspaceChange,
   onRegister,
   onAttentionChange,
+  onLspPollKeyChange,
+  onEditorTabsChange,
   onSignal,
+  onNotify,
   features,
 }: {
   workspace: Workspace;
@@ -122,6 +174,29 @@ export function WorkspaceTab({
    */
   onAttentionChange: (root: string, hasAttention: boolean) => void;
   /**
+   * Report this codebase's open-file set, so the language-server indicator in
+   * the app's bottom status bar can poll on the active codebase's key.
+   *
+   * A callback and not part of {@link WorkspaceTabHandle}: the handle is for
+   * one-shot actions `App` *invokes*, and a ref is invisible to rendering. This
+   * is a value `App` renders, so it has to travel the way attention does.
+   */
+  onLspPollKeyChange: (root: string, key: string | null) => void;
+  /**
+   * Report whether this codebase's editor area holds a tab, so `App` can decide
+   * the window's transparency.
+   *
+   * A sibling of {@link onLspPollKeyChange} rather than a
+   * {@link WorkspaceTabHandle} method, for the reason stated there: this is a
+   * value `App` renders from, not an action it invokes.
+   *
+   * `null` on unmount, so `App` **deletes** the entry rather than blanking it.
+   * A lingering `false` would keep the window translucent for a codebase that is
+   * gone, and a lingering `true` would keep it opaque — forever, one dead key
+   * per codebase ever opened.
+   */
+  onEditorTabsChange: (root: string, open: boolean | null) => void;
+  /**
    * Report a one-shot event worth showing on this codebase's tab while it is in
    * the background: a build that succeeded or failed, or a minimized terminal
    * that finished.
@@ -134,13 +209,30 @@ export function WorkspaceTab({
    */
   onSignal: (root: string, signal: TabSignal) => void;
   /**
+   * Raise an app-wide notification.
+   *
+   * Passed straight through to `RunView`. A tab signal cannot carry this: the
+   * files a rename wrote may belong to no codebase the user has in front of
+   * them, and "these were written to disk and are not undoable here" has to be
+   * readable after switching away.
+   */
+  onNotify: (report: { kind: "error" | "warning" | "info"; title: string; detail: string }) => void;
+  /**
    * The optional features that are switched on, or `null` while the startup load
    * is in flight. Passed down rather than fetched here so every open codebase
    * renders the same answer from one read, and so the strip never flickers.
    */
   features: FeatureInfo[] | null;
 }) {
-  const [tab, setTab] = useState<Tab>("run");
+  const [tab, setTab] = useState<Tab>("project");
+  /**
+   * Which surface the Project tab's rail is showing.
+   *
+   * Held here rather than inside `RunView` because `view.run` / `view.changes`
+   * have to do two things at once — select the Project tab *and* preselect a
+   * pane — and a command handler cannot reach into a child's state.
+   */
+  const [pane, setPane] = useState<ProjectPane>("files");
 
   /**
    * The tabs this build actually shows, after the optional-feature gate.
@@ -150,11 +242,32 @@ export function WorkspaceTab({
   const shownTabs = visibleTabs(TABS, features, FEATURE_BY_TAB);
 
   /**
-   * Whether a tab survived the gate. Asked of `shownTabs` rather than of
-   * `featureEnabled` again so a gated body and the tab strip cannot disagree:
-   * there is one filtered list and both read it.
+   * The SQL console: a floating window rather than a tab, so what used to be a
+   * tab selection is now an open/minimized panel plus a restore token.
    */
-  const tabShown = (id: Tab) => shownTabs.some((t) => t.id === id);
+  const [sqlPanel, setSqlPanel] = useState(CLOSED_SQL_PANEL);
+  const sqlEnabled = featureEnabled(features, "sqlConsole");
+  const openSql = () => setSqlPanel(openSqlPanel);
+  // Switching the feature off unmounts the console rather than hiding it — see
+  // `sqlPanelAfterFeatureChange` for why the two are different. The decision
+  // returns the same object when nothing changes, so this cannot loop.
+  useEffect(() => {
+    setSqlPanel((state) => sqlPanelAfterFeatureChange(state, sqlEnabled));
+  }, [sqlEnabled]);
+
+  /**
+   * The SQL MCP server installer: a transient modal, so a plain boolean is
+   * enough — unlike the SQL console there is no live state to preserve, and
+   * re-opening it is a fresh read of the install status either way.
+   */
+  const [mcpPanelOpen, setMcpPanelOpen] = useState(false);
+  const mcpEnabled = featureEnabled(features, "mcpSqlServer");
+  const openMcp = () => setMcpPanelOpen(true);
+  // Switching the feature off closes the panel rather than leaving a modal on
+  // screen for a feature the user just turned off.
+  useEffect(() => {
+    if (!mcpEnabled) setMcpPanelOpen(false);
+  }, [mcpEnabled]);
 
   /**
    * Keep the selected tab on something that still exists. Turning off the
@@ -170,8 +283,37 @@ export function WorkspaceTab({
   useEffect(() => {
     if (!active) return;
     const registrations = shownTabs.map(({ id }) => registerCommand(`view.${id}`, () => setTab(id)));
+    // `view.run` and `view.changes` outlived the tabs they named. Settings still
+    // advertises them — the repo rule is that a command is never advertised
+    // without a handler — and they are what a user's muscle memory reaches for,
+    // so they now select the Project tab *and* the pane that used to be that
+    // tab. This is the one place a command sets two pieces of state, which is
+    // why `pane` is held here rather than inside `RunView`.
+    if (shownTabs.some(({ id }) => id === "project")) {
+      registrations.push(
+        registerCommand("view.run", () => {
+          setTab("project");
+          setPane("files");
+        }),
+        registerCommand("view.changes", () => {
+          setTab("project");
+          setPane("changes");
+        }),
+      );
+    }
+    // `view.sql` outlived its tab the way `view.run`/`view.changes` did, and is
+    // still advertised in Settings — the repo rule is that no command is
+    // advertised without a handler — so it now opens (or restores) the floating
+    // console. Registered only while the feature is on, exactly as it was only
+    // registered while the tab survived the gate.
+    if (sqlEnabled) registrations.push(registerCommand("view.sql", openSql));
+    // Registered only while its feature is on, exactly as `view.sql` is: a
+    // command advertised in Settings must have a handler, and a command whose
+    // feature is off must not act.
+    if (mcpEnabled) registrations.push(registerCommand("plugin.mcp", openMcp));
     return () => registrations.forEach((unregister) => unregister());
-  }, [active, shownTabs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, shownTabs, sqlEnabled, mcpEnabled]);
   const [showSetup, setShowSetup] = useState(false);
   const [inspectRequest, setInspectRequest] = useState<InspectRequest | null>(null);
   const [openRequest, setOpenRequest] = useState<OpenFileRequest | null>(null);
@@ -202,6 +344,22 @@ export function WorkspaceTab({
    * does nothing is indistinguishable from the app being broken.
    */
   const [askError, setAskError] = useState<string | null>(null);
+  /**
+   * A monotonic open request for `AskPanel`, in the request-and-consume shape
+   * `App` already uses for `openRequest`/`selectRequest`.
+   *
+   * A counter rather than a lifted `open` boolean: the panel owns its own
+   * visibility (and its Ctrl+/ registration, which is what keeps that chord
+   * returning cleanly to CodeMirror when the feature is off), so this only ever
+   * *asks* it to open. Re-opening after the user closed it changes no field a
+   * boolean could compare, which is exactly what the counter is for.
+   */
+  const [askOpenSignal, setAskOpenSignal] = useState(0);
+  const askEnabled = featureEnabled(features, "askCodebase");
+  const openAsk = () => {
+    if (!askEnabled) return;
+    setAskOpenSignal((n) => n + 1);
+  };
 
   const [terminals, setTerminals] = useState<TerminalDescriptor[]>([]);
   const terminalSeq = useRef(0);
@@ -244,15 +402,95 @@ export function WorkspaceTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // This codebase's open-file set, as the Run view reports it. Pushed up and
+  // dropped on unmount: a closed codebase has no open editors, and an entry
+  // left behind would keep the status bar polling for a workspace slot the
+  // backend has already torn down.
+  //
+  // Unmount reports `null`, not `""`, so `App` can *delete* the entry the way
+  // it deletes the attention one. A blank string would read identically to the
+  // status bar but accumulate one dead key per codebase ever opened.
+  const [lspPollKey, setLspPollKey] = useState("");
+  useEffect(() => {
+    onLspPollKeyChange(workspace.root, lspPollKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lspPollKey, workspace.root]);
+  useEffect(() => {
+    return () => onLspPollKeyChange(workspace.root, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Whether this codebase's editor area holds a tab. Reported for **every**
+  // codebase and not only the foreground one, exactly as the poll key is, so a
+  // tab switch re-decides the window from state `App` already holds rather than
+  // waiting for the newly-foregrounded tab to report.
+  const [editorTabsOpen, setEditorTabsOpen] = useState(false);
+  useEffect(() => {
+    onEditorTabsChange(workspace.root, editorTabsOpen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorTabsOpen, workspace.root]);
+  useEffect(() => {
+    return () => onEditorTabsChange(workspace.root, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function nextToken() {
     requestToken.current += 1;
     return requestToken.current;
   }
 
-  const openTerminal = () => {
+  /**
+   * Add one terminal to this codebase's set, running `command` — or the
+   * platform default shell when that is `null`.
+   *
+   * Shared by the plain open and the one-off shell pick so the sequence counter
+   * is bumped in exactly one place: two copies of that increment could drift
+   * and mint the same `term-N`, which would have React reuse a live xterm for a
+   * different PTY session.
+   */
+  const mintTerminal = (command: { program: string; args: string[] } | null) => {
     terminalSeq.current += 1;
-    setTerminals((open) => [...open, makeTerminal(terminalSeq.current, workspace.root)]);
+    const seq = terminalSeq.current;
+    setTerminals((open) => [
+      ...open,
+      makeTerminal(seq, nextTerminalNumber(open), workspace.root, command ?? undefined),
+    ]);
   };
+  /**
+   * Open a plain terminal, in the preferred shell if that shell is here.
+   *
+   * Detection runs at **open** time rather than being cached, mirroring
+   * `openAskTerminal`, which already awaits `agent_interactive_command` before
+   * minting a descriptor. It costs a few `is_file` probes and buys the
+   * preference being re-validated against the machine as it is *now*: a shell
+   * uninstalled since the choice was made resolves to nothing and
+   * `resolvePreferredShell` abstains, so the terminal opens on the platform
+   * default rather than failing to spawn a file that is gone.
+   *
+   * A failed detection must not stop a terminal opening — the user asked for a
+   * terminal — and must not silently claim the preference was honoured, hence
+   * the log rather than a silent `catch`.
+   */
+  const openTerminal = () => {
+    void api
+      .listShells()
+      .then(({ shells }) =>
+        mintTerminal(resolvePreferredShell(loadTerminalShell(localStorage), shells)),
+      )
+      .catch((e) => {
+        console.error("code-basics: shell detection failed; opening the system default", e);
+        mintTerminal(null);
+      });
+  };
+  /**
+   * Open a terminal in one specific shell, this once, from the titlebar menu.
+   *
+   * The `ShellInfo` was resolved by the detection that built the menu, so
+   * nothing is looked up again here — the path the row showed is the path that
+   * gets spawned.
+   */
+  const openTerminalIn = (shell: ShellInfo) =>
+    mintTerminal({ program: shell.program, args: shell.args });
   /**
    * Open a terminal running an agent that has already been asked `question`.
    *
@@ -282,10 +520,12 @@ export function WorkspaceTab({
       .agentInteractiveCommand(agentId, model, question)
       .then((command) => {
         terminalSeq.current += 1;
+        const seq = terminalSeq.current;
         setTerminals((open) => [
           ...open,
           makeAgentTerminal(
-            terminalSeq.current,
+            seq,
+            nextTerminalNumber(open),
             workspace.root,
             command.program,
             command.args,
@@ -342,13 +582,13 @@ export function WorkspaceTab({
   function requestOpenFile(path: string, name: string, line?: number) {
     requestToken.current += 1;
     setOpenRequest({ path, name, line, token: requestToken.current });
-    setTab("run");
+    setTab("project");
   }
 
   function requestSelectConfig(configId: string) {
     requestToken.current += 1;
     setSelectRequest({ configId, token: requestToken.current });
-    setTab("run");
+    setTab("project");
   }
 
   // Register this tab's action handle so the global titlebar and Notes panel can
@@ -356,20 +596,38 @@ export function WorkspaceTab({
   // needs to re-register when a handler identity changes between renders.
   const handleRef = useRef<WorkspaceTabHandle>({
     openTerminal,
+    openTerminalIn,
     openAskTerminal,
     openRunAgent,
     openReview,
     openNoteInAgent,
+    openSql,
+    openAsk,
+    openMcp,
   });
-  handleRef.current = { openTerminal, openAskTerminal, openRunAgent, openReview, openNoteInAgent };
+  handleRef.current = {
+    openTerminal,
+    openTerminalIn,
+    openAskTerminal,
+    openRunAgent,
+    openReview,
+    openNoteInAgent,
+    openSql,
+    openAsk,
+    openMcp,
+  };
   useEffect(() => {
     const stable: WorkspaceTabHandle = {
       openTerminal: () => handleRef.current.openTerminal(),
+      openTerminalIn: (shell) => handleRef.current.openTerminalIn(shell),
       openAskTerminal: (question, agentId, model) =>
         handleRef.current.openAskTerminal(question, agentId, model),
       openRunAgent: (id) => handleRef.current.openRunAgent(id),
       openReview: () => handleRef.current.openReview(),
       openNoteInAgent: (note) => handleRef.current.openNoteInAgent(note),
+      openSql: () => handleRef.current.openSql(),
+      openAsk: () => handleRef.current.openAsk(),
+      openMcp: () => handleRef.current.openMcp(),
     };
     onRegister(workspace.root, stable);
     return () => onRegister(workspace.root, null);
@@ -405,7 +663,7 @@ export function WorkspaceTab({
           consoles); Changes, History and Architecture mount only while this is
           the foreground tab and their inner tab is chosen, so a background
           codebase never re-reads disk or polls git for the active pointer. */}
-      <div className="body" hidden={tab !== "run"}>
+      <div className="body" hidden={tab !== "project"}>
         <RunView
           workspace={workspace}
           onWorkspaceChange={onWorkspaceChange}
@@ -416,7 +674,20 @@ export function WorkspaceTab({
           onSelectConsumed={() => setSelectRequest(null)}
           onNavigate={requestOpenFile}
           onProcessResult={(ok) => onSignal(workspace.root, ok ? "success" : "error")}
-          active={active && tab === "run"}
+          onLspPollKeyChange={setLspPollKey}
+          onEditorTabsChange={setEditorTabsOpen}
+          active={active && tab === "project"}
+          pane={pane}
+          onPaneChange={setPane}
+          // The two halves of `active`, kept apart: the changes model needs all
+          // three visibility terms separately (see `ChangesVisibility`).
+          tabForeground={tab === "project"}
+          codebaseActive={active}
+          behavioral={behavioralReport}
+          onOpenReview={openReview}
+          onRunBehavioral={(configId, httpFiles) => openBehavioral(configId, httpFiles, false)}
+          onVerifyClaims={(configId, httpFiles) => openBehavioral(configId, httpFiles, true)}
+          onNotify={onNotify}
         />
       </div>
       <div className="body" hidden={tab !== "tests"}>
@@ -426,37 +697,6 @@ export function WorkspaceTab({
           onResult={(success) => onSignal(workspace.root, success ? "success" : "error")}
         />
       </div>
-      {/* Two different gates, and the distinction is the point.
-
-          *Hidden* (the feature is on, another tab is in front): stays mounted,
-          like Run/Tests/Objects and unlike the conditionally-mounted views,
-          because it owns live database connections and a query that may still
-          be streaming rows — none of which survives an unmount.
-
-          *Switched off* (the feature is off): unmounted. The mounted-while-
-          hidden convention is about a tab the user can still reach in one
-          click; a disabled feature is not that. Left mounted it would keep
-          calling `sql_list_connections` on mount, keep its CodeMirror instance
-          alive, and keep a query streaming against a live database with no
-          route to the rows and no route to Stop — the user turned the console
-          off and the console kept running.
-
-          Abandoning an in-flight query on unmount is bounded, not a leak:
-          `sql_execute` keeps draining its internal channel after `channel.send`
-          starts failing (a closed frontend channel stops the sending, not the
-          draining), calls `state.sql.finish`, and `run_plan` drops the driver
-          connection when the statement completes. Nothing waits on this side.
-          What is *not* claimed: this is not a server-side cancel, so a long
-          statement runs to completion on the server exactly as Stop would have
-          left it.
-
-          `tabAfterDisable` above has already moved the selection off the tab,
-          so `hidden` and the mount gate never contradict each other. */}
-      {tabShown("sql") && (
-        <div className="body" hidden={tab !== "sql"}>
-          <SqlView workspace={workspace} />
-        </div>
-      )}
       <div className="body" hidden={tab !== "inspect"}>
         <InspectView
           workspace={workspace}
@@ -464,17 +704,6 @@ export function WorkspaceTab({
           onRequestConsumed={() => setInspectRequest(null)}
         />
       </div>
-      {active && tab === "changes" && (
-        <div className="body">
-          <ChangesView
-            workspace={workspace}
-            behavioral={behavioralReport}
-            onOpenReview={openReview}
-            onRunBehavioral={(configId, httpFiles) => openBehavioral(configId, httpFiles, false)}
-            onVerifyClaims={(configId, httpFiles) => openBehavioral(configId, httpFiles, true)}
-          />
-        </div>
-      )}
       {active && tab === "history" && (
         <div className="body">
           <HistoryView />
@@ -498,7 +727,8 @@ export function WorkspaceTab({
           cleanly to CodeMirror's comment toggle. */}
       <AskPanel
         active={active}
-        enabled={featureEnabled(features, "askCodebase")}
+        openSignal={askOpenSignal}
+        enabled={askEnabled}
         onAsk={openAskTerminal}
       />
 
@@ -541,6 +771,44 @@ export function WorkspaceTab({
           onVerify={openVerifyClaims}
           onClose={() => setBehavioralPanel(null)}
         />
+      )}
+
+      {/* Mounted only while the user has it open *and* the feature is on. The
+          two are different facts and the distinction is the point.
+
+          *Minimized* (open, out of sight): stays mounted — `SqlPanel` hides it
+          rather than unmounting — because it owns live database connections, a
+          CodeMirror document and a query that may still be streaming rows, none
+          of which survives an unmount, and it is one click away.
+
+          *Switched off* (the feature is off): unmounted, by `sqlPanelMounted`
+          answering false. Left mounted it would keep calling
+          `sql_list_connections` on mount, keep its CodeMirror instance alive,
+          and keep a query streaming against a live database with no route to the
+          rows and no route to Stop — the user turned the console off and the
+          console kept running.
+
+          Abandoning an in-flight query on unmount is bounded, not a leak:
+          `sql_execute` keeps draining its internal channel after `channel.send`
+          starts failing (a closed frontend channel stops the sending, not the
+          draining), calls `state.sql.finish`, and `run_plan` drops the driver
+          connection when the statement completes. Nothing waits on this side.
+          What is *not* claimed: this is not a server-side cancel, so a long
+          statement runs to completion on the server exactly as Stop would have
+          left it. */}
+      {sqlPanelMounted(sqlPanel, sqlEnabled) && (
+        <SqlPanel
+          workspace={workspace}
+          restoreRequest={sqlPanel.restoreToken}
+          onClose={() => setSqlPanel(closeSqlPanel)}
+        />
+      )}
+
+      {/* Mounted only while open *and* the feature is on — a modal, so closing
+          it is an unmount and nothing is lost by that. The feature gate is here
+          rather than at the call site so no caller has to re-derive it. */}
+      {mcpPanelOpen && mcpEnabled && (
+        <McpServerPanel onClose={() => setMcpPanelOpen(false)} />
       )}
 
       {terminals.map((t, index) => (

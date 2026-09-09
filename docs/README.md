@@ -5,7 +5,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 ## Getting started
 
 - [Installation](getting-started/installation.md) — prerequisites, first run, building a distributable
-- [Using the app](getting-started/using-the-app.md) — opening workspaces, a tour of the six views, the floating terminals, and launching other apps
+- [Using the app](getting-started/using-the-app.md) — opening workspaces, a tour of the tabs and floating windows, the floating terminals, and launching other apps
 - [Customizing the app](getting-started/customizing.md) — themes, fonts, font sizes, shortcuts, and project attention signals
 
 ## Architecture
@@ -15,6 +15,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 - [The Tauri shell (`src-tauri`)](architecture/tauri-shell.md) — state, adapter dispatch, and the command surface
 - [The frontend (`src/`)](architecture/frontend.md) — views, components, and IPC wrappers
 - [The IPC type contract](architecture/ipc-contract.md) — how Rust and TypeScript types stay in sync
+- [The browser panel](architecture/browser-panel.md) — why it is raw `wry`, and the z-order cost that comes with it
 - [Live inspection](architecture/live-inspection.md) — the object-inspector sidecar, why it is one-shot, and why it is bundled
 
 ## Guides
@@ -24,6 +25,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 - [Rider import](guides/rider-import.md) — how JetBrains Rider run configurations are converted
 - [Agent intent capture](guides/agent-intent-capture.md) — grouping a diff into the decisions behind it, with Claude Code or Codex
 - [Instruction enhancements](guides/instruction-enhancements.md) — adding reusable instruction sections to CLAUDE.md / AGENTS.md from a menu of `.md` templates
+- [The SQL MCP server](guides/sql-mcp-server.md) - letting an agent read the databases you are already connected to, read-only and by explicit per-connection consent
 - [Inspecting objects](guides/inspecting-objects.md) — reading the real heap of a crash dump, and what crash dump capture costs
 - [Language servers](guides/language-servers.md) — which server per language, how to install each, and how to point config at one
 

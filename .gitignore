@@ -28,7 +28,21 @@ package-lock.json
 /sidecar/**/obj/
 /src-tauri/resources/inspector/
 
+# Debug adapters vendored into the bundle by `pnpm debuggers:fetch`.
+# Pinned, checksummed downloads — never committed.
+/src-tauri/resources/debuggers/
+
 # Claude Code runtime junk under .claude/. The committed hook config
 # (settings.json, hooks/) is tracked; these are per-session artifacts.
 /.claude/scheduled_tasks.lock
 /.claude/wf/
+
+# Per-workspace app state (intents, symbol cache, agent-run records). Created
+# wherever a codebase is opened — including inside this repo when it is opened
+# on itself, which is why this is not anchored to the root.
+.code-basics/
+
+# Backups the hook and enhancement installers write before editing a file the
+# user shares with their team. They are a safety net, not a source artifact.
+*.bak
+*.qgate-bak

@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "code-basics",
-  "version": "1.1.0",
+  "version": "1.4.0",
   "identifier": "dev.codebasics.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm debuggers:fetch && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -17,7 +17,8 @@
         "height": 820,
         "minWidth": 900,
         "minHeight": 600,
-        "resizable": true
+        "resizable": true,
+        "transparent": true
       }
     ],
     "security": {
@@ -29,6 +30,7 @@
     "targets": "all",
     "resources": {
       "resources/inspector/": "inspector/",
+      "resources/debuggers/": "debuggers/",
       "resources/instructions/": "instructions/",
       "resources/prompts/": "prompts/"
     },

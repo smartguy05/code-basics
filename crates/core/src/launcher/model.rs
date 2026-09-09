@@ -36,7 +36,31 @@ pub struct Launchable {
     /// into argv. Required for anything using `|`, `>` or `&&`.
     pub shell: bool,
     /// Pinned entries sort first and are never evicted by the recents cap.
+    /// Ordering only — deliberately **not** the same fact as `shortcut`.
     pub pinned: bool,
+    /// Publish this entry as a named command in the terminal menu.
+    ///
+    /// Distinct from `pinned` on purpose: pinning changes where an entry appears
+    /// in the picker, a shortcut changes *whether it appears somewhere else at
+    /// all*. Merging them would reorder every existing list the moment a user
+    /// saved their first shortcut, and would make un-pinning silently withdraw a
+    /// command from a menu the user is looking at. Like a pin, a shortcut is
+    /// exempt from the recents cap — see [`super::recents::MAX_UNPINNED`].
+    #[serde(default)]
+    pub shortcut: bool,
+    /// A long-running service: it keeps running and stays listed until stopped.
+    ///
+    /// A statement about the process's expected lifetime, and nothing more. It
+    /// does **not** restart the command when it exits — that reading was
+    /// considered and rejected, because a launcher that silently respawns a
+    /// process the user stopped is unstoppable from the one place they would
+    /// look.
+    #[serde(default)]
+    pub persistent: bool,
+    /// Run with no output panel tab. The process is still tracked and still
+    /// stoppable from the Running panel; only its console is omitted.
+    #[serde(default)]
+    pub headless: bool,
     /// When it last ran, ms since the Unix epoch. The clock is the caller's, so
     /// the recents policy stays a pure function.
     pub last_run_ms: u64,

@@ -21,7 +21,7 @@ export function PlanPreview({
   confirmLabel?: string;
 }) {
   return (
-    <div style={{ marginTop: 8 }}>
+    <div className="plan-preview" style={{ marginTop: 8 }}>
       <div style={{ fontSize: 12, marginBottom: 4 }}>
         This will write {plan.writes.length} file
         {plan.writes.length === 1 ? "" : "s"}:

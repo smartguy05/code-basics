@@ -85,6 +85,38 @@ pub struct AppState {
     /// rescan and a `close` of the workspace it was started from — exactly the
     /// argument [`AppState::pty`] makes for a terminal.
     pub sql: SqlSessions,
+    /// The embedded browser panel's **data** — its availability, url, title,
+    /// consent and bounded logs.
+    ///
+    /// Only the data. The wry `WebView` itself is `!Send` and main-thread-affine
+    /// and lives in a `thread_local!` in [`crate::browser`]; this state is
+    /// `std::sync::Mutex`-guarded and `set_workspace` clears caches while
+    /// holding a guard, so nothing here may need the main thread or an `.await`.
+    /// [`AppState::browser`] pairs this with an `AppHandle` to make the
+    /// clone-cheap handle that can reach the thread owning the webview — the
+    /// same reasoning as [`cb_core::lsp::session::LspHandle`]: never an
+    /// `Arc<Mutex<the resource>>`.
+    ///
+    /// Global and **not** per-workspace, like [`AppState::pty`]: there is one
+    /// browser panel for the whole application ("verify my deployment" is not
+    /// repo-specific), and a workspace-scoped one would leave a *visible* OS
+    /// webview painting over a codebase the user had switched away from, because
+    /// a background `WorkspaceTab` is only `hidden`.
+    browser: Arc<Mutex<crate::browser::BrowserShared>>,
+
+    /// The browser control pipe, while a browser panel is open.
+    ///
+    /// **Tied to the panel, not to the process**, which is the smaller surface:
+    /// with no panel open there is no pipe on the machine at all, and *panel
+    /// closed* becomes an answer a client reads out of the registry without
+    /// connecting to anything. `browser_open` starts it and `browser_close`
+    /// stops it, and the registry entry is rewritten on both.
+    ///
+    /// Ordinary data, unlike the webview it serves: a `PipeListener` is a join
+    /// handle and a flag, so it is `Send + Sync` and belongs here rather than in
+    /// the main thread's `thread_local!`.
+    #[cfg(windows)]
+    browser_pipe: Mutex<Option<crate::browser::pipe::PipeListener>>,
 }
 
 impl Default for AppState {
@@ -101,6 +133,9 @@ impl Default for AppState {
             pty: PtyManager::with_store(running.clone()),
             running,
             sql: SqlSessions::new(),
+            browser: Arc::new(Mutex::new(crate::browser::BrowserShared::new())),
+            #[cfg(windows)]
+            browser_pipe: Mutex::new(None),
         }
     }
 }
@@ -128,6 +163,9 @@ pub struct WorkspaceSlot {
     /// collision without namespacing ids, and lets `close` cancel exactly this
     /// workspace's processes.
     pub supervisor: Supervisor,
+    /// Debug adapter processes, keyed exactly like ordinary configuration runs.
+    /// Killing the adapter's process tree also kills the debuggee it launched.
+    pub debug: DebugSessions,
     /// The most recent result per test configuration, so "re-run failed" knows
     /// which tests to name. Keyed by config id, which is unique *within* a
     /// workspace.
@@ -164,6 +202,7 @@ impl WorkspaceSlot {
             // Tracked so this codebase's runs/builds appear in the Running panel
             // and are recoverable as orphans after a crash.
             supervisor: Supervisor::with_store(running),
+            debug: DebugSessions::default(),
             last_test_run: Mutex::new(HashMap::new()),
             last_coverage: Mutex::new(HashMap::new()),
             last_inspect: Mutex::new(None),
@@ -188,6 +227,39 @@ impl WorkspaceSlot {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
+    }
+}
+
+/// The live debug-adapter processes for one workspace.
+#[derive(Clone, Default)]
+pub struct DebugSessions {
+    running: Arc<tokio::sync::Mutex<HashMap<String, u32>>>,
+}
+
+impl DebugSessions {
+    pub async fn register(&self, id: &str, pid: u32) {
+        self.cancel(id).await;
+        self.running.lock().await.insert(id.to_string(), pid);
+    }
+
+    pub async fn finish(&self, id: &str, pid: u32) -> bool {
+        let mut running = self.running.lock().await;
+        if running.get(id) == Some(&pid) {
+            running.remove(id);
+            return true;
+        }
+        false
+    }
+
+    pub async fn cancel(&self, id: &str) -> bool {
+        let Some(pid) = self.running.lock().await.remove(id) else {
+            return false;
+        };
+        cb_core::process::kill_tree_async(pid).await
+    }
+
+    pub async fn ids(&self) -> Vec<String> {
+        self.running.lock().await.keys().cloned().collect()
     }
 }
 
@@ -549,6 +621,78 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         store.clone()
+    }
+
+    /// The browser panel's handle: this state's data, plus a way to reach the
+    /// main thread that owns the webview.
+    ///
+    /// Takes the `AppHandle` as an argument rather than storing one, because
+    /// `AppState` is constructed **before** there is an app — `AppState::default`
+    /// runs in `run()` ahead of `tauri::Builder`, and `workspace_from_args` uses
+    /// it there. Storing an `Option<BrowserHandle>` filled in by `setup` would
+    /// add a "the browser is not initialised yet" failure that no caller could
+    /// do anything about; a command already has the `AppHandle` (as
+    /// `start_debug` does), so pairing the two here costs nothing and cannot be
+    /// in the wrong state.
+    pub fn browser(&self, app: tauri::AppHandle) -> crate::browser::BrowserHandle {
+        crate::browser::BrowserHandle::from_parts(app, self.browser.clone())
+    }
+
+    /// Hand the browser control pipe over to this state, stopping whatever was
+    /// there.
+    ///
+    /// Replacing rather than refusing: a panel re-open after a close that did
+    /// not get as far as stopping the old listener must not end up with two,
+    /// and the pipe name is per-process so the second could never bind anyway.
+    #[cfg(windows)]
+    pub fn set_browser_pipe(&self, listener: Option<crate::browser::pipe::PipeListener>) {
+        let previous = {
+            let mut slot = self
+                .browser_pipe
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            std::mem::replace(&mut *slot, listener)
+        };
+        // Stopped **after** the guard is dropped: `stop` aborts a task, and
+        // holding a `std::sync::Mutex` across that is the shape `set_workspace`
+        // avoids for the same reason.
+        if let Some(previous) = previous {
+            previous.stop();
+        }
+    }
+
+    /// Stop and forget the browser control pipe. Idempotent.
+    #[cfg(windows)]
+    pub fn clear_browser_pipe(&self) {
+        self.set_browser_pipe(None);
+    }
+
+    /// Read the browser panel's data without an `AppHandle` and without touching
+    /// the main thread.
+    ///
+    /// Separate from [`AppState::browser`] because the *reads* — status, the
+    /// console log, the network log — need no webview at all, and a command that
+    /// crossed to the main thread to answer them would be a poll that can be
+    /// blocked by whatever the page is doing.
+    pub fn browser_data<T>(&self, read: impl FnOnce(&crate::browser::BrowserShared) -> T) -> T {
+        let guard = self
+            .browser
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        read(&guard)
+    }
+
+    /// Change the browser panel's data. Consent is the one thing that moves
+    /// through here without the webview being involved at all.
+    pub fn browser_data_mut<T>(
+        &self,
+        write: impl FnOnce(&mut crate::browser::BrowserShared) -> T,
+    ) -> T {
+        let mut guard = self
+            .browser
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        write(&mut guard)
     }
 }
 

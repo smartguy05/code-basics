@@ -227,6 +227,44 @@ export type TerminalEvent =
   | { type: "exited"; code: number | null; success: boolean }
   | { type: "failed"; message: string };
 
+/**
+ * One shell `list_shells` found on this machine. Mirrors the Rust `ShellInfo`,
+ * pinned by `shell_info_serialises_with_the_keys_the_ui_reads` in
+ * `crates/core/src/pty/model.rs`.
+ *
+ * Every row describes a file that existed at detection time — there is no
+ * "missing" or disabled variant, because a shell that cannot be launched is
+ * omitted rather than offered.
+ */
+export interface ShellInfo {
+  /** Stable id; this, not `program`, is what a stored preference persists. */
+  id: string;
+  /** Display name. Never derived from a version nobody read. */
+  label: string;
+  /**
+   * The resolved absolute path that gets spawned — and the only thing that
+   * tells two installations of the same shell apart, so show it as the row's
+   * helper text or tooltip.
+   */
+  program: string;
+  /** Arguments to pass with `program`. Empty for every shell detected today. */
+  args: string[];
+}
+
+/**
+ * What `list_shells` answers. Mirrors the Rust `DetectedShells`, pinned by
+ * `detected_shells_serialises_with_the_keys_the_ui_reads`.
+ *
+ * An **empty** `shells` array is a legitimate answer, not a failure: terminals
+ * still open on the platform default. `defaultId` is `T | null` rather than
+ * optional, deliberately — "we could not identify the default" must not be
+ * indistinguishable from a backend that forgot to send one.
+ */
+export interface DetectedShells {
+  shells: ShellInfo[];
+  defaultId: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Running processes (the Running panel)
 // ---------------------------------------------------------------------------
@@ -501,6 +539,8 @@ export interface Note {
   id: string;
   title: string;
   body: string;
+  /** Optional colour belonging to this tab, not to the Notes window. */
+  color?: string;
   /** When the note was created, milliseconds since the Unix epoch. */
   createdAtMs: number;
   /** When the note was last edited, milliseconds since the Unix epoch. */
@@ -509,7 +549,7 @@ export interface Note {
 
 /** The whole global notes file (`notes::NotesFile`). */
 export interface NotesFile {
-  /** Schema version (currently 1), so the format can migrate. */
+  /** Schema version (currently 2), so the format can migrate. */
   version: number;
   /** The notes, in the order the panel shows their tabs. */
   notes: Note[];
@@ -552,8 +592,23 @@ export interface Launchable {
   label: string | null;
   /** Run through the default shell (needed for `|`, `>`, `&&`). */
   shell: boolean;
-  /** Pinned entries sort first and are never evicted by the recents cap. */
+  /**
+   * Pinned entries sort first and are never evicted by the recents cap.
+   * Ordering only — not the same fact as {@link Launchable.shortcut}.
+   */
   pinned: boolean;
+  /**
+   * Show this entry as a named command in the terminal menu. Distinct from
+   * `pinned`, which only sorts. Like a pin, exempt from the recents cap.
+   */
+  shortcut: boolean;
+  /**
+   * A long-running service: it keeps running and stays listed until stopped.
+   * Never auto-restarted.
+   */
+  persistent: boolean;
+  /** Run with no output panel tab. Still tracked, still stoppable. */
+  headless: boolean;
   /** When it last ran, ms since the Unix epoch. */
   lastRunMs: number;
   runCount: number;
@@ -1850,6 +1905,156 @@ export interface ServerStatus {
   hint: string | null;
 }
 
+/**
+ * A rename that happened, or the reason none did.
+ *
+ * **Two lists of edits, because the work is split.** Rust wrote every file
+ * nobody has open (`written`); the open buffers' edits come back in `buffers`
+ * for the editor to dispatch, one transaction per file. A disk write behind an
+ * open tab is invisible to its CodeMirror buffer — the build effect is keyed on
+ * identity alone, there is no file watcher and there is no autosave — and is
+ * clobbered by the next `Mod-s`, which is why the backend must not write those.
+ *
+ * **Dispatch `buffers` synchronously**, in the `.then` of the call, and
+ * *report* any entry with no receiving editor rather than dropping it: between
+ * the disk writes and that dispatch is the one window this design cannot close,
+ * and it is one promise resolution wide.
+ *
+ * **A multi-file rename is not one undo.** Each open buffer gets one
+ * transaction, so `Ctrl+Z` in that tab reverts that file's part; `written` files
+ * have no undo at all. Say so — the Changes tab's line-level revert is the real
+ * answer — rather than implying an undo that does not exist.
+ *
+ * Every key is present on every result, `null` where there is no value: the Rust
+ * struct carries no `skip_serializing_if`. Pinned by
+ * `rename_result_serialises_with_the_keys_the_ui_reads` and
+ * `a_rename_that_could_not_be_asked_carries_the_total_key_as_null` in
+ * `crates/core/src/lsp/model_tests.rs`.
+ */
+export interface RenameResult {
+  outcome: Availability;
+  /**
+   * How many edits the rename accounted for, across every file.
+   *
+   * `null` unless `outcome` is `"ready"`; `0` means the server answered that
+   * there is nothing to change, which is a real answer and not the same as
+   * nobody being asked — so branch on `total === null`, not on falsiness.
+   */
+  total: number | null;
+  /** The closed files the backend wrote, in write order. */
+  written: RenamedFile[];
+  /** The open buffers' edits, for the editor to apply. */
+  buffers: BufferEdits[];
+  /**
+   * Files that could not be written, or could not be restored. Non-empty means
+   * the rename did not complete; an entry with `unrecoverable` set must be
+   * escalated rather than listed.
+   */
+  failures: RenameFailure[];
+  /**
+   * Why, when `outcome` is not `"ready"` — **and the qualification when it is.**
+   *
+   * A `"ready"` rename carries a message when the answer needs one: the server
+   * never finished priming (so call sites may have been *missed*, which is worse
+   * than a low count and worth showing before the user moves on), or some edits
+   * landed on text that merely contains the identifier, such as a comment. See
+   * {@link UsageResult.message}.
+   */
+  message: string | null;
+  /** Which server answered, for a status line. `null` when none did. */
+  server: string | null;
+}
+
+/**
+ * One span of one document, and the text that replaces it.
+ *
+ * **1-based `line`, 0-based UTF-16 `character`** on both ends — the same
+ * asymmetry as {@link Target.character}, restated because this is the only type
+ * on this surface carrying an *end* position. The range is half-open: `end` is
+ * exclusive, so a zero-width range is an insertion and an empty `newText` is a
+ * deletion. Insertions are the **normal** case, not an edge one: the real Roslyn
+ * server answers a rename with a minimal diff, so renaming `Walker` to
+ * `HeapWalker` arrives as an insertion of `"Heap"`.
+ *
+ * No byte offsets, deliberately — the backend has no text for an open buffer, so
+ * converting these to document positions is the editor's job.
+ */
+export interface RangeEdit {
+  startLine: number;
+  startCharacter: number;
+  endLine: number;
+  endCharacter: number;
+  newText: string;
+}
+
+/** A closed file that was written to disk. */
+export interface RenamedFile {
+  /** Workspace-relative, forward slashes — ready for the open-a-file chain. */
+  path: string;
+  /** How many edits this file received. */
+  edits: number;
+}
+
+/** One open buffer's edits, to apply as a single transaction. */
+export interface BufferEdits {
+  /**
+   * Workspace-relative, forward slashes. Match it with `sameWorkspaceFile(tab,
+   * path)` and never `file.id === path`: a diff tab carries a `path` too, and
+   * applying a rename into a diff buffer writes it over the real file.
+   */
+  path: string;
+  /** In document order and non-overlapping; the backend proved that. */
+  edits: RangeEdit[];
+}
+
+/** A file the rename could not finish with. */
+export interface RenameFailure {
+  /** Workspace-relative, forward slashes. */
+  path: string;
+  /** What went wrong, in the words of whatever refused. */
+  detail: string;
+  /**
+   * Whether this file is beyond anything the app can do about it — a write
+   * failed *and* restoring an earlier file failed too, so it holds part of a
+   * rename with no copy of its previous contents anywhere.
+   *
+   * A boolean rather than prose because this has to be escalated without
+   * parsing English: send the user to git, immediately, not to a list.
+   */
+  unrecoverable: boolean;
+}
+
+/**
+ * Whether the caret is on something renameable, and where its identifier is.
+ *
+ * `renameable: false` with `outcome: "ready"` is a **real answer about the
+ * caret** — it is on a keyword, a comment or a literal — and must decline the
+ * rename rather than report a broken server. Never open the field on it, and
+ * never open it empty.
+ *
+ * The four position fields are `null` together. A server may say the caret is
+ * renameable while naming no range (`defaultBehavior`), and the real Roslyn
+ * server names a range with **no `placeholder`** — so the field's prefill comes
+ * from the buffer (`renameLogic.identifierAt`) and that is the live path for C#,
+ * not a fallback.
+ */
+export interface PrepareRenameResult {
+  outcome: Availability;
+  /** False for every outcome that is not `"ready"`, and for a `null` answer. */
+  renameable: boolean;
+  /** **1-based**; see {@link RangeEdit}. `null` unless the server named a range. */
+  startLine: number | null;
+  /** **0-based UTF-16 code units**; see {@link Target.character}. */
+  startCharacter: number | null;
+  endLine: number | null;
+  endCharacter: number | null;
+  /** What to prefill with, when the server offered it — `null` for Roslyn. */
+  placeholder: string | null;
+  /** Why there is no answer, or the qualification a `"ready"` one needs. */
+  message: string | null;
+  server: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Debugging (`cb_core::dap::model`)
 // ---------------------------------------------------------------------------
@@ -2025,6 +2230,17 @@ export interface SqlConnectionProfile {
    * form round-trip cannot turn the read-only guard off.
    */
   allowWrites: boolean;
+  /**
+   * Sent and **ignored**, for the same reason and a stronger one: only
+   * `sqlSetExposeToAgents` moves this, so a form round-trip cannot hand a
+   * database to an agent.
+   */
+  exposeToAgents: boolean;
+  /**
+   * Sent and **ignored**, for the same reason: only `sqlRenameConnection` sets
+   * this, so a re-save carrying a derived name cannot undo a rename.
+   */
+  userNamed: boolean;
   createdAtMs: number;
   lastUsedMs: number | null;
 }
@@ -2039,8 +2255,49 @@ export interface SqlConnectionView {
   holdsASecret: boolean;
   workspaceRoot: string | null;
   allowWrites: boolean;
+  /**
+   * Whether an agent may see this connection at all, through the MCP server.
+   * A separate fact from `allowWrites` and never derived from it: the agent
+   * path forces read-only regardless, so this answers only *may an agent read
+   * here*. Default off; moved only by `sqlSetExposeToAgents`.
+   */
+  exposeToAgents: boolean;
+  /**
+   * Whether the user typed `name`. When they did, `savedConnectionLabel` shows
+   * it verbatim; when they did not, it composes `project · source · key` from
+   * the reference. Two different facts — a name alone cannot say who wrote it.
+   */
+  userNamed: boolean;
   createdAtMs: number;
   lastUsedMs: number | null;
+}
+
+/** Streamed lifecycle and console events for one attached debug launch. */
+export type DebugEvent =
+  | { type: "state"; state: DebugState }
+  | { type: "output"; stream: "stdout" | "stderr"; text: string };
+
+/** Extensible object-explorer category. Tables are the first supported kind. */
+export type SqlObjectKind = "table";
+
+/** One database catalog object; schema stays separate for future object kinds. */
+export interface SqlObjectView {
+  kind: SqlObjectKind;
+  schema: string | null;
+  name: string;
+}
+
+/** Normalized column metadata loaded when a table node is expanded. */
+export interface SqlColumnView {
+  name: string;
+  dataType: string;
+  nullable: boolean | null;
+  defaultValue: string | null;
+  ordinal: number;
+  maxLength: number | null;
+  numericPrecision: number | null;
+  numericScale: number | null;
+  primaryKey: boolean | null;
 }
 
 /**
@@ -2208,3 +2465,222 @@ export type SqlTestOutcome =
  * would make a race look like a working feature.
  */
 export type SqlStopOutcome = "signalled" | "alreadyStopping" | "notFound";
+
+// ---------------------------------------------------------------------------
+// About (Help -> About)
+// ---------------------------------------------------------------------------
+
+/**
+ * What build is running. Mirrors the Rust `AboutInfo`, pinned by
+ * `about_info_serialises_with_the_keys_the_ui_reads` in
+ * `src-tauri/src/commands/about.rs` — unusually for this file the struct lives
+ * in the command module rather than `cb-core`, because it carries no decision
+ * the core crate needs to make.
+ *
+ * The application and Tauri versions are absent on purpose: the frontend reads
+ * those from `@tauri-apps/api/app`, so this covers only what that API cannot
+ * answer. Every field is a plain string and **none of them is optional** — a
+ * fact that could not be established arrives as the literal `"unknown"`, so
+ * "we do not know" can never be confused with a backend that forgot to send it.
+ */
+export interface AboutInfo {
+  /** `cb-app`'s crate version, which may differ from `getVersion()`'s. */
+  appVersion: string;
+  /** `std::env::consts::OS` for the compiled target, e.g. `"windows"`. */
+  os: string;
+  /** `std::env::consts::ARCH`, e.g. `"x86_64"`. */
+  arch: string;
+  /**
+   * The short commit, suffixed `-dirty` when the tree carried uncommitted
+   * changes at build time, `-unverified` when that could not be checked, or
+   * `"unknown"`. Read it through `aboutLogic.treeState` rather than by hand.
+   */
+  gitSha: string;
+  /**
+   * UNIX epoch **seconds** as a decimal string, or `"unknown"` — not a
+   * formatted date. `aboutLogic.formatBuildDate` renders it; see `build.rs`
+   * for why the formatting is on this side.
+   */
+  buildDate: string;
+}
+
+// ---------------------------------------------------------------------------
+// The embedded browser panel
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the embedded browser is. Mirrors `cb_core::browser::model::
+ * BrowserAvailability`, pinned by `serialisation_shape` there.
+ *
+ * **Six answers, never collapsed into one**, because each licenses something
+ * different: `pluginDisabled` is a setting to change, `panelClosed` is one
+ * click away, `blank` is a panel with no page, `loading` is a page whose text
+ * would be *wrong rather than absent*, `ready` is the only state a read may be
+ * attempted in, and `failed` is a navigation this app could not start.
+ */
+export type BrowserAvailability =
+  | "pluginDisabled"
+  | "panelClosed"
+  | "blank"
+  | "loading"
+  | "ready"
+  | "failed";
+
+/** How a captured console message was ranked. `other` is the abstention. */
+export type BrowserConsoleLevel =
+  | "debug"
+  | "log"
+  | "info"
+  | "warn"
+  | "error"
+  | "other";
+
+/** One captured console message. `seq` is a cursor, not an index. */
+export interface BrowserConsoleEntry {
+  seq: number;
+  level: BrowserConsoleLevel;
+  /**
+   * The `console` method as the page spelled it (`"warn"`, `"table"`), or
+   * `"onerror"` / `"unhandledrejection"` for the two window events that are
+   * captured and are not console calls at all. Kept beside `level` because the
+   * level is this app's ranking and this is the page's own word.
+   */
+  method: string;
+  text: string;
+}
+
+/**
+ * How one network row was observed — and therefore what it can say. A
+ * `resource` row comes from a `PerformanceObserver` and has no status and no
+ * real method; only `fetch`/`xhr` rows can report one.
+ */
+export type BrowserNetworkSource = "fetch" | "xhr" | "resource";
+
+/** One observed network request. */
+export interface BrowserNetworkEntry {
+  seq: number;
+  url: string;
+  method: string;
+  /** `null` for a `resource` row and for a fetch that never completed. */
+  status: number | null;
+  durationMs: number | null;
+  transferSize: number | null;
+  source: BrowserNetworkSource;
+}
+
+/**
+ * Text extracted from the page, and what was left out. `totalChars` is the
+ * whole page's length, never the returned slice's — `returnedChars ===
+ * totalChars` is the only way to know you have all of it.
+ */
+export interface BrowserPageText {
+  text: string;
+  totalChars: number;
+  returnedChars: number;
+  truncated: boolean;
+}
+
+/**
+ * What an agent may do with the page the user is looking at. `writes` without
+ * `reads` is unrepresentable on the Rust side, and `origin` is what the flags
+ * were granted against — an origin change resets both, so navigating never
+ * grants consent and never renews it. Not persisted.
+ */
+/**
+ * The last program that asked to read or drive the page, and what it asked
+ * for. Mirrors the Rust `AgentRequest`.
+ *
+ * This is what lets the consent banner say *who is asking* rather than "an
+ * agent". The name comes from the connected pipe client's own process image,
+ * never from anything the caller sent — a self-reported name is the one field a
+ * rogue caller would lie about.
+ */
+export interface BrowserAgentRequest {
+  pid: number;
+  /** The client executable's file name, e.g. `codex.cmd`. */
+  program: string;
+  /** The MCP tool it called, e.g. `browser_page_text`. */
+  tool: string;
+  /** Whether it asked for something that would change the page. */
+  needsWrites: boolean;
+  /** Whether it was refused for want of consent. `false` means it ran. */
+  refused: boolean;
+}
+
+export interface BrowserAutomationConsent {
+  reads: boolean;
+  writes: boolean;
+  origin: string | null;
+}
+
+/**
+ * Everything the panel renders, in one read. Mirrors the Rust
+ * `BrowserSnapshot`, pinned by `snapshot_serialises_with_the_keys_the_ui_reads`
+ * in `src-tauri/src/browser/shared_tests.rs` — unusually for this file the
+ * struct lives in the host rather than `cb-core`, on the `AboutInfo` precedent,
+ * because it is a projection of the host's own state.
+ */
+export interface BrowserSnapshot {
+  availability: BrowserAvailability;
+  /**
+   * The current page's address. From the navigation handler, not
+   * `WebView::url()` — the Phase 4 spike measured that returning an empty
+   * string while a document was loaded.
+   */
+  url: string | null;
+  title: string | null;
+  /** The page's origin, `null` for every opaque one (`about:blank` included). */
+  origin: string | null;
+  consent: BrowserAutomationConsent;
+  /** Navigations the origin rule refused — a page reaching for `tauri://`. */
+  refusedNavigations: number;
+  /** Messages from the page parsed and *not* applied. A prober is visible. */
+  rejectedMessages: number;
+  lastRefusal: string | null;
+  /**
+   * The last agent request over the control pipe, or `null` when nothing has
+   * asked. Cleared with everything else a page owns, because "codex.cmd wanted
+   * to read this page" is a statement about a page.
+   */
+  lastAgentRequest: BrowserAgentRequest | null;
+}
+
+/** A panel rect in logical pixels, relative to the window's client area. */
+export interface BrowserRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** Console rows after a cursor, and how many the cursor missed. */
+export interface BrowserConsoleBatch {
+  entries: BrowserConsoleEntry[];
+  /**
+   * Rows this page's own log lost to the buffer cap before this read. Never
+   * silently zero.
+   */
+  missed: number;
+  /**
+   * Rows that belonged to a page that is gone and were discarded with it. A
+   * different fact from `missed`, and only `missed` says the record in front of
+   * the reader is partial.
+   */
+  discarded: number;
+  nextCursor: number;
+}
+
+/** Network rows after a cursor, plus what the instrumentation cannot see. */
+export interface BrowserNetworkBatch {
+  entries: BrowserNetworkEntry[];
+  missed: number;
+  /** See `BrowserConsoleBatch.discarded`. */
+  discarded: number;
+  nextCursor: number;
+  /**
+   * `NETWORK_COVERAGE_NOTE` — carried on every answer, empty list included.
+   * These rows are not DevTools' network panel: no headers, no bodies, statuses
+   * only for fetch/XHR, and nothing at all from before the init script ran.
+   */
+  coverage: string;
+}

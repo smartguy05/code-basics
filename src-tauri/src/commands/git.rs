@@ -299,6 +299,18 @@ pub async fn git_stash_save(state: State<'_, AppState>, message: String) -> Resu
         .map_err(|e| format!("{e:#}"))
 }
 
+/// Stash only the named files, leaving every other change in the working tree.
+#[tauri::command]
+pub async fn git_stash_paths(
+    state: State<'_, AppState>,
+    message: String,
+    paths: Vec<String>,
+) -> Result<String, String> {
+    open(&state)?
+        .stash_paths(&message, &paths)
+        .map_err(|e| format!("{e:#}"))
+}
+
 #[tauri::command]
 pub async fn git_stash_list(state: State<'_, AppState>) -> Result<Vec<StashEntry>, String> {
     open(&state)?.stash_list().map_err(|e| format!("{e:#}"))

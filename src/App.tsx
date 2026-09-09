@@ -1,22 +1,57 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { AboutDialog } from "./components/AboutDialog";
 import { AppOutputPanel } from "./components/AppOutputPanel";
 import { BranchMenu } from "./components/BranchMenu";
+import { BrowserPanel } from "./components/BrowserPanel";
+import {
+  browserPanelAfterFeatureChange,
+  browserPanelMounted,
+  closeBrowserPanel,
+  openBrowserPanel,
+  CLOSED_BROWSER_PANEL,
+  type BrowserPanelState,
+} from "./components/browserPanelLogic";
+import { featureEnabled } from "./components/featuresLogic";
 import { LauncherPicker } from "./components/LauncherPicker";
 import { FeaturesPicker } from "./components/FeaturesPicker";
+import { ContextMenu } from "./components/ContextMenu";
+import { LspStatusIndicator } from "./components/LspStatus";
+import { activeLspPollKey, lspWatching } from "./components/lspStatusLogic";
 import { MenuBar } from "./components/MenuBar";
+import { isInside } from "./components/launcherLogic";
 import { NotesPanel } from "./components/NotesPanel";
+import { NotificationHost } from "./components/NotificationHost";
+import { pluginMenuAvailable, pluginMenuRows } from "./components/pluginMenuLogic";
+import {
+  describeUnexpectedStop,
+  dismissNotification,
+  notifiesUnexpectedStop,
+  pushNotification,
+  type AppNotification,
+} from "./components/notificationLogic";
 import { RunningPanel } from "./components/RunningPanel";
 import { liveCount } from "./components/runningLogic";
 import {
   addTab,
   applyEvent,
+  bufferHeadless,
   closeTab,
   liveTabCount,
   makeTab,
+  revealsHeadlessFailure,
   setTabSeverity,
+  shouldOpenTab,
   type AppTab,
 } from "./components/appOutputLogic";
+import {
+  liveKeysByEntry,
+  newTerminalButton,
+  shortcutActionLabel,
+  shortcutEntries,
+  terminalMenuRows,
+  type TerminalMenuAction,
+} from "./components/terminalMenuLogic";
 import type { Severity } from "./components/consoleLogic";
 import type { ConsoleHandle } from "./components/OutputConsole";
 import { WorkspaceTab, type WorkspaceTabHandle } from "./components/WorkspaceTab";
@@ -29,6 +64,16 @@ import {
   tabSignalClass,
 } from "./components/workspaceTabsLogic";
 import type { TabSignal } from "./components/workspaceTabsLogic";
+import {
+  clearLabel,
+  customLabel,
+  labelFor,
+  loadLabels,
+  MAX_LABEL_LENGTH,
+  saveLabels,
+  setLabel,
+  type WorkspaceLabels,
+} from "./components/workspaceRenameLogic";
 import * as api from "./ipc/api";
 
 /**
@@ -38,15 +83,20 @@ import * as api from "./ipc/api";
  * unlike the other three signals it expires without being acknowledged.
  */
 const DONE_SIGNAL_MS = 1900;
-import { applyAppearance, loadAppearance } from "./appearance";
+import { applyAppearance, loadAppearance, onAppearanceChange } from "./appearance";
+import { applyWindowOpacity } from "./windowTransparency";
+import { transparencySupport, windowBackgroundOpacity } from "./windowTransparencyLogic";
 import { dispatchShortcut, registerCommand } from "./shortcuts";
 import { loadRecents, rememberRecent } from "./recentsLogic";
 import type {
   InspectTarget,
+  Launchable,
+  LauncherGroups,
   ProcessEvent,
   FeatureInfo,
   RootSpec,
   RunningReport,
+  ShellInfo,
   Workspace,
 } from "./ipc/types";
 
@@ -104,6 +154,11 @@ export function App() {
   const [recents, setRecents] = useState<string[]>(() => loadRecents(localStorage));
   const [loading, setLoading] = useState(true);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [notesRestoreRequest, setNotesRestoreRequest] = useState(0);
+  const showNotes = () => {
+    setNotesOpen(true);
+    setNotesRestoreRequest((request) => request + 1);
+  };
   const [settingsOpen, setSettingsOpen] = useState(false);
   /**
    * Which optional features are on. Loaded once at startup — before any
@@ -113,6 +168,32 @@ export function App() {
    */
   const [features, setFeatures] = useState<FeatureInfo[] | null>(null);
   const [featuresOpen, setFeaturesOpen] = useState(false);
+  /**
+   * The embedded browser panel — app-level, one instance, **not** per codebase.
+   *
+   * "Does my deployment work" is not a question about a repository; a background
+   * `WorkspaceTab` is only `hidden`, so a workspace-scoped browser would leave a
+   * *visible* OS webview painting over a codebase the user had switched away
+   * from; and the MCP surface that comes next needs one unambiguous target.
+   *
+   * Held as the `{ open, restoreToken }` pair rather than a boolean because
+   * "open the browser" has two meanings once the panel can be minimized — mount
+   * it, or bring the minimized one back — and re-opening an open panel changes
+   * no field a child could compare.
+   */
+  const [browserPanel, setBrowserPanel] = useState<BrowserPanelState>(CLOSED_BROWSER_PANEL);
+  const showBrowser = () => setBrowserPanel(openBrowserPanel);
+  const browserEnabled = featureEnabled(features, "webBrowser");
+  // Switching the feature off must *close* the panel and not merely stop
+  // rendering it: leaving `open: true` behind would silently bring the page back
+  // the moment the feature was switched on again, which is not what the user
+  // asked for either time. `browserPanelAfterFeatureChange` returns the same
+  // object when nothing changes, so this effect cannot loop.
+  useEffect(() => {
+    setBrowserPanel((state) => browserPanelAfterFeatureChange(state, browserEnabled));
+  }, [browserEnabled]);
+  /** Help → About. App-level like the other dialogs: it describes the build, not a codebase. */
+  const [aboutOpen, setAboutOpen] = useState(false);
   // The Running panel and the report it renders. The report is polled here (not
   // in the panel) so the titlebar badge stays live even while the panel is
   // closed; `list_running` is a cheap in-memory read.
@@ -125,11 +206,126 @@ export function App() {
   const [appOutputOpen, setAppOutputOpen] = useState(false);
   const [appTabs, setAppTabs] = useState<AppTab[]>([]);
   const [activeAppKey, setActiveAppKey] = useState<string | null>(null);
+  /**
+   * The terminal split button's menu: where it opened, and the saved commands
+   * it lists.
+   *
+   * `null` groups is "not read yet", not "there are none" — `terminalMenuRows`
+   * is told which of the two it is, because an empty section under a heading
+   * claims the user has saved no shortcuts and that would be a guess.
+   */
+  const [terminalMenu, setTerminalMenu] = useState<{ x: number; y: number } | null>(null);
+  /**
+   * The shells detected on this machine, for the menu's one-off pick rows.
+   *
+   * `null` is "not detected yet", exactly as `launcherGroups` is: the menu is
+   * told which of the two it is, because an empty shells section would report
+   * that this machine has no shell at all — a much stronger claim than "we have
+   * not looked", and one the user might act on.
+   */
+  const [shells, setShells] = useState<ShellInfo[] | null>(null);
+  const [pluginMenu, setPluginMenu] = useState<{ x: number; y: number } | null>(null);
+  const [launcherGroups, setLauncherGroups] = useState<LauncherGroups | null>(null);
+  /**
+   * Which launcher entry each live supervisor key was started from.
+   *
+   * Held here because a `RunningRecord` carries no launcher id — the key is
+   * minted in this file, so this is the only place the two can be joined, and
+   * the menu needs the join to know a service is already up. Entries are
+   * dropped as their process ends, so this cannot grow across a session.
+   */
+  const [launchEntryIds, setLaunchEntryIds] = useState<Record<string, string>>({});
   // Per-codebase terminal-attention flag, so a background tab can flash to show
   // which project a minimized terminal's bell is coming from. Live state, not an
   // event: a terminal is asking for you until it is restored, so this goes back
   // down on its own and is never latched.
   const [attentionByRoot, setAttentionByRoot] = useState<Record<string, boolean>>({});
+
+  /**
+   * Each open codebase's open-file set, as its Run view reports it.
+   *
+   * Read for the *active* root only: the language-server indicator in the
+   * bottom status bar is one instance for the whole app, and `lsp_status`
+   * answers for the active workspace slot. `activeLspPollKey` composes the key
+   * that re-arms it, and `lspWatching` — a separate question — decides whether
+   * to keep asking at all.
+   */
+  const [lspPollKeyByRoot, setLspPollKeyByRoot] = useState<Record<string, string>>({});
+
+  /**
+   * Whether each open codebase's editor area holds a tab, as its Run view
+   * reports it. Read for the *active* root only — the window is one window, and
+   * a background codebase's editors are not what the user is looking at.
+   *
+   * A root **absent** from this map has not reported yet, which
+   * `windowBackgroundOpacity` reads as "unknown" and resolves to opaque.
+   */
+  const [editorTabsByRoot, setEditorTabsByRoot] = useState<Record<string, boolean>>({});
+
+  /**
+   * The app-wide notification stack.
+   *
+   * Global, not per-workspace, because the first thing it reports belongs to
+   * no codebase: a launcher entry's `cwd` may sit outside every open
+   * workspace, so the tab-signal mechanism has no tab to outline.
+   */
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const notificationSeq = useRef(0);
+  /** Raise a notification. The one way in; `notificationLogic` owns the rules. */
+  const notify = useCallback((next: Omit<AppNotification, "id">) => {
+    notificationSeq.current += 1;
+    const id = `note-${notificationSeq.current}`;
+    setNotifications((list) => pushNotification(list, { ...next, id }));
+  }, []);
+  const dismissNote = useCallback((id: string) => {
+    setNotifications((list) => dismissNotification(list, id));
+  }, []);
+
+  /**
+   * Launches the user declared to be long-running services, by key.
+   *
+   * Kept beside `headlessLaunches` rather than read back off the launcher
+   * store: the entry could be edited or forgotten while the process runs, and
+   * what matters is what it was declared to be *when it was started*.
+   */
+  const persistentLaunches = useRef(new Map<string, { label: string }>());
+
+  /**
+   * Record, or drop, one codebase's key. A closing tab reports `null`, which
+   * deletes rather than blanks: a blank entry reads the same to the status bar
+   * but leaves one dead key behind per codebase ever opened.
+   */
+  const setLspPollKeyForRoot = useCallback((root: string, key: string | null) => {
+    setLspPollKeyByRoot((prev) => {
+      if (key === null) {
+        if (!(root in prev)) return prev;
+        const { [root]: _closed, ...rest } = prev;
+        return rest;
+      }
+      // Guarded because this fires on every codebase's editor-tab change, and an
+      // unconditional new object re-renders the app for a key that did not move.
+      return prev[root] === key ? prev : { ...prev, [root]: key };
+    });
+  }, []);
+  /**
+   * Record, or drop, one codebase's editor state. Deletes on `null` for the
+   * same reason the poll key does: a stale entry for a closed codebase would go
+   * on answering the window's question.
+   */
+  const setEditorTabsForRoot = useCallback((root: string, open: boolean | null) => {
+    setEditorTabsByRoot((prev) => {
+      if (open === null) {
+        if (!(root in prev)) return prev;
+        const { [root]: _closed, ...rest } = prev;
+        return rest;
+      }
+      // Guarded, like the poll key: this fires on every codebase's editor-tab
+      // change, and an unconditional new object re-renders the app for an
+      // answer that did not move.
+      return prev[root] === open ? prev : { ...prev, [root]: open };
+    });
+  }, []);
+
   /**
    * Per-codebase latched signal — a build that succeeded or failed, or a
    * minimized terminal that finished.
@@ -218,6 +414,71 @@ export function App() {
     };
   }, []);
 
+  /**
+   * The names the user gave their open codebases, keyed by root.
+   *
+   * Not held on the `Workspace` object: `onWorkspaceChange` and
+   * `addOpenWorkspace` replace that object in place on every rescan and
+   * re-open, so a rename kept there would be silently discarded.
+   */
+  const [wsLabels, setWsLabels] = useState<WorkspaceLabels>(() => loadLabels(localStorage));
+  /** The root whose tab is being edited inline, and the draft text. */
+  const [renamingRoot, setRenamingRoot] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  /** The right-clicked tab and where its menu opened. */
+  const [tabMenu, setTabMenu] = useState<{ root: string; x: number; y: number } | null>(null);
+
+  /**
+   * Set while Escape is abandoning an edit, so the blur that may follow does not
+   * commit it.
+   *
+   * A ref and not state, and not a reliance on ordering: whether removing a
+   * focused input fires `blur` at all differs between browsers and React
+   * versions, so the rule is made explicit here rather than inferred from an
+   * event that may or may not arrive. Escape is the one gesture that must never
+   * save.
+   */
+  const abandoningRename = useRef(false);
+
+  /** Open the inline editor, seeded with whatever the user would be editing. */
+  const beginRename = (root: string) => {
+    setTabMenu(null);
+    const derived = openWorkspaces.find((w) => w.root === root)?.name ?? root;
+    // `labelFor`, not `labels[i]`: the strip may show a disambiguating path
+    // prefix this app generated, and seeding the box with it would invite the
+    // user to save our disambiguation as their chosen name.
+    setRenameDraft(labelFor(wsLabels, root, derived));
+    abandoningRename.current = false;
+    setRenamingRoot(root);
+  };
+
+  /**
+   * Accept the typed name, or keep the old one. `setLabel` returns null for a
+   * blank name — an empty tab label is unclickable — and the abstain rule says
+   * fall back to the scanned name rather than inventing one.
+   */
+  const commitRename = (root: string, raw: string) => {
+    if (abandoningRename.current) {
+      abandoningRename.current = false;
+      setRenamingRoot(null);
+      return;
+    }
+    const next = setLabel(wsLabels, root, raw);
+    if (next) {
+      setWsLabels(next);
+      saveLabels(localStorage, next);
+    }
+    setRenamingRoot(null);
+  };
+
+  /** Drop a rename and follow the scan again. */
+  const resetRename = (root: string) => {
+    const next = clearLabel(wsLabels, root);
+    setWsLabels(next);
+    saveLabels(localStorage, next);
+    setTabMenu(null);
+  };
+
   const activeWorkspace = openWorkspaces.find((w) => w.root === activeRoot) ?? null;
 
   /**
@@ -265,6 +526,15 @@ export function App() {
   const appConsoles = useRef(new Map<string, ConsoleHandle>());
   const appPending = useRef(new Map<string, ProcessEvent[]>());
   const appWorkspaceRoots = useRef(new Map<string, string>());
+  /**
+   * Launches that were started headless and so have no tab yet.
+   *
+   * The entry is what a tab would need if the run fails: "no tab" must not
+   * become "no answer", so a headless run that dies gets its console after the
+   * fact, replaying the output buffered under its key. Removed as soon as a tab
+   * exists — from then on it is an ordinary launch.
+   */
+  const headlessLaunches = useRef(new Map<string, { label: string; cwd: string }>());
 
   const registerAppConsole = useCallback((key: string, handle: ConsoleHandle | null) => {
     if (!handle) {
@@ -281,13 +551,16 @@ export function App() {
 
   /** Route one process event to its tab's console and status. */
   const onAppEvent = useCallback((key: string, event: ProcessEvent) => {
+    const headless = headlessLaunches.current.get(key);
     const handle = appConsoles.current.get(key);
     if (handle) {
       handle.handle(event);
     } else {
       const queued = appPending.current.get(key) ?? [];
-      queued.push(event);
-      appPending.current.set(key, queued);
+      // A headless run has no console to drain its buffer, and may run for
+      // days, so its buffer is capped. Everything else is drained within a tick
+      // by `registerAppConsole` and is left whole.
+      appPending.current.set(key, headless ? bufferHeadless(queued, event) : [...queued, event]);
     }
     const root = appWorkspaceRoots.current.get(key);
     if (root && event.type === "exited" && !event.cancelled) {
@@ -295,29 +568,88 @@ export function App() {
     } else if (root && event.type === "failed") {
       raiseSignal(root, "error");
     }
-    setAppTabs((tabs) => applyEvent(tabs, key, event));
+    // The process is over, so the key can no longer be running: drop the join
+    // that told the terminal menu this entry's service was up.
+    if (event.type === "exited" || event.type === "failed") {
+      setLaunchEntryIds(({ [key]: _ended, ...rest }) => rest);
+    }
+    const reveal = headless !== undefined && revealsHeadlessFailure(event);
+    // A headless run that ends is done with either way, so its bookkeeping goes
+    // now — not only when a failure is revealed. Clearing on `reveal` alone
+    // leaked an entry in all three refs for every headless run that succeeded or
+    // was stopped, and those are the common cases: a headless run mints no output
+    // tab, so `closeAppTab` (the only other place that clears them) is
+    // unreachable. The buffered events go too — up to 200 per run — and nothing
+    // can replay them once the process is gone unless the failure path above is
+    // taking them right now.
+    const service = persistentLaunches.current.get(key);
+    if (service && notifiesUnexpectedStop(event, true)) {
+      // Deduped on the key, so a crash-looping service stays one entry that
+      // keeps updating rather than a new toast per restart.
+      notify({ ...describeUnexpectedStop(service.label, event), dedupeKey: key });
+    }
+    const ended = event.type === "exited" || event.type === "failed";
+    if (ended) persistentLaunches.current.delete(key);
+    if (reveal || (headless !== undefined && ended)) {
+      headlessLaunches.current.delete(key);
+      appWorkspaceRoots.current.delete(key);
+      if (!reveal) appPending.current.delete(key);
+    }
+    setAppTabs((tabs) => {
+      if (!reveal || tabs.some((t) => t.key === key)) return applyEvent(tabs, key, event);
+      // Minting the tab now is what makes the buffered output reachable: the
+      // console mounts, registers, and `registerAppConsole` replays everything
+      // that arrived while nobody was watching.
+      const revealed = makeTab(
+        { key, id: key, label: headless.label, cwd: headless.cwd },
+        appWorkspaceRoots.current.get(key) ?? null,
+      );
+      return applyEvent([...tabs, revealed], key, event);
+    });
+    if (reveal) {
+      setActiveAppKey(key);
+      setAppOutputOpen(true);
+    }
   }, [raiseSignal]);
 
-  /** Launch a command from the picker: open a tab for it, then start it. */
+  /**
+   * Launch a command from the picker: open a tab for it, then start it.
+   *
+   * A **headless** launch skips the tab (`shouldOpenTab`) but not the channel:
+   * it is still supervised, still listed in Running, still stoppable, and its
+   * output is buffered under its key so a failure can be shown after the fact.
+   */
   const launchApp = useCallback(
-    (spec: { command: string; cwd: string; shell: boolean; label?: string }) => {
+    (spec: {
+      command: string;
+      cwd: string;
+      shell: boolean;
+      label?: string;
+      headless?: boolean;
+      /** Declared a long-running service: any end to it is worth reporting. */
+      persistent?: boolean;
+    }) => {
       // The key is minted here, not by the backend: output starts arriving the
       // moment the process spawns, which is before `launchCommand` resolves.
       const key = `ext:${crypto.randomUUID()}`;
-      const placeholder = makeTab(
-        {
-          key,
-          id: key,
-          label: spec.label?.trim() || spec.command,
-          cwd: spec.cwd,
-        },
-        activeRootRef.current,
-      );
-      const added = addTab(appTabs, placeholder);
-      if (placeholder.workspaceRoot) appWorkspaceRoots.current.set(key, placeholder.workspaceRoot);
-      setAppTabs(added.tabs);
-      setActiveAppKey(added.activeKey);
-      setAppOutputOpen(true);
+      const label = spec.label?.trim() || spec.command;
+      // Attributed by the command's OWN cwd, not by whichever codebase happens
+      // to be in front. A launcher entry can live outside every open workspace
+      // — that is exactly what the picker's `global` group means — and blaming
+      // the foreground codebase for it outlined an unrelated tab red. No
+      // matching workspace means no attribution; the notification carries it
+      // instead, which is part of why that surface exists.
+      const root = openWorkspaces.find((w) => isInside(w.root, spec.cwd))?.root ?? null;
+      if (root) appWorkspaceRoots.current.set(key, root);
+      if (spec.persistent) persistentLaunches.current.set(key, { label });
+      if (shouldOpenTab(spec)) {
+        const added = addTab(appTabs, makeTab({ key, id: key, label, cwd: spec.cwd }, root));
+        setAppTabs(added.tabs);
+        setActiveAppKey(added.activeKey);
+        setAppOutputOpen(true);
+      } else {
+        headlessLaunches.current.set(key, { label, cwd: spec.cwd });
+      }
 
       api
         .launchCommand({ ...spec, key }, (event) => onAppEvent(key, event))
@@ -327,6 +659,7 @@ export function App() {
           setAppTabs((tabs) =>
             tabs.map((t) => (t.key === key ? { ...t, label: app.label, entryId: app.id } : t)),
           );
+          setLaunchEntryIds((prev) => ({ ...prev, [key]: app.id }));
           refreshRunning();
         })
         .catch((e) => {
@@ -367,10 +700,75 @@ export function App() {
       appConsoles.current.delete(key);
       appPending.current.delete(key);
       appWorkspaceRoots.current.delete(key);
+      headlessLaunches.current.delete(key);
       if (result.tabs.length === 0) setAppOutputOpen(false);
     },
     [appTabs, activeAppKey, stopApp],
   );
+
+  /**
+   * Open the terminal menu under the caret, with a freshly read command list.
+   *
+   * Cleared first, exactly as the Run tab's Stop menu does: a list left over
+   * from the last time the menu was open is worse than no list, because the
+   * user would act on it.
+   */
+  const openTerminalMenu = (event: React.MouseEvent) => {
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    setTerminalMenu({ x: box.left, y: box.bottom + 2 });
+    setLauncherGroups(null);
+    api
+      .listLaunchables()
+      .then(setLauncherGroups)
+      .catch((e) => setError(api.errorMessage(e)));
+    // Shells are re-detected on every open under the same rule, which also
+    // means a shell installed mid-session shows up without a restart.
+    setShells(null);
+    api
+      .listShells()
+      .then(({ shells: found }) => setShells(found))
+      .catch((e) => setError(api.errorMessage(e)));
+  };
+
+  /** Run one saved command shortcut, honouring its headless flag. */
+  const runShortcut = (entry: Launchable) => {
+    launchApp({
+      command: entry.command,
+      cwd: entry.cwd,
+      shell: entry.shell,
+      label: entry.label ?? undefined,
+      headless: entry.headless,
+      persistent: entry.persistent,
+    });
+  };
+
+  /** Carry out one terminal-menu row. The row decided what; this only does it. */
+  const runTerminalMenuAction = (action: TerminalMenuAction) => {
+    setTerminalMenu(null);
+    switch (action.kind) {
+      case "newTerminal":
+        activeHandle()?.openTerminal();
+        return;
+      case "newTerminalIn":
+        activeHandle()?.openTerminalIn(action.shell);
+        return;
+      case "launcher":
+        setLauncherOpen(true);
+        return;
+      case "running":
+        setRunningOpen(true);
+        return;
+      case "apps":
+        setAppOutputOpen(true);
+        return;
+      case "runShortcut":
+        runShortcut(action.entry);
+        return;
+      case "stopShortcut":
+        for (const key of action.keys) stopApp(key);
+        return;
+    }
+  };
 
   /** The Running panel's View action: focus a launched app's output tab. */
   const viewAppOutput = useCallback((key: string) => {
@@ -385,6 +783,47 @@ export function App() {
     const timer = setInterval(refreshRunning, 2000);
     return () => clearInterval(timer);
   }, [refreshRunning]);
+
+  /**
+   * The window's background opacity, and whether this platform can honour it.
+   *
+   * `appearance` tracks the *applied* settings rather than what is in storage:
+   * the Settings dialog previews unpersisted, so re-reading `localStorage` here
+   * would preview nothing. That is what `onAppearanceChange` now hands over.
+   *
+   * `os` stays `null` until `about_info` answers, and a failed read leaves it
+   * there — `transparencySupport(null)` is unsupported, so the window abstains
+   * to fully opaque rather than guessing at a platform.
+   */
+  const [appearance, setAppearance] = useState(loadAppearance);
+  const [os, setOs] = useState<string | null>(null);
+  useEffect(() => onAppearanceChange(setAppearance), []);
+  useEffect(() => {
+    let live = true;
+    void api
+      .aboutInfo()
+      .then((info) => {
+        if (live) setOs(info.os);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // The single writer of `--app-bg-opacity`. Every input is state this
+  // component already holds, and the whole decision is the pure, tested
+  // `windowBackgroundOpacity` — nothing is decided here.
+  useEffect(() => {
+    applyWindowOpacity(
+      windowBackgroundOpacity({
+        opacity: appearance.windowOpacity,
+        supported: transparencySupport(os).supported,
+        activeRoot,
+        editorTabsByRoot,
+      }),
+    );
+  }, [appearance.windowOpacity, os, activeRoot, editorTabsByRoot]);
 
   /** Apply user-global appearance and route every configurable shortcut. */
   useEffect(() => {
@@ -403,7 +842,8 @@ export function App() {
       registerCommand("file.open", pickFolder),
       registerCommand("file.rescan", () => void rescan()),
       registerCommand("file.settings", () => setSettingsOpen(true)),
-      registerCommand("panel.notes", () => setNotesOpen(true)),
+      registerCommand("panel.notes", showNotes),
+      registerCommand("plugin.browser", showBrowser),
       registerCommand("panel.launch", () => setLauncherOpen(true)),
       registerCommand("panel.apps", () => setAppOutputOpen(true)),
       registerCommand("panel.running", () => setRunningOpen(true)),
@@ -563,74 +1003,97 @@ export function App() {
     );
   }
 
-  const labels = tabLabels(openWorkspaces);
+  const labels = tabLabels(openWorkspaces, wsLabels);
 
   return (
     <div className="app">
+      {/* Three zones, not a flex row with a spacer: the branch widget is meant to
+          sit in the *window's* centre, and a spacer can only centre it when the
+          two sides happen to be the same width. `.titlebar` is a
+          three-column grid so the middle zone is centred regardless of how
+          much chrome sits either side of it. */}
       <div className="titlebar">
-        {/* File (Open / Rescan) and Enhancements — the agent actions target the
-            foreground tab through its registered handle. */}
-        <MenuBar
-          onOpen={pickFolder}
-          onRescan={rescan}
-          onRunAgent={(promptId) => activeHandle()?.openRunAgent(promptId)}
-          onOpenReview={() => activeHandle()?.openReview()}
-          onOpenFeatures={() => setFeaturesOpen(true)}
-          onOpenSettings={() => setSettingsOpen(true)}
-        />
+        <div className="titlebar-left">
+          {/* File (Open / Rescan) and Enhancements — the agent actions target the
+              foreground tab through its registered handle. */}
+          <MenuBar
+            onOpen={pickFolder}
+            onRescan={rescan}
+            onRunAgent={(promptId) => activeHandle()?.openRunAgent(promptId)}
+            onOpenReview={() => activeHandle()?.openReview()}
+            onOpenFeatures={() => setFeaturesOpen(true)}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenAbout={() => setAboutOpen(true)}
+          />
+        </div>
 
-        {activeWorkspace && (
-          /* Keyed by the active root, so switching codebases re-reads branches. */
-          <BranchMenu key={activeRoot ?? ""} />
-        )}
-
-        <div className="spacer" />
-
-        {activeWorkspace && (
-          <span className="muted" style={{ fontSize: 11 }}>
-            {activeWorkspace.projects.length} project
-            {activeWorkspace.projects.length === 1 ? "" : "s"}
-          </span>
-        )}
-        <button onClick={() => setNotesOpen(true)} title="Open the notes / scratchpad panel">
-          Notes
-        </button>
-        <button
-          onClick={() => setLauncherOpen(true)}
-          title="Run another app or command, and see what you have run before"
-        >
-          Launch
-        </button>
-        {appTabs.length > 0 && (
-          <button
-            onClick={() => setAppOutputOpen(true)}
-            title="Show the output of the apps you launched"
-          >
-            Apps
-            {liveTabCount(appTabs) > 0 && (
-              <span className="running-badge">{liveTabCount(appTabs)}</span>
-            )}
-          </button>
-        )}
-        <button
-          onClick={() => setRunningOpen(true)}
-          title="Show everything the app is running (and possible orphans)"
-        >
-          Running
-          {liveCount(runningReport) > 0 && (
-            <span className="running-badge">{liveCount(runningReport)}</span>
+        {/* The zone is rendered even with no workspace open, so the left and
+            right columns do not shift the moment a branch widget appears. */}
+        <div className="titlebar-center">
+          {activeWorkspace && (
+            /* Keyed by the active root, so switching codebases re-reads branches. */
+            <BranchMenu key={activeRoot ?? ""} />
           )}
-        </button>
-        <button
-          onClick={() => activeHandle()?.openTerminal()}
-          title="Open a floating terminal in the active codebase"
-        >
-          + Terminal
-        </button>
-        <button onClick={rescan} title="Re-detect projects and configurations">
-          Rescan
-        </button>
-        <button onClick={pickFolder}>Open…</button>
+        </div>
+
+        <div className="titlebar-right">
+          {activeWorkspace && (
+            <span className="muted" style={{ fontSize: 11 }}>
+              {activeWorkspace.projects.length} project
+              {activeWorkspace.projects.length === 1 ? "" : "s"}
+            </span>
+          )}
+
+          {/* The optional features' own surface. The SQL console used to live in
+              the terminal menu, which is a menu about *running things*; a
+              database console is not one, and the next plugin would have been a
+              second guest there. Hidden entirely when every plugin is off —
+              `pluginMenuAvailable` — rather than opening onto nothing. */}
+          {pluginMenuAvailable({ features, workspaceOpen: activeWorkspace !== null }) && (
+            <button
+              onClick={(event) => {
+                const box = event.currentTarget.getBoundingClientRect();
+                setPluginMenu({ x: box.left, y: box.bottom + 4 });
+              }}
+              title="Open an optional feature"
+            >
+              Plugins ▾
+            </button>
+          )}
+          <button onClick={showNotes} title="Open or restore the notes / scratchpad panel">
+            Notes
+          </button>
+          {/* One split button in place of Launch / Apps / Running / + Terminal:
+              the body opens a terminal, the caret holds the rest. Notes keeps
+              its own button — it is global and about nothing running. The
+              running count moved onto the caret so the information the two
+              badges carried is still visible with the menu shut. */}
+          <span className="split-button">
+            <button
+              data-command="terminal.new"
+              onClick={() => activeHandle()?.openTerminal()}
+              disabled={newTerminalButton({ workspaceOpen: activeWorkspace !== null }).disabled}
+              title={newTerminalButton({ workspaceOpen: activeWorkspace !== null }).title}
+            >
+              New Terminal
+            </button>
+            <button
+              className="split-button-arrow"
+              onClick={openTerminalMenu}
+              title="Launch, running processes and your saved commands"
+              aria-label="Terminal and launcher menu"
+            >
+              ▾
+              {liveCount(runningReport) > 0 && (
+                <span className="running-badge">{liveCount(runningReport)}</span>
+              )}
+            </button>
+          </span>
+          <button onClick={rescan} title="Re-detect projects and configurations">
+            Rescan
+          </button>
+          <button onClick={pickFolder}>Open…</button>
+        </div>
       </div>
 
       {/* The open-codebases tab strip, above each workspace's own inner tabs. */}
@@ -647,14 +1110,44 @@ export function App() {
                 ? mergeSignal(signalByRoot[w.root], "attention")
                 : (signalByRoot[w.root] ?? null),
             )}`}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setTabMenu({ root: w.root, x: e.clientX, y: e.clientY });
+            }}
           >
-            <button
-              className="ws-tab-label"
-              onClick={() => void activateWorkspace(w.root)}
-              title={w.root}
-            >
-              {labels[i]}
-            </button>
+            {renamingRoot === w.root ? (
+              <input
+                className="ws-tab-rename"
+                autoFocus
+                value={renameDraft}
+                // In UTF-16 units, while the stored cap is in code points, so a
+                // pasted paragraph is stopped here and `normalizeLabel` does the
+                // exact trim. The two agreeing to the character is not worth a
+                // second implementation of the cap in the DOM.
+                maxLength={MAX_LABEL_LENGTH}
+                onChange={(e) => setRenameDraft(e.target.value)}
+                // Blur commits as well as Enter: clicking away from a rename box
+                // reads as "that is the name", not as "throw it away". Escape is
+                // the exception, and it says so through `abandoningRename`.
+                onBlur={() => commitRename(w.root, renameDraft)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitRename(w.root, renameDraft);
+                  else if (e.key === "Escape") {
+                    abandoningRename.current = true;
+                    setRenamingRoot(null);
+                  }
+                }}
+              />
+            ) : (
+              <button
+                className="ws-tab-label"
+                onClick={() => void activateWorkspace(w.root)}
+                onDoubleClick={() => beginRename(w.root)}
+                title={w.root}
+              >
+                {labels[i]}
+              </button>
+            )}
             <button
               className="ws-tab-close"
               onClick={() => void closeWorkspace(w.root)}
@@ -669,7 +1162,117 @@ export function App() {
         </button>
       </div>
 
+      {/* The tab's right-click menu, through the shared ContextMenu shell — it
+          adds Escape-to-close and viewport clamping, which the two remaining
+          hand-rolled copies still lack. Its default stacking level applies, so
+          no z-index is written here. */}
+      {tabMenu && (
+        <ContextMenu x={tabMenu.x} y={tabMenu.y} elevated onClose={() => setTabMenu(null)}>
+          <div className="dropdown-item" onClick={() => beginRename(tabMenu.root)}>
+            Rename…
+          </div>
+          <div
+            className={`dropdown-item${
+              customLabel(wsLabels, tabMenu.root) === undefined ? " disabled" : ""
+            }`}
+            onClick={() => {
+              // Nothing to reset on a tab that was never renamed. Doing nothing
+              // beats writing the scanned name back as if it were a choice.
+              if (customLabel(wsLabels, tabMenu.root) !== undefined) resetRename(tabMenu.root);
+            }}
+          >
+            Reset name
+          </div>
+          <div
+            className="dropdown-item"
+            onClick={() => {
+              const root = tabMenu.root;
+              setTabMenu(null);
+              void closeWorkspace(root);
+            }}
+          >
+            Close
+          </div>
+        </ContextMenu>
+      )}
+
+      {/* Every row — label, disabled reason and action — comes from
+          `pluginMenuRows`; nothing is decided here. */}
+      {pluginMenu && (
+        <ContextMenu
+          x={pluginMenu.x}
+          y={pluginMenu.y}
+          elevated
+          onClose={() => setPluginMenu(null)}
+        >
+          {pluginMenuRows({ features, workspaceOpen: activeWorkspace !== null }).map((row) => (
+            <div
+              key={row.id}
+              className={`dropdown-item${row.disabled ? " disabled" : ""}`}
+              title={row.title}
+              onClick={() => {
+                if (row.action === null) return;
+                setPluginMenu(null);
+                if (row.action.kind === "sql") activeHandle()?.openSql();
+                if (row.action.kind === "ask") activeHandle()?.openAsk();
+                if (row.action.kind === "mcp") activeHandle()?.openMcp();
+                // The one plugin that acts on no codebase, so it is opened here
+                // rather than through the foreground tab's handle.
+                if (row.action.kind === "browser") showBrowser();
+              }}
+            >
+              {row.label}
+            </div>
+          ))}
+        </ContextMenu>
+      )}
+
       {error && <div className="error">{error}</div>}
+
+      {/* The terminal split button's menu, through the shared ContextMenu shell.
+          Every row — its label, badge, disabled reason and action — comes from
+          `terminalMenuRows`; nothing is decided here. */}
+      {terminalMenu && (
+        <ContextMenu
+          x={terminalMenu.x}
+          y={terminalMenu.y}
+          elevated
+          onClose={() => setTerminalMenu(null)}
+        >
+          {terminalMenuRows({
+            workspaceOpen: activeWorkspace !== null,
+            runningCount: liveCount(runningReport),
+            appTabCount: appTabs.length,
+            liveAppCount: liveTabCount(appTabs),
+            shortcuts: launcherGroups ? shortcutEntries(launcherGroups) : [],
+            liveKeys: liveKeysByEntry(runningReport, new Map(Object.entries(launchEntryIds))),
+            shortcutsLoading: launcherGroups === null,
+            shells: shells ?? [],
+            shellsLoading: shells === null,
+          }).map((row) => (
+            <div key={row.id}>
+              {row.separator && <div className="dropdown-separator" />}
+              {row.section !== undefined && (
+                <div className="dropdown-section">{row.section}</div>
+              )}
+              <div
+                className={`dropdown-item${row.disabled ? " disabled" : ""}`}
+                title={row.title}
+                onClick={() => row.action && runTerminalMenuAction(row.action)}
+              >
+                {row.live !== undefined && (
+                  <span className={`shortcut-dot${row.live ? " live" : ""}`} aria-hidden="true" />
+                )}
+                <span className="terminal-menu-label">{row.label}</span>
+                {row.badge !== null && <span className="running-badge">{row.badge}</span>}
+                {row.live !== undefined && (
+                  <span className="terminal-menu-action">{shortcutActionLabel(row)}</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </ContextMenu>
+      )}
 
       {/* One tab per open codebase, kept mounted; only the active one is visible,
           so a background codebase's processes, terminals and language server keep
@@ -684,7 +1287,10 @@ export function App() {
           onAttentionChange={(root, has) =>
             setAttentionByRoot((prev) => ({ ...prev, [root]: has }))
           }
+          onLspPollKeyChange={setLspPollKeyForRoot}
+          onEditorTabsChange={setEditorTabsForRoot}
           onSignal={raiseSignal}
+          onNotify={notify}
           features={features}
         />
       ))}
@@ -701,8 +1307,27 @@ export function App() {
 
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
 
+      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
+
+      {/* The embedded browser. One instance for the whole application, for the
+          reasons on `browserPanel` above.
+
+          Switching the plugin off **unmounts** it, which is what makes the host
+          drop the webview: a hidden browser would keep a WebView2 process, its
+          cookie jar and whatever endpoint the page polls alive, with no URL bar
+          and no route to Stop. `enabled` is passed down only so the close can
+          say *which* of the two reasons it was. */}
+      {browserPanelMounted(browserPanel, browserEnabled) && (
+        <BrowserPanel
+          restoreRequest={browserPanel.restoreToken}
+          enabled={browserEnabled}
+          onClose={() => setBrowserPanel(closeBrowserPanel)}
+        />
+      )}
+
       {notesOpen && (
         <NotesPanel
+          restoreRequest={notesRestoreRequest}
           onClose={() => setNotesOpen(false)}
           onSendToAgent={(note) => activeHandle()?.openNoteInAgent(note)}
         />
@@ -748,6 +1373,11 @@ export function App() {
         />
       )}
 
+      {/* One global notification stack. Not a workspace tab signal: a
+          launcher entry's cwd may sit outside every open codebase, so a
+          service dying is often nobody's tab to outline. */}
+      <NotificationHost notifications={notifications} onDismiss={dismissNote} />
+
       {/* Bottom status bar: the active codebase's folder name and full path,
           moved here from the titlebar. */}
       <div className="statusbar">
@@ -759,6 +1389,16 @@ export function App() {
             </span>
           </>
         )}
+        {/* Silent unless a server is starting, missing or dead. Mounted outside
+            the `activeWorkspace` guard so it keeps one poll loop across codebase
+            switches rather than remounting — the key is what tells it the
+            codebase changed. Opening a file is what starts a server (a `didOpen`
+            from `FileEditor`), which is why `watching` is false with nothing
+            open and the poll stops rather than running for the life of the app. */}
+        <LspStatusIndicator
+          pollKey={activeLspPollKey(activeRoot, lspPollKeyByRoot)}
+          watching={lspWatching(activeRoot, lspPollKeyByRoot)}
+        />
       </div>
     </div>
   );

@@ -17,6 +17,9 @@ fn entry(command: &str, cwd: &str, last_run_ms: u64, pinned: bool) -> Launchable
         label: None,
         shell: false,
         pinned,
+        shortcut: false,
+        persistent: false,
+        headless: false,
         last_run_ms,
         run_count: 1,
     }
@@ -215,4 +218,126 @@ fn pinning_and_removing_address_entries_by_id() {
         !remove(&mut file, &id),
         "removing twice reports nothing done"
     );
+}
+
+#[test]
+fn a_shortcut_is_never_evicted_by_the_cap() {
+    // A shortcut is the user saying "this is a named command I will run again",
+    // exactly as a pin says "keep this". A cap that could drop one would make
+    // saving a shortcut a suggestion rather than a promise — and unlike a pin,
+    // the loss is visible as a command vanishing from the terminal menu.
+    let mut file = file_with(vec![Launchable {
+        shortcut: true,
+        ..entry("saved-shortcut", "/repo", 1, false)
+    }]);
+    for i in 0..MAX_UNPINNED as u64 + 5 {
+        record_run(
+            &mut file,
+            &format!("cmd{i}"),
+            Path::new("/repo"),
+            false,
+            i + 10,
+        );
+    }
+    assert!(
+        file.entries.iter().any(|e| e.command == "saved-shortcut"),
+        "the oldest entry in the file, but exempt"
+    );
+    assert_eq!(file.entries.len(), MAX_UNPINNED + 1);
+}
+
+#[test]
+fn clearing_the_shortcut_flag_re_exposes_the_entry_to_the_cap() {
+    // The mirror of unpinning: an entry that was exempt must not stay exempt
+    // once the thing making it exempt is gone.
+    let mut file = file_with(vec![entry("was-a-shortcut", "/repo", 1, false)]);
+    file.entries[0].shortcut = true;
+    let id = file.entries[0].id.clone();
+    for i in 0..MAX_UNPINNED as u64 {
+        record_run(
+            &mut file,
+            &format!("cmd{i}"),
+            Path::new("/repo"),
+            false,
+            i + 10,
+        );
+    }
+    assert_eq!(file.entries.len(), MAX_UNPINNED + 1);
+    assert!(set_flags(&mut file, &id, Some(false), None, None));
+    assert_eq!(file.entries.len(), MAX_UNPINNED);
+    assert!(!file.entries.iter().any(|e| e.command == "was-a-shortcut"));
+}
+
+#[test]
+fn setting_flags_touches_only_the_ones_given() {
+    // A partial update: `None` means "leave it alone", not "false". Reading an
+    // absent field as `false` is how a save from one panel silently clears a
+    // flag another panel set.
+    let mut file = file_with(vec![Launchable {
+        shortcut: true,
+        persistent: true,
+        headless: true,
+        ..entry("a", "/repo", 1, false)
+    }]);
+    let id = file.entries[0].id.clone();
+    assert!(set_flags(&mut file, &id, None, Some(false), None));
+    let entry = &file.entries[0];
+    assert!(entry.shortcut);
+    assert!(!entry.persistent);
+    assert!(entry.headless);
+}
+
+#[test]
+fn setting_flags_on_an_unknown_id_reports_nothing_done() {
+    let mut file = file_with(vec![entry("a", "/repo", 1, false)]);
+    assert!(!set_flags(&mut file, "nope", Some(true), None, None));
+}
+
+#[test]
+fn a_shortcut_is_not_a_pin_and_does_not_sort_ahead() {
+    // Distinct facts: `pinned` orders the picker, `shortcut` publishes the entry
+    // as a named command. Conflating them would reorder every existing list the
+    // moment a user saved their first shortcut.
+    let entries = vec![
+        Launchable {
+            shortcut: true,
+            ..entry("shortcut", "/repo", 1, false)
+        },
+        entry("recent", "/repo", 100, false),
+    ];
+    let groups = group(&entries, Some(Path::new("/repo")));
+    let here: Vec<&str> = groups
+        .this_codebase
+        .iter()
+        .map(|e| e.command.as_str())
+        .collect();
+    assert_eq!(here, vec!["recent", "shortcut"], "recency still decides");
+}
+
+#[test]
+fn rerunning_preserves_the_shortcut_flags() {
+    // Same rule as the pin and the rename: a re-run updates the clock and the
+    // count, never the things only the user sets.
+    let mut file = file_with(vec![Launchable {
+        shortcut: true,
+        persistent: true,
+        headless: true,
+        ..entry("redis-server", "/repo", 1, false)
+    }]);
+    record_run(&mut file, "redis-server", Path::new("/repo"), false, 9_000);
+    let entry = &file.entries[0];
+    assert!(entry.shortcut);
+    assert!(entry.persistent);
+    assert!(entry.headless);
+    assert_eq!(entry.last_run_ms, 9_000);
+}
+
+#[test]
+fn a_new_entry_starts_with_every_flag_off() {
+    let mut file = LauncherFile::default();
+    record_run(&mut file, "npm run dev", Path::new("/repo"), false, 1);
+    let entry = &file.entries[0];
+    assert!(!entry.shortcut);
+    assert!(!entry.persistent);
+    assert!(!entry.headless);
 }

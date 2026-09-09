@@ -169,3 +169,54 @@ export function setTabSeverity(tabs: AppTab[], key: string, severity: Severity):
   if (!tabs.some((t) => t.key === key && t.severity !== severity)) return tabs;
   return tabs.map((t) => (t.key === key ? { ...t, severity } : t));
 }
+
+// ---------------------------------------------------------------------------
+// Headless launches
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a launch opens an output tab up front.
+ *
+ * A **headless** entry is one the user has said they do not want to watch — a
+ * local Redis, a docker compose stack — so minting a tab for it every time
+ * would bury the tabs they do want. It is still an ordinary supervised process:
+ * it registers in Running and it can be stopped there. Only the tab is skipped.
+ */
+export function shouldOpenTab(spec: { headless?: boolean }): boolean {
+  return spec.headless !== true;
+}
+
+/**
+ * Whether a headless run has to become visible after all.
+ *
+ * The channel is never dropped for a headless launch, because "no tab" must not
+ * become "no answer": a command that could not spawn, or one that died on its
+ * own, is exactly the case where the user needs the output. A clean exit and a
+ * stop the user asked for both stay silent — they are the expected endings.
+ *
+ * `cancelled` is checked separately from `success` deliberately: a killed
+ * process reports `success: false`, and treating that as a failure would pop a
+ * console open every time the user pressed Stop.
+ */
+export function revealsHeadlessFailure(event: ProcessEvent): boolean {
+  if (event.type === "failed") return true;
+  return event.type === "exited" && !event.success && !event.cancelled;
+}
+
+/**
+ * How many events are kept for a headless run that has no console to write to.
+ *
+ * A headless service can run for days, so the buffer has to be bounded or it
+ * grows without limit for a process nobody is watching. The *last* events are
+ * kept rather than the first: if this buffer is ever replayed it is because the
+ * run failed, and the lines that say why are at the end.
+ */
+export const HEADLESS_BUFFER_LIMIT = 200;
+
+/** Append one event to a headless run's buffer, dropping the oldest past the cap. */
+export function bufferHeadless(queued: ProcessEvent[], event: ProcessEvent): ProcessEvent[] {
+  const next = [...queued, event];
+  return next.length <= HEADLESS_BUFFER_LIMIT
+    ? next
+    : next.slice(next.length - HEADLESS_BUFFER_LIMIT);
+}

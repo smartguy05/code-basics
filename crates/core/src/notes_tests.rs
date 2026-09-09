@@ -16,6 +16,7 @@ fn note(id: &str, title: &str, body: &str) -> Note {
         id: id.into(),
         title: title.into(),
         body: body.into(),
+        color: None,
         created_at_ms: 1_000,
         updated_at_ms: 2_000,
     }
@@ -26,7 +27,7 @@ fn a_missing_file_loads_as_the_empty_default() {
     let path = scratch("missing").with_file_name("does-not-exist.json");
     let loaded = load(&path);
     assert_eq!(loaded, NotesFile::default());
-    assert_eq!(loaded.version, 1);
+    assert_eq!(loaded.version, 2);
     assert!(loaded.notes.is_empty());
 }
 
@@ -155,6 +156,19 @@ fn serialisation_shape_pins_the_wire_keys() {
     let mut keys: Vec<&str> = n.keys().map(String::as_str).collect();
     keys.sort_unstable();
     assert_eq!(keys, ["body", "createdAtMs", "id", "title", "updatedAtMs"]);
+}
+
+#[test]
+fn version_one_notes_migrate_with_no_tab_colour() {
+    let path = scratch("v1-colour");
+    fs::write(
+        &path,
+        r#"{"version":1,"notes":[{"id":"n1","title":"Old","body":"text","createdAtMs":1,"updatedAtMs":2}]}"#,
+    )
+    .unwrap();
+    let loaded = load(&path);
+    assert_eq!(loaded.notes[0].color, None);
+    let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
 #[test]

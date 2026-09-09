@@ -14,7 +14,7 @@ After import, `.code-basics/config.json` is the source of truth. This is a one-t
 
 ## What gets translated
 
-The importer (`crates/core/src/importers/rider.rs`) parses the XML into name/kind/option maps, expands Rider's path macros (e.g. `$PROJECT_DIR$`) against the workspace root, and maps known configuration kinds (such as `DotNetProject`) onto `RunConfig` fields: project, arguments, environment variables, working directory, launch profile. Unknown kinds and unrecognised options become warnings rather than guesses.
+The importer (`crates/core/src/importers/rider.rs`) parses the XML into name/kind/option maps, expands Rider's path macros (e.g. `$PROJECT_DIR$`) against the workspace root, and maps known configuration kinds (such as `DotNetProject`) onto `RunConfig` fields: project, arguments, environment variables, working directory, launch profile. Its saved id includes both project and configuration identity, so identically named configurations in different projects remain separate and keep their own environment. Unknown kinds and unrecognised options become warnings rather than guesses.
 
 Warnings survive into the saved configuration's `warnings` field, so the context is still visible when editing later.
 
@@ -22,7 +22,7 @@ Warnings survive into the saved configuration's `warnings` field, so the context
 
 Rider's compound configurations (`CompoundRunConfigurationType`) launch several other configurations together. They import as a `RunConfig` with `ecosystem: "compound"` whose `compound` field lists member config ids; running one starts every member (each under its own id, so members can be stopped individually or all at once via the compound).
 
-Rider records members by display name, so during preview `resolve_compounds` matches each name against, in order: the other imported configurations, existing configurations by exact name, and detected launch-profile configurations (Rider's `Project: profile` naming matched by project file stem and profile). Members that resolve nowhere are dropped with a warning on the compound, visible in the review step.
+Rider records members by display name, so during preview `resolve_compounds` matches each name against, in order: the other imported configurations, existing configurations by exact name, and detected launch-profile configurations (Rider's `Project: profile` naming matched by project file stem and profile). Members that resolve nowhere—or match more than one same-named project configuration—are dropped with a warning on the compound, visible in the review step, rather than silently launching the wrong project.
 
 ## Extending it
 

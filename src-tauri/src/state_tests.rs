@@ -603,3 +603,49 @@ fn with_no_workspace_open_there_is_no_active_slot() {
     assert!(!state.symbols_building());
     assert!(state.lsp().is_none());
 }
+
+#[test]
+fn the_browser_panel_survives_every_workspace_lifecycle_event() {
+    // Global and *not* per-workspace, like `pty`: there is one browser panel for
+    // the whole application, so opening a codebase, switching to another and
+    // closing one must not disturb the page. A per-slot browser would also mean
+    // a *visible* OS webview left painting over a codebase the user had switched
+    // away from, since a background `WorkspaceTab` is only `hidden`.
+    let state = AppState::default();
+    state.browser_data_mut(|data| {
+        crate::browser::shared::note_load_finished(data, "https://x.example/a")
+    });
+    state
+        .browser_data_mut(|data| crate::browser::shared::grant_consent(data, true, false))
+        .unwrap();
+
+    state.set_workspace(workspace_at("/a")).unwrap();
+    state.set_workspace(workspace_at("/b")).unwrap();
+    state.set_active(Path::new("/a")).unwrap();
+    state.close(Path::new("/a"));
+    state.close(Path::new("/b"));
+
+    let snapshot = state.browser_data(crate::browser::shared::snapshot);
+    assert_eq!(snapshot.url.as_deref(), Some("https://x.example/a"));
+    assert!(
+        snapshot.consent.reads(),
+        "consent is scoped to the *page*, not to a codebase: closing a workspace \
+         the user was not even browsing must not revoke it"
+    );
+}
+
+#[test]
+fn with_no_workspace_open_the_browser_state_is_still_readable() {
+    // Every other cache answers `None` with nothing open. This one must not:
+    // the panel is app-level and openable on the welcome screen, so a read that
+    // depended on an active slot would make the first plugin with
+    // `needsWorkspace: false` unusable exactly where it is meant to work.
+    let state = AppState::default();
+    assert!(state.active_slot().is_err());
+    let snapshot = state.browser_data(crate::browser::shared::snapshot);
+    assert_eq!(
+        snapshot.availability,
+        cb_core::browser::model::BrowserAvailability::PanelClosed
+    );
+    assert!(!snapshot.consent.reads());
+}

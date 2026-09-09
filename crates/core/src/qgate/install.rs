@@ -242,6 +242,19 @@ fn caveats_for(
     }
 }
 
+/// What the gate promises *not* to do, stated wherever the user is asked to
+/// install it.
+///
+/// Kept as one constant because the same sentence belongs in every scope's
+/// caveats and drifting copies would quietly start describing different
+/// behaviour. It has to name both abstains: the tooling being absent, and the
+/// tooling being present but unreachable — the second is what stops a broken
+/// local install (an unreadable `node_modules`, a running executable holding its
+/// own exe) from wedging a turn that no edit could unblock.
+const ABSTAIN_NOTE: &str = "The gate abstains where the tooling is absent (no `typecheck` script, \
+     no Cargo.toml), and where a check runs but cannot reach its own dependencies \
+     — it reports that nothing was checked instead of failing the turn.";
+
 /// What to warn the user about before writing Claude Code's settings.
 fn caveats(scope: InstallScope) -> Vec<String> {
     match scope {
@@ -249,15 +262,31 @@ fn caveats(scope: InstallScope) -> Vec<String> {
             "This writes .claude/settings.json, which is committed and shared with \
              everyone who clones the repository."
                 .to_string(),
+            SHARED_EXE_PATH_NOTE.to_string(),
+            ABSTAIN_NOTE.to_string(),
         ],
-        InstallScope::User => vec![
-            "A user-level hook runs when any repository's agent turn ends. The gate \
-             abstains where the tooling is absent (no `typecheck` script, no \
-             Cargo.toml), so it is safe, but it applies to every repository you open."
-                .to_string(),
-        ],
+        InstallScope::User => vec![format!(
+            "A user-level hook runs when any repository's agent turn ends. {ABSTAIN_NOTE} \
+                 It is therefore safe, but it applies to every repository you open."
+        )],
     }
 }
+
+/// The condition a project-scope install leaves looking correct while doing
+/// nothing on a teammate's machine.
+///
+/// [`command_line`] bakes in `std::env::current_exe()` — an absolute path to
+/// *this* installation. Committed to a shared settings file, it is a path that
+/// may not exist for anyone else, and a hook whose command cannot be found
+/// simply does not run. Surfaced for the same reason the Codex trust caveat is:
+/// silent no-ops are worse than refusals.
+///
+/// Public because [`crate::mcp::install::plan`] states the same condition about
+/// the same executable path and must **share** the sentence rather than copy
+/// it — a drifting copy would start describing different behaviour.
+pub const SHARED_EXE_PATH_NOTE: &str =
+    "The hook command is the full path to this copy of code-basics. Teammates who \
+     do not have it installed at the same path will silently get no gate.";
 
 /// What to warn the user about before writing Codex's `hooks.json`.
 ///
@@ -274,6 +303,8 @@ fn codex_caveats(scope: InstallScope, root: &Path, home: Option<&Path>) -> Vec<S
                  everyone who clones the repository."
                     .to_string(),
             );
+            caveats.push(SHARED_EXE_PATH_NOTE.to_string());
+            caveats.push(ABSTAIN_NOTE.to_string());
             if !codex::is_trusted_in(home, root) {
                 caveats.push(
                     "Codex ignores this repository's .codex/ directory until the project \
@@ -283,12 +314,10 @@ fn codex_caveats(scope: InstallScope, root: &Path, home: Option<&Path>) -> Vec<S
             }
         }
         InstallScope::User => {
-            caveats.push(
-                "A user-level hook runs when any repository's agent turn ends. The gate \
-                 abstains where the tooling is absent (no `typecheck` script, no \
-                 Cargo.toml), so it is safe, but it applies to every repository you open."
-                    .to_string(),
-            );
+            caveats.push(format!(
+                "A user-level hook runs when any repository's agent turn ends. {ABSTAIN_NOTE} \
+                 It is therefore safe, but it applies to every repository you open."
+            ));
         }
     }
     caveats.push("Codex asks you to review a new command hook the first time it runs.".to_string());

@@ -25,10 +25,13 @@
 
 use std::path::Path;
 
-use cb_core::lsp::model::{AnchorResult, DefinitionResult, LspStatus, UsageResult};
+use cb_core::lsp::model::{
+    AnchorResult, DefinitionResult, LspStatus, PrepareRenameResult, RenameResult, UsageResult,
+};
 use cb_core::lsp::session::{self, LspHandle};
 use tauri::State;
 
+use crate::commands::files::reindex_saved_file;
 use crate::state::AppState;
 
 /// What to say when the workspace went away underneath a request.
@@ -300,6 +303,81 @@ pub async fn lsp_declaration_anchors(
 ) -> Result<AnchorResult, String> {
     let session = ensure_session(&state)?;
     Ok(session.declaration_anchors(Path::new(&path)).await)
+}
+
+/// What the symbol at `line`/`character` is called, and whether it can be
+/// renamed at all.
+///
+/// Same convention as [`lsp_find_usages`]: 1-based `line`, 0-based UTF-16
+/// `character`, in both directions — the range coming back is spelled the same
+/// way.
+///
+/// **A `renameable: true` answer may carry no range at all.** A server may reply
+/// `{"defaultBehavior": true}`, which says "rename works here, work the span out
+/// yourself"; Roslyn instead replies with a bare range and **no** placeholder.
+/// So the caller derives the prefill from its own buffer either way
+/// (`renameLogic.identifierAt`), and neither shape is a refusal.
+#[tauri::command]
+pub async fn lsp_prepare_rename(
+    state: State<'_, AppState>,
+    path: String,
+    line: u32,
+    character: u32,
+) -> Result<PrepareRenameResult, String> {
+    let session = ensure_session(&state)?;
+    Ok(session
+        .prepare_rename(Path::new(&path), line, character)
+        .await)
+}
+
+/// Rename the symbol at `line`/`character` from `old_name` to `new_name`.
+///
+/// Same position convention as [`lsp_find_usages`]. Two things about the rest of
+/// the signature are worth stating here, because both are easy to get wrong from
+/// the calling side:
+///
+/// * `old_name` is **not decoration**. `cb_core::lsp::rename` uses it to check
+///   that each edit lands on a token of that name — the stale-mirror guard — and
+///   an empty string is a documented *abstention* from that check, not a
+///   convenient default. Send the identifier the field was prefilled with.
+/// * The result is **split by design**: closed files were already written to
+///   disk by the core (`written`), while `buffers` carries the edits for files
+///   the editor has open, which only the editor can apply without clobbering an
+///   unsaved buffer. A caller that ignores `buffers` has performed half a rename
+///   — see `RenameResult` in `src/ipc/types.ts`.
+///
+/// A `ready` result may still carry a `message`, and unlike find-usages that is
+/// not merely a caveat about a count: the server may have **missed call sites**,
+/// and the writes have already happened.
+#[tauri::command]
+pub async fn lsp_rename(
+    state: State<'_, AppState>,
+    path: String,
+    line: u32,
+    character: u32,
+    old_name: String,
+    new_name: String,
+) -> Result<RenameResult, String> {
+    let root = state.workspace_root()?;
+    let session = ensure_session(&state)?;
+    let result = session
+        .rename(Path::new(&path), line, character, &old_name, &new_name)
+        .await;
+    // The one thing this command adds, and it is a loop rather than a decision:
+    // the core wrote those files behind the search palette's back, so the symbol
+    // index would keep serving their pre-rename declarations. `written` carries
+    // workspace-relative paths in write order, which is exactly what
+    // `reindex_saved_file` wants once joined onto the root; it fails silently for
+    // the same reason it does on an ordinary save (see its own doc).
+    //
+    // `buffers` is deliberately *not* reindexed here: nothing has been written
+    // for those files, and indexing text that exists only in an editor would put
+    // declarations in the palette that are not on disk. Their reindex happens on
+    // the save, through `fs_write_file`, like every other edit.
+    for file in &result.written {
+        reindex_saved_file(&state, &root.join(&file.path));
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

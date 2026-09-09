@@ -9,6 +9,7 @@
 pub mod adapters;
 pub mod architecture;
 pub mod behavioral;
+pub mod browser;
 pub mod changelists;
 pub mod config;
 pub mod dap;
@@ -23,6 +24,7 @@ pub mod intents;
 pub mod invocation;
 pub mod launcher;
 pub mod lsp;
+pub mod mcp;
 pub mod model;
 pub mod notes;
 pub mod process;

@@ -954,9 +954,9 @@ fn unattributed_remainder_of_a_split_hunk_is_not_claimed_by_either_intent() {
     ));
 }
 
-/// A reason that already has an evidenced (bound) card must not also appear as
-/// a candidate on an ambiguous card for a different, unbound hunk it scopes: it
-/// is a known intent, not a guess, so it is dropped from the candidate list.
+/// A reason that already has an evidenced (bound) card must not also receive
+/// unrelated ambiguous lines. Unevidenced plausible reasons each get their own
+/// card carrying the ambiguous lines.
 #[test]
 fn an_evidenced_reason_is_not_repeated_as_an_ambiguous_candidate() {
     // Hunk 1 matches reason R's recorded edit → R binds and gets its own card.
@@ -1024,28 +1024,43 @@ fn an_evidenced_reason_is_not_repeated_as_an_ambiguous_candidate() {
         .expect("R should have its own evidenced card");
     assert!(bound.candidates.is_empty());
 
-    // The ambiguous card lists only the two unevidenced reasons — never R.
-    let ambiguous = groups
-        .iter()
-        .find(|g| !g.candidates.is_empty())
-        .expect("the unbound hunk should still be an ambiguous card");
-    assert_eq!(ambiguous.candidates.len(), 2);
-    assert!(!ambiguous
-        .candidates
-        .contains(&"Remove redundant flight plan fetches".to_string()));
-    assert!(ambiguous
-        .candidates
-        .contains(&"move read tracking to owning page".to_string()));
-    assert!(ambiguous
-        .candidates
-        .contains(&"cancel superseded table reads".to_string()));
+    assert!(groups.iter().all(|g| g.candidates.is_empty()));
+    for reason in [
+        "move read tracking to owning page",
+        "cancel superseded table reads",
+    ] {
+        let card = groups
+            .iter()
+            .find(|g| g.label == reason)
+            .expect("missing intent card");
+        assert_eq!(card.files[0].line_indices, vec![10, 11]);
+    }
+    assert_eq!(bound.files[0].line_indices, vec![0]);
+}
+
+#[test]
+fn identical_declared_intent_text_merges_across_turns() {
+    let diffs = [
+        simple("a.rs", &["+    let a = 1;"], "fn a() {"),
+        simple("b.rs", &["+    let b = 2;"], "fn b() {"),
+    ];
+    let intents = scoped_labels(&[
+        ("turn-a", "support the shared workflow", &["a.rs"]),
+        ("turn-b", "support the shared workflow", &["b.rs"]),
+    ]);
+
+    let groups = with_intent(&diffs, &intents);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].label, "support the shared workflow");
+    assert_eq!(groups[0].files.len(), 2);
 }
 
 /// The reported Autocomplete bug: two declared reasons both scope the file's
-/// directory, so neither binds uniquely. Rather than fall back to a symbol
-/// name, the card lists both as candidates.
+/// directory, so neither binds uniquely. Each reason remains a separate card,
+/// with the genuinely ambiguous line visible in both.
 #[test]
-fn two_covering_reasons_become_candidates_not_a_symbol_title() {
+fn two_covering_reasons_remain_separate_intent_cards() {
     let d = simple(
         "dir/Autocomplete.razor.cs",
         &["+    private CancellationTokenSource _cts = new();"],
@@ -1062,16 +1077,20 @@ fn two_covering_reasons_become_candidates_not_a_symbol_title() {
 
     let groups = with_intent(&[d], &intents);
 
-    assert_eq!(groups.len(), 1);
-    assert_eq!(groups[0].kind, GroupKind::Intent);
-    assert_eq!(groups[0].label, "");
-    assert_eq!(groups[0].candidates.len(), 2);
-    assert!(groups[0]
-        .candidates
-        .contains(&"move per-search cancellation into Autocomplete".to_string()));
-    assert!(groups[0]
-        .candidates
-        .contains(&"move read tracking to owning page".to_string()));
+    assert_eq!(groups.len(), 2);
+    assert!(groups.iter().all(|group| group.kind == GroupKind::Intent));
+    assert!(groups.iter().all(|group| group.candidates.is_empty()));
+    assert!(groups
+        .iter()
+        .all(|group| group.files[0].line_indices == vec![0]));
+    let labels: BTreeSet<_> = groups.iter().map(|group| group.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        BTreeSet::from([
+            "move per-search cancellation into Autocomplete",
+            "move read tracking to owning page",
+        ])
+    );
 }
 
 /// The override must not touch a hunk that is pure formatting — that is

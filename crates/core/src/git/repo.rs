@@ -1013,9 +1013,32 @@ impl Repo {
     /// them. What survives that is reported with the path and what to do about
     /// it, rather than as raw libgit2 text.
     fn checkout_tree_tolerating_locks(&self, object: &git2::Object<'_>, name: &str) -> Result<()> {
+        self.tolerating_locks(name, |repo| repo.checkout_tree(object, None))
+    }
+
+    /// `checkout_head` with the same tolerance, for a checkout that needs
+    /// options — a path-scoped revert, say.
+    ///
+    /// It needs the retry more than a branch switch does, not less: the stash
+    /// revert asks for `remove_untracked`, so it is deleting files and the
+    /// directories they leave behind, which is exactly the case Windows
+    /// refuses.
+    fn checkout_head_tolerating_locks(
+        &self,
+        builder: &mut git2::build::CheckoutBuilder<'_>,
+        name: &str,
+    ) -> Result<()> {
+        self.tolerating_locks(name, |repo| repo.checkout_head(Some(&mut *builder)))
+    }
+
+    /// Run a checkout, retrying briefly when the filesystem reports a lock.
+    fn tolerating_locks<F>(&self, name: &str, mut attempt: F) -> Result<()>
+    where
+        F: FnMut(&git2::Repository) -> std::result::Result<(), git2::Error>,
+    {
         const PAUSE: std::time::Duration = std::time::Duration::from_millis(150);
 
-        match self.inner.checkout_tree(object, None) {
+        match attempt(&self.inner) {
             Ok(()) => return Ok(()),
             Err(e) if e.code() == git2::ErrorCode::Locked => {}
             Err(e) => {
@@ -1030,15 +1053,13 @@ impl Repo {
         // is meaningless on directories — Explorer uses it to mark customised
         // folders — but tooling sets it in bulk, so a whole repository can be
         // affected and every branch switch that removes a directory fails.
-        if clear_readonly_directories(&self.workdir) > 0
-            && self.inner.checkout_tree(object, None).is_ok()
-        {
+        if clear_readonly_directories(&self.workdir) > 0 && attempt(&self.inner).is_ok() {
             return Ok(());
         }
 
         // Otherwise something really is holding it; that is often momentary.
         std::thread::sleep(PAUSE);
-        match self.inner.checkout_tree(object, None) {
+        match attempt(&self.inner) {
             Ok(()) => Ok(()),
             Err(e) => bail!(locked_checkout_message(name, e.message())),
         }
@@ -1298,6 +1319,362 @@ impl Repo {
             )
             .context("failed to stash changes")?;
         Ok(())
+    }
+
+    /// Stash only `paths`, leaving every other change in the working tree.
+    ///
+    /// Behaves like `git stash push -m <message> -u -- <paths>`.
+    ///
+    /// libgit2 *does* offer a pathspec stash — `git_stash_save_with_opts`,
+    /// wrapped as `Repository::stash_save_ext` — and it deliberately is not
+    /// used here, because for a pathspec it loses work: it builds the index
+    /// and untracked parents from the *whole* repository, and its reset step
+    /// calls `git_checkout_tree(FORCE | REMOVE_UNTRACKED)` with no path filter,
+    /// so it reverts every other file in the working tree and deletes every
+    /// untracked file while stashing only the named ones. Everything outside
+    /// the pathspec is then unrecoverable.
+    ///
+    /// So the stash commit is built here, to the shape libgit2's own
+    /// `stash.c` produces, and only the selected paths are reverted:
+    ///
+    /// * `i_commit` — the index tree, parent `[HEAD]`, `index on <base>`
+    /// * `u_commit` — the untracked tree, **no** parents, `untracked files on <base>`
+    /// * `w_commit` — the working tree, parents `[HEAD, i_commit, u_commit?]`
+    ///
+    /// Two details are load-bearing and each fails silently if dropped.
+    /// `refs/stash` is not a ref git logs by itself, so it has to be given a
+    /// reflog before it is written or the first stash in a repository is
+    /// created and then invisible to `stash_list`. And an untracked path
+    /// belongs in `u_tree` *only* — putting it in `w_tree` as well makes
+    /// `stash_pop` check it out twice and leave it staged.
+    ///
+    /// Returns the stash commit id.
+    pub fn stash_paths(&mut self, message: &str, paths: &[String]) -> Result<String> {
+        let selected = normalise_stash_paths(paths)?;
+
+        let head = match self.inner.head() {
+            Ok(reference) => reference
+                .peel_to_commit()
+                .context("failed to resolve HEAD")?,
+            Err(_) => bail!("there is nothing to stash before the first commit"),
+        };
+        let head_tree = head.tree().context("failed to read the HEAD tree")?;
+
+        // Every path is checked before a single object is written, so a bad
+        // selection can never leave a half-built stash behind.
+        for path in &selected {
+            match self.inner.status_file(Path::new(path)) {
+                Ok(status) if status.is_conflicted() => {
+                    bail!("{path} has unresolved conflicts; resolve them before stashing")
+                }
+                Ok(status) if status.is_empty() => bail!("{path} has no changes to stash"),
+                Ok(_) => {}
+                Err(_) => bail!("{path} is not a changed file in this workspace"),
+            }
+        }
+
+        let repo_index = self.inner.index().context("failed to read the index")?;
+
+        // A path git has never seen goes into the untracked parent; everything
+        // else is tracked, whether it is modified, added or deleted.
+        let (untracked, tracked): (Vec<&String>, Vec<&String>) =
+            selected.iter().partition(|path| {
+                let key = Path::new(path.as_str());
+                repo_index.get_path(key, 0).is_none() && head_tree.get_path(key).is_err()
+            });
+
+        // Each tree starts from HEAD and takes only the selected paths, so its
+        // diff against HEAD is exactly the selection and nothing else. All are
+        // built on a detached in-memory index — never on the real one.
+        let mut staged = git2::Index::new().context("failed to build a stash index")?;
+        staged
+            .read_tree(&head_tree)
+            .context("failed to seed the stash index")?;
+        for path in &tracked {
+            let key = Path::new(path.as_str());
+            match repo_index.get_path(key, 0) {
+                Some(entry) => staged.add(&entry).with_context(|| {
+                    format!("failed to record the staged copy of {path} in the stash")
+                })?,
+                // Staged for deletion: the entry seeded from HEAD comes back out.
+                None => staged.remove_path(key).with_context(|| {
+                    format!("failed to record the staged deletion of {path} in the stash")
+                })?,
+            }
+        }
+        let index_tree = staged
+            .write_tree_to(&self.inner)
+            .context("failed to write the stash index tree")?;
+
+        let mut working = git2::Index::new().context("failed to build a stash index")?;
+        working
+            .read_tree(&head_tree)
+            .context("failed to seed the stash index")?;
+        for path in &tracked {
+            let key = Path::new(path.as_str());
+            if self.workdir.join(path).symlink_metadata().is_ok() {
+                let entry = self.stash_entry_from_disk(path, &repo_index, &head_tree)?;
+                working.add(&entry).with_context(|| {
+                    format!("failed to record the working copy of {path} in the stash")
+                })?;
+            } else {
+                working.remove_path(key).with_context(|| {
+                    format!("failed to record the deletion of {path} in the stash")
+                })?;
+            }
+        }
+        let working_tree = working
+            .write_tree_to(&self.inner)
+            .context("failed to write the stash working tree")?;
+
+        let untracked_tree = if untracked.is_empty() {
+            None
+        } else {
+            let mut new_files = git2::Index::new().context("failed to build a stash index")?;
+            for path in &untracked {
+                let entry = self.stash_entry_from_disk(path, &repo_index, &head_tree)?;
+                new_files.add(&entry).with_context(|| {
+                    format!("failed to record the new file {path} in the stash")
+                })?;
+            }
+            Some(
+                new_files
+                    .write_tree_to(&self.inner)
+                    .context("failed to write the stash untracked tree")?,
+            )
+        };
+
+        let signature = self
+            .inner
+            .signature()
+            .context("git has no user.name/user.email configured")?;
+        let branch = self
+            .inner
+            .head()
+            .ok()
+            .filter(git2::Reference::is_branch)
+            .and_then(|head| head.shorthand().map(str::to_string))
+            .unwrap_or_else(|| DETACHED_STASH_BRANCH.to_string());
+        let short = head
+            .as_object()
+            .short_id()
+            .ok()
+            .and_then(|id| id.as_str().map(str::to_string))
+            .unwrap_or_else(|| head.id().to_string());
+        let base = format!("{branch}: {short} {}", head.summary().unwrap_or_default());
+
+        let index_commit = {
+            let tree = self
+                .inner
+                .find_tree(index_tree)
+                .context("failed to read the stash index tree")?;
+            let oid = self
+                .inner
+                .commit(
+                    None,
+                    &signature,
+                    &signature,
+                    &format!("index on {base}\n"),
+                    &tree,
+                    &[&head],
+                )
+                .context("failed to record the stashed index")?;
+            self.inner
+                .find_commit(oid)
+                .context("failed to read the stashed index")?
+        };
+
+        let untracked_commit = match untracked_tree {
+            None => None,
+            Some(id) => {
+                let tree = self
+                    .inner
+                    .find_tree(id)
+                    .context("failed to read the stash untracked tree")?;
+                let oid = self
+                    .inner
+                    .commit(
+                        None,
+                        &signature,
+                        &signature,
+                        &format!("untracked files on {base}\n"),
+                        &tree,
+                        &[],
+                    )
+                    .context("failed to record the stashed new files")?;
+                Some(
+                    self.inner
+                        .find_commit(oid)
+                        .context("failed to read the stashed new files")?,
+                )
+            }
+        };
+
+        let summary = stash_commit_message(&branch, &base, message);
+        let stash_id = {
+            let tree = self
+                .inner
+                .find_tree(working_tree)
+                .context("failed to read the stash working tree")?;
+            let mut parents: Vec<&git2::Commit> = vec![&head, &index_commit];
+            if let Some(commit) = untracked_commit.as_ref() {
+                parents.push(commit);
+            }
+            self.inner
+                .commit(None, &signature, &signature, &summary, &tree, &parents)
+                .context("failed to record the stash")?
+        };
+
+        // `refs/stash` is not one of the refs git logs automatically, and
+        // `stash_list` reads the reflog — so without this the first stash in a
+        // repository is written and then cannot be found.
+        self.inner
+            .reference_ensure_log("refs/stash")
+            .context("failed to prepare the stash log")?;
+        let logged = self.stash_log_len();
+        self.inner
+            .reference("refs/stash", stash_id, true, summary.trim_end())
+            .context("failed to record the stash")?;
+
+        // Writing the ref usually appends the log entry itself, but libgit2
+        // obeys `core.logAllRefUpdates` when it decides, and `refs/stash` is
+        // not one of the paths it logs regardless. git's own stash forces the
+        // entry instead (`REF_FORCE_CREATE_REFLOG`) — so where libgit2 skipped
+        // it, it is written here. Comparing the length rather than always
+        // appending is what keeps the usual case from gaining a phantom
+        // second stash.
+        if self.stash_log_len() == logged {
+            let mut log = self
+                .inner
+                .reflog("refs/stash")
+                .context("failed to read the stash log")?;
+            log.append(stash_id, &signature, Some(summary.trim_end()))
+                .context("failed to record the stash")?;
+            log.write().context("failed to record the stash")?;
+        }
+
+        // Only now that the stash is safely on disk is the working tree
+        // touched: if the revert fails, nothing has been lost.
+        self.revert_stashed_paths(&head, &selected, &untracked)?;
+
+        Ok(stash_id.to_string())
+    }
+
+    /// How many entries the stash log holds, treating an absent log as empty.
+    fn stash_log_len(&self) -> usize {
+        self.inner
+            .reflog("refs/stash")
+            .map(|log| log.len())
+            .unwrap_or(0)
+    }
+
+    /// Put the stashed paths back to `HEAD`, in index and working tree.
+    fn revert_stashed_paths(
+        &self,
+        head: &git2::Commit<'_>,
+        selected: &[String],
+        untracked: &[&String],
+    ) -> Result<()> {
+        // The index first: a staged addition is still tracked until its entry
+        // is gone, and the checkout below decides what to delete from that.
+        self.inner
+            .reset_default(Some(head.as_object()), selected.iter().map(String::as_str))
+            .context("failed to reset the stashed paths")?;
+
+        let mut builder = git2::build::CheckoutBuilder::new();
+        builder.force().remove_untracked(true);
+        for path in selected {
+            builder.path(path.as_str());
+        }
+        self.checkout_head_tolerating_locks(&mut builder, "the stashed files")?;
+
+        // `remove_untracked` will not delete a read-only file, and leaves an
+        // emptied directory behind — so anything the stash took and the
+        // checkout left is removed here rather than reappearing as a change
+        // the user did not make.
+        for path in untracked {
+            let full = self.workdir.join(path.as_str());
+            if full.symlink_metadata().is_err() {
+                continue;
+            }
+            if let Ok(meta) = std::fs::metadata(&full) {
+                let mut perms = meta.permissions();
+                #[allow(clippy::permissions_set_readonly_false)]
+                perms.set_readonly(false);
+                let _ = std::fs::set_permissions(&full, perms);
+            }
+            std::fs::remove_file(&full)
+                .with_context(|| format!("failed to remove {path} after stashing it"))?;
+        }
+        Ok(())
+    }
+
+    /// An index entry for the file as it currently is on disk.
+    ///
+    /// The blob is written through `blob_writer` with the path as its hint so
+    /// the repository's filters are applied: without them a `core.autocrlf`
+    /// working copy would store CRLF in the stash tree where every other tree
+    /// stores LF, and the stash would show the whole file as changed. (
+    /// `blob_path` happens to filter too — it derives the same hint whenever
+    /// the file sits under the working directory — but it does so only on that
+    /// prefix match, and here the hint is known outright.)
+    fn stash_entry_from_disk(
+        &self,
+        path: &str,
+        repo_index: &git2::Index,
+        head_tree: &git2::Tree<'_>,
+    ) -> Result<git2::IndexEntry> {
+        let full = self.workdir.join(path);
+        let meta = full
+            .symlink_metadata()
+            .with_context(|| format!("failed to read {path}"))?;
+
+        let (id, mode) = if meta.file_type().is_symlink() {
+            let target = std::fs::read_link(&full)
+                .with_context(|| format!("failed to read the link {path}"))?;
+            let text = target.to_string_lossy().replace('\\', "/");
+            let id = self
+                .inner
+                .blob(text.as_bytes())
+                .with_context(|| format!("failed to store {path}"))?;
+            (id, 0o120_000)
+        } else {
+            let mut writer = self
+                .inner
+                .blob_writer(Some(Path::new(path)))
+                .with_context(|| format!("failed to store {path}"))?;
+            let mut file =
+                std::fs::File::open(&full).with_context(|| format!("failed to read {path}"))?;
+            std::io::copy(&mut file, &mut writer)
+                .with_context(|| format!("failed to read {path}"))?;
+            let id = writer
+                .commit()
+                .with_context(|| format!("failed to store {path}"))?;
+            // The executable bit is not readable from a Windows stat, so it is
+            // carried over from what git already recorded for the file.
+            let key = Path::new(path);
+            let mode = repo_index
+                .get_path(key, 0)
+                .map(|entry| entry.mode)
+                .or_else(|| head_tree.get_path(key).ok().map(|e| e.filemode() as u32))
+                .unwrap_or(0o100_644);
+            (id, mode)
+        };
+
+        Ok(git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode,
+            uid: 0,
+            gid: 0,
+            file_size: meta.len() as u32,
+            id,
+            flags: 0,
+            flags_extended: 0,
+            path: path.as_bytes().to_vec(),
+        })
     }
 
     /// Every stash, most recent first (`index` 0 is `stash@{0}`).
@@ -1569,6 +1946,56 @@ fn unstaged_kind(status: git2::Status) -> Option<ChangeKind> {
     }
 }
 
+/// The branch label git records for a stash taken with no branch checked out.
+const DETACHED_STASH_BRANCH: &str = "(no branch)";
+
+/// Validate and tidy the paths a path-scoped stash was asked for.
+///
+/// Deduplicates, because the Changes view can legitimately offer the same file
+/// twice — once staged, once unstaged — and the stash acts on the path once.
+fn normalise_stash_paths(paths: &[String]) -> Result<Vec<String>> {
+    if paths.is_empty() {
+        bail!("no files were selected to stash");
+    }
+    let mut out = BTreeSet::new();
+    for path in paths {
+        out.insert(normalise_stash_path(path)?);
+    }
+    Ok(out.into_iter().collect())
+}
+
+/// One workspace-relative path, or a refusal naming what is wrong with it.
+///
+/// The same rule `files::resolve` applies: a stash reverts files, so a path
+/// that escaped the workspace would revert something the user never opened.
+fn normalise_stash_path(path: &str) -> Result<String> {
+    let cleaned = path.trim().replace('\\', "/");
+    if cleaned.is_empty() {
+        bail!("an empty path cannot be stashed");
+    }
+    if cleaned.starts_with('/') || cleaned.chars().nth(1) == Some(':') {
+        bail!("{path} is an absolute path; only files inside the workspace can be stashed");
+    }
+    if cleaned.split('/').any(|part| part == "..") {
+        bail!("{path} leaves the workspace");
+    }
+    Ok(cleaned)
+}
+
+/// The message the stash commit itself carries.
+///
+/// `parse_stash_branch` reads the branch back out of the `On <branch>:` form,
+/// so the two have to keep agreeing. An empty message falls back to git's own
+/// `WIP on <branch>: <sha> <subject>`.
+fn stash_commit_message(branch: &str, base: &str, message: &str) -> String {
+    let text = message.trim();
+    if text.is_empty() {
+        format!("WIP on {base}\n")
+    } else {
+        format!("On {branch}: {text}\n")
+    }
+}
+
 /// Pull the branch name out of a stash message, or `None` when it does not
 /// carry one in the shape git writes.
 ///
@@ -1608,6 +2035,70 @@ mod tests {
         let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
         keys.sort();
         assert_eq!(keys, ["branch", "id", "index", "message", "time"]);
+    }
+
+    #[test]
+    fn stash_paths_are_deduplicated_and_separator_normalised() {
+        // The Changes view can offer the same file twice — once staged, once
+        // unstaged — and Windows rows carry backslashes.
+        let paths = [
+            "src/a.rs".to_string(),
+            "src\\a.rs".to_string(),
+            "b.rs".to_string(),
+        ];
+        assert_eq!(
+            normalise_stash_paths(&paths).unwrap(),
+            vec!["b.rs".to_string(), "src/a.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_stash_path_may_not_leave_the_workspace() {
+        for bad in [
+            "../outside.rs",
+            "a/../../outside.rs",
+            "/etc/passwd",
+            "C:\\x",
+            "",
+        ] {
+            assert!(
+                normalise_stash_path(bad).is_err(),
+                "{bad} should have been refused"
+            );
+        }
+        // A file called `..something` is not a traversal.
+        assert_eq!(normalise_stash_path("a/..keep").unwrap(), "a/..keep");
+    }
+
+    #[test]
+    fn stashing_nothing_is_refused_before_anything_is_written() {
+        assert!(normalise_stash_paths(&[]).is_err());
+    }
+
+    #[test]
+    fn a_stash_message_round_trips_through_the_branch_parser() {
+        // The commit message is the only place the branch is recorded, and
+        // `parse_stash_branch` is what reads it back for the stash list.
+        let message = stash_commit_message("main", "main: 0abc123 subject", "my note");
+        assert_eq!(message, "On main: my note\n");
+        assert_eq!(parse_stash_branch(&message), Some("main".to_string()));
+
+        let detached = stash_commit_message(
+            DETACHED_STASH_BRANCH,
+            "(no branch): 0abc123 subject",
+            "my note",
+        );
+        assert_eq!(
+            parse_stash_branch(&detached),
+            Some(DETACHED_STASH_BRANCH.to_string())
+        );
+    }
+
+    #[test]
+    fn an_empty_stash_message_falls_back_to_gits_own_wording() {
+        let message = stash_commit_message("main", "main: 0abc123 subject", "   ");
+        assert_eq!(message, "WIP on main: 0abc123 subject\n");
+        assert_eq!(parse_stash_branch(&message), Some("main".to_string()));
     }
 
     #[test]

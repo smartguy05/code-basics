@@ -5,12 +5,23 @@
 //! is state management, the `#[tauri::command]` surface, and bridging streamed
 //! process output onto an IPC channel.
 
+// `pub` rather than private, unlike `state`: the browser host is the surface the
+// Phase 4c MCP server — a fourth self-dispatch mode of this same binary, beside
+// `record-intent`, `quality-gate` and `mcp-sql` — reads the panel through. The
+// consent decision it exists for (`browser::shared::state_for` feeding
+// `cb_core::browser::consent::decide`) has no in-window caller by design: the
+// user driving their own panel needs no consent from themselves.
+pub mod browser;
 mod state;
 
 mod commands {
+    pub mod about;
     pub mod architecture;
     pub mod behavioral;
+    pub mod browser;
+    pub mod browser_mcp;
     pub mod changelists;
+    pub mod debug;
     pub mod enhancements;
     pub mod erosion;
     pub mod features;
@@ -20,6 +31,7 @@ mod commands {
     pub mod intents;
     pub mod launcher;
     pub mod lsp;
+    pub mod mcp;
     pub mod notes;
     pub mod qgate;
     pub mod review;
@@ -34,6 +46,8 @@ mod commands {
     pub mod workspace;
 }
 
+mod mcp_browser;
+mod mcp_sql;
 mod qgate_run;
 mod recorder;
 
@@ -74,6 +88,24 @@ pub fn run() {
         return;
     }
 
+    // The third self-dispatch mode: an MCP client (Claude Code, Codex) starts
+    // this executable as a stdio server rather than as an application. Like the
+    // other two it must never create a window — and unlike them it must never
+    // write to stdout either, which is the transport.
+    if mcp_sql::is_mcp_sql_invocation() {
+        mcp_sql::run();
+    }
+
+    // The fifth mode, and the second MCP server out of this one executable:
+    // the browser tools. Unlike `mcp-sql` it answers nothing itself - the page
+    // it reports on lives in a window in another process - so it forwards over
+    // a named pipe and hands back that application's own words. Same two rules
+    // as the SQL server: never a window, and never a byte on stdout that is not
+    // an MCP frame.
+    if mcp_browser::is_mcp_browser_invocation() {
+        mcp_browser::run();
+    }
+
     let state = AppState::default();
     workspace_from_args(&state);
 
@@ -89,6 +121,15 @@ pub fn run() {
         // nothing else would ever kick the build off.
         .setup(|app| {
             use tauri::Manager;
+            // Bundle icons decorate the executable and installer; Windows does
+            // not reliably copy that resource onto a WebView window. Apply the
+            // same icon explicitly so the installed app also owns its taskbar
+            // and title-bar identity.
+            if let (Some(window), Some(icon)) =
+                (app.get_webview_window("main"), app.default_window_icon())
+            {
+                window.set_icon(icon.clone())?;
+            }
             // Detect crash-orphans once, before anything is spawned: reload the
             // previous session's recorded processes, keep the ones still alive
             // whose identity matches, and rewrite the file to the survivors.
@@ -105,6 +146,14 @@ pub fn run() {
                 // runtime for its actor, and `setup` is synchronous.
                 commands::lsp::spawn_session(app.handle().clone());
             }
+            // Publish this application in the browser instance registry with no
+            // listener: an absent entry means *no application is running*, and
+            // an entry carrying `browserFeature` and no listener means *running,
+            // and no browser panel open*. Those are different answers with
+            // different fixes, and a client has to be able to tell them apart
+            // without connecting to anything - which it can only do if the
+            // entry exists before any panel does.
+            browser::registry::announce_startup();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -137,6 +186,7 @@ pub fn run() {
             commands::features::set_feature,
             commands::notes::read_notes,
             commands::notes::write_notes,
+            commands::about::about_info,
             commands::files::fs_list_dir,
             commands::files::fs_read_file,
             commands::files::fs_write_file,
@@ -150,6 +200,9 @@ pub fn run() {
             commands::run::build_project,
             commands::run::cancel_run,
             commands::run::running_ids,
+            commands::debug::start_debug,
+            commands::debug::stop_debug,
+            commands::debug::debug_ids,
             commands::run::run_tests,
             commands::run::last_test_run,
             commands::run::coverage_of_change,
@@ -185,6 +238,7 @@ pub fn run() {
             commands::git::git_commit_file_contents,
             commands::git::git_commit_file_why,
             commands::git::git_stash_save,
+            commands::git::git_stash_paths,
             commands::git::git_stash_list,
             commands::git::git_stash_pop,
             commands::git::git_stash_apply,
@@ -207,6 +261,16 @@ pub fn run() {
             commands::intents::set_card_intent,
             commands::intents::clear_card_intent,
             commands::intents::move_card_edits,
+            commands::mcp::mcp_server_status,
+            commands::mcp::mcp_server_install_plan,
+            commands::mcp::install_mcp_server,
+            commands::mcp::mcp_server_uninstall_plan,
+            commands::mcp::uninstall_mcp_server,
+            commands::browser_mcp::browser_mcp_status,
+            commands::browser_mcp::browser_mcp_install_plan,
+            commands::browser_mcp::install_browser_mcp,
+            commands::browser_mcp::browser_mcp_uninstall_plan,
+            commands::browser_mcp::uninstall_browser_mcp,
             commands::qgate::quality_gate_status,
             commands::qgate::quality_gate_install_plan,
             commands::qgate::install_quality_gate,
@@ -243,20 +307,41 @@ pub fn run() {
             commands::lsp::lsp_find_usages,
             commands::lsp::lsp_goto_definition,
             commands::lsp::lsp_declaration_anchors,
+            commands::lsp::lsp_prepare_rename,
+            commands::lsp::lsp_rename,
+            commands::browser::browser_open,
+            commands::browser::browser_close,
+            commands::browser::browser_set_bounds,
+            commands::browser::browser_set_visible,
+            commands::browser::browser_navigate,
+            commands::browser::browser_back,
+            commands::browser::browser_forward,
+            commands::browser::browser_reload,
+            commands::browser::browser_state,
+            commands::browser::browser_console,
+            commands::browser::browser_network,
+            commands::browser::browser_page_text,
+            commands::browser::browser_set_automation_consent,
             commands::terminal::terminal_open,
             commands::terminal::terminal_write,
             commands::terminal::terminal_resize,
             commands::terminal::terminal_close,
             commands::terminal::terminal_list,
             commands::terminal::terminal_set_label,
+            commands::terminal::list_shells,
             commands::running::list_running,
             commands::running::kill_running,
             commands::sql::sql_list_connections,
             commands::sql::sql_discover,
             commands::sql::sql_save_connection,
             commands::sql::sql_delete_connection,
+            commands::sql::sql_rename_connection,
             commands::sql::sql_set_allow_writes,
+            commands::sql::sql_set_expose_to_agents,
             commands::sql::sql_test_connection,
+            commands::sql::sql_test_connection_string,
+            commands::sql::sql_list_objects,
+            commands::sql::sql_list_columns,
             commands::sql::sql_execute,
             commands::sql::sql_cancel,
         ])
@@ -275,6 +360,13 @@ pub fn run() {
                 for record in app_handle.state::<AppState>().running.live() {
                     cb_core::process::kill_tree(record.pid);
                 }
+                // And take this application out of the browser instance
+                // registry. Not load-bearing - liveness is re-probed, so a
+                // leftover entry for a dead pid reads as `NoneRunning` - but a
+                // stale entry makes a second application's entry look like an
+                // ambiguity, which is a refusal the user would have to resolve
+                // for no reason.
+                let _ = browser::registry::withdraw(std::process::id());
             }
         });
 }

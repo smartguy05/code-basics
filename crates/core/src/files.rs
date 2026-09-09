@@ -15,7 +15,7 @@ use crate::workspace::should_skip;
 
 /// Refuse to open files larger than this in the editor. Anything bigger is
 /// build output or data, not something to edit in a run-tab pane.
-const MAX_EDITABLE_BYTES: u64 = 5 * 1024 * 1024;
+pub const MAX_EDITABLE_BYTES: u64 = 5 * 1024 * 1024;
 
 /// One entry in a directory listing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]

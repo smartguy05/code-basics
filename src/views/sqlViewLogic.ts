@@ -27,6 +27,11 @@ import type {
   SqlConnectionView,
   SqlStopOutcome,
 } from "../ipc/types";
+import {
+  acceptedConnectionName,
+  candidateConnectionLabel,
+  type ManualConnectionDraft,
+} from "../components/sqlPickerLogic";
 import type { SqlRunPhase } from "./sqlLogic";
 
 // ---------------------------------------------------------------------------
@@ -160,6 +165,40 @@ export function writesConfirm(connection: SqlConnectionView, next: boolean): Wri
     driverGiveUpLead:
       driverGiveUp === null ? null : "This connection is protected by more than the guard.",
     confirmLabel: "Allow writes",
+  };
+}
+
+/**
+ * The confirmation for an exposure toggle, or `null` when none is owed.
+ *
+ * The same asymmetry as {@link writesConfirm} and for the same reason: taking
+ * consent back is the safe direction, and a modal in front of it is a modal
+ * people learn to dismiss.
+ *
+ * It reuses {@link WritesConfirm}'s shape so one modal renders both, and it
+ * leaves `driverGiveUp` empty — that slot means *a protection stronger than the
+ * guard is being given up*, and exposure gives up nothing of the kind. Filling
+ * it with reassurance would put a promise where a warning belongs.
+ *
+ * The second paragraph states the hole the MCP server's own docs state and
+ * cannot close: an agent with read access can read credentials the **database**
+ * stores — a `pg_stat_activity`, a foreign-data-wrapper user mapping — which no
+ * amount of care in this app removes. This dialog is the one place the user can
+ * act on knowing it.
+ */
+export function exposureConfirm(
+  connection: SqlConnectionView,
+  next: boolean,
+): WritesConfirm | null {
+  if (!next) return null;
+
+  return {
+    title: `Expose ${connection.name} to agents?`,
+    guard:
+      "An agent reaching this connection through the MCP server can read anything this login can read. Every statement it sends is forced read-only — there is no setting here and no argument there that lifts that, and allowing writes on this connection does not change it. But read access is the whole of what you are granting, and it includes credentials the database itself stores, which nothing in this app can keep out of a query. Expose only connections whose login you would give a colleague read access to.",
+    driverGiveUp: null,
+    driverGiveUpLead: null,
+    confirmLabel: "Expose to agents",
   };
 }
 
@@ -346,6 +385,7 @@ export function profileFromCandidate(
   workspaceRoot: string | null,
   existingIds: readonly string[],
   nowMs: number,
+  engineOverride?: NonNullable<SqlConnectionProfile["engine"]>,
 ): SqlConnectionProfile {
   const taken = new Set(existingIds);
   let id = candidate.id;
@@ -356,11 +396,50 @@ export function profileFromCandidate(
   }
   return {
     id,
-    name: candidate.name,
-    engine: candidate.engine,
+    name: candidateConnectionLabel(candidate),
+    engine: engineOverride ?? candidate.engine,
     secret: candidate.source,
     workspaceRoot,
     allowWrites: false,
+    // Both consents are sent and ignored: the backend forces them off for a
+    // new profile. Exposure especially — a connection the user has just
+    // saved has not been offered to an agent.
+    exposeToAgents: false,
+    // Derived from the candidate, so the picker keeps composing a label for it
+    // until the user renames it.
+    userNamed: false,
+    createdAtMs: nowMs,
+    lastUsedMs: null,
+  };
+}
+
+/** Build a collision-free, read-only profile after a manual draft tests OK. */
+export function profileFromManual(
+  draft: ManualConnectionDraft & { engine: NonNullable<ManualConnectionDraft["engine"]> },
+  workspaceRoot: string,
+  existingIds: readonly string[],
+  nowMs: number,
+): SqlConnectionProfile {
+  const taken = new Set(existingIds);
+  const stem = `manual:${nowMs}`;
+  let id = stem;
+  let suffix = 2;
+  while (taken.has(id)) {
+    id = `${stem}-${suffix}`;
+    suffix += 1;
+  }
+  return {
+    id,
+    name: acceptedConnectionName(draft.name) ?? draft.name.trim(),
+    engine: draft.engine,
+    secret: { kind: "literal", connectionString: draft.connectionString },
+    workspaceRoot: draft.global ? null : workspaceRoot,
+    allowWrites: false,
+    exposeToAgents: false,
+    // The user typed this name in the manual form, so nothing derives over it.
+    // (A literal secret was never decorated anyway — this states the fact rather
+    // than relying on the label function's variant arm to keep saying so.)
+    userNamed: true,
     createdAtMs: nowMs,
     lastUsedMs: null,
   };
@@ -414,4 +493,35 @@ export function stoppedNote(
     header: "stopped — may be incomplete",
     row: "The run was stopped, so reading ended here. Rows may be missing and no cap was reported — do not read this as the whole answer.",
   };
+}
+
+/** The shortest the query editor may be dragged. Matches its CSS floor. */
+export const SQL_EDITOR_MIN_HEIGHT = 96;
+
+/**
+ * The shortest the results pane may be squeezed to.
+ *
+ * Deliberately not zero. Dragging the divider to the bottom would hide the
+ * results entirely, and a pane that can vanish leaves no handle to bring it
+ * back — the user would be left with a console that appears to have stopped
+ * returning rows. Keeping a strip visible keeps the divider reachable.
+ */
+export const SQL_RESULTS_MIN_HEIGHT = 120;
+
+/** The editor's height on first open, before the divider is ever dragged. */
+export const SQL_EDITOR_DEFAULT_HEIGHT = 220;
+
+/**
+ * Where the divider between the query editor and the results may sit.
+ *
+ * Both panes have a floor, and in a short window the two floors can ask for
+ * more room than there is. The editor's floor wins that argument: the caret
+ * has to stay visible or the console cannot be typed into at all, whereas the
+ * results merely scroll. Stated here rather than left to whichever `Math.min`
+ * happened to be applied last.
+ */
+export function clampSqlEditorHeight(height: number, containerHeight: number): number {
+  const ceiling = containerHeight - SQL_RESULTS_MIN_HEIGHT;
+  if (ceiling <= SQL_EDITOR_MIN_HEIGHT) return SQL_EDITOR_MIN_HEIGHT;
+  return Math.min(ceiling, Math.max(SQL_EDITOR_MIN_HEIGHT, height));
 }

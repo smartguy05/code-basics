@@ -1,9 +1,114 @@
+import { normalizeLabel } from "./workspaceRenameLogic";
 import type {
   SqlAuthMode,
+  SqlCandidate,
   SqlCandidateState,
   SqlConnectionDisplay,
+  SqlConnectionView,
+  SqlEngine,
   SqlSecretView,
 } from "../ipc/types";
+
+function pathParts(path: string): string[] {
+  return path.split(/[\\/]/).filter(Boolean);
+}
+
+function sourceContext(source: string): string {
+  if (source.toLowerCase().startsWith("user secrets")) return "User secrets";
+  const file = pathParts(source)[pathParts(source).length - 1] ?? source;
+  const appsettings = /^appsettings(?:\.([^.]+))?\.json$/i.exec(file);
+  if (appsettings !== null) return appsettings[1] ?? "Default";
+  return file;
+}
+
+/** A stable, human identity that distinguishes the same key across projects and environments. */
+export function candidateConnectionLabel(candidate: SqlCandidate): string {
+  return [candidate.project, sourceContext(candidate.origin), candidate.name]
+    .filter((part): part is string => part !== null && part.trim() !== "")
+    .join(" · ");
+}
+
+/** The exact location and configuration key shown beneath a candidate label. */
+export function candidateSourceDetail(candidate: SqlCandidate): string {
+  switch (candidate.source.kind) {
+    case "literal":
+      return candidate.origin;
+    case "appSettings":
+    case "userSecrets":
+    case "dotEnv":
+      return `${candidate.origin} → ${candidate.source.key}`;
+  }
+}
+
+/**
+ * The one acceptance rule for a connection name, shared by the rename and the
+ * create form.
+ *
+ * A thin delegation to {@link normalizeLabel} on purpose, and named the way
+ * `acceptedTerminalTitle` is named for the same reason: a rename here has two
+ * destinations — the picker's React state and the JSON store behind
+ * `sql_rename_connection` — and a second, slightly different acceptance at one
+ * of them is the bug, not a safeguard. `null` means *not a usable name*, which
+ * leaves the row untouched rather than saving something the header would then
+ * render differently.
+ */
+export function acceptedConnectionName(name: string): string | null {
+  return normalizeLabel(name);
+}
+
+/** Display identity for saved references, including profiles saved before composite names existed. */
+export function savedConnectionLabel(connection: SqlConnectionView): string {
+  // A name the user typed is the identity; nothing is composed over it. The
+  // derivation below is this module's *guess* at one, and it is right only while
+  // nobody has supplied a better answer. Without this guard a typed name with no
+  // " · " in it is indistinguishable from an old generic key and silently
+  // reacquires the `project · source ·` prefix on the next read.
+  if (connection.userNamed) return connection.name;
+  if (connection.name.includes(" · ")) return connection.name;
+  switch (connection.secret.kind) {
+    case "literal":
+      return connection.name;
+    case "appSettings": {
+      const parts = pathParts(connection.secret.path);
+      const project = parts.at(-2) ?? null;
+      return [project, sourceContext(connection.secret.path), connection.name]
+        .filter((part): part is string => part !== null && part.trim() !== "")
+        .join(" · ");
+    }
+    case "userSecrets": {
+      const parts = pathParts(connection.secret.project);
+      const projectFile = parts.at(-1) ?? "";
+      const project = projectFile.replace(/\.csproj$/i, "");
+      return [project, "User secrets", connection.name].filter(Boolean).join(" · ");
+    }
+    case "dotEnv": {
+      const parts = pathParts(connection.secret.path);
+      const project = parts.at(-2) ?? null;
+      return [project, sourceContext(connection.secret.path), connection.name]
+        .filter((part): part is string => part !== null && part.trim() !== "")
+        .join(" · ");
+    }
+  }
+}
+
+/** Values collected before a literal connection has passed its required test. */
+export interface ManualConnectionDraft {
+  name: string;
+  engine: SqlEngine | null;
+  connectionString: string;
+  global: boolean;
+}
+
+/** The first reason a manual connection cannot be tested and added. */
+export function manualConnectionError(draft: ManualConnectionDraft): string | null {
+  // The same question the rename asks, not a looser one: a bare `trim` strips
+  // neither U+0000 nor a bidi override, so the create path could save a name the
+  // rename would refuse.
+  if (acceptedConnectionName(draft.name) === null) return "Enter a connection name.";
+  if (draft.engine === null) return "Choose a database engine.";
+  if (draft.connectionString.trim() === "") return "Enter a connection string.";
+  return null;
+}
 
 /**
  * The decisions behind `SqlConnectionPicker`.

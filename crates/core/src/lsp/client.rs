@@ -74,10 +74,11 @@ use thiserror::Error;
 use tokio::sync::{broadcast, watch};
 
 use super::protocol::{
-    decode_document_symbols, decode_goto, document_end, initialize_params, method, DecodeError,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DocumentSymbolParams, Location, Position, ReferenceParams, ServerCapabilities, Symbol,
-    SyncKind, TextDocumentPositionParams,
+    decode_document_symbols, decode_goto, decode_prepare_rename, decode_workspace_edit,
+    document_end, initialize_params, method, DecodeError, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbolParams, Location,
+    Position, PrepareRenameResponse, ReferenceParams, RenameParams, ServerCapabilities, Symbol,
+    SyncKind, TextDocumentPositionParams, WorkspaceEdit,
 };
 use super::registry::{caller_args, takes_caller_args, Readiness, ServerSpec, Timeouts};
 use super::transport::{Death, Launch, Notification, RequestFailure, SignalFilter, Transport};
@@ -674,6 +675,67 @@ impl Client {
             )
             .await?;
         decode_document_symbols(value).map_err(|error| malformed(method, error))
+    }
+
+    /// Whether the symbol under the caret can be renamed, and over what span.
+    ///
+    /// Gated on `renameProvider.prepareProvider` rather than on
+    /// `renameProvider`: a server offering the second and not the first answers
+    /// `-32601` here, which would arrive as [`RequestError::Failed`] and read as
+    /// a rename that cannot work. `Unsupported` says the truth instead — this
+    /// server cannot *prepare*, and [`Client::rename`] is still available.
+    ///
+    /// [`PrepareRenameResponse::NotRenameable`] is a **real answer** and comes
+    /// back as `Ok`: the caret is on a keyword, a comment or a literal.
+    pub async fn prepare_rename(
+        &self,
+        path: &Path,
+        position: Position,
+    ) -> Result<PrepareRenameResponse, RequestError> {
+        let method = method::PREPARE_RENAME;
+        self.require(
+            self.capabilities.prepare_rename,
+            method,
+            "renameProvider.prepareProvider",
+        )?;
+        let uri = self.uri_for(path)?;
+        let params = TextDocumentPositionParams::new(&uri, position);
+        let value = self
+            .ask(method, as_params(&params), self.spec.timeouts.request)
+            .await?;
+        decode_prepare_rename(value).map_err(|error| malformed(method, error))
+    }
+
+    /// The edits that would rename the symbol at `position` to `new_name`.
+    ///
+    /// Written out in full rather than through the [`Client::goto`] helper,
+    /// which exists only because three requests share one body — this one shares
+    /// with nothing.
+    ///
+    /// The budget is `timeouts.request`, the same as `references`: a rename is a
+    /// workspace-wide search plus an edit computation, which is what find-usages
+    /// already costs. A separate number here would be a guess about a cost
+    /// nobody has measured.
+    ///
+    /// **Nothing is applied and nothing is refused here.** The answer may carry
+    /// file operations this app declines to perform; they arrive intact in
+    /// [`WorkspaceEdit::resource_operations`] so the caller can decline the
+    /// whole answer, and the user-facing sentence is written where the decision
+    /// is made rather than here.
+    pub async fn rename(
+        &self,
+        path: &Path,
+        position: Position,
+        new_name: &str,
+    ) -> Result<WorkspaceEdit, RequestError> {
+        let method = method::RENAME;
+        self.require(self.capabilities.rename, method, "renameProvider")?;
+        let uri = self.uri_for(path)?;
+        let params = RenameParams::new(&uri, position, new_name);
+        let value = self
+            .ask(method, as_params(&params), self.spec.timeouts.request)
+            .await?;
+        decode_workspace_edit(value).map_err(|error| malformed(method, error))
     }
 
     // -----------------------------------------------------------------------

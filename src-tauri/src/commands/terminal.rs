@@ -186,6 +186,24 @@ pub async fn terminal_list(state: State<'_, AppState>) -> Result<Vec<String>, St
     Ok(state.pty.list())
 }
 
+/// The shells on this machine, and which of them a terminal opens with no
+/// preference set.
+///
+/// Read-only and workspace-independent, so it takes no `State`: a shell is a
+/// fact about the machine, not about the codebase that happens to be open.
+/// There is no command-layer struct and no decision in the body either — every
+/// rule about what may be listed lives in `cb_core::pty::detected_shells`,
+/// where it is unit-tested, because a `#[tauri::command]` body in this crate
+/// cannot be reached by any test (see `CLAUDE.md`).
+///
+/// An **empty** `shells` list is a success, not an error: terminals still open
+/// on `default_shell()`, and the frontend states that rather than showing a
+/// failure.
+#[tauri::command]
+pub async fn list_shells() -> Result<cb_core::pty::DetectedShells, String> {
+    Ok(cb_core::pty::detect_shells())
+}
+
 /// The user's home directory, for a terminal opened with no workspace.
 fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")

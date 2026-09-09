@@ -2,6 +2,12 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  BrowserConsoleBatch,
+  BrowserNetworkBatch,
+  BrowserPageText,
+  BrowserRect,
+  BrowserSnapshot,
+  AboutInfo,
   AgentCommand,
   AnchorResult,
   ArchGraph,
@@ -14,6 +20,8 @@ import type {
   Commit,
   ComparisonMode,
   DefinitionResult,
+  DebugEvent,
+  DetectedShells,
   DiagramFile,
   DirEntry,
   ElidedReason,
@@ -41,9 +49,11 @@ import type {
   ProjectSecrets,
   PromptInfo,
   PromptRuns,
+  PrepareRenameResult,
   ProviderId,
   ProviderStatus,
   RejectSummary,
+  RenameResult,
   RetireSummary,
   ReviewAgentInfo,
   RiderImportPreview,
@@ -57,7 +67,10 @@ import type {
   SearchScope,
   SqlConnectionProfile,
   SqlConnectionView,
+  SqlColumnView,
+  SqlObjectView,
   SqlDiscovery,
+  SqlEngine,
   SqlEvent,
   SqlStopOutcome,
   SqlTestOutcome,
@@ -232,6 +245,20 @@ export const writeNotes = (file: NotesFile) =>
   invoke<void>("write_notes", { file });
 
 // ---------------------------------------------------------------------------
+// About (Help -> About)
+// ---------------------------------------------------------------------------
+
+/**
+ * What build is running: host platform, and the commit and instant `build.rs`
+ * stamped in. Cannot fail — anything it could not establish comes back as the
+ * literal `"unknown"` rather than as an error or a blank.
+ *
+ * The application and Tauri versions are *not* here; read those from
+ * `@tauri-apps/api/app`, which the bundle already carries.
+ */
+export const aboutInfo = () => invoke<AboutInfo>("about_info");
+
+// ---------------------------------------------------------------------------
 // Running
 // ---------------------------------------------------------------------------
 
@@ -274,6 +301,23 @@ export const cancelRun = (configId: string) =>
   invoke<boolean>("cancel_run", { configId });
 
 export const runningIds = () => invoke<string[]>("running_ids");
+
+/** Launch a configuration under its ecosystem's debug adapter. */
+export function startDebug(
+  configId: string,
+  onEvent: (event: DebugEvent) => void,
+  env?: Record<string, string>,
+  buildConfiguration?: string,
+): Promise<void> {
+  const channel = new Channel<DebugEvent>();
+  channel.onmessage = onEvent;
+  return invoke<void>("start_debug", { configId, channel, env, buildConfiguration });
+}
+
+export const stopDebug = (configId: string) =>
+  invoke<boolean>("stop_debug", { configId });
+
+export const debugIds = () => invoke<string[]>("debug_ids");
 
 export function runTests(
   configId: string,
@@ -435,6 +479,17 @@ export const terminalClose = (id: string) =>
 /** The ids of every open terminal. */
 export const terminalList = () => invoke<string[]>("terminal_list");
 
+/**
+ * The shells on this machine, and which of them a terminal opens with no
+ * preference set. Read-only detection — nothing is spawned.
+ *
+ * `shells` may legitimately be **empty**, which is not a failure: a terminal
+ * opened with no program still runs the platform default. And a shell may
+ * appear or vanish between calls (a tool mid-upgrade, a PATH change), so the
+ * list is what is here *now* rather than something to cache.
+ */
+export const listShells = () => invoke<DetectedShells>("list_shells");
+
 // ---------------------------------------------------------------------------
 // The app launcher
 // ---------------------------------------------------------------------------
@@ -480,10 +535,20 @@ export function launchCommand(
 export const stopCommand = (key: string) =>
   invoke<boolean>("stop_command", { key });
 
-/** Pin/unpin or rename a remembered command; resolves to the updated file. */
+/**
+ * Apply a partial update to a remembered command; resolves to the updated file.
+ * Every field is optional and an omitted one is left alone, so a caller sends
+ * only what the user changed.
+ */
 export const saveLaunchable = (
   id: string,
-  changes: { label?: string; pinned?: boolean },
+  changes: {
+    label?: string;
+    pinned?: boolean;
+    shortcut?: boolean;
+    persistent?: boolean;
+    headless?: boolean;
+  },
 ) => invoke<LauncherFile>("save_launchable", { id, ...changes });
 
 /** Forget a remembered command; resolves to the updated file. */
@@ -617,6 +682,9 @@ export const gitCommitFileWhy = (id: string, path: string) =>
 
 export const gitStashSave = (message: string) =>
   invoke<void>("git_stash_save", { message });
+
+export const gitStashPaths = (message: string, paths: string[]) =>
+  invoke<string>("git_stash_paths", { message, paths });
 
 export const gitStashList = () => invoke<StashEntry[]>("git_stash_list");
 
@@ -801,6 +869,35 @@ export const qualityGateUninstallPlan = (provider: ProviderId, scope: InstallSco
 /** Perform an uninstall the user has confirmed; returns the new status. */
 export const uninstallQualityGate = (provider: ProviderId, scope: InstallScope) =>
   invoke<InstallScope | null>("uninstall_quality_gate", { provider, scope });
+
+// ---------------------------------------------------------------------------
+// The SQL MCP server (`mcp/install/`) — the same preview-then-apply shape as the
+// quality gate, and deliberately over the same four IPC types: a status is
+// exactly `InstallScope | null`, so nothing new crosses the boundary.
+// ---------------------------------------------------------------------------
+
+/** Where the SQL MCP server is installed for this workspace and provider, if anywhere. */
+export const mcpServerStatus = (provider: ProviderId) =>
+  invoke<InstallScope | null>("mcp_server_status", { provider });
+
+/** Exactly what installing the SQL MCP server would write. Touches nothing. */
+export const mcpServerInstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("mcp_server_install_plan", { provider, scope });
+
+/** Perform an install the user has confirmed; returns the new status. */
+export const installMcpServer = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("install_mcp_server", { provider, scope });
+
+/**
+ * Exactly what removing the SQL MCP server would rewrite. Touches nothing. An
+ * empty `writes` means that configuration holds no entry of ours.
+ */
+export const mcpServerUninstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("mcp_server_uninstall_plan", { provider, scope });
+
+/** Perform a removal the user has confirmed; returns the new status. */
+export const uninstallMcpServer = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("uninstall_mcp_server", { provider, scope });
 
 /** First-open setup: exactly what installing every hook at `scope` would write. */
 export const setupInstallPlan = (scope: InstallScope) =>
@@ -1101,6 +1198,51 @@ export const lspGotoDefinition = (
 export const lspDeclarationAnchors = (path: string) =>
   invoke<AnchorResult>("lsp_declaration_anchors", { path });
 
+/**
+ * Whether the symbol at `line`/`character` can be renamed, and over what span.
+ *
+ * Same position convention as {@link lspFindUsages}. Ask this *before* opening
+ * the rename field, and treat three answers as distinct:
+ *
+ * * `outcome !== "ready"` — nobody could be asked. Say why; do not open a field.
+ * * `outcome === "ready"` with `renameable: false` — the server says this is not
+ *   a rename site. A refusal, never an empty box.
+ * * `outcome === "ready"` with `renameable: true` — go ahead. The four position
+ *   fields may all be `null` (the `defaultBehavior` shape) and `placeholder` is
+ *   `null` for real Roslyn, so the field's prefill comes from the buffer
+ *   (`renameLogic.identifierAt`) rather than from this answer.
+ */
+export const lspPrepareRename = (path: string, line: number, character: number) =>
+  invoke<PrepareRenameResult>("lsp_prepare_rename", { path, line, character });
+
+/**
+ * Rename the symbol at `line`/`character`.
+ *
+ * Same position convention as {@link lspFindUsages}. **Flush any owed
+ * `lspChangeDocument` before calling this and wait for it to resolve**: the
+ * ranges coming back are applied to the editor's text, so they must have been
+ * computed from the editor's text. A server answering about a buffer two edits
+ * old returns ranges that are plausible and wrong.
+ *
+ * `oldName` is the identifier the field was prefilled with. It is the backend's
+ * stale-mirror check — each edit must land on a token of that name — and `""` is
+ * a documented abstention from that check rather than a convenient default.
+ *
+ * **The answer is split and both halves must be honoured.** `written` names the
+ * closed files the backend already wrote to disk; `buffers` carries the edits for
+ * files this editor has open, which only the editor can apply without clobbering
+ * an unsaved buffer. Dispatch those synchronously in the `.then`, and *report* a
+ * `buffers` entry no editor received rather than dropping it — that gap is the
+ * one window the design cannot close.
+ */
+export const lspRename = (
+  path: string,
+  line: number,
+  character: number,
+  oldName: string,
+  newName: string,
+) => invoke<RenameResult>("lsp_rename", { path, line, character, oldName, newName });
+
 // ---------------------------------------------------------------------------
 // The SQL console
 // ---------------------------------------------------------------------------
@@ -1143,6 +1285,20 @@ export const sqlDeleteConnection = (id: string) =>
   invoke<SqlConnectionView[]>("sql_delete_connection", { id });
 
 /**
+ * Rename a saved connection, and record that the user chose the name.
+ *
+ * Its own verb rather than a `sqlSaveConnection` round-trip, and not for
+ * tidiness: a {@link SqlConnectionView} carries a **redacted** secret, so the
+ * only profile a caller holding one can rebuild has the display form where the
+ * password was. Posting a rename that way would break the connection it renamed.
+ *
+ * `name` must already have passed `acceptedConnectionName` — the one acceptance
+ * rule, shared with the create form.
+ */
+export const sqlRenameConnection = (id: string, name: string) =>
+  invoke<SqlConnectionView[]>("sql_rename_connection", { id, name });
+
+/**
  * Allow or disallow writes on one connection — the consent action.
  *
  * Its own verb on purpose. Enabling writes both lifts the read-only guard for
@@ -1152,6 +1308,23 @@ export const sqlDeleteConnection = (id: string) =>
  */
 export const sqlSetAllowWrites = (id: string, allowWrites: boolean) =>
   invoke<SqlConnectionView[]>("sql_set_allow_writes", { id, allowWrites });
+
+/**
+ * Expose or un-expose one connection to agents through the MCP server — the
+ * second consent action, and the stronger one.
+ *
+ * Orthogonal to {@link sqlSetAllowWrites}: the agent path forces read-only
+ * regardless of `allowWrites`, so no combination of the two lets an agent
+ * write. What this grants is *reading*, and an agent with read access can read
+ * anything that login can read — including credentials the database itself
+ * stores. Expose only connections whose login you would give a colleague read
+ * access to.
+ *
+ * Un-exposing takes effect on the next call: the server re-reads the store per
+ * request and caches no connection.
+ */
+export const sqlSetExposeToAgents = (id: string, exposeToAgents: boolean) =>
+  invoke<SqlConnectionView[]>("sql_set_expose_to_agents", { id, exposeToAgents });
 
 /**
  * Open the connection, prove a database is behind it, ask its version, and
@@ -1171,6 +1344,21 @@ export const sqlSetAllowWrites = (id: string, allowWrites: boolean) =>
  */
 export const sqlTestConnection = (id: string) =>
   invoke<SqlTestOutcome>("sql_test_connection", { id });
+
+/**
+ * Test a manually entered connection without saving it. The string travels
+ * only toward the backend and no response type has a field that can echo it.
+ */
+export const sqlTestConnectionString = (engine: SqlEngine, connectionString: string) =>
+  invoke<SqlTestOutcome>("sql_test_connection_string", { engine, connectionString });
+
+/** List the selected database's objects. Tables are the first supported kind. */
+export const sqlListObjects = (connectionId: string) =>
+  invoke<SqlObjectView[]>("sql_list_objects", { connectionId });
+
+/** Lazily load one table's column definitions. */
+export const sqlListColumns = (connectionId: string, schema: string | null, table: string) =>
+  invoke<SqlColumnView[]>("sql_list_columns", { connectionId, schema, table });
 
 /**
  * Run SQL, streaming its rows to `onEvent`.
@@ -1220,3 +1408,94 @@ export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
 }
+
+// --- The embedded browser panel --------------------------------------------
+//
+// Every one of these is `async` on the Rust side and must stay so: the host
+// reaches a main-thread-affine wry `WebView` through `run_on_main_thread`, and
+// Tauri warns that webview creation deadlocks from a synchronous command on
+// Windows. See `src-tauri/src/browser/mod.rs`.
+
+/**
+ * Open the page at `rect`, optionally navigating straight to `url` (raw user
+ * input — the backend normalises and may refuse it). Creates the webview, or
+ * re-places and re-shows one that was only minimized.
+ */
+export const browserOpen = (rect: BrowserRect, url: string | null) =>
+  invoke<BrowserSnapshot>("browser_open", { rect, url });
+
+/**
+ * Close the panel, **dropping** the webview and its WebView2 process tree.
+ * `pluginDisabled` says why: "the user switched the browser off" and "the panel
+ * is closed" are one click apart and an agent acts on the difference.
+ */
+export const browserClose = (pluginDisabled: boolean) =>
+  invoke<BrowserSnapshot>("browser_close", { pluginDisabled });
+
+/** Move and resize the page to follow the panel. Logical pixels. */
+export const browserSetBounds = (rect: BrowserRect) =>
+  invoke<void>("browser_set_bounds", { rect });
+
+/**
+ * Show or hide the OS surface — the only mechanism that works. The page is a
+ * child HWND compositing above the DOM, so a React `hidden` cannot hide it.
+ */
+export const browserSetVisible = (visible: boolean) =>
+  invoke<void>("browser_set_visible", { visible });
+
+/** Navigate to whatever the user typed. A search phrase is refused, not searched. */
+export const browserNavigate = (input: string) =>
+  invoke<BrowserSnapshot>("browser_navigate", { input });
+
+export const browserBack = () => invoke<void>("browser_back");
+export const browserForward = () => invoke<void>("browser_forward");
+export const browserReload = () => invoke<void>("browser_reload");
+
+/** The whole readable state. A pure data read — no main thread, cheap to poll. */
+export const browserState = () => invoke<BrowserSnapshot>("browser_state");
+
+/** Console rows after `cursor`, with what the cursor missed. */
+export const browserConsole = (cursor: number) =>
+  invoke<BrowserConsoleBatch>("browser_console", { cursor });
+
+/** Network rows after `cursor`, with the coverage note. */
+export const browserNetwork = (cursor: number) =>
+  invoke<BrowserNetworkBatch>("browser_network", { cursor });
+
+/** The page's rendered text. Refused unless the page is `ready`. */
+export const browserPageText = () =>
+  invoke<BrowserPageText>("browser_page_text");
+
+/** Record consent the user gave or withdrew. The only thing that moves it. */
+export const browserSetAutomationConsent = (reads: boolean, writes: boolean) =>
+  invoke<BrowserSnapshot>("browser_set_automation_consent", { reads, writes });
+
+// --- The browser MCP server's installer ------------------------------------
+//
+// The same five-call shape as the SQL server's (`mcpServerStatus` and friends)
+// because it is the same machinery: `cb_core::browser::install` reuses
+// `mcp::install`'s merge rather than growing a second one. Separate calls
+// rather than a `kind` parameter, because the two servers carry different
+// caveats and the failure mode of one shared call is showing somebody the
+// database warning before granting an agent their browser session.
+
+/** Where the browser MCP server is installed for `provider`, if anywhere. */
+export const browserMcpStatus = (provider: ProviderId) =>
+  invoke<InstallScope | null>("browser_mcp_status", { provider });
+
+/** Exactly what installing it would write. Touches nothing. */
+export const browserMcpInstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("browser_mcp_install_plan", { provider, scope });
+
+/** Perform an install the user has confirmed; returns the new status. */
+export const installBrowserMcp = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("install_browser_mcp", { provider, scope });
+
+/** Exactly what removing it would rewrite. A zero-write plan means nothing of
+ * ours was there. */
+export const browserMcpUninstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("browser_mcp_uninstall_plan", { provider, scope });
+
+/** Perform a removal the user has confirmed; returns the new status. */
+export const uninstallBrowserMcp = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("uninstall_browser_mcp", { provider, scope });

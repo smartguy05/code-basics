@@ -182,6 +182,84 @@ pub fn apply_writes(writes: &[PlannedWrite]) -> Result<()> {
     Ok(())
 }
 
+/// Perform a set of planned writes **atomically**, for files another process is
+/// reading while we write them.
+///
+/// Added beside [`apply_writes`] rather than replacing its behaviour, so no
+/// existing caller changes: the hook files are small and are not open in
+/// anything else, and quietly altering how every install writes would be a much
+/// wider change than the one case that needs it.
+///
+/// That case is the MCP installer. `~/.claude.json` is a 122 KB file that a
+/// running Claude Code reads and rewrites continuously, and `fs::write` over it
+/// is a **truncate followed by a write** — a reader that arrives in between sees
+/// an empty or half-written file, and a crash in between leaves one. So: back
+/// the file up, write a temp sibling, then rename it into place, which is the
+/// one operation the filesystem gives us that a reader can never catch halfway.
+/// [`crate::notes::save`] is the proven local precedent for exactly this.
+///
+/// The rename is same-directory by construction (the temp file is a sibling),
+/// which is what keeps it atomic rather than a copy.
+///
+/// # What this does not fix, stated rather than glossed
+///
+/// On Windows a rename over a file another process holds open *without*
+/// `FILE_SHARE_DELETE` fails outright. So where `fs::write` would have silently
+/// produced a half-written file, this can instead fail loudly — which is the
+/// trade being made, and the right way round for a config file, but it is a
+/// different failure rather than none. It also does nothing about the *other*
+/// process's own writes: if a running Claude Code rewrites `~/.claude.json`
+/// after this rename, its copy wins. That is why the user-scope caveat tells
+/// the user to close Claude Code first; no write strategy here removes the need
+/// for it.
+pub fn apply_writes_atomically(writes: &[PlannedWrite]) -> Result<()> {
+    use anyhow::Context;
+
+    for write in writes {
+        if let Some(parent) = write.path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+
+        if write.merges_existing && write.path.exists() {
+            let backup = write.path.with_extension(backup_extension(&write.path));
+            std::fs::copy(&write.path, &backup).with_context(|| {
+                format!(
+                    "failed to back up {} before changing it",
+                    write.path.display()
+                )
+            })?;
+        }
+
+        let temp = write
+            .path
+            .with_extension(temp_extension(&write.path, std::process::id()));
+        std::fs::write(&temp, &write.content)
+            .with_context(|| format!("failed to write {}", temp.display()))?;
+        std::fs::rename(&temp, &write.path).with_context(|| {
+            // Leave the temp file behind on a failed rename: it holds the content
+            // the user approved, and deleting it would throw that away.
+            format!(
+                "failed to replace {} with {}",
+                write.path.display(),
+                temp.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+/// A sibling temp name that cannot collide with a second installer running at
+/// the same time, and that keeps the original extension so an abandoned one is
+/// obviously a copy of that file.
+fn temp_extension(path: &Path, pid: u32) -> String {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(existing) => format!("{existing}.{pid}.tmp"),
+        None => format!("{pid}.tmp"),
+    }
+}
+
 /// `hooks.json` becomes `hooks.json.bak`, keeping the original extension so
 /// the backup is obviously a copy of that file and not a different one.
 fn backup_extension(path: &Path) -> String {

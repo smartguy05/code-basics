@@ -112,7 +112,13 @@ pub fn read(project_path: &Path) -> Result<ProjectSecrets> {
         });
     };
 
-    let path = secrets_path(&id)?;
+    read_with_id(&id)
+}
+
+/// Read a secrets store whose id was obtained from evaluated MSBuild
+/// properties (for example through an imported props file).
+pub fn read_with_id(id: &str) -> Result<ProjectSecrets> {
+    let path = secrets_path(id)?;
     let content = match std::fs::read_to_string(&path) {
         Ok(text) => Some(text),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -120,7 +126,7 @@ pub fn read(project_path: &Path) -> Result<ProjectSecrets> {
     };
 
     Ok(ProjectSecrets {
-        secrets_id: Some(id),
+        secrets_id: Some(id.to_string()),
         path: Some(path),
         content,
     })

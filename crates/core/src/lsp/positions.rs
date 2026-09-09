@@ -75,6 +75,59 @@ pub fn byte_to_utf16(line: &str, byte: usize) -> u32 {
     units as u32
 }
 
+/// The byte offset of an LSP position within a whole document.
+///
+/// The only whole-document arithmetic in this app, and it lives here because
+/// this module is where the two conventions are reconciled and nowhere else may
+/// do it. `line` is 0-based and `character` counts UTF-16 code units — LSP's
+/// spelling rather than this app's, because every caller is reading a server's
+/// own answer.
+///
+/// Takes scalars rather than a `protocol::Position` deliberately: `protocol`
+/// already depends on this module, so accepting its types here would invert the
+/// layering the module docs set out.
+///
+/// # Clamping, and the one place it must not round off
+///
+/// A line past the end resolves to the end of the document, and a character
+/// past the end of its line resolves to the end of that line's **content** —
+/// before a CRLF, never between the two. That last rule is what preserves CRLF
+/// files: resolving to *after* the carriage return would let a replacement land
+/// between it and the newline, leaving a lone `\r` in the middle of the file.
+///
+/// The clamping is a mechanism, not a decision. A server naming a line the
+/// document does not have is describing a different version of the file, and
+/// `edits::plan` refuses that *before* reaching here rather than rounding it
+/// into an edit somewhere plausible.
+pub fn byte_offset(text: &str, line: u32, character: u32) -> usize {
+    let mut start = 0usize;
+    let mut remaining = line;
+
+    while remaining > 0 {
+        match text[start..].find(['\n', '\r']) {
+            Some(at) => {
+                // A CRLF is one terminator, not two lines.
+                let width = if text[start + at..].starts_with("\r\n") {
+                    2
+                } else {
+                    1
+                };
+                start += at + width;
+                remaining -= 1;
+            }
+            // Fewer lines than asked for. The end of the document is the closest
+            // thing to the position, and it is always a character boundary.
+            None => return text.len(),
+        }
+    }
+
+    let content_end = text[start..]
+        .find(['\n', '\r'])
+        .map(|at| start + at)
+        .unwrap_or(text.len());
+    start + utf16_to_byte(&text[start..content_end], character)
+}
+
 /// A 0-based LSP line as this app's 1-based line.
 pub fn to_editor_line(lsp: u32) -> u32 {
     lsp.saturating_add(1)

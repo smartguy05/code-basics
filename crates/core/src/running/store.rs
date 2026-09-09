@@ -109,6 +109,30 @@ impl RunningStore {
         self.persist();
     }
 
+    /// Drop a live process only when it is still the generation identified by
+    /// `pid`. This keeps a replaced debug session from removing its successor's
+    /// Running-panel record while the old adapter is being reaped.
+    pub fn remove_if_pid(&self, root: &str, key: &str, pid: u32) -> bool {
+        let removed = {
+            let mut inner = self.lock();
+            let entry = entry_key(root, key);
+            if inner
+                .live
+                .get(&entry)
+                .is_some_and(|record| record.pid == pid)
+            {
+                inner.live.remove(&entry);
+                true
+            } else {
+                false
+            }
+        };
+        if removed {
+            self.persist();
+        }
+        removed
+    }
+
     /// Update a live process's label (a terminal renamed after it opened).
     pub fn update_label(&self, root: &str, key: &str, label: &str) {
         {

@@ -134,6 +134,39 @@ pub struct SqlConnection {
     /// silently appeared.
     #[serde(default)]
     pub allow_writes: bool,
+    /// **Consent for an agent to see this connection at all, and nothing else.**
+    ///
+    /// Orthogonal to `allow_writes` on purpose. The MCP path forces
+    /// `writes_allowed: false` regardless of what this store says, so no
+    /// combination of the two flags lets an agent write; this one answers only
+    /// *may an agent know this connection exists and read from it*.
+    ///
+    /// `#[serde(default)]` for the same reason as `allow_writes`: an absent key
+    /// is consent **withheld**. A hand-written file, an older file, or one
+    /// whose entry was edited by hand must load as unexposed and must still
+    /// load — an entry that vanished because it did not mention this key would
+    /// be indistinguishable from one whose consent silently appeared.
+    ///
+    /// **What granting it means.** An agent with read access can read anything
+    /// that login can read, including credentials the database itself stores
+    /// (`pg_stat_activity`, `SHOW ALL`, `sys.dm_exec_connections`, an fdw user
+    /// mapping). Expose only connections whose login you would give a colleague
+    /// read access to.
+    #[serde(default)]
+    pub expose_to_agents: bool,
+    /// **The user typed this name**, so nothing derives a label from it.
+    ///
+    /// The picker composes `project · source · key` for a reference-backed
+    /// profile, which is the right identity for one it named itself and the
+    /// wrong one for a name the user chose — a typed name would silently
+    /// reacquire the prefix. This flag is what ends the derivation, and it is a
+    /// separate fact from the name because a name alone cannot say who wrote it.
+    ///
+    /// `#[serde(default)]` for the same reason as `allow_writes`, and it keeps
+    /// the file at version 1: every profile saved before renaming existed *was*
+    /// derived, so an absent key means exactly `false`.
+    #[serde(default)]
+    pub user_named: bool,
     /// When the profile was created, milliseconds since the Unix epoch. The
     /// clock is the caller's, as in [`crate::notes::Note`].
     pub created_at_ms: u64,

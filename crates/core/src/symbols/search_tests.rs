@@ -323,6 +323,25 @@ fn a_query_matching_nothing_returns_an_empty_vec() {
 }
 
 #[test]
+fn search_all_keeps_a_matching_razor_file_among_many_symbols() {
+    let names: Vec<String> = (0..80).map(|i| format!("CounterComponent{i}")).collect();
+    let symbols: Vec<(&str, &str, u32)> = names
+        .iter()
+        .map(|name| (name.as_str(), "src/Components/Counter.razor.cs", 1))
+        .collect();
+    let idx = index(&["src/Components/Counter.razor"], &symbols);
+    let mut q = query("Counter");
+    q.limit = 50;
+
+    let hits = search(&idx, &[], &q);
+
+    assert!(hits.iter().any(|hit| {
+        hit.kind == HitKind::File
+            && hit.path.as_deref() == Some(Path::new("src/Components/Counter.razor"))
+    }));
+}
+
+#[test]
 fn search_hit_serialises_with_the_keys_the_ui_reads() {
     // Written a phase before the counterparty existed, to fix the shape the
     // mirror would be written against. Both counterparties now exist —

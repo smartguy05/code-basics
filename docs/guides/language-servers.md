@@ -80,6 +80,69 @@ The titlebar shows an indicator whenever a server has something to say — and n
 
 Servers write their own logs into `.code-basics/lsp-logs/`, which is gitignored — a verbose trace of one editing session, rewritten on every launch and safe to delete at any time.
 
+## Renaming a symbol (F2)
+
+Put the caret on a class, method, property or variable and press **F2**. A field
+opens over the symbol, prefilled with its current name and selected; Enter
+applies the rename everywhere the server says it occurs, Escape or clicking away
+cancels.
+
+It is answered by the same server as everything else on this page, and that has
+a consequence worth stating plainly: **there is no text-based fallback.** A
+server that does not advertise `renameProvider`, or is not installed, refuses and
+says which server it looked for. The symbol index behind the search palette is
+*not* used — a near miss there costs a keystroke, whereas a near miss in a rename
+writes the wrong text into files you may not have open.
+
+Two files change in two different ways, because they have two different truths:
+
+- **Files you have open** are edited in the editor, as one undo step each. Their
+  buffers go dirty and you save them as usual. The backend never writes to disk
+  behind an open tab — there is no file watcher, so the next Ctrl+S would
+  clobber it.
+- **Files you do not have open** are written to disk by the backend and are
+  re-indexed for the search palette immediately. They are **not** undoable in
+  the editor, so the summary notification says so and points at the Changes tab,
+  where line-level revert is what this app is actually good at.
+
+### What it refuses, and why
+
+A rename is refused **whole**, having written nothing, if any of these hold. A
+partial rename does not compile, so there is no useful half-measure:
+
+- Two edits overlap, or two insertions land at one position with no defined order.
+- An edit names a line the file does not have — the server is describing a
+  different version of it, and applying that edit somewhere plausible is the
+  worst available outcome.
+- An edit falls outside the workspace, or on a non-`file:` URI (Roslyn really
+  does emit `source-generated:` ones).
+- The server asks to create, rename or delete a **file**. Renaming a type does
+  not rename its file here; that is a much larger blast radius and is declined.
+- None of a file's edits land on a token matching the old name, which means the
+  server computed them from text this app does not have.
+
+If a `didChange` is still owed when you press F2 — you typed within the last
+quarter second — the app flushes it and waits before opening the field, and
+re-checks the document version again at Enter. That ordering is the whole
+defence: ranges computed against a stale mirror are *plausible and wrong*.
+
+One qualification is surfaced rather than hidden: if the server was promoted at
+its readiness ceiling (90 seconds, for a project that never finished loading),
+the rename may have **missed call sites**, and you are told before it is applied.
+
+### What has not been verified
+
+The rename path is covered by unit and integration tests plus a scripted server,
+and was measured against real Roslyn 2.140.9 — which, usefully, turned out to
+answer with zero-width **insertions** carrying a minimal diff (renaming `Walker`
+to `HeapWalker` inserts `"Heap"`) rather than replacing whole identifiers. Any
+code assuming a replacement is a live bug for C#, not a theoretical one.
+
+`typescript-language-server` and `rust-analyzer` have **not** answered this code
+yet. Their edit style is reasoned about rather than observed, and the
+enclosing-token check is designed to cover both — but that is an argument, not
+evidence.
+
 ## Verifying against a real server
 
 The whole subsystem is otherwise tested against a scripted stand-in, which cannot catch a protocol regression against the real thing. `crates/core/tests/lsp_oracle.rs` closes that: it writes a small project per language, starts a session through the same discovery the app uses, and asserts the one usage it knows is there.

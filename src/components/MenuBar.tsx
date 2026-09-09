@@ -14,7 +14,7 @@ import {
 } from "./enhancementsLogic";
 
 /**
- * The application menu bar: **File** and **Enhancements**.
+ * The application menu bar: **File**, **Enhancements** and **Help**.
  *
  * A small HTML menu bar rather than a native OS menu, to stay consistent with
  * the app's custom titlebar and to render the dynamic, file-driven Enhancements
@@ -26,10 +26,13 @@ import {
  * - **Run Agent** — run a prompt's body as an agent in the panel; a run-once
  *   prompt records its success per repo and confirms before re-running.
  *
+ * `Help` holds one item, the About dialog — the only place in the app that says
+ * which build is running, which is what makes a bug report about it actionable.
+ *
  * The menu bar sits above the dropdown backdrop (see `styles.css`) so hovering
  * one top-level menu while another is open switches between them.
  */
-type TopMenu = "file" | "enhancements";
+type TopMenu = "file" | "enhancements" | "help";
 type Submenu = "instructions" | "prompts";
 
 export function MenuBar({
@@ -39,6 +42,7 @@ export function MenuBar({
   onOpenReview,
   onOpenFeatures,
   onOpenSettings,
+  onOpenAbout,
 }: {
   onOpen: () => void;
   onRescan: () => void;
@@ -50,6 +54,8 @@ export function MenuBar({
   onOpenFeatures: () => void;
   /** Open user-global appearance and keyboard settings. */
   onOpenSettings: () => void;
+  /** Open the About dialog — the app's version, commit and host platform. */
+  onOpenAbout: () => void;
 }) {
   const [menu, setMenu] = useState<TopMenu | null>(null);
   const [sub, setSub] = useState<Submenu | null>(null);
@@ -398,6 +404,31 @@ export function MenuBar({
                 </div>
               </>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* Help */}
+      <div className="dropdown">
+        <button
+          className={`menu-button ${menu === "help" ? "open" : ""}`}
+          onClick={() => openMenu("help")}
+          onMouseEnter={() => hoverMenu("help")}
+        >
+          Help
+        </button>
+        {menu === "help" && (
+          <div className="dropdown-menu" style={{ minWidth: 180 }}>
+            <div
+              className="dropdown-item"
+              title="Version, commit and host platform — what to quote in a bug report"
+              onClick={() => {
+                close();
+                onOpenAbout();
+              }}
+            >
+              About code-basics…
+            </div>
           </div>
         )}
       </div>

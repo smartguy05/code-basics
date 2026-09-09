@@ -65,6 +65,12 @@
   --z-notes: 200;
   --z-overlay: 300;
 
+  /* The window background's opacity. Written by `windowTransparency.ts` and by
+     nothing else; this value is only the first-paint fallback, which is why it
+     is 100% — the window starts opaque and becomes translucent after React's
+     first render, so there is no flash of desktop through an unpainted app. */
+  --app-bg-opacity: 100%;
+
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
   --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
@@ -82,12 +88,36 @@ body,
   margin: 0;
 }
 
+/* The one layer that carries the window transparency.
+   `color-mix(in srgb, X 100%, transparent)` computes to exactly `X`, so at the
+   default this is byte-identical to the plain `var(--bg)` it replaced — the
+   "indistinguishable when off" guarantee holds in the CSS and not only in the
+   predicate that feeds it.
+   `--bg` itself is deliberately not given alpha: four other selectors use it as
+   an opaque paint (`.ws-tabs`, `.intent-panel pre`, `.intent-edit-prompt`,
+   `.ws-tab-rename`) and would go see-through with it. */
 body {
-  background: var(--bg);
+  background: color-mix(in srgb, var(--bg) var(--app-bg-opacity), transparent);
   color: var(--text);
   font-family: var(--font);
   font-size: var(--ui-font-size);
   overflow: hidden;
+}
+
+/* An invalid value falls back to 100% rather than poisoning the whole
+   `background` declaration — which would compute to `unset` and leave a fully
+   see-through window with no way to read anything on it. */
+@property --app-bg-opacity {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 100%;
+}
+
+/* An older WebView2 with no `color-mix` degrades to exactly today's paint. */
+@supports not (background: color-mix(in srgb, red 50%, transparent)) {
+  body {
+    background: var(--bg);
+  }
 }
 
 button {
@@ -146,8 +176,14 @@ textarea:focus {
   height: 100%;
 }
 
+/* Three columns rather than a flex row: the branch widget sits in the window's
+   centre, and only equal-weight outer columns can put it there. A flex spacer
+   centres against whichever side is narrower, which drifts as the right-hand
+   chrome grows a badge. `minmax(0, 1fr)` (not `1fr`) so a long menu or a wide
+   run of buttons shrinks its own column instead of pushing the centre off. */
 .titlebar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   padding: 6px 12px;
@@ -156,8 +192,21 @@ textarea:focus {
   flex: 0 0 auto;
 }
 
-.titlebar .spacer {
-  flex: 1;
+.titlebar-left,
+.titlebar-center,
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.titlebar-center {
+  justify-content: center;
+}
+
+.titlebar-right {
+  justify-content: flex-end;
 }
 
 .tabs {
@@ -387,6 +436,29 @@ textarea:focus {
   flex-wrap: wrap;
 }
 
+.split-button {
+  display: inline-flex;
+}
+
+.split-button > button {
+  border-radius: 0;
+}
+
+.split-button > button:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.split-button > button:last-child {
+  border-left: 0;
+  border-radius: 0 3px 3px 0;
+}
+
+.split-button-arrow {
+  min-width: 24px;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+
 .content {
   flex: 1;
   min-height: 0;
@@ -461,6 +533,49 @@ textarea:focus {
   background: rgba(201, 162, 39, 0.12);
 }
 
+/* The counterpart to `.warning` and `.error`: something finished, and said so.
+   Needed because a modal that clears its own preview on success gives the user
+   no signal at all, which reads as a cancel. */
+.success {
+  margin: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--pass);
+  border-radius: 4px;
+  background: rgba(79, 181, 115, 0.12);
+}
+
+/* An `InstallPlan` preview holds the *entire* final contents of each file it
+   would write, and one of those files is `~/.claude.json` — 122 KB here, with
+   long single-line JSON. A bare `<pre>` is `white-space: pre` with no height
+   bound, so it pushed straight out of its `max-height: 70vh` container in both
+   axes and the confirm buttons went with it.
+
+   The rule this follows is the one in CLAUDE.md: wide content scrolls inside
+   its own container, and the surface around it never does. Height is capped so
+   the actions stay reachable no matter how large the file is, and the content
+   is *not* wrapped — this is JSON and TOML a person is checking before it is
+   written to their machine, and rewrapped braces are harder to verify, not
+   easier. Shared by every PlanPreview consumer: the intent hooks, the quality
+   gate, the first-open setup prompt and the MCP installer. */
+.plan-preview {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.plan-preview pre {
+  max-height: 30vh;
+  overflow: auto;
+  margin: 4px 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-inset, var(--bg-raised));
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  tab-size: 2;
+}
+
 .group-label {
   font-size: calc(var(--ui-font-size) - 2px);
   text-transform: uppercase;
@@ -488,6 +603,14 @@ textarea:focus {
 
 .row.selected {
   background: var(--accent-dim);
+}
+
+/* Ticked for a bulk action (stash, for now), which is a different fact from
+   `.selected` — that one means "the diff pane is showing this file". A marker
+   down the leading edge rather than a fill, so a row can carry both without
+   either becoming unreadable. */
+.row.checked {
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* A project the scan listed but could not read: present, and plainly inert.
@@ -1141,6 +1264,11 @@ textarea:focus {
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
   overflow-x: auto;
+  /* Chrome, so it paints its own surface: with a translucent window this strip
+     holds label text and would otherwise sit directly on the desktop. Every
+     other strip in the app (`.titlebar`, `.tabs-row`, `.project-rail`,
+     `.sidebar`, `.statusbar`) already does this; this one did not. */
+  background: var(--bg-raised);
 }
 
 .console-tabs button {
@@ -3155,6 +3283,42 @@ textarea:focus {
    Faint and small: on a file whose language has no server it is on screen the
    whole time, so it has to be ignorable — and its `title` is where the
    actionable detail (the install hint, the server's error) lives. */
+/* The F2 rename field.
+
+   Positioned inside `.editor-frame` (the same positioned wrapper the usages
+   dropdown is clamped into) rather than injected into CodeMirror, which tears
+   out DOM on the next viewport update. `placeRenameField` supplies `left`/`top`;
+   everything else is here so no z-index integer is written in TypeScript. */
+.rename-field {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 320px;
+}
+
+.rename-input {
+  width: 240px;
+  padding: 2px 6px;
+  border: 1px solid var(--accent, var(--border));
+  border-radius: 3px;
+  background: var(--bg-inset);
+  color: var(--text);
+  font-family: var(--code-font-family, monospace);
+  font-size: var(--editor-font-size, inherit);
+}
+
+.rename-error {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-inset);
+  color: var(--text-faint);
+  font-size: calc(var(--ui-font-size) - 1px);
+  white-space: normal;
+}
+
 .usages-note {
   position: absolute;
   right: 8px;
@@ -3815,13 +3979,359 @@ textarea:focus {
 
 /* --- Editor -------------------------------------------------------------- */
 
+.sql-work-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.sql-console-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sql-object-explorer {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 170px;
+  max-width: 38%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-strong);
+  background: linear-gradient(180deg, var(--bg-raised) 0, var(--bg-inset) 72px);
+  overflow: hidden;
+}
+
+.sql-object-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  z-index: 2;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+  transition: background 120ms ease;
+}
+
+.sql-object-resizer:hover,
+.sql-object-resizer:focus-visible {
+  background: color-mix(in srgb, var(--accent) 65%, transparent);
+  outline: none;
+}
+
+.sql-object-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sql-object-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sql-object-title > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sql-object-title strong,
+.sql-object-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sql-object-title strong {
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+.sql-object-title span {
+  color: var(--text-faint);
+  font-size: calc(var(--ui-font-size) - 3px);
+}
+
+.sql-object-title-icon {
+  position: relative;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 17px;
+  border: 1px solid color-mix(in srgb, var(--accent) 72%, var(--border));
+  border-radius: 50%;
+  box-shadow: inset 0 -5px 0 color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.sql-object-title-icon::after {
+  content: "";
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: 4px;
+  height: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 72%, var(--border));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 72%, var(--border));
+}
+
+.sql-object-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  font-size: calc(var(--ui-font-size) - 2px);
+}
+
+.sql-object-refresh > span:first-child {
+  color: var(--accent);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.sql-object-kind {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 10px 5px;
+  color: var(--text-dim);
+  font-size: calc(var(--ui-font-size) - 2px);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sql-object-count {
+  min-width: 20px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-raised);
+  color: var(--text-faint);
+  font-weight: 400;
+  text-align: center;
+}
+
+.sql-object-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 6px 10px;
+}
+
+.sql-object-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  font-size: calc(var(--ui-font-size) - 1px);
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.sql-object-row:hover {
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-raised));
+}
+
+.sql-object-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sql-object-schema {
+  color: var(--text-faint);
+}
+
+.sql-object-chevron {
+  width: 0;
+  height: 0;
+  flex: 0 0 auto;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--text-faint);
+  transform-origin: 2px 4px;
+  transition: transform 100ms ease;
+}
+
+.sql-object-chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+.sql-column-list {
+  margin: 1px 0 3px 19px;
+  border-left: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  padding-left: 5px;
+}
+
+.sql-column-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  min-height: 25px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  font-size: calc(var(--ui-font-size) - 1px);
+  text-align: left;
+}
+
+.sql-column-row:hover {
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-raised));
+}
+
+.sql-column-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sql-column-icon {
+  position: relative;
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--text-faint);
+  border-radius: 50%;
+}
+
+.sql-column-icon::after {
+  content: "";
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  top: 2px;
+  left: 2px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.sql-column-details {
+  margin: 2px 7px 8px 24px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--bg-raised) 82%, transparent);
+  color: var(--text-dim);
+  font-size: calc(var(--ui-font-size) - 2px);
+}
+
+.sql-column-details > div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.sql-column-details dt {
+  color: var(--text-faint);
+}
+
+.sql-column-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.sql-column-details code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: inherit;
+}
+
+.sql-column-badge {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+}
+
+.sql-column-badge.is-nullable {
+  color: var(--skip);
+  border-color: color-mix(in srgb, var(--skip) 55%, var(--border));
+}
+
+.sql-column-badge.is-key {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.sql-object-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-radius: 3px;
+  background:
+    linear-gradient(to bottom, transparent 4px, color-mix(in srgb, var(--accent) 30%, transparent) 4px 5px, transparent 5px 10px, color-mix(in srgb, var(--accent) 30%, transparent) 10px 11px, transparent 11px),
+    linear-gradient(to right, transparent 6px, color-mix(in srgb, var(--accent) 30%, transparent) 6px 7px, transparent 7px);
+}
+
+.sql-object-empty,
+.sql-object-error {
+  padding: 6px 9px;
+  font-size: calc(var(--ui-font-size) - 2px);
+  color: var(--text-dim);
+}
+
+.sql-object-error {
+  color: var(--fail);
+}
+
 /* A third of the pane. `min-height` keeps a few lines visible however tall the
    result set grows. */
+/* Height is set inline from `editorHeight`, so the flex basis must be `auto` or
+   flex would override the drag. The floor is repeated from
+   `sqlViewLogic.SQL_EDITOR_MIN_HEIGHT` — the clamp is authoritative, this is a
+   backstop for the first paint before any measurement exists. The bottom border
+   moved to the resizer, which is the visible divider now. */
 .sql-editor {
-  flex: 0 0 34%;
+  flex: 0 0 auto;
   min-height: 96px;
   overflow: hidden;
-  border-bottom: 1px solid var(--border);
+}
+
+/* The drag handle between the query and its results. Three pixels of border
+   with a taller transparent hit area, the same trick `.sql-object-resizer`
+   uses: a 1px target is unhittable, and a 6px visible bar is a heavy line
+   across the console. */
+.sql-split-resizer {
+  flex: 0 0 auto;
+  height: 5px;
+  margin-top: -1px;
+  background: var(--border);
+  background-clip: content-box;
+  border-top: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+  cursor: row-resize;
+}
+
+.sql-split-resizer:hover,
+.sql-split-resizer:focus-visible {
+  background-color: var(--accent);
+  outline: none;
 }
 
 .sql-editor .cm-editor {
@@ -4123,6 +4633,67 @@ textarea:focus {
   color: var(--fail);
 }
 
+.sql-manual-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.45fr);
+  gap: 10px 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-inset);
+}
+
+.sql-manual-form > .sql-conn-section-title,
+.sql-manual-form > .sql-cand-note,
+.sql-manual-form > .sql-conn-test,
+.sql-manual-form > .sql-manual-actions,
+.sql-manual-form > .sql-manual-scope {
+  grid-column: 1 / -1;
+}
+
+.sql-manual-form label:not(.sql-manual-scope) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+.sql-manual-form label:nth-of-type(3) {
+  grid-column: 1 / -1;
+}
+
+.sql-manual-form input,
+.sql-manual-form select {
+  min-width: 0;
+}
+
+.sql-manual-secret {
+  display: flex;
+  gap: 6px;
+}
+
+.sql-manual-secret input {
+  flex: 1;
+}
+
+.sql-manual-scope {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+.sql-manual-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+  color: var(--text-dim);
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
 .sql-conn-body {
   overflow-y: auto;
   display: flex;
@@ -4149,12 +4720,21 @@ textarea:focus {
   color: var(--text-faint);
 }
 
-.sql-conn-row,
-.sql-cand-row {
+.sql-conn-row {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 4px 6px;
+  border-radius: 4px;
+  min-width: 0;
+}
+
+.sql-cand-row {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 6px;
   border-radius: 4px;
   min-width: 0;
 }
@@ -4176,6 +4756,35 @@ textarea:focus {
 .sql-cand-name {
   font-size: var(--ui-font-size);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The inline rename editor, matching `.terminal-title-edit` and
+   `.notes-tab-rename` — one rename affordance, drawn one way. `width: 100%`
+   rather than a min-width, because unlike a panel header this sits in a row
+   that is already sized. */
+.sql-conn-rename {
+  font: inherit;
+  font-size: var(--ui-font-size);
+  width: 100%;
+  padding: 1px 4px;
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+
+.sql-conn-identity,
+.sql-cand-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sql-conn-identity {
+  flex: 1;
 }
 
 .sql-conn-meta,
@@ -4198,9 +4807,25 @@ textarea:focus {
   color: var(--fail);
 }
 
+/* Granted, not dangerous: exposure is read-only on the agent path, so it must
+   not borrow the writes badge's failure colour and read as a broken state. It
+   is still a grant, so it is not the muted `--skip` either. */
+.sql-conn-exposed {
+  color: var(--accent);
+}
+
 .sql-conn-test {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   font-size: calc(var(--ui-font-size) - 2px);
   margin-left: auto;
+  max-width: 280px;
+}
+
+.sql-conn-test-detail {
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
 }
 
 .sql-conn-test.ok {
@@ -4215,6 +4840,11 @@ textarea:focus {
 .sql-cand-action {
   font-size: calc(var(--ui-font-size) - 2px);
   padding: 2px 8px;
+}
+
+.sql-cand-engine {
+  min-width: 120px;
+  max-width: 145px;
 }
 
 .sql-cand-section {
@@ -4243,7 +4873,6 @@ textarea:focus {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-  flex: 1;
 }
 
 .sql-cand-display.refused {
@@ -4256,7 +4885,7 @@ textarea:focus {
 .sql-cand-blocked {
   font-size: calc(var(--ui-font-size) - 2px);
   color: var(--skip);
-  margin-left: auto;
+  white-space: normal;
 }
 
 .sql-cand-warnings {
@@ -4379,4 +5008,683 @@ button.danger:hover:not(:disabled) {
 @media (max-width: 720px) {
   .settings-grid.colors, .settings-grid.fonts { grid-template-columns: 1fr; }
   .shortcut-row { grid-template-columns: 1fr 130px 30px 30px; }
+}
+
+/* ===================================================================== */
+/* Phase 1 — file-type icons, tree action bar, icon run controls, branch  */
+/* filter. Appended as one block so the four changes stay legible together.*/
+/* ===================================================================== */
+
+/* --------------------------------------------------------------------- */
+/* File-type icons (Run tab file tree, Changes file list)                  */
+/* --------------------------------------------------------------------- */
+
+/* `FileIcon` inlines a build-time-known SVG from `material-icon-theme`, so each
+   glyph brings its own brand colours and this rule deliberately sets none —
+   recolouring them through a token would erase the one thing that makes a C#
+   file distinguishable from a Rust one at a glance, and the palette they ship
+   with is legible on both the dark and light grounds this app uses.
+   What the rows do need is a fixed box: the icons ship with several viewBoxes
+   (24 and 32 are both common), so without one they would render at whatever
+   intrinsic size each file happens to declare and the list would go ragged.
+   `flex: 0 0 auto` matches `.twisty` so a long path cannot squeeze the icon. */
+.tree-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.tree-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+/* --------------------------------------------------------------------- */
+/* File-tree action bar (Run tab)                                          */
+/* --------------------------------------------------------------------- */
+
+/* Sits above the rows, inside `.file-tree`, because the tree is as long as the
+   repository and a bar under it would scroll out of reach. Right-aligned so it
+   reads as chrome for the list rather than as the list's first entry — the
+   `.group-label` above it already carries the heading, and a left-aligned pair
+   of glyphs at row indentation would look like two nameless files. The bottom
+   padding alone (no top) closes the gap to that label without adding a second
+   one above it. */
+.tree-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  padding: 0 4px 2px;
+}
+
+/* Undoes the base `button` chrome: a filled, bordered control at this size next
+   to a dense file list reads as far more important than it is, so these are
+   quiet until hovered — the same "present but not shouting" treatment the
+   twisty gets. `--text-dim` rather than `--text-faint` because unlike a twisty
+   these are clickable and must be findable without hunting. `button:disabled`
+   already supplies the dimming, so the no-open-file state needs nothing here;
+   what it must not gain is the hover, hence `:not(:disabled)`. */
+.tree-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-dim);
+}
+
+.tree-action:hover:not(:disabled) {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* lucide ships every icon at an intrinsic 24px, which is toolbar scale and
+   twice what a tree row is. Sized here rather than through each icon's `size`
+   prop so the two can never drift apart. `currentColor` is lucide's default
+   stroke, so the hover colour above carries into the glyph with no extra rule. */
+.tree-action svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* --------------------------------------------------------------------- */
+/* Icon-only toolbar buttons (Run / Stop / Build in the Run toolbar)      */
+
+/* A toolbar button whose entire label is an icon. It sits shoulder to shoulder
+   with text-label buttons (Debug, Restart, Clear), so the one thing this rule
+   exists to guarantee is that it is exactly as tall as they are — a toolbar
+   whose height shifts as buttons swap between a glyph and a word reads as a
+   layout bug, not as a restyle. Padding and borders are inherited from the base
+   `button` rule untouched, so only the content box is in question here.
+   No colour is declared: a lucide SVG strokes with `currentColor`, which is
+   already the button's own `var(--text)` in both themes (and stays correct
+   under `.primary`). */
+.icon-label-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The height match is made by a zero-width strut rather than by sizing the
+   icon to some measured pixel value. The strut contributes the font's own line
+   box — the very box a text label would produce — and no width, so the button's
+   content height is decided by the same thing that decides it on its
+   neighbours, and it keeps tracking them when the user changes the UI font size
+   in Settings. A zero-width *space* is required: an empty `content: ""` inline
+   block collapses to zero height and would contribute nothing. */
+.icon-label-button::before {
+  content: "\200b";
+  display: inline-block;
+  width: 0;
+}
+
+/* Sized in em, below the strut, so the icon can never be the thing that sets
+   the height. `normal` line-height is comfortably above 1.1 for the UI font
+   stack, so the strut stays the taller of the two at every font size; a pixel
+   size would overtake it as soon as the UI font was shrunk, which is precisely
+   the case that would break the match. `flex: 0 0 auto` keeps it from being
+   shrunk by a cramped toolbar instead of wrapping. */
+.icon-label-button > svg {
+  width: 1.1em;
+  height: 1.1em;
+  flex: 0 0 auto;
+}
+
+/* ---- Branch menu filter (BranchMenu) ---------------------------------- */
+
+/* The filter box sits at the top of the branch dropdown, above Fetch/Pull/Push
+   and separated from the create-branch box by a `.dropdown-separator`. The icon
+   is what keeps the two boxes from reading as the same control: typing a search
+   into the create box offers to create a branch named after the search. */
+.branch-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 4px;
+}
+
+.branch-filter-icon {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+/* `.dropdown-menu input` gives every input in here a full width and a top
+   margin; the filter shares its row with the icon, so it takes the remaining
+   width instead and drops the margin the row already provides. */
+.dropdown-menu input.branch-filter {
+  flex: 1 1 auto;
+  width: auto;
+  margin-top: 0;
+}
+
+/* "No branches match" — deliberately not a `.dropdown-item`, since there is
+   nothing here to click. */
+.branch-empty {
+  padding: 6px 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+   The language-server status indicator, in the bottom status bar.
+
+   Moved out of the Run toolbar: it is one app-wide indicator now, reading the
+   active codebase's poll key, so it has to live beside the folder name and path
+   rather than inside a workspace tab. `LspStatusIndicator` renders
+   `.dropdown.lsp-status`, and everything below is placement — the component
+   keeps its ordinary downward menu anywhere else it is mounted.
+   --------------------------------------------------------------------------- */
+
+.statusbar .lsp-status {
+  /* Locked to the right of the folder row. `margin-left: auto` rather than a
+     spacer element so `.statusbar-path` keeps shrinking into its own ellipsis
+     instead of being pushed out of the bar, and `flex: 0 0 auto` so the path —
+     which is `overflow: hidden` and therefore shrinkable to nothing — gives way
+     first: a starting or missing server is the more useful of the two. */
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.statusbar .lsp-status > button {
+  /* Status-bar chrome, not a toolbar button: the base `button` rule's 4px/10px
+     padding would grow the 22px bar, and its raised background would read as an
+     action in a row of plain text. */
+  background: transparent;
+  border-color: transparent;
+  padding: 0 6px;
+  color: inherit;
+  /* Capped and ellipsised because the label is a whole sentence ("C#: this
+     server does not answer these questions (+2 more)"). The full text is in the
+     `title` tooltip and in the menu, so nothing is lost by trimming it here. */
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar .lsp-status .dropdown-menu {
+  /* Opens *upward*. `.dropdown-menu`'s `top: calc(100% + 4px)` is right for a
+     toolbar and wrong at the bottom of the window: the panel would be laid out
+     below the viewport, where nothing scrolls it into view — a control that
+     visibly toggles and shows nothing at all. The menu's own `max-height` still
+     bounds it, so a long server list scrolls rather than running off the top. */
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+/* ---------------------------------------------------------------------------
+   Renaming a codebase tab (Task 2c).
+   Append after the `.ws-tab-add` rule, which ends the tab-strip block.
+   --------------------------------------------------------------------------- */
+
+/* The inline rename box replaces the `.ws-tab-label` button in place, so it
+   borrows that button's metrics rather than the generic form input styling —
+   the strip must not reflow or change height the moment the user starts
+   editing. The width is the label's own `max-width`, which is also why the cap
+   in `workspaceRenameLogic.ts` is stated in terms of it. */
+.ws-tab-rename {
+  width: 220px;
+  max-width: 220px;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  color: var(--text);
+  font: inherit;
+  padding: 3px 7px; /* 1px less than the label's 4px 8px, to pay for the border */
+  outline: none;
+}
+
+/* A renamed tab reads as an ordinary tab — no badge, no italics. The rename is
+   the user's answer, not an annotation on ours; the real path stays on hover
+   via the tab's `title`. This rule exists only to say that deliberately, so a
+   later change does not add decoration by default. */
+
+/* ---------------------------------------------------------------------------
+   The Project tab's tool-window rail (Phase 3).
+
+   Run and Changes used to be two top-level tabs. They are one tab now, and this
+   narrow strip switches which surface the side panel shows — Rider's tool-window
+   bar, and the reason the switch reads as navigation rather than as a tab
+   change: the editor, the running processes and the console never move.
+   --------------------------------------------------------------------------- */
+
+.project-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 4px;
+  background: var(--bg-raised);
+  border-right: 1px solid var(--border);
+  /* Never scrolls and never shrinks: two icons, and a rail that could be
+     squeezed away would strand the user in whichever pane they last chose. */
+  flex: 0 0 auto;
+}
+
+.project-rail button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-dim);
+}
+
+.project-rail button:hover {
+  background: var(--bg-inset);
+  color: var(--text);
+}
+
+/* The selected surface is marked the way `.tabs button.active` marks a tab —
+   accent edge plus full-strength text — so the rail reads as the same kind of
+   control the tab strip above it is, rather than inventing a second visual
+   language for the same idea. The edge is on the left here because the rail is
+   vertical. */
+.project-rail button.active {
+  background: var(--bg-inset);
+  border-left-color: var(--accent);
+  color: var(--text);
+}
+
+.project-rail button svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* ======================================================================== */
+/* SQL console — the floating window (Task A)                               */
+/* ======================================================================== */
+
+/* Reuses the .review-panel base (float, drag, resize, minimize). Deliberately
+   writes NO z-index: the panel stays in the base panel band that
+   `.review-panel` already sets, beside Review/Behavioral/Apps. It has no raise
+   trigger of its own, and a band above the terminals would pin it permanently
+   over a terminal the user just clicked. Wider and taller than the agent panel
+   by default — it holds an editor, a results grid and an object explorer side
+   by side, and the tab it replaces had the whole window. */
+.sql-panel {
+  width: min(1100px, 86vw);
+  height: min(720px, 82vh);
+}
+
+/* The positioned, clipping ancestor for the two overlays SqlView renders. Both
+   are `position: fixed` in their own rules — right for a full-screen tab, and
+   wrong inside a window: a fixed child of this panel resolves against the
+   VIEWPORT (nothing here sets a transform, unlike `.terminal-panel`), so the
+   connection picker and the writes-confirmation backdrop would each cover the
+   whole application from `--z-overlay`, above every terminal and above Notes.
+   `relative` here scopes them to the console area, leaving the panel header
+   draggable while a modal is open. Safe for the existing absolute children:
+   `.sql-object-resizer` resolves against `.sql-object-explorer`, which is
+   already `position: relative`. */
+.sql-panel .sql-view {
+  position: relative;
+}
+
+/* Both overlays, scoped. The z-index is local to the panel's own stacking
+   context (the `.review-panel` base establishes one), so `1` is enough to sit
+   over the console and cannot escape the band the panel is in — which is the
+   whole point of not leaving them at `--z-overlay`. */
+.sql-panel .sql-view .modal-backdrop,
+.sql-panel .sql-conn-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+/* Viewport-relative sizing inside a window is the same mistake one level down:
+   `10vh` of padding and `min(760px, 94vw)` are measured against the screen, not
+   against the panel the picker now lives in. Re-measure both against the panel. */
+.sql-panel .sql-conn-overlay {
+  padding-top: 24px;
+}
+
+.sql-panel .sql-conn-picker {
+  width: min(760px, calc(100% - 32px));
+  max-height: calc(100% - 48px);
+}
+
+/* Minimized: a thin labelled bar like Notes', but pinned bottom-LEFT. The
+   bottom-right column is taken — `.review-pill` bases there and
+   `terminalLogic.pillBottom` reserves the base slot for the Notes bar and
+   stacks terminal pills upward from one step above it — so a right-hand SQL
+   pill would land on a terminal's. Nothing occupies the left corner. */
+.sql-pill {
+  right: auto;
+  left: 16px;
+  bottom: 16px;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+/* ---------------------------------------------------------------------------
+   The titlebar terminal split button's menu (`terminalMenuLogic.ts`).
+
+   The rows are ordinary `.dropdown-item`s, so the existing dropdown styling
+   applies unchanged; only three things are new. The label takes the free space
+   so a badge or a Run/Stop word lands hard right, and the live dot is what
+   tells a saved command's row that its service is already up — it uses the same
+   `--pass` green as every other "this is alive and well" mark in the app rather
+   than a colour of its own.
+   --------------------------------------------------------------------------- */
+.terminal-menu-label {
+  flex: 1 1 auto;
+}
+
+.terminal-menu-action {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: calc(var(--ui-font-size) - 2px);
+}
+
+/* Only ever rendered for a row where "is it running" is a real question, so an
+   unlit dot means stopped — it is never a placeholder on a row that has no
+   process behind it. */
+.shortcut-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.shortcut-dot.live {
+  background: var(--pass);
+}
+
+/* The running count sits on the caret now that the Running button is gone, so
+   the caret needs room for it beside the ▾. */
+.split-button-arrow .running-badge {
+  margin-left: 4px;
+}
+/* ---------------------------------------------------------------------------
+   Context menus opened from the titlebar (Phase 4).
+
+   `ContextMenu`'s default band (46) sits below `--z-panel`, which is correct
+   for a menu opened from inside a view — it shares a plane with what it acts
+   on. A menu opened from the *titlebar* is above everything, so at 46 it hid
+   behind any open terminal, and so did its click-catching backdrop: clicking
+   that terminal then neither closed the menu nor was intercepted.
+
+   One step below `--z-overlay`, so a modal still covers it.
+   --------------------------------------------------------------------------- */
+
+.dropdown-menu.context-menu-elevated {
+  z-index: calc(var(--z-overlay) - 1);
+}
+
+.dropdown-backdrop.context-menu-elevated-backdrop {
+  z-index: calc(var(--z-overlay) - 2);
+}
+
+/* The same lift for a plain `.dropdown` opened from the titlebar — the branch
+   widget. Named without `context-menu-` because it is not one; the band is
+   shared so there is still only one place the number lives.
+
+   Two steps *below* the elevated context band on purpose. `BranchMenu` opens a
+   right-click menu over itself, and today that menu's backdrop (45) sits above
+   the branch list (41) so a click on a branch row closes the submenu instead of
+   checking that branch out. Lifting both to the same band would invert that and
+   make the click check out a branch with a menu still open. */
+
+.dropdown-menu.dropdown-elevated {
+  z-index: calc(var(--z-overlay) - 4);
+}
+
+.dropdown-backdrop.dropdown-elevated-backdrop {
+  z-index: calc(var(--z-overlay) - 5);
+}
+
+/* ---------------------------------------------------------------------------
+   The global notification stack.
+
+   Bottom-right, above every floating panel but below the overlay band, so a
+   modal still covers it. It reports things that belong to no codebase — a
+   long-running service dying, whose working directory may sit outside every
+   open workspace — which is exactly what the workspace-tab signals cannot say.
+   --------------------------------------------------------------------------- */
+
+.notification-host {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: calc(var(--z-overlay) - 1);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* The column is a lane for the toasts, not a surface: clicks pass through the
+     gaps to whatever is behind it. Each toast turns pointer events back on. */
+  pointer-events: none;
+  max-width: min(420px, 90vw);
+}
+
+.notification {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-left-width: 3px;
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+/* The kind is carried by the left edge rather than by the whole background: a
+   fully tinted toast over an editor is hard to read, and these can sit up
+   indefinitely when they are errors. */
+.notification-error {
+  border-left-color: var(--fail);
+}
+
+.notification-warning {
+  border-left-color: var(--skip);
+}
+
+.notification-info {
+  border-left-color: var(--accent);
+}
+
+.notification-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.notification-title {
+  font-weight: 600;
+}
+
+.notification-detail {
+  margin-top: 2px;
+  color: var(--text-dim);
+  /* Wraps rather than ellipsises: the detail is the exit code or the reason a
+     program could not start, and half of that is no use. */
+  overflow-wrap: anywhere;
+}
+
+.notification-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.notification-dismiss:hover {
+  color: var(--text);
+}
+
+/* The heading above each block of shortcuts in Settings — the app's own
+   commands, then one block per plugin. Quiet: it separates a long list, it is
+   not a title competing with the page's own. */
+.shortcut-section {
+  margin: 14px 0 6px;
+  font-size: calc(var(--ui-font-size) - 1px);
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.shortcut-list > div:first-child .shortcut-section {
+  margin-top: 0;
+}
+
+/* ======================================================================== */
+/* The embedded browser panel                                               */
+/* ======================================================================== */
+
+/* Reuses the `.review-panel` base (float, drag, resize, minimize) and writes NO
+   z-index, so it stays in the base panel band beside Review/Behavioral/Apps/SQL.
+   The band is moot for the page itself and not for the panel: the WebView2 child
+   HWND composites above the *whole* DOM regardless of any band, which is the
+   accepted cost recorded in `browserPanelLogic.ts` and in the host's module doc.
+   What the band still decides is where the panel's own chrome — the header and
+   the URL bar — sits relative to the other panels.
+
+   Sized generously by default — a page rendered at agent-panel width is a mobile
+   layout, which is not what "check my deployment" means — but deliberately not
+   *almost the whole viewport*: `clampPanelPosition` keeps a panel on screen, so
+   one sized 88vw × 86vh saturates the clamp on the first drag and reads as a
+   window that will not move. */
+.browser-panel {
+  width: min(1100px, 78vw);
+  height: min(720px, 74vh);
+}
+
+/* The header holds the nav buttons and the URL bar, so it needs to lay them out
+   rather than just label the panel. `flex: 1` on the field is what makes the
+   drag exemption matter — it covers most of the header's width. */
+.browser-header {
+  gap: 6px;
+  /* A drag across a header of buttons otherwise selects their labels, which
+     leaves the whole strip highlighted blue after every move. The URL bar opts
+     back in below — a field whose text cannot be selected is worse than a
+     header that highlights. */
+  user-select: none;
+}
+
+/* The drag handle, and the only part of this header that is not a control. The
+   URL bar is `flex: 1`, so without a real width here the panel is draggable
+   only by three characters — which is how the undraggable version was found.
+   `cursor: move` says so, and `user-select: none` stops a drag selecting the
+   word instead of moving the window. */
+.browser-header strong {
+  padding: 2px 10px;
+  cursor: move;
+  user-select: none;
+}
+
+.browser-url {
+  flex: 1;
+  min-width: 120px;
+  user-select: text;
+  font-family: var(--mono);
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+/* The rectangle the OS webview is painted over. It holds no content of its own
+   — the page is not in the DOM — so it must not be transparent: the window is
+   translucent (`--app-bg-opacity`), and a see-through hole where the page has
+   not painted yet shows the desktop through the panel. */
+.browser-page {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* Why the page is not on screen, in its place. Never an unexplained blank. */
+.browser-page-note {
+  padding: 16px;
+  max-width: 60ch;
+  color: var(--fg-muted, #9aa0a6);
+  font-size: calc(var(--ui-font-size) - 1px);
+  line-height: 1.5;
+}
+
+.browser-error {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-strong);
+  background: #3a1d1d;
+  color: #ffb4b4;
+  font-size: calc(var(--ui-font-size) - 1px);
+  white-space: pre-wrap;
+}
+
+/* Minimized: a pill, pinned bottom-left above the SQL bar's slot. The
+   bottom-right column is taken (`.review-pill` bases there and
+   `terminalLogic.pillBottom` stacks terminal pills upward from one step above
+   the Notes bar), and `.sql-pill` already owns the bottom-left corner — so this
+   sits one step above it rather than on top of it. */
+.browser-pill {
+  right: auto;
+  left: 16px;
+  bottom: 60px;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+/* The browser panel's automation consent banner.
+   Four kinds, and only one of them draws the eye: `asked` is a request waiting
+   on the user, so it gets the warning colour, while `granted`/`active`/`idle`
+   are standing state and must not look like alarms - a banner that always
+   shouts is one people stop reading, and this one is the control every agent
+   refusal points at by name. */
+/* A COLUMN, deliberately, and this is not a style preference.
+   The first version was one wrapping row (message with `flex: 1`, then the
+   buttons). With a short message the buttons fit beside it; with a long one -
+   which is the state that matters, because that is the state where an agent has
+   asked for something - they wrapped onto a second line that ended up in the
+   band the page's WebView2 child HWND paints over. The result was buttons that
+   were **invisible and still clickable**: a stray click in that strip granted
+   read-and-control with nothing on screen to say so, which is the worst
+   combination available here.
+   An explicit column makes the banner's height a plain function of its content,
+   and the page's own ResizeObserver already follows `.browser-page` shrinking. */
+.browser-consent {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 5px 8px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.browser-consent-message {
+  /* No `flex: 1` and no `min-width`: in a column it is a full-width row, and
+     the two properties are what let it squeeze the buttons out of view. */
+  line-height: 1.4;
+}
+.browser-consent-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.browser-consent-idle .browser-consent-message,
+.browser-consent-granted .browser-consent-message {
+  color: var(--fg-faint);
+}
+.browser-consent-asked {
+  background: var(--warn-bg, rgba(220, 160, 40, 0.14));
+  border-bottom-color: var(--warn, #c8912a);
+}
+.browser-consent-active .browser-consent-message {
+  color: var(--fg);
+}
+.browser-consent button {
+  white-space: nowrap;
 }

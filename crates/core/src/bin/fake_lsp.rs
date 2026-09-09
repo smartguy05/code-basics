@@ -155,6 +155,19 @@ struct Step {
     /// strings and every reply shape these tests use is a list of locations.
     #[serde(default)]
     argv_file: Option<PathBuf>,
+    /// `echoParams`: where to write the params of the request this step
+    /// answered, as JSON.
+    ///
+    /// A file rather than a reply, for a reason worth stating: the params of a
+    /// *request* are otherwise invisible. The notification journal covers only
+    /// notifications, and putting the params in the **answer** would prove
+    /// nothing either, because the client reads every answer through a decoder
+    /// that ignores keys it does not know — so `textDocument/rename` would
+    /// decode its own echoed params as a perfectly valid empty edit. The step's
+    /// own `reply` still goes back, so the client under test sees a normal
+    /// answer.
+    #[serde(default)]
+    params_file: Option<PathBuf>,
     /// `unknownIdReply`: the id nobody asked about.
     #[serde(default)]
     unknown_id: Option<RequestId>,
@@ -211,6 +224,11 @@ enum Misbehave {
     SpawnChildAndLeak,
     /// Answer with whatever URI the request carried.
     EchoUri,
+    /// Record the request's own `params` to `paramsFile`, then answer normally.
+    /// The only way a test can see what a *request* actually put on the wire —
+    /// a position one line off and a misspelled parameter name are both
+    /// invisible from every other angle.
+    EchoParams,
     /// Record this process's own command line to `argvFile`, then answer
     /// normally. The only way a test can see what the client actually spawned —
     /// and an argument a doc comment promises but nobody appends is invisible
@@ -494,6 +512,15 @@ async fn handle(server: Arc<Server>, id: Option<RequestId>, method: String, para
                 }));
             }
             return;
+        }
+        Some(Misbehave::EchoParams) => {
+            if let Some(path) = step.and_then(|s| s.params_file.as_deref()) {
+                let body = serde_json::to_vec_pretty(params.as_ref().unwrap_or(&Value::Null))
+                    .expect("params serialise");
+                if let Err(error) = std::fs::write(path, body) {
+                    eprintln!("[fake-lsp] could not write the params file: {error}");
+                }
+            }
         }
         Some(Misbehave::EchoArgv) => {
             if let Some(path) = step.and_then(|s| s.argv_file.as_deref()) {

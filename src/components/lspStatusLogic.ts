@@ -236,3 +236,65 @@ export function lspPollDelay(
   if (!status || !watching) return null;
   return shouldPollLspAgain(status, attempt) ? LSP_POLL_FAST_MS : LSP_POLL_SLOW_MS;
 }
+
+/**
+ * The separator joining the parts of a poll key.
+ *
+ * NUL because the parts are a filesystem root and editor ids, and it is the one
+ * byte neither of them can contain — any printable separator is something a
+ * path could itself contain, which would let two different file sets collide
+ * into one key and suppress the re-arm.
+ */
+export const LSP_POLL_KEY_SEP = "\u0000";
+
+/**
+ * The poll key for one codebase's open editors.
+ *
+ * The *set* of ids, not a count: opening one file while closing another leaves
+ * the count alone and changes which servers exist, and it is this string
+ * changing that re-arms the indicator's effect.
+ */
+export function lspPollKeyFor(fileIds: string[]): string {
+  return fileIds.join(LSP_POLL_KEY_SEP);
+}
+
+/**
+ * The poll key for the indicator in the status bar: which codebase it is
+ * looking at, and which files that codebase has open.
+ *
+ * **The root is always part of the key, including when nothing is open**, and
+ * that is the whole reason this is a module rather than a `join`. The backend
+ * answers `lsp_status` for the **active** workspace slot, so switching
+ * codebases changes the answer while changing nothing the indicator can see.
+ * An earlier version returned `""` whenever the active codebase had no file
+ * open, which made two file-less codebases produce the same key: the effect
+ * never re-armed, and the previous codebase's server list stayed on screen
+ * under the new one's name. Identity is not the same question as
+ * "is there anything to watch" — see {@link lspWatching} for that one.
+ */
+export function activeLspPollKey(
+  activeRoot: string | null,
+  keysByRoot: Record<string, string>,
+): string {
+  if (!activeRoot) return "";
+  return `${activeRoot}${LSP_POLL_KEY_SEP}${keysByRoot[activeRoot] ?? ""}`;
+}
+
+/**
+ * Whether the active codebase has anything a language server could have been
+ * started for.
+ *
+ * Deliberately separate from {@link activeLspPollKey}: a key answers *which*
+ * codebase, this answers *whether to keep asking*. A server is started by the
+ * `didOpen` a `FileEditor` sends, so with no file open there is nothing that
+ * could have started one and {@link lspPollDelay} stops rather than polling for
+ * the life of the app. Collapsing the two into one string — "empty means both a
+ * fresh identity and nothing to watch" — is what produced the stale-list bug.
+ */
+export function lspWatching(
+  activeRoot: string | null,
+  keysByRoot: Record<string, string>,
+): boolean {
+  if (!activeRoot) return false;
+  return (keysByRoot[activeRoot] ?? "").length > 0;
+}

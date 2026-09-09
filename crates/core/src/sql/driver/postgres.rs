@@ -126,10 +126,7 @@ pub enum WireFormat {
 pub enum PgTargetError {
     /// Nothing but whitespace.
     Empty,
-    /// It is neither a `postgres://` URL nor a keyword string naming a `Host`.
-    /// Abstaining rather than picking a plausible-looking value: `Server=` is
-    /// spoken by several drivers, and guessing wrong here means connecting to
-    /// the wrong server, which is not a near miss.
+    /// It is neither a `postgres://` URL nor a keyword string naming a server.
     NoHostNamed,
     /// A `Port=` keyword whose value is not a TCP port.
     BadPort,
@@ -146,7 +143,7 @@ impl PgTargetError {
             PgTargetError::Empty => "The connection string is empty.",
             PgTargetError::NoHostNamed => {
                 "The connection string names no PostgreSQL server. Expected a `postgres://` URL \
-                 or a `Host=` keyword."
+                 or a `Host=`, `Server=`, or `Data Source=` keyword."
             }
             PgTargetError::BadPort => {
                 "The `Port=` value is not a TCP port number between 1 and 65535."
@@ -268,9 +265,9 @@ pub fn connect_target(dsn: &str) -> Result<PgTarget, PgTargetError> {
             .map(|(_, v)| v.clone())
     };
 
-    // Only `Host=`. `Server=` is spoken by SqlClient too, and `dsn::sniff_engine`
-    // deliberately does not read it as Postgres either.
-    let Some(host) = get(&["host"]) else {
+    // The caller has already selected PostgreSQL, so accept the server aliases
+    // supported by Npgsql even though they are ambiguous during engine sniffing.
+    let Some(host) = get(&["host", "server", "data source", "datasource"]) else {
         return Err(PgTargetError::NoHostNamed);
     };
 

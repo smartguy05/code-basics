@@ -3,11 +3,15 @@ import type { LaunchedApp, ProcessEvent } from "../ipc/types";
 import {
   addTab,
   applyEvent,
+  bufferHeadless,
   canStop,
   closeTab,
+  HEADLESS_BUFFER_LIMIT,
   liveTabCount,
   makeTab,
+  revealsHeadlessFailure,
   setTabSeverity,
+  shouldOpenTab,
   statusText,
   tabTitle,
 } from "./appOutputLogic";
@@ -189,5 +193,87 @@ describe("setTabSeverity", () => {
   it("returns the same array for a tab that is not there", () => {
     const tabs = [tab()];
     expect(setTabSeverity(tabs, "ext:missing", "error")).toBe(tabs);
+  });
+});
+
+describe("shouldOpenTab", () => {
+  it("opens a tab for an ordinary launch", () => {
+    expect(shouldOpenTab({})).toBe(true);
+    expect(shouldOpenTab({ headless: false })).toBe(true);
+  });
+
+  it("opens no tab for a headless launch", () => {
+    expect(shouldOpenTab({ headless: true })).toBe(false);
+  });
+});
+
+describe("revealsHeadlessFailure", () => {
+  const exited = (over: Partial<Extract<ProcessEvent, { type: "exited" }>>): ProcessEvent => ({
+    type: "exited",
+    code: 0,
+    success: true,
+    durationMs: 1,
+    cancelled: false,
+    ...over,
+  });
+
+  it("stays silent for output and start", () => {
+    expect(revealsHeadlessFailure({ type: "output", stream: "stdout", text: "hi" })).toBe(false);
+    expect(
+      revealsHeadlessFailure({
+        type: "started",
+        pid: 7,
+        program: "redis",
+        args: [],
+        cwd: "/repo",
+      }),
+    ).toBe(false);
+  });
+
+  it("stays silent for a clean exit", () => {
+    expect(revealsHeadlessFailure(exited({}))).toBe(false);
+  });
+
+  it("stays silent for a stop the user asked for", () => {
+    expect(revealsHeadlessFailure(exited({ code: null, success: false, cancelled: true }))).toBe(
+      false,
+    );
+  });
+
+  it("surfaces a non-zero exit", () => {
+    expect(revealsHeadlessFailure(exited({ code: 1, success: false }))).toBe(true);
+  });
+
+  it("surfaces a signalled exit, which has no code at all", () => {
+    expect(revealsHeadlessFailure(exited({ code: null, success: false }))).toBe(true);
+  });
+
+  it("surfaces a spawn failure", () => {
+    expect(revealsHeadlessFailure({ type: "failed", message: "not found" })).toBe(true);
+  });
+});
+
+describe("bufferHeadless", () => {
+  const line = (text: string): ProcessEvent => ({ type: "output", stream: "stdout", text });
+
+  it("appends below the cap", () => {
+    const buffer = bufferHeadless(bufferHeadless([], line("a")), line("b"));
+    expect(buffer.map((e) => (e.type === "output" ? e.text : ""))).toEqual(["a", "b"]);
+  });
+
+  it("keeps the newest events once the cap is reached", () => {
+    let buffer: ProcessEvent[] = [];
+    for (let i = 0; i < HEADLESS_BUFFER_LIMIT + 5; i += 1) buffer = bufferHeadless(buffer, line(`${i}`));
+    expect(buffer.length).toBe(HEADLESS_BUFFER_LIMIT);
+    const first = buffer[0];
+    const last = buffer[buffer.length - 1];
+    expect(first?.type === "output" ? first.text : "").toBe("5");
+    expect(last?.type === "output" ? last.text : "").toBe(`${HEADLESS_BUFFER_LIMIT + 4}`);
+  });
+
+  it("does not mutate the buffer it was given", () => {
+    const original: ProcessEvent[] = [line("a")];
+    bufferHeadless(original, line("b"));
+    expect(original.length).toBe(1);
   });
 });

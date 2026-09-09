@@ -39,10 +39,13 @@
 //! - [`format`] — rendering result values for display.
 //! - [`dotenv`] — reading connection strings out of environment files.
 //! - [`discover`] — finding the connections a workspace already mentions.
+//! - [`catalog`] — the object explorer's catalog queries and rows.
+//! - [`plan`] — whether a statement may be sent, and with what.
 //! - [`store`] — persisted, secret-free connection profiles.
 //! - [`driver`] — the **only** module here that opens a database handle.
 //! - [`session`] — the registry of in-flight statements and their stop handles.
 
+pub mod catalog;
 pub mod discover;
 pub mod dotenv;
 pub mod driver;
@@ -50,5 +53,6 @@ pub mod dsn;
 pub mod format;
 pub mod guard;
 pub mod model;
+pub mod plan;
 pub mod session;
 pub mod store;

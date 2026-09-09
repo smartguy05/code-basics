@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { featureEnabled, visibleTabs, tabAfterDisable } from "./featuresLogic";
+import { featureEnabled, visibleTabs, tabAfterDisable, type FeatureKey } from "./featuresLogic";
 import type { FeatureInfo } from "../ipc/types";
 
 function feature(id: string, enabled: boolean): FeatureInfo {
@@ -74,95 +74,57 @@ describe("tabAfterDisable", () => {
   });
 });
 
-// The real tab strip, as `WorkspaceTab.tsx` declares it. Duplicated here rather
-// than imported because that module is a `.tsx` and vitest runs in the node
-// environment with no DOM — so this is a drift alarm, not a re-export: if a tab
-// is added there and not here, this suite still passes and the next reader is
-// the one who notices. What it does pin is the shape of the first real entry in
-// `FEATURE_BY_TAB`, which was empty until the SQL console landed.
+// The real tab strip, as `WorkspaceTab.tsx` declares it. Duplicated here
+// rather than imported because that module is a `.tsx` and vitest runs in the
+// node environment with no DOM — so this is a drift alarm, not a re-export: if
+// a tab is added there and not here, this suite still passes and the next
+// reader is the one who notices.
+//
+// **`FEATURE_BY_TAB` is empty again.** It held exactly one entry, `sql`, and
+// the SQL console is no longer a tab — it is a floating panel, so the feature
+// now gates the *opener* rather than a strip entry. The tests that used to
+// live here pinned the tab gate and the body gate; both were deleted with the
+// tab rather than rewritten to describe something that no longer happens. What
+// replaced them is `sqlPanelLogic.sqlPanelMounted` / `sqlPanelAfterFeatureChange`,
+// tested beside that module, which carry the same guarantee the body gate did:
+// a switched-off console is unmounted, not merely hidden, so it cannot keep a
+// live connection and a streaming query with no UI to reach them.
 const REAL_TABS = [
-  { id: "run", label: "Run" },
+  { id: "project", label: "Project" },
   { id: "tests", label: "Tests" },
-  { id: "changes", label: "Changes" },
   { id: "history", label: "History" },
   { id: "architecture", label: "Architecture" },
   { id: "inspect", label: "Objects" },
-  { id: "sql", label: "SQL" },
 ] as const;
 
-const REAL_FEATURE_BY_TAB = { sql: "sqlConsole" } as const;
+/** Empty, and the type is what says so rather than a comment. */
+const REAL_FEATURE_BY_TAB: Partial<Record<string, FeatureKey>> = {};
 
-describe("the SQL tab's gate", () => {
-  it("hides the SQL tab, and only it, when the SQL console is off", () => {
-    const visible = visibleTabs(REAL_TABS, [feature("sqlConsole", false)], REAL_FEATURE_BY_TAB);
-    expect(visible.map((t) => t.id)).toEqual([
-      "run",
-      "tests",
-      "changes",
-      "history",
-      "architecture",
-      "inspect",
-    ]);
-  });
-
-  it("shows it when the feature is on, at the end of the strip", () => {
-    const visible = visibleTabs(REAL_TABS, [feature("sqlConsole", true)], REAL_FEATURE_BY_TAB);
-    expect(visible.map((t) => t.id)).toHaveLength(7);
-    expect(visible[6]?.id).toBe("sql");
-  });
-
-  it("moves a user looking at SQL back to Run when they switch it off", () => {
-    // The payoff for the picker gating a tab for the first time: turning the
-    // feature off while the SQL tab is selected must not leave a tab strip with
-    // nothing beneath it.
-    const visible = visibleTabs(REAL_TABS, [feature("sqlConsole", false)], REAL_FEATURE_BY_TAB);
-    expect(tabAfterDisable("sql", visible)).toBe("run");
-  });
-
-  it("leaves every other tab's selection alone when SQL is switched off", () => {
-    const visible = visibleTabs(REAL_TABS, [feature("sqlConsole", false)], REAL_FEATURE_BY_TAB);
-    expect(tabAfterDisable("history", visible)).toBe("history");
-  });
-
-  it("switching an unrelated feature off does not touch the SQL tab", () => {
-    const visible = visibleTabs(REAL_TABS, [feature("askCodebase", false)], REAL_FEATURE_BY_TAB);
-    expect(visible.map((t) => t.id)).toContain("sql");
-  });
-});
-
-// The body gate added alongside these: `WorkspaceTab` mounts `SqlView` only
-// while the SQL tab survived the filter (`shownTabs.some(t => t.id === "sql")`),
-// so the strip and the body read one list and cannot disagree. The mount itself
-// is `.tsx` and vitest runs in the node environment with no DOM, so it cannot be
-// tested here — what is pinned below is the predicate the gate asks.
-const bodyGate = (features: FeatureInfo[] | null) =>
-  visibleTabs(REAL_TABS, features, REAL_FEATURE_BY_TAB).some((t) => t.id === "sql");
-
-describe("the SQL body gate", () => {
-  it("is closed exactly when the feature is off", () => {
-    expect(bodyGate([feature("sqlConsole", false)])).toBe(false);
-    expect(bodyGate([feature("sqlConsole", true)])).toBe(true);
-  });
-
-  it("agrees with the tab strip in every state, including not-yet-loaded", () => {
-    // The bug this replaces: the strip hid the tab while the body kept SqlView
-    // mounted, so a switched-off console still held a live connection and a
-    // streaming query with no UI to reach them.
+describe("the real tab strip", () => {
+  it("gates no tab on a feature any more", () => {
+    // Every tab in the strip is core. If this starts failing, a tab has been
+    // put behind a feature and the two gates (strip and body) have to be made
+    // to agree again — which is the bug the SQL entry existed to prevent.
     for (const features of [
       null,
       [],
-      [feature("sqlConsole", true)],
       [feature("sqlConsole", false)],
       [feature("askCodebase", false)],
     ] as (FeatureInfo[] | null)[]) {
-      expect(bodyGate(features)).toBe(featureEnabled(features, "sqlConsole"));
+      expect(visibleTabs(REAL_TABS, features, REAL_FEATURE_BY_TAB).map((t) => t.id)).toEqual([
+        "project",
+        "tests",
+        "history",
+        "architecture",
+        "inspect",
+      ]);
     }
   });
 
-  it("leaves a user switched off the tab on a tab the body still renders", () => {
-    const visible = visibleTabs(REAL_TABS, [feature("sqlConsole", false)], REAL_FEATURE_BY_TAB);
-    const next = tabAfterDisable("sql", visible);
-    expect(next).toBe("run");
-    expect(visible.some((t) => t.id === next)).toBe(true);
+  it("never moves the selection, because nothing can vanish", () => {
+    const visible = visibleTabs(REAL_TABS, [], REAL_FEATURE_BY_TAB);
+    for (const id of REAL_TABS.map((t) => t.id)) {
+      expect(tabAfterDisable(id, visible)).toBe(id);
+    }
   });
 });

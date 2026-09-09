@@ -64,6 +64,7 @@ function describeFocus(): FocusedSurface | null {
 export function AskPanel({
   active,
   enabled,
+  openSignal,
   onAsk,
 }: {
   /**
@@ -79,6 +80,17 @@ export function AskPanel({
    * decides not to act is one more thing between the key and the editor.
    */
   enabled: boolean;
+  /**
+   * A monotonic counter the host bumps to ask this box to open — the Plugins
+   * menu's route in, beside the Ctrl+/ chord.
+   *
+   * A counter rather than a controlled `open`/`onClose` pair, because the box
+   * closing itself after asking (and on Escape) is the whole of its lifecycle;
+   * lifting that out would put two owners on one boolean. A count that changes
+   * is a *request*, and a request is what an outside caller has: re-opening a
+   * box the user just closed changes no field a boolean could compare.
+   */
+  openSignal?: number;
   /** Open a terminal asking `question` of `agentId` (with `model`, if any). */
   onAsk: (question: string, agentId: string, model: string | undefined) => void;
 }) {
@@ -98,6 +110,19 @@ export function AskPanel({
       setTimeout(() => inputRef.current?.focus(), 0);
     });
   }, [active, enabled]);
+
+  // A request from outside — today the Plugins menu. Unlike the chord there is
+  // no `shouldAbstainForFocus` check: a menu row was clicked deliberately, and
+  // where the caret happened to be is not a reason to refuse it. `openSignal`
+  // starts undefined and its first value is 0, so mounting opens nothing.
+  useEffect(() => {
+    if (openSignal === undefined || openSignal === 0) return;
+    if (!enabled) return;
+    setOpen(true);
+    setTimeout(() => inputRef.current?.focus(), 0);
+    // Deliberately keyed on the signal alone: re-running because `enabled`
+    // flipped back on would re-open a box the user had closed.
+  }, [openSignal]);
 
   // Read the installed agents when the box opens. `review_agents` resolves each
   // CLI on PATH, so it is re-read per open rather than cached for the session:
