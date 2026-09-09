@@ -217,6 +217,28 @@ pub async fn git_create_branch(
     .map_err(|e| format!("{e:#}"))
 }
 
+/// Create a new worktree on a new branch and return its directory, for the
+/// frontend to open in a new project tab. `base` is the start point (a branch or
+/// revision; `None` = current HEAD). `dir` overrides the default sibling
+/// location. Does not touch the current working tree.
+#[tauri::command]
+pub async fn git_add_worktree(
+    state: State<'_, AppState>,
+    name: String,
+    base: Option<String>,
+    dir: Option<String>,
+) -> Result<String, String> {
+    let root = state.workspace_root()?;
+    cb_core::git::worktree::add_worktree(
+        &root,
+        &name,
+        base.as_deref(),
+        dir.as_deref().map(Path::new),
+    )
+    .map(|path| path.to_string_lossy().into_owned())
+    .map_err(|e| format!("{e:#}"))
+}
+
 #[tauri::command]
 pub async fn git_checkout_branch(state: State<'_, AppState>, name: String) -> Result<(), String> {
     open(&state)?

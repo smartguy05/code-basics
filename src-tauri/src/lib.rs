@@ -223,6 +223,7 @@ pub fn run() {
             commands::git::git_commit,
             commands::git::git_branches,
             commands::git::git_create_branch,
+            commands::git::git_add_worktree,
             commands::git::git_checkout_branch,
             commands::git::git_checkout_remote_branch,
             commands::git::git_delete_branch,

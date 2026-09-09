@@ -4,6 +4,8 @@ import {
   clickModifier,
   contextSelection,
   defaultStashMessage,
+  revertMenuLabel,
+  revertablePaths,
   stashMenuLabel,
   stashablePaths,
   toggleSelection,
@@ -112,6 +114,37 @@ describe("stashMenuLabel", () => {
     expect(stashMenuLabel(1)).toBe("Stash file…");
     expect(stashMenuLabel(3)).toBe("Stash 3 files…");
     expect(stashMenuLabel(0)).toBe("");
+  });
+});
+
+describe("revertablePaths", () => {
+  const files = [
+    file({ path: "a.ts" }),
+    file({ path: "b.ts", staged: "modified", unstaged: null }),
+    file({ path: "new.ts", staged: null, unstaged: "untracked" }),
+    file({ path: "conflict.ts", unstaged: "conflicted" }),
+    file({ path: "quiet.ts", staged: null, unstaged: null }),
+  ];
+
+  it("keeps changed, non-conflicted files (untracked included)", () => {
+    const selected = new Set(["a.ts", "b.ts", "new.ts", "conflict.ts", "quiet.ts"]);
+    expect(revertablePaths(selected, files)).toEqual(["a.ts", "b.ts", "new.ts"]);
+  });
+
+  it("drops a path the status no longer lists", () => {
+    expect(revertablePaths(new Set(["ghost.ts"]), files)).toEqual([]);
+  });
+
+  it("sorts the result", () => {
+    expect(revertablePaths(new Set(["b.ts", "a.ts"]), files)).toEqual(["a.ts", "b.ts"]);
+  });
+});
+
+describe("revertMenuLabel", () => {
+  it("counts the files, and says nothing when there are none", () => {
+    expect(revertMenuLabel(1)).toBe("Revert file…");
+    expect(revertMenuLabel(3)).toBe("Revert 3 files…");
+    expect(revertMenuLabel(0)).toBe("");
   });
 });
 

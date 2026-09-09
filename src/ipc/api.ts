@@ -623,6 +623,14 @@ export const gitCreateBranch = (name: string, checkout: boolean, from?: string) 
 export const gitCheckoutBranch = (name: string) =>
   invoke<void>("git_checkout_branch", { name });
 
+/**
+ * Create a worktree on a new branch and return its directory, to open in a new
+ * project tab. `base` is the start point (a branch or revision; absent = HEAD);
+ * `dir` overrides the default sibling location.
+ */
+export const gitAddWorktree = (name: string, base?: string, dir?: string) =>
+  invoke<string>("git_add_worktree", { name, base, dir });
+
 /** Check out `origin/x` like `git switch x`: local tracking branch + switch. */
 export const gitCheckoutRemoteBranch = (name: string) =>
   invoke<void>("git_checkout_remote_branch", { name });

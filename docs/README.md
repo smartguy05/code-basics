@@ -14,6 +14,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 - [The core crate (`cb-core`)](architecture/core-crate.md) — workspace scanning, adapters, test parsing, git, process supervision
 - [The Tauri shell (`src-tauri`)](architecture/tauri-shell.md) — state, adapter dispatch, and the command surface
 - [The frontend (`src/`)](architecture/frontend.md) — views, components, and IPC wrappers
+- [Split docking (regions)](architecture/split-docking.md) — dragging editors and terminals to the edges for side-by-side work
 - [The IPC type contract](architecture/ipc-contract.md) — how Rust and TypeScript types stay in sync
 - [The browser panel](architecture/browser-panel.md) — why it is raw `wry`, and the z-order cost that comes with it
 - [Live inspection](architecture/live-inspection.md) — the object-inspector sidecar, why it is one-shot, and why it is bundled

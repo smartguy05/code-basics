@@ -59,6 +59,7 @@ import {
   mergeSignal,
   nextPulseExpiry,
   pulseAttention,
+  reorderWorkspaces,
   tabLabels,
   tabSignalClass,
 } from "./components/workspaceTabsLogic";
@@ -146,6 +147,10 @@ const inTauri = "__TAURI_INTERNALS__" in window;
 export function App() {
   // Every open codebase, and which one is in the foreground. Identity is `root`.
   const [openWorkspaces, setOpenWorkspaces] = useState<Workspace[]>([]);
+  // Drag-to-reorder of the codebase tabs: the index being dragged and the tab it
+  // is currently hovering, so the drop target can be outlined. Cleared on drop or
+  // drag-end. Reordering never changes which root is active (identity is `root`).
+  const [tabDrag, setTabDrag] = useState<{ from: number; over: number } | null>(null);
   const [activeRoot, setActiveRoot] = useState<string | null>(null);
   const activeRootRef = useRef<string | null>(null);
   activeRootRef.current = activeRoot;
@@ -1063,7 +1068,7 @@ export function App() {
         <div className="titlebar-center">
           {activeWorkspace && (
             /* Keyed by the active root, so switching codebases re-reads branches. */
-            <BranchMenu key={activeRoot ?? ""} />
+            <BranchMenu key={activeRoot ?? ""} onOpenWorktree={(path) => void openPath(path)} />
           )}
         </div>
 
@@ -1132,7 +1137,9 @@ export function App() {
         {openWorkspaces.map((w, i) => (
           <div
             key={w.root}
-            className={`ws-tab ${w.root === activeRoot ? "active" : ""}${tabSignalClass(
+            className={`ws-tab ${w.root === activeRoot ? "active" : ""}${
+              tabDrag?.from === i ? " dragging" : ""
+            }${tabDrag && tabDrag.from !== i && tabDrag.over === i ? " drag-over" : ""}${tabSignalClass(
               w.root,
               activeRoot,
               // A ringing bell is live state and outranks nothing it is folded
@@ -1144,6 +1151,26 @@ export function App() {
                 ? mergeSignal(signalByRoot[w.root], "attention")
                 : (signalByRoot[w.root] ?? null),
             )}`}
+            // The tab is a drag handle for reordering, except while its rename
+            // box is open — a draggable container would swallow the text
+            // selection the input needs.
+            draggable={renamingRoot !== w.root}
+            onDragStart={(e) => {
+              setTabDrag({ from: i, over: i });
+              e.dataTransfer.effectAllowed = "move";
+            }}
+            onDragOver={(e) => {
+              if (!tabDrag) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (tabDrag.over !== i) setTabDrag({ ...tabDrag, over: i });
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (tabDrag) setOpenWorkspaces((list) => reorderWorkspaces(list, tabDrag.from, i));
+              setTabDrag(null);
+            }}
+            onDragEnd={() => setTabDrag(null)}
             onContextMenu={(e) => {
               e.preventDefault();
               setTabMenu({ root: w.root, x: e.clientX, y: e.clientY });

@@ -14,13 +14,15 @@ import { HistoryView } from "../views/HistoryView";
 import { InspectView } from "../views/InspectView";
 import { RunView } from "../views/RunView";
 import { ReviewPanel } from "./ReviewPanel";
+import { RegionHost } from "./RegionHost";
+import { RegionProvider } from "./RegionContext";
+import { DockableTerminal } from "./DockableTerminal";
 import { SearchEverywhere } from "./SearchEverywhere";
 import { Occluder } from "./occlusionContext";
 import { SetupPrompt } from "./SetupPrompt";
 import { McpServerPanel } from "./McpServerPanel";
 import { SqlPanel } from "./SqlPanel";
 import { shouldPrompt, setDismissed } from "./setupPromptLogic";
-import { TerminalPanel } from "./TerminalPanel";
 import { TestsView } from "../views/TestsView";
 import { terminalTitle } from "./askLogic";
 import {
@@ -399,6 +401,10 @@ export function WorkspaceTab({
 
   const [terminals, setTerminals] = useState<TerminalDescriptor[]>([]);
   const terminalSeq = useRef(0);
+  // The floating-terminal portal layer. A DOM node inside `.workspace-tab` (so it
+  // inherits the codebase's `hidden`), the portal target for terminals that are
+  // not docked into a region — see `DockableTerminal`.
+  const [floatLayer, setFloatLayer] = useState<HTMLDivElement | null>(null);
 
   // Which terminal is in front, bottom-most key first. Kept *beside* `terminals`
   // rather than by reordering it: the array index places each pill and cascade
@@ -689,6 +695,7 @@ export function WorkspaceTab({
   }, [workspace.root]);
 
   return (
+    <RegionProvider root={workspace.root} terminalIds={terminals.map((t) => t.key)}>
     <div className="workspace-tab" hidden={!active}>
       <div className="tabs tabs-row">
         {shownTabs.map(({ id, label }) => (
@@ -698,6 +705,11 @@ export function WorkspaceTab({
         ))}
       </div>
 
+      {/* The inner tab bodies are the *center*; `RegionHost` surrounds them with
+          any docked editor/diff/terminal regions. When nothing is docked it is a
+          transparent pass-through. Editors and diffs are portaled in by RunView,
+          terminals by `DockableTerminal` below. */}
+      <RegionHost>
       {/* Run, Tests and Objects stay mounted while hidden (they own processes and
           consoles); Changes, History and Architecture mount only while this is
           the foreground tab and their inner tab is chosen, so a background
@@ -753,6 +765,7 @@ export function WorkspaceTab({
           <ArchitectureView workspace={workspace} onOpenFile={requestOpenFile} />
         </div>
       )}
+      </RegionHost>
 
       <SearchEverywhere
         workspace={workspace}
@@ -877,17 +890,20 @@ export function WorkspaceTab({
         />
       )}
 
+      {/* The floating-terminal portal layer — a zero-size, non-transformed node
+          so fixed-positioned terminals still resolve against the viewport, but
+          inside `.workspace-tab` so a backgrounded codebase's terminals stay
+          hidden with it. */}
+      <div className="terminal-float-layer" ref={setFloatLayer} />
+
       {terminals.map((t, index) => (
-        <TerminalPanel
+        <DockableTerminal
           key={t.key}
-          title={t.title}
-          cwd={t.cwd}
-          command={t.command}
-          number={t.number}
+          descriptor={t}
           index={index}
           stackOffset={stackOffset(stackOrder, t.key)}
-          color={t.color}
           workspaceActive={active}
+          floatLayer={floatLayer}
           onClose={() => closeTerminal(t.key)}
           onRaise={() => setStackOrder((order) => raiseTerminal(order, t.key))}
           onAttentionChange={(wants) => setTerminalAttention(t.key, wants)}
@@ -897,5 +913,6 @@ export function WorkspaceTab({
         />
       ))}
     </div>
+    </RegionProvider>
   );
 }

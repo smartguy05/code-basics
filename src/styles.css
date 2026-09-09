@@ -75,6 +75,10 @@
      first render, so there is no flash of desktop through an unpainted app. */
   --app-bg-opacity: 100%;
 
+  /* Opacity of a file editor / terminal while it is not focused. Written by
+     `applyAppearance` as a 0-1 fraction; 1 (this fallback) is "off". */
+  --unfocused-opacity: 1;
+
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
   --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
@@ -320,6 +324,14 @@ textarea:focus {
 .ws-tab.active {
   border-bottom-color: var(--accent);
   background: var(--bg-raised);
+}
+/* Drag-to-reorder feedback: the dragged tab fades, and the tab the pointer is
+   over gets an accent edge showing where a drop would land. */
+.ws-tab.dragging {
+  opacity: 0.4;
+}
+.ws-tab.drag-over {
+  border-left: 2px solid var(--accent);
 }
 /* A background codebase with something to say: outline the tab in the colour of
    what happened and pulse it, so the user sees which project is asking and
@@ -704,6 +716,16 @@ textarea:focus {
 
 .dropdown-item.selected {
   background: var(--accent-dim);
+}
+
+/* A destructive action (e.g. Revert file) — tinted so it does not read as an
+   ordinary menu entry. */
+.dropdown-item.danger {
+  color: var(--fail);
+}
+.dropdown-item.danger:hover {
+  background: var(--fail);
+  color: var(--bg);
 }
 
 /* A collapsible section header inside a dropdown (Local / Remote). */
@@ -1574,6 +1596,23 @@ textarea:focus {
   height: 100%;
   background: var(--bg-inset);
   padding: 4px 6px;
+  /* Fades to `--unfocused-opacity` when the terminal is not focused (see the
+     shared rule below). The transition applies in both directions. */
+  transition: opacity 0.15s ease;
+}
+/* A file editor or terminal that does not have focus fades to the user's
+   configured unfocused opacity, so the surface being typed in stands out. The
+   focused one is always fully opaque. `--unfocused-opacity` defaults to 1, so
+   this is inert until the user lowers it in Settings > Appearance.
+   `:focus-within` is used for the terminal because xterm's focus lands on a
+   hidden textarea inside `.terminal-host`; CodeMirror sets `.cm-focused` on its
+   own root. Scoped to `.editor-host` so diff panes are not faded. */
+.terminal-host:not(:focus-within),
+.editor-host .cm-editor:not(.cm-focused) {
+  opacity: var(--unfocused-opacity, 1);
+}
+.editor-host .cm-editor {
+  transition: opacity 0.15s ease;
 }
 
 /* Inline title edit in a terminal header (double-click the title). Sized to sit
@@ -5083,9 +5122,17 @@ button.danger:hover:not(:disabled) {
 .tree-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 2px;
   padding: 0 4px 2px;
+}
+
+/* The "Files" title shares the actions row and fills it, so the reveal and
+   collapse buttons sit at the right edge. Its own `.group-label` padding is
+   dropped here — the row owns the padding — leaving only the top gap that keeps
+   the header off the tab strip above it. */
+.tree-actions-title {
+  flex: 1;
+  padding: 6px 2px 0;
 }
 
 /* Undoes the base `button` chrome: a filled, bordered control at this size next
@@ -5729,4 +5776,172 @@ button.danger:hover:not(:disabled) {
 }
 .browser-consent button {
   white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------- */
+/* Split docking (regions) — see `regionLayoutLogic` / `RegionHost`.      */
+/* --------------------------------------------------------------------- */
+
+/* The floating-terminal portal layer: takes no layout space and sets no
+   transform, so the fixed-positioned terminals inside still resolve against the
+   viewport, but it lives inside `.workspace-tab` so a backgrounded codebase's
+   terminals hide with it. */
+.terminal-float-layer {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+/* Fills the space below the inner tab strip; a flex column like the workspace
+   tab it sits in, so the center bodies fill exactly as they did before. */
+.region-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.region-middle {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+.region-center {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* One docked region. Sized by an inline flex-basis fraction; the border faces
+   the center. */
+.region {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+.region-left {
+  border-right: 1px solid var(--border-strong);
+}
+.region-right {
+  border-left: 1px solid var(--border-strong);
+}
+.region-top {
+  border-bottom: 1px solid var(--border-strong);
+}
+.region-bottom {
+  border-top: 1px solid var(--border-strong);
+}
+
+/* The region's own tab strip — its header, since a docked item's own header is
+   hidden. */
+.region-tabs {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px 4px;
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border);
+}
+.region-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  font-size: calc(var(--ui-font-size) - 2px);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+.region-tab:hover {
+  background: var(--border);
+  color: var(--text);
+}
+.region-tab.active {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+.region-tab-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0 2px;
+  cursor: pointer;
+  line-height: 1;
+}
+.region-tab-close:hover {
+  color: var(--fail);
+}
+
+/* The region body stacks its item slots; only the active one is shown (the
+   others carry `hidden`). Absolute fill so the portaled editor/terminal takes
+   the whole area. */
+.region-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.region-slot {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* A terminal docked into a region fills its slot rather than floating: none of
+   the floating chrome (fixed position, shadow, resize grip, rounded corners, the
+   raise band) applies. */
+.terminal-panel.terminal-docked {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  resize: none;
+  z-index: auto;
+}
+
+/* The splitters between the center and each region. */
+.region-splitter-v {
+  flex: 0 0 4px;
+  cursor: col-resize;
+  background: transparent;
+}
+.region-splitter-h {
+  flex: 0 0 4px;
+  cursor: row-resize;
+  background: transparent;
+}
+.region-splitter-v:hover,
+.region-splitter-h:hover {
+  background: var(--accent);
+}
+
+/* The drag drop-zone highlight. Above the center content but below the floating
+   panels; purely visual, so it never eats pointer events. */
+.region-drop {
+  position: absolute;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  border: 1px solid var(--accent);
+  pointer-events: none;
+  z-index: calc(var(--z-panel) - 1);
+}
+.region-drop-center {
+  inset: 0;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-style: dashed;
 }

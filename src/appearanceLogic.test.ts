@@ -3,6 +3,7 @@ import {
   BUILTIN_THEMES,
   DEFAULT_APPEARANCE,
   activeTheme,
+  clampUnfocusedOpacity,
   clampWindowOpacity,
   parseThemeFile,
   readAppearance,
@@ -60,6 +61,24 @@ describe("appearance persistence", () => {
     const read = readAppearance(JSON.stringify({ ...DEFAULT_APPEARANCE, windowOpacity: 5 }));
     expect(read.windowOpacity).toBe(30);
     expect(read.uiFontSize).toBe(DEFAULT_APPEARANCE.uiFontSize);
+  });
+
+  it("ships the unfocused-opacity effect off, and resolves garbage to off", () => {
+    expect(DEFAULT_APPEARANCE.unfocusedOpacity).toBe(100);
+    expect(clampUnfocusedOpacity(Number.NaN)).toBe(100);
+    expect(clampUnfocusedOpacity(250)).toBe(100);
+    expect(clampUnfocusedOpacity(1)).toBe(30);
+  });
+
+  it("reads a blob written before unfocused opacity existed as off", () => {
+    const read = readAppearance(
+      JSON.stringify({ version: 1, activeThemeId: BUILTIN_THEMES[0]!.id, customThemes: [] }),
+    );
+    expect(read.unfocusedOpacity).toBe(100);
+  });
+
+  it("clamps a stored unfocused opacity", () => {
+    expect(readAppearance(JSON.stringify({ ...DEFAULT_APPEARANCE, unfocusedOpacity: 5 })).unfocusedOpacity).toBe(30);
   });
 
   it("round trips an exported theme file", () => {

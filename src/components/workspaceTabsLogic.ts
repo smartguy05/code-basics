@@ -55,6 +55,33 @@ export function closeOpenWorkspace(
 }
 
 /**
+ * Move an open workspace from one position in the strip to another, for
+ * drag-to-reorder. `from`/`to` are indices into `open`; the dragged tab is
+ * removed and re-inserted so the other tabs close the gap and shift by one.
+ *
+ * Out-of-range indices, or a no-op move (`from === to`), return the **same
+ * array reference** — the caller can skip the state update, and a stray drag
+ * event cannot churn the list. Identity is the `root`, so this never touches
+ * which root is active; the caller keeps `activeRoot` as it was.
+ */
+export function reorderWorkspaces(open: Workspace[], from: number, to: number): Workspace[] {
+  if (
+    from === to ||
+    from < 0 ||
+    to < 0 ||
+    from >= open.length ||
+    to >= open.length
+  ) {
+    return open;
+  }
+  const next = [...open];
+  const [moved] = next.splice(from, 1);
+  if (moved === undefined) return open;
+  next.splice(to, 0, moved);
+  return next;
+}
+
+/**
  * Whether a workspace tab should flash to signal that one of its terminals
  * wants attention.
  *

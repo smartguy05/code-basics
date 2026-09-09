@@ -8,6 +8,7 @@ import {
   mergeSignal,
   nextPulseExpiry,
   pulseAttention,
+  reorderWorkspaces,
   shouldFlashWorkspaceTab,
   tabLabels,
   tabSignalClass,
@@ -26,6 +27,24 @@ function ws(root: string, name?: string): Workspace {
     order: [],
   };
 }
+
+describe("reorderWorkspaces", () => {
+  const list = [ws("/a"), ws("/b"), ws("/c"), ws("/d")];
+
+  it("moves a tab forward, closing the gap", () => {
+    expect(reorderWorkspaces(list, 0, 2).map((w) => w.root)).toEqual(["/b", "/c", "/a", "/d"]);
+  });
+
+  it("moves a tab backward", () => {
+    expect(reorderWorkspaces(list, 3, 1).map((w) => w.root)).toEqual(["/a", "/d", "/b", "/c"]);
+  });
+
+  it("returns the same reference on a no-op or out-of-range move", () => {
+    expect(reorderWorkspaces(list, 1, 1)).toBe(list);
+    expect(reorderWorkspaces(list, -1, 2)).toBe(list);
+    expect(reorderWorkspaces(list, 0, 9)).toBe(list);
+  });
+});
 
 describe("addOpenWorkspace", () => {
   it("appends a new workspace and makes it active", () => {

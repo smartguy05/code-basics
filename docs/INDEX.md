@@ -137,11 +137,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/git/coverage_tests.rs` | 962 | Tests for the intent-coverage reverse pass and scorecard. |
 | `crates/core/src/git/grouping.rs` | 1036 | Turning hunks into a handful of decisions. |
 | `crates/core/src/git/grouping_tests.rs` | 1616 | Tests for collapsing hunks into cards. |
-| `crates/core/src/git/mod.rs` | 34 | Git operations. |
+| `crates/core/src/git/mod.rs` | 35 | Git operations. |
 | `crates/core/src/git/patch.rs` | 487 | Building unified diff patches restricted to a selection of lines. |
 | `crates/core/src/git/repo.rs` | 2285 | Repository reads and mutations. |
 | `crates/core/src/git/why.rs` | 260 | Intent that survives the commit. |
 | `crates/core/src/git/why_tests.rs` | 324 | Tests for the pure durable-why build and resolve logic. |
+| `crates/core/src/git/worktree.rs` | 165 | Creating a **user** git worktree on a new branch, to open in its own project |
+| `crates/core/src/git/worktree_tests.rs` | 56 |  |
 | `crates/core/src/importers/mod.rs` | 7 | Importing configurations from other tools. |
 | `crates/core/src/importers/rider.rs` | 522 | Importing JetBrains Rider run configurations. |
 | `crates/core/src/importers/rider_tests.rs` | 679 | Tests for the Rider importer. |
@@ -353,16 +355,16 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/sql_mssql.rs` | 733 | The SQL Server half of the SQL console, against a real server. |
 | `crates/core/tests/sql_postgres.rs` | 811 | The PostgreSQL half of the SQL subsystem's end-to-end proof. |
 | `crates/core/tests/sql_sqlite.rs` | 1073 | The first test in the SQL subsystem that touches a real database. |
-| `src/App.tsx` | 1443 |  |
-| `src/appearance.ts` | 83 |  |
-| `src/appearanceLogic.test.ts` | 70 |  |
-| `src/appearanceLogic.ts` | 168 |  |
+| `src/App.tsx` | 1470 |  |
+| `src/appearance.ts` | 87 |  |
+| `src/appearanceLogic.test.ts` | 89 |  |
+| `src/appearanceLogic.ts` | 196 |  |
 | `src/components/AboutDialog.tsx` | 138 |  |
 | `src/components/AppOutputPanel.tsx` | 237 |  |
 | `src/components/AskPanel.tsx` | 265 |  |
 | `src/components/AttachConfirm.tsx` | 63 |  |
 | `src/components/BehavioralPanel.tsx` | 412 |  |
-| `src/components/BranchMenu.tsx` | 462 |  |
+| `src/components/BranchMenu.tsx` | 500 |  |
 | `src/components/BrowserMcpPanel.tsx` | 227 |  |
 | `src/components/BrowserPanel.tsx` | 727 |  |
 | `src/components/ConfigEditor.tsx` | 313 |  |
@@ -371,13 +373,15 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/DiffView.tsx` | 967 |  |
 | `src/components/Dock.tsx` | 48 | The shared minimized-window dock: one fixed strip that renders every |
 | `src/components/DockContext.tsx` | 75 | The React plumbing for the shared minimized-window dock. All *decisions* live |
+| `src/components/DockableEditorSlot.tsx` | 70 |  |
+| `src/components/DockableTerminal.tsx` | 84 |  |
 | `src/components/EnvironmentPicker.tsx` | 107 |  |
 | `src/components/ErosionPanel.tsx` | 101 |  |
 | `src/components/ErrorBoundary.tsx` | 65 |  |
 | `src/components/FeaturesPicker.tsx` | 96 |  |
 | `src/components/FileEditor.tsx` | 1582 |  |
 | `src/components/FileIcon.tsx` | 108 | The file-type icon beside a name in the file tree and the Changes list. |
-| `src/components/FileTree.tsx` | 513 |  |
+| `src/components/FileTree.tsx` | 515 |  |
 | `src/components/IntentPanel.tsx` | 1530 |  |
 | `src/components/LauncherPicker.tsx` | 308 |  |
 | `src/components/LspStatus.tsx` | 184 |  |
@@ -389,22 +393,26 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/OutputConsole.tsx` | 487 |  |
 | `src/components/PillColorMenu.tsx` | 84 |  |
 | `src/components/PlanPreview.tsx` | 60 |  |
+| `src/components/RegionContext.tsx` | 248 |  |
+| `src/components/RegionDropOverlay.tsx` | 34 |  |
+| `src/components/RegionHost.tsx` | 154 |  |
+| `src/components/RegionSplitter.tsx` | 53 |  |
 | `src/components/ReviewPanel.tsx` | 499 |  |
 | `src/components/RiderImportDialog.tsx` | 135 |  |
 | `src/components/RunConfigMenu.tsx` | 183 |  |
-| `src/components/RunningPanel.tsx` | 240 |  |
+| `src/components/RunningPanel.tsx` | 248 |  |
 | `src/components/SearchEverywhere.tsx` | 497 |  |
-| `src/components/SettingsDialog.tsx` | 230 |  |
+| `src/components/SettingsDialog.tsx` | 247 |  |
 | `src/components/SetupPrompt.tsx` | 115 |  |
 | `src/components/Sidebar.tsx` | 50 |  |
 | `src/components/SqlConnectionPicker.tsx` | 624 |  |
 | `src/components/SqlPanel.tsx` | 191 |  |
 | `src/components/SqlResultGrid.tsx` | 217 |  |
 | `src/components/StashPanel.tsx` | 288 |  |
-| `src/components/TerminalPanel.tsx` | 576 |  |
+| `src/components/TerminalPanel.tsx` | 615 |  |
 | `src/components/TerminalView.tsx` | 178 |  |
 | `src/components/TestTree.tsx` | 125 |  |
-| `src/components/WorkspaceTab.tsx` | 901 |  |
+| `src/components/WorkspaceTab.tsx` | 918 |  |
 | `src/components/aboutLogic.test.ts` | 134 |  |
 | `src/components/aboutLogic.ts` | 140 | The string composition behind the About dialog. |
 | `src/components/appOutputLogic.test.ts` | 279 |  |
@@ -468,6 +476,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/pluginMenuLogic.ts` | 154 | The **Plugins** titlebar menu: what the optional features offer, and whether |
 | `src/components/projectViewLogic.test.ts` | 171 |  |
 | `src/components/projectViewLogic.ts` | 222 | Pure decisions for the merged **Project** tab — the view that puts the old |
+| `src/components/regionLayoutLogic.test.ts` | 188 |  |
+| `src/components/regionLayoutLogic.ts` | 287 | Pure decisions for **split docking** — dragging an editor, diff or terminal |
 | `src/components/renameLogic.test.ts` | 709 |  |
 | `src/components/renameLogic.ts` | 756 | Every decision F2 makes, kept out of the editor so it can be tested. |
 | `src/components/reviewLayoutLogic.test.ts` | 215 |  |
@@ -503,12 +513,12 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/usagesLogic.ts` | 922 | Every decision the usages UI makes, with no React, no DOM and no CodeMirror. |
 | `src/components/workspaceRenameLogic.test.ts` | 246 |  |
 | `src/components/workspaceRenameLogic.ts` | 222 | Custom, user-chosen labels for the open-codebase tabs. |
-| `src/components/workspaceTabsLogic.test.ts` | 305 |  |
-| `src/components/workspaceTabsLogic.ts` | 294 | Pure decisions for the top-level workspace tab strip — adding an open |
+| `src/components/workspaceTabsLogic.test.ts` | 324 |  |
+| `src/components/workspaceTabsLogic.ts` | 321 | Pure decisions for the top-level workspace tab strip — adding an open |
 | `src/editorFontSize.ts` | 52 | Applying the editor font size, and telling live editors it moved. |
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 | The one font size every CodeMirror editor in the app reads. |
-| `src/ipc/api.ts` | 1506 | Typed wrappers over the Tauri command surface. |
+| `src/ipc/api.ts` | 1514 | Typed wrappers over the Tauri command surface. |
 | `src/ipc/types.ts` | 2686 | TypeScript mirrors of the `cb-core` model types. |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
@@ -518,10 +528,10 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/shortcutLogic.ts` | 327 |  |
 | `src/shortcuts.ts` | 78 |  |
 | `src/views/ArchitectureView.tsx` | 679 |  |
-| `src/views/ChangesView.tsx` | 1020 |  |
+| `src/views/ChangesView.tsx` | 1062 |  |
 | `src/views/HistoryView.tsx` | 542 |  |
 | `src/views/InspectView.tsx` | 1086 |  |
-| `src/views/RunView.tsx` | 2336 |  |
+| `src/views/RunView.tsx` | 2372 |  |
 | `src/views/SqlView.tsx` | 1069 |  |
 | `src/views/TestsView.tsx` | 426 |  |
 | `src/views/architecture/DiagramCanvas.tsx` | 760 |  |
@@ -542,8 +552,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/architecture/viewportLogic.ts` | 117 | Where the user had panned and zoomed each diagram to, kept across a remount. |
 | `src/views/changesLogic.test.ts` | 222 |  |
 | `src/views/changesLogic.ts` | 115 |  |
-| `src/views/changesSelectionLogic.test.ts` | 127 |  |
-| `src/views/changesSelectionLogic.ts` | 110 |  |
+| `src/views/changesSelectionLogic.test.ts` | 160 |  |
+| `src/views/changesSelectionLogic.ts` | 142 |  |
 | `src/views/consolePanelLogic.test.ts` | 228 |  |
 | `src/views/consolePanelLogic.ts` | 205 | Whether the Run tab's console panel is put away, and how tall it is when it |
 | `src/views/debugLogic.test.ts` | 154 |  |
@@ -590,7 +600,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/erosion.rs` | 32 | Erosion-detector command. |
 | `src-tauri/src/commands/features.rs` | 53 | Optional-feature commands. |
 | `src-tauri/src/commands/files.rs` | 328 | Workspace file commands, for the Run tab's directory tree and file editor. |
-| `src-tauri/src/commands/git.rs` | 387 | Git commands. |
+| `src-tauri/src/commands/git.rs` | 409 | Git commands. |
 | `src-tauri/src/commands/inspect.rs` | 352 | Object-inspection commands. |
 | `src-tauri/src/commands/intents.rs` | 832 | Agent-intent commands. |
 | `src-tauri/src/commands/launcher.rs` | 380 | The app launcher's bridge: run an arbitrary command line, and manage the |
@@ -608,7 +618,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/symbols.rs` | 234 | The command palette's surface: searching the workspace, and asking after |
 | `src-tauri/src/commands/terminal.rs` | 277 | Interactive floating terminals. |
 | `src-tauri/src/commands/workspace.rs` | 258 | Workspace and configuration commands. |
-| `src-tauri/src/lib.rs` | 372 | The Tauri shell. |
+| `src-tauri/src/lib.rs` | 373 | The Tauri shell. |
 | `src-tauri/src/main.rs` | 6 | Suppress the extra console window on Windows in release builds. |
 | `src-tauri/src/mcp_browser.rs` | 336 | The `mcp-browser` mode: this executable as an MCP stdio server that talks to |
 | `src-tauri/src/mcp_browser_tests.rs` | 189 |  |
@@ -640,7 +650,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **run** (`src-tauri/src/commands/run.rs`): `start_run`, `build_project`, `cancel_run`, `running_ids`, `run_tests`, `last_test_run`, `coverage_of_change`
 - **debug** (`src-tauri/src/commands/debug.rs`): `start_debug`, `stop_debug`, `debug_ids`
 - **review** (`src-tauri/src/commands/review.rs`): `start_review`, `cancel_review`, `review_agents`, `agent_interactive_command`
-- **git** (`src-tauri/src/commands/git.rs`): `git_status`, `git_file_diff`, `git_file_contents`, `git_write_file`, `git_stage_file`, `git_unstage_file`, `git_stage_lines`, `git_unstage_lines`, `git_revert_lines`, `git_discard_file`, `git_commit`, `git_branches`, `git_create_branch`, `git_checkout_branch`, `git_checkout_remote_branch`, `git_delete_branch`, `git_merge_branch`, `git_abort_merge`, `git_history`, `git_commit_diff`, `git_commit_file_contents`, `git_commit_file_why`, `git_stash_save`, `git_stash_paths`, `git_stash_list`, `git_stash_pop`, `git_stash_apply`, `git_stash_drop`, `git_stash_clear`, `git_network`
+- **git** (`src-tauri/src/commands/git.rs`): `git_status`, `git_file_diff`, `git_file_contents`, `git_write_file`, `git_stage_file`, `git_unstage_file`, `git_stage_lines`, `git_unstage_lines`, `git_revert_lines`, `git_discard_file`, `git_commit`, `git_branches`, `git_create_branch`, `git_add_worktree`, `git_checkout_branch`, `git_checkout_remote_branch`, `git_delete_branch`, `git_merge_branch`, `git_abort_merge`, `git_history`, `git_commit_diff`, `git_commit_file_contents`, `git_commit_file_why`, `git_stash_save`, `git_stash_paths`, `git_stash_list`, `git_stash_pop`, `git_stash_apply`, `git_stash_drop`, `git_stash_clear`, `git_network`
 - **changelists** (`src-tauri/src/commands/changelists.rs`): `git_changelists`, `git_create_changelist`, `git_delete_changelist`, `git_rename_changelist`, `git_assign_to_changelist`
 - **intents** (`src-tauri/src/commands/intents.rs`): `intent_groups`, `stage_intent_group`, `revert_intent_group`, `reject_intent_group`, `intent_capture_status`, `intent_install_plan`, `enable_intent_capture`, `intent_uninstall_plan`, `disable_intent_capture`, `import_intent_history`, `intent_prune_preview`, `prune_intent_history`, `clear_intent_history`, `set_card_intent`, `clear_card_intent`, `move_card_edits`
 - **mcp** (`src-tauri/src/commands/mcp.rs`): `mcp_server_status`, `mcp_server_install_plan`, `install_mcp_server`, `mcp_server_uninstall_plan`, `uninstall_mcp_server`
@@ -661,7 +671,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 
 ## Frontend IPC wrappers (`src/ipc/api.ts`)
 
-`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `fsCreateFile`, `fsCreateDir`, `fsRename`, `fsDelete`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `listFeatures`, `setFeature`, `readNotes`, `writeNotes`, `aboutInfo`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `startDebug`, `stopDebug`, `debugIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `agentInteractiveCommand`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listShells`, `listLaunchables`, `launchCommand`, `stopCommand`, `saveLaunchable`, `deleteLaunchable`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashPaths`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `intentPrunePreview`, `pruneIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `moveCardEdits`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `mcpServerStatus`, `mcpServerInstallPlan`, `installMcpServer`, `mcpServerUninstallPlan`, `uninstallMcpServer`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspRestart`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `lspPrepareRename`, `lspRename`, `sqlListConnections`, `sqlDiscover`, `sqlSaveConnection`, `sqlDeleteConnection`, `sqlRenameConnection`, `sqlSetAllowWrites`, `sqlSetExposeToAgents`, `sqlTestConnection`, `sqlTestConnectionString`, `sqlListObjects`, `sqlListColumns`, `sqlExecute`, `sqlCancel`, `errorMessage`, `browserOpen`, `browserClose`, `browserSetBounds`, `browserSetVisible`, `browserNavigate`, `browserBack`, `browserForward`, `browserReload`, `browserState`, `browserConsole`, `browserNetwork`, `browserPageText`, `browserSetAutomationConsent`, `browserMcpStatus`, `browserMcpInstallPlan`, `installBrowserMcp`, `browserMcpUninstallPlan`, `uninstallBrowserMcp`
+`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `fsCreateFile`, `fsCreateDir`, `fsRename`, `fsDelete`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `listFeatures`, `setFeature`, `readNotes`, `writeNotes`, `aboutInfo`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `startDebug`, `stopDebug`, `debugIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `agentInteractiveCommand`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listShells`, `listLaunchables`, `launchCommand`, `stopCommand`, `saveLaunchable`, `deleteLaunchable`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitAddWorktree`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashPaths`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `intentPrunePreview`, `pruneIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `moveCardEdits`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `mcpServerStatus`, `mcpServerInstallPlan`, `installMcpServer`, `mcpServerUninstallPlan`, `uninstallMcpServer`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspRestart`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `lspPrepareRename`, `lspRename`, `sqlListConnections`, `sqlDiscover`, `sqlSaveConnection`, `sqlDeleteConnection`, `sqlRenameConnection`, `sqlSetAllowWrites`, `sqlSetExposeToAgents`, `sqlTestConnection`, `sqlTestConnectionString`, `sqlListObjects`, `sqlListColumns`, `sqlExecute`, `sqlCancel`, `errorMessage`, `browserOpen`, `browserClose`, `browserSetBounds`, `browserSetVisible`, `browserNavigate`, `browserBack`, `browserForward`, `browserReload`, `browserState`, `browserConsole`, `browserNetwork`, `browserPageText`, `browserSetAutomationConsent`, `browserMcpStatus`, `browserMcpInstallPlan`, `installBrowserMcp`, `browserMcpUninstallPlan`, `uninstallBrowserMcp`
 
 ## Public core API (`cb-core`)
 
@@ -729,6 +739,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/git/patch.rs`: `LineOrigin`, `DiffLine`, `Hunk`, `FileDiff`, `changed_line_indices()`, `hunk_line_indices()`, `Direction`, `build_patch()`
 - `crates/core/src/git/repo.rs`: `clear_readonly_directories()`, `clear_readonly_directories()`, `ComparisonMode`, `ChangeKind`, `FileContents`, `FileChange`, `is_conflicted()`, `WorkingStatus`, `Branch`, `Commit`, `StashEntry`, `MergeOutcome`, `MergeReport`, `StageTarget`, `Repo`, `open()`, `workdir()`, `head_oid()`, `hooks_dir()`, `status()`, `file_diff()`, `diff_all()`, `baseline_content()`, `working_content()`, `write_working_file()`, `stage_file()`, `unstage_file()`, `stage_lines()`, `unstage_lines()`, `revert_lines()`, `discard_file()`, `commit()`, `merge_branch()`, `abort_merge()`, `branches()`, `create_branch()`, `checkout_branch()`, `create_branch_from()`, `checkout_remote_branch()`, `delete_branch()`, `history()`, `commit_diff()`, `commit_file_contents()`, `write_why_note()`, `read_why_note()`, `why_for_file()`, `stash_save()`, `stash_paths()`, `stash_list()`, `stash_pop()`, `stash_apply()`, `stash_drop()`, `stash_clear()`, `network_command()`, `NetworkOperation`, `NetworkKind`, `resolve_network()`
 - `crates/core/src/git/why.rs`: `WhyEntry`, `FileWhy`, `DurableWhy`, `is_empty()`, `LineIntent`, `content_hash()`, `build_for_commit()`, `resolve_lines()`, `file_in()`, `record_note()`
+- `crates/core/src/git/worktree.rs`: `validate_branch_name()`, `sanitize_dir_segment()`, `default_worktree_dir()`, `add_worktree()`
 - `crates/core/src/importers/rider.rs`: `RiderConfiguration`, `parse()`, `expand_macros()`, `convert()`, `resolve_compounds()`, `ImportResult`, `import()`
 - `crates/core/src/inspect/dumps.rs`: `dumps_dir()`, `ParsedDumpName`, `dump_env()`, `parse_dump_name()`, `list()`, `newest_for()`, `prune()`, `prune_unnamed()`
 - `crates/core/src/inspect/graph.rs`: `RawResult`, `RawNode`, `parse()`, `classify()`, `display_label()`

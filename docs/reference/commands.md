@@ -212,6 +212,7 @@ The Running panel: what the app has running now (across every open codebase) plu
 | `git_commit` | `message: String`, `amend: bool` | `String` | Returns the new commit id. Also persists the change's content-keyed intent into a git note (`refs/notes/code-basics-intents`), best-effort — a note failure never fails the commit |
 | `git_branches` | – | `Branch[]` | |
 | `git_create_branch` | `name: String`, `checkout: bool`, `from: String?` | `()` | `from` is the revision to branch from; absent means HEAD |
+| `git_add_worktree` | `name: String`, `base: String?`, `dir: String?` | `String` | Creates a worktree on a new branch and returns its directory (to open in a new tab); `base` absent means HEAD, `dir` absent uses a sibling `<repo>.worktrees/<name>` |
 | `git_checkout_branch` | `name: String` | `()` | |
 | `git_checkout_remote_branch` | `name: String` | `()` | Like `git switch`: creates the local tracking branch (or reuses it), then switches |
 | `git_delete_branch` | `name: String` | `()` | |

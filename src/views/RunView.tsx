@@ -18,6 +18,8 @@ import {
   selectedBuildConfiguration,
 } from "../components/configLogic";
 import { FileEditor, type PendingRenameEdits } from "../components/FileEditor";
+import { DockableEditorSlot } from "../components/DockableEditorSlot";
+import { useRegions } from "../components/RegionContext";
 import { consumeRenameEdits, renameSummary, type RenameReport } from "../components/renameLogic";
 import { FileTree } from "../components/FileTree";
 import { lspPollKeyFor } from "../components/lspStatusLogic";
@@ -1534,10 +1536,28 @@ export function RunView({
   /** Whatever Run is bound to now, so the tooltip cannot advertise a stale key. */
   const runKey = useShortcutHint("run.run");
 
+  // Split docking: a file tab dragged to a screen edge docks into a region.
+  // Docked tabs leave the center strip (they show in the region's own strip),
+  // and RunView tells the region system which tabs are open so a closed one is
+  // pruned. Diffs are deliberately not dockable — a second `DiffPane` breaks the
+  // single-pane command routing this view documents (see `DiffPane`), so only
+  // `FileEditor`-backed tabs dock.
+  const regions = useRegions();
+  const openIdsKey = openFiles.map((f) => f.id).join(" ");
+  useEffect(() => {
+    regions?.syncTabIds(openFiles.map((f) => f.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regions, openIdsKey]);
+
+  const centerFiles = regions
+    ? openFiles.filter((f) => !regions.dockedTabs.has(f.id))
+    : openFiles;
+
   // The open tabs split into the pinned row and the normal row; with nothing
-  // pinned this is exactly the old single strip.
+  // pinned this is exactly the old single strip. Docked tabs are excluded — they
+  // live in their region's strip.
   const { pinned: pinnedTabs, unpinned: unpinnedTabs } = partitionTabs(
-    openFiles,
+    centerFiles,
     pinnedFiles,
   );
 
@@ -1567,6 +1587,12 @@ export function RunView({
             selectMode(file.source.mode);
             changes.openFile(file.source.path);
           }
+        }}
+        // Dragging a file tab to a screen edge docks it (diffs excluded — see
+        // `centerFiles`). A plain click still selects: `startDrag` only arms
+        // window listeners and the click fires when there was no drag.
+        onPointerDown={(e) => {
+          if (file.source.kind !== "diff") regions?.startDrag({ kind: "tab", id: file.id }, e);
         }}
         // Middle-click closes, like browser tabs. The mousedown guard stops the
         // autoscroll cursor.
@@ -1668,7 +1694,6 @@ export function RunView({
             </>
           )}
 
-          <div className="group-label">Files</div>
           <FileTree
             refreshToken={workspace}
             // A diff tab's id is `diff:<mode>:<path>` and names no file on disk,
@@ -1758,38 +1783,20 @@ export function RunView({
             )}
           </>
         )}
-        {/* The main area shows the active tab, and the toolbar follows it.
+        {/* The Run toolbar renders unconditionally, so its controls stay
+            reachable even while a diff tab is active — the toolbar no longer
+            "follows" the active tab. It uses only `run.*` commands and
+            DiffPane's toolbar only `changes.*`/`change.*`, so the two never
+            collide in `pickCommandTarget` even both on screen. The invariant
+            that mattered still holds in the dangerous direction: a file-active
+            view renders no `changes.*` toolbar at all, so `changes.stage` never
+            gets an off-screen target.
 
-            The order is load-bearing. `DiffPane` renders its own `.toolbar`
-            and `.content`, so with a diff active the DOM reads: diff toolbar,
-            diff content, then the editor area *hidden beside it*. Two
-            consequences, both deliberate: the editors stay mounted and keep
-            their state, scroll and language-server documents; and there is
-            never a second `.toolbar` on screen, so `changes.stage` cannot be
-            answered by a control the user is not looking at. */}
-        {isDiff ? (
-          <DiffPane
-            path={changes.selectedPath}
-            mode={changes.mode}
-            onModeChange={selectMode}
-            scopedHunks={changes.groupHunks}
-            highlight={changes.highlight}
-            intentGroups={changes.intentGroups}
-            erosion={changes.erosion}
-            coverage={changes.coverage}
-            busy={changes.busy}
-            runAction={changes.withBusy}
-            // A `useState` setter, never an inline arrow: this is a
-            // dependency of the pane's load effect, and a fresh identity per
-            // render would refetch the diff forever.
-            onError={changes.setError}
-            onMutated={changes.refreshAll}
-            reloadRef={changes.reloadFile}
-            banner={changes.error ? <div className="error">{changes.error}</div> : null}
-          />
-        ) : (
-          <>
-          <div className="toolbar">
+            Below the toolbar the order is still load-bearing. `DiffPane` renders
+            its own `.toolbar` and `.content`; the editor/console area is the
+            sibling below, kept mounted and `hidden` beside it so editors keep
+            their state, scroll and language-server documents. */}
+        <div className="toolbar">
             <button
               data-command="run.run"
               className="primary icon-label-button"
@@ -2003,6 +2010,28 @@ export function RunView({
             )}
           </div>
 
+        {isDiff ? (
+          <DiffPane
+            path={changes.selectedPath}
+            mode={changes.mode}
+            onModeChange={selectMode}
+            scopedHunks={changes.groupHunks}
+            highlight={changes.highlight}
+            intentGroups={changes.intentGroups}
+            erosion={changes.erosion}
+            coverage={changes.coverage}
+            busy={changes.busy}
+            runAction={changes.withBusy}
+            // A `useState` setter, never an inline arrow: this is a
+            // dependency of the pane's load effect, and a fresh identity per
+            // render would refetch the diff forever.
+            onError={changes.setError}
+            onMutated={changes.refreshAll}
+            reloadRef={changes.reloadFile}
+            banner={changes.error ? <div className="error">{changes.error}</div> : null}
+          />
+        ) : (
+          <>
           {error && <div className="error">{error}</div>}
           {selectedUnreadable && (
             <div className="warning inspect-notice">
@@ -2172,15 +2201,22 @@ export function RunView({
                         takes an `EditableSource`, and a diff reaching its
                         read/write pair would render the plain file and then
                         write the buffer back over it on the flush timer. The
-                        type says so, and this is where the type is honoured. */}
+                        type says so, and this is where the type is honoured.
+
+                        Each editor is wrapped in `DockableEditorSlot`, which
+                        owns a center host here and portals the `FileEditor` into
+                        a docked region slot when the tab is dragged to an edge —
+                        without remounting it, so unsaved edits (a `FileEditor`
+                        saves only on Ctrl+S) and its language-server document
+                        survive the move. */}
                     {openFiles.map((file) =>
                       file.source.kind === "diff" ? null : (
-                      <div
+                      <DockableEditorSlot
                         key={file.id}
-                        style={{
-                          display: file.id === activeFile ? "block" : "none",
-                          height: "100%",
-                        }}
+                        tabId={file.id}
+                        label={file.name}
+                        centerActive={file.id === activeFile}
+                        onClose={() => closeFile(file.id)}
                       >
                         <FileEditor
                           source={file.source}
@@ -2202,7 +2238,7 @@ export function RunView({
                           onRenameApplied={distributeRename}
                           onRenameNote={(report) => onNotify?.(report)}
                         />
-                      </div>
+                      </DockableEditorSlot>
                       ),
                     )}
                   </div>

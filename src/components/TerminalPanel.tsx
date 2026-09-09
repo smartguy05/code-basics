@@ -51,6 +51,8 @@ export function TerminalPanel({
   onCompleted,
   onRename,
   onRecolor,
+  docked = false,
+  onDock,
 }: {
   title: string;
   /**
@@ -131,6 +133,16 @@ export function TerminalPanel({
   onRename?: (title: string) => void;
   /** Set/clear the minimized-pill colour. */
   onRecolor?: (color: string | undefined) => void;
+  /**
+   * When true this terminal is **docked** into a region: it fills its container
+   * (a `RegionHost` slot it is portaled into) instead of floating, hides its own
+   * header (the region's tab strip is the header), and drops the drag/resize/
+   * minimize chrome. The same component instance is used floating and docked so
+   * the xterm session survives the transition — only its container changes.
+   */
+  docked?: boolean;
+  /** Floating only: dock this terminal into a region (offered in the header). */
+  onDock?: () => void;
 }) {
   const viewRef = useRef<TerminalViewHandle>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -183,6 +195,14 @@ export function TerminalPanel({
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   minimizedRef.current = minimized;
+  // Read inside the mount-once ResizeObserver, and re-fit when the dock state
+  // flips (the container changes shape as it moves between float and slot).
+  const dockedRef = useRef(docked);
+  dockedRef.current = docked;
+  useEffect(() => {
+    const t = setTimeout(() => viewRef.current?.fit(), 0);
+    return () => clearTimeout(t);
+  }, [docked]);
   workspaceActiveRef.current = workspaceActive;
 
   // A workspace switch hides an otherwise-visible terminal. If its bell rang
@@ -300,6 +320,12 @@ export function TerminalPanel({
     const observer = new ResizeObserver(() => {
       const width = panel.offsetWidth;
       const height = panel.offsetHeight;
+      // Docked: the region's splitter drives the size, so re-fit xterm to it and
+      // never persist it as the floating size (that key is the floating layout).
+      if (dockedRef.current) {
+        viewRef.current?.fit();
+        return;
+      }
       if (!gate.persist({ width, height })) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
@@ -466,7 +492,7 @@ export function TerminalPanel({
   return (
     <>
       <div
-        className="review-panel terminal-panel"
+        className={`review-panel terminal-panel${docked ? " terminal-docked" : ""}`}
         hidden={minimized}
         ref={panelRef}
         // Capture phase, on the root rather than the header, so clicking into the
@@ -475,16 +501,23 @@ export function TerminalPanel({
         // preventDefaults nor stops propagation, which is what leaves xterm's
         // text selection, the drag, and the header buttons untouched.
         onPointerDownCapture={() => onRaise?.()}
-        style={{
-          ...({ "--cb-stack": stackOffset } as React.CSSProperties),
-          ...(pos
-            ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" }
-            : shift
-              ? { transform: `translate(${-shift}px, ${-shift}px)` }
-              : {}),
-          ...(size ? { width: size.width, height: size.height } : {}),
-        }}
+        // Docked: fill the slot (positioning/size come from the region), so the
+        // floating pos/size/stack are all dropped.
+        style={
+          docked
+            ? {}
+            : {
+                ...({ "--cb-stack": stackOffset } as React.CSSProperties),
+                ...(pos
+                  ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" }
+                  : shift
+                    ? { transform: `translate(${-shift}px, ${-shift}px)` }
+                    : {}),
+                ...(size ? { width: size.width, height: size.height } : {}),
+              }
+        }
       >
+        {!docked && (
         <div
           className={`review-header${attention ? " attention" : ""}`}
           onPointerDown={onHeaderPointerDown}
@@ -538,6 +571,11 @@ export function TerminalPanel({
           {onRecolor && (
             <PillColorMenu color={color} onPick={onRecolor} title="Set the minimized pill colour" />
           )}
+          {onDock && (
+            <button onClick={onDock} title="Dock this terminal to the side (drag its tab to move it)">
+              ⇥
+            </button>
+          )}
           <button onClick={() => setMinimized(true)} title="Minimize (keeps running)">
             —
           </button>
@@ -545,6 +583,7 @@ export function TerminalPanel({
             ✕
           </button>
         </div>
+        )}
 
         {error && <div className="warning">{error}</div>}
 
