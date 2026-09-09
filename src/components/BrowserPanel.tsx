@@ -16,7 +16,7 @@ import {
   consentBanner,
   READ_CONSENT_ACTION,
   WRITE_CONSENT_ACTION,
-  BROWSER_LAYOUT_KEY,
+  browserLayoutKey,
   hiddenPageReason,
   pageRect,
   pageVisible,
@@ -67,10 +67,24 @@ import {
  * **after** the handler runs, so a synchronous `focus()` is silently undone.
  */
 export function BrowserPanel({
+  root,
+  active,
   restoreRequest,
   enabled,
   onClose,
 }: {
+  /**
+   * The codebase this page belongs to. Every host call is scoped by it, so a
+   * page never reaches into another codebase's webview, and the layout is
+   * remembered per codebase (`browserLayoutKey`).
+   */
+  root: string;
+  /**
+   * Whether this codebase is the foreground tab. Drives the OS webview's
+   * visibility through `pageVisible`/`sync`: a backgrounded codebase's page is
+   * hidden, so it cannot composite over the codebase the user switched to.
+   */
+  active: boolean;
   /**
    * Changes on every request to open the browser. A minimized panel restores
    * itself when it changes — a boolean could not say "open it again" about a
@@ -114,11 +128,11 @@ export function BrowserPanel({
   useEffect(() => setMinimized(false), [restoreRequest]);
 
   const [pos, setPos] = useState<PanelLayout | undefined>(() => {
-    const saved = loadPanelLayout(localStorage, BROWSER_LAYOUT_KEY);
+    const saved = loadPanelLayout(localStorage, browserLayoutKey(root));
     return saved.left !== undefined && saved.top !== undefined ? saved : undefined;
   });
   const [size] = useState<PanelSize | undefined>(() => {
-    const saved = loadPanelLayout(localStorage, BROWSER_LAYOUT_KEY);
+    const saved = loadPanelLayout(localStorage, browserLayoutKey(root));
     return saved.width !== undefined && saved.height !== undefined
       ? { width: saved.width, height: saved.height }
       : undefined;
@@ -180,6 +194,7 @@ export function BrowserPanel({
       state: { open: true, restoreToken: 0 },
       enabled: true,
       minimized,
+      active,
       rect: decision,
     });
     setHidden(
@@ -187,20 +202,30 @@ export function BrowserPanel({
         state: { open: true, restoreToken: 0 },
         enabled: true,
         minimized,
+        active,
         rect: decision,
       }),
     );
     try {
       if (decision.ok) {
-        await api.browserSetBounds(decision.rect);
+        await api.browserSetBounds(root, decision.rect);
         if (superseded()) return;
       }
-      await api.browserSetVisible(visible);
+      await api.browserSetVisible(root, visible);
     } catch (e) {
       if (superseded()) return;
       setError(String(e));
     }
-  }, [measure, minimized]);
+  }, [measure, minimized, active, root]);
+
+  // Re-run `sync` when this codebase moves between foreground and background.
+  // A switch-away must call `set_visible(false)` deterministically, and a
+  // switch-back must place and show the page again. `sync`'s generation stamp
+  // abandons any superseded write, which is what stops a stale run re-showing
+  // the page over the codebase the user switched to.
+  useEffect(() => {
+    void sync();
+  }, [active, sync]);
 
   // Create the page on mount, and drop it on unmount. `browser_close` really
   // does take the WebView2 process tree with it (verified in the Phase 4
@@ -221,11 +246,12 @@ export function BrowserPanel({
       }
       try {
         const state = await api.browserOpen(
+          root,
           decision.ok ? decision.rect : { left: 0, top: 0, width: 1, height: 1 },
           null,
         );
         if (live) setSnapshot(state);
-        if (live && !decision.ok) await api.browserSetVisible(false);
+        if (live && !decision.ok) await api.browserSetVisible(root, false);
       } catch (e) {
         if (live) setError(String(e));
       }
@@ -234,7 +260,7 @@ export function BrowserPanel({
       live = false;
       // `enabledRef` and not `enabled`: the caller flips the feature off and
       // then unmounts, so the value at unmount is the one that says why.
-      void api.browserClose(!enabledRef.current).catch(() => {
+      void api.browserClose(root, !enabledRef.current).catch(() => {
         // Nothing to report to — the panel is gone. The host has already
         // recorded the state change.
       });
@@ -250,7 +276,7 @@ export function BrowserPanel({
     let live = true;
     const read = async () => {
       try {
-        const state = await api.browserState();
+        const state = await api.browserState(root);
         if (live) setSnapshot(state);
       } catch {
         // A failed poll is not worth a message: the next one is 700ms away and
@@ -323,8 +349,8 @@ export function BrowserPanel({
           { width, height },
           { width: window.innerWidth, height: window.innerHeight },
         );
-        const saved = loadPanelLayout(localStorage, BROWSER_LAYOUT_KEY);
-        savePanelLayout(localStorage, { ...saved, ...clamped }, BROWSER_LAYOUT_KEY);
+        const saved = loadPanelLayout(localStorage, browserLayoutKey(root));
+        savePanelLayout(localStorage, { ...saved, ...clamped }, browserLayoutKey(root));
       }, 200);
     });
     observer.observe(panel);
@@ -382,7 +408,7 @@ export function BrowserPanel({
       header.releasePointerCapture(e.pointerId);
       header.removeEventListener("pointermove", onMove);
       header.removeEventListener("pointerup", onUp);
-      if (moved) savePanelLayout(localStorage, latest, BROWSER_LAYOUT_KEY);
+      if (moved) savePanelLayout(localStorage, latest, browserLayoutKey(root));
       void sync();
     };
     header.addEventListener("pointermove", onMove);
@@ -394,7 +420,7 @@ export function BrowserPanel({
     if (typed === null) return;
     setError(null);
     try {
-      const state = await api.browserNavigate(typed);
+      const state = await api.browserNavigate(root, typed);
       setSnapshot(state);
       // Only now: while a draft exists the field shows it, and clearing it
       // before the navigation lands would flick the user's text away and then
@@ -416,7 +442,7 @@ export function BrowserPanel({
   const grant = async (reads: boolean, writes: boolean) => {
     setError(null);
     try {
-      setSnapshot(await api.browserSetAutomationConsent(reads, writes));
+      setSnapshot(await api.browserSetAutomationConsent(root, reads, writes));
     } catch (e) {
       setError(String(e));
     }
@@ -462,20 +488,24 @@ export function BrowserPanel({
         <div className="review-header browser-header" onPointerDown={onHeaderPointerDown}>
           <strong>Web</strong>
           <button
-            onClick={() => void act(api.browserBack)}
+            onClick={() => void act(() => api.browserBack(root))}
             title="Back (the page's own history)"
             aria-label="Back"
           >
             ←
           </button>
           <button
-            onClick={() => void act(api.browserForward)}
+            onClick={() => void act(() => api.browserForward(root))}
             title="Forward (the page's own history)"
             aria-label="Forward"
           >
             →
           </button>
-          <button onClick={() => void act(api.browserReload)} title="Reload" aria-label="Reload">
+          <button
+            onClick={() => void act(() => api.browserReload(root))}
+            title="Reload"
+            aria-label="Reload"
+          >
             ⟳
           </button>
           <input

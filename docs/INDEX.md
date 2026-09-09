@@ -214,13 +214,13 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/lsp/positions_tests.rs` | 342 |  |
 | `crates/core/src/lsp/protocol.rs` | 1198 | The LSP messages this app actually uses, and nothing else. |
 | `crates/core/src/lsp/protocol_tests.rs` | 1740 |  |
-| `crates/core/src/lsp/registry.rs` | 1030 | Which server serves which file, where it is, and what to say when it is absent. |
-| `crates/core/src/lsp/registry_tests.rs` | 1270 |  |
+| `crates/core/src/lsp/registry.rs` | 1061 | Which server serves which file, where it is, and what to say when it is absent. |
+| `crates/core/src/lsp/registry_tests.rs` | 1325 |  |
 | `crates/core/src/lsp/rename.rs` | 639 | Turning a server's `WorkspaceEdit` into files on disk, or refusing to. |
 | `crates/core/src/lsp/rename_tests.rs` | 929 | The two phases, every refusal, and the rollback. |
 | `crates/core/src/lsp/results.rs` | 398 | LSP payloads in, the types the frontend reads out. |
 | `crates/core/src/lsp/results_tests.rs` | 670 | Every rule this module claims to obey, one test each. |
-| `crates/core/src/lsp/session.rs` | 1928 | Every language server for one workspace, behind one actor. |
+| `crates/core/src/lsp/session.rs` | 1947 | Every language server for one workspace, behind one actor. |
 | `crates/core/src/lsp/session_tests.rs` | 536 | The session's pure decisions, headlessly. |
 | `crates/core/src/lsp/settings.rs` | 159 | The per-workspace language-server configuration block. |
 | `crates/core/src/lsp/settings_tests.rs` | 172 |  |
@@ -346,14 +346,14 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/intent_retirement.rs` | 358 | End-to-end tests for retiring intents a commit has absorbed. |
 | `crates/core/tests/lsp_client.rs` | 1664 | One language server, from handshake to shutdown, against `cb-fake-lsp`. |
 | `crates/core/tests/lsp_oracle.rs` | 838 | The answers a **real** language server gives, for the languages this machine |
-| `crates/core/tests/lsp_session.rs` | 1398 | Every language server for one workspace, behind one actor, against `cb-fake-lsp`. |
+| `crates/core/tests/lsp_session.rs` | 1455 | Every language server for one workspace, behind one actor, against `cb-fake-lsp`. |
 | `crates/core/tests/lsp_transport.rs` | 935 | The transport against a live process, one test per way a server misbehaves. |
 | `crates/core/tests/pty_roundtrip.rs` | 260 | End-to-end PTY test: prove a real pseudo-terminal round-trips stdin to |
 | `crates/core/tests/reject_markers.rs` | 422 | Rejection end to end: against a real repository, with the real `git`. |
 | `crates/core/tests/sql_mssql.rs` | 733 | The SQL Server half of the SQL console, against a real server. |
 | `crates/core/tests/sql_postgres.rs` | 811 | The PostgreSQL half of the SQL subsystem's end-to-end proof. |
 | `crates/core/tests/sql_sqlite.rs` | 1073 | The first test in the SQL subsystem that touches a real database. |
-| `src/App.tsx` | 1405 |  |
+| `src/App.tsx` | 1406 |  |
 | `src/appearance.ts` | 83 |  |
 | `src/appearanceLogic.test.ts` | 70 |  |
 | `src/appearanceLogic.ts` | 168 |  |
@@ -364,7 +364,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/BehavioralPanel.tsx` | 402 |  |
 | `src/components/BranchMenu.tsx` | 462 |  |
 | `src/components/BrowserMcpPanel.tsx` | 227 |  |
-| `src/components/BrowserPanel.tsx` | 578 |  |
+| `src/components/BrowserPanel.tsx` | 608 |  |
 | `src/components/ConfigEditor.tsx` | 313 |  |
 | `src/components/ContextMenu.tsx` | 111 |  |
 | `src/components/DiffPane.tsx` | 441 |  |
@@ -373,7 +373,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/ErosionPanel.tsx` | 101 |  |
 | `src/components/ErrorBoundary.tsx` | 65 |  |
 | `src/components/FeaturesPicker.tsx` | 96 |  |
-| `src/components/FileEditor.tsx` | 1553 |  |
+| `src/components/FileEditor.tsx` | 1582 |  |
 | `src/components/FileIcon.tsx` | 108 | The file-type icon beside a name in the file tree and the Changes list. |
 | `src/components/FileTree.tsx` | 513 |  |
 | `src/components/IntentPanel.tsx` | 1530 |  |
@@ -384,7 +384,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/NotesPanel.tsx` | 385 |  |
 | `src/components/NotificationHost.tsx` | 79 |  |
 | `src/components/ObjectTree.tsx` | 357 |  |
-| `src/components/OutputConsole.tsx` | 484 |  |
+| `src/components/OutputConsole.tsx` | 487 |  |
 | `src/components/PillColorMenu.tsx` | 84 |  |
 | `src/components/PlanPreview.tsx` | 60 |  |
 | `src/components/ReviewPanel.tsx` | 489 |  |
@@ -402,7 +402,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/TerminalPanel.tsx` | 558 |  |
 | `src/components/TerminalView.tsx` | 178 |  |
 | `src/components/TestTree.tsx` | 125 |  |
-| `src/components/WorkspaceTab.tsx` | 834 |  |
+| `src/components/WorkspaceTab.tsx` | 891 |  |
 | `src/components/aboutLogic.test.ts` | 134 |  |
 | `src/components/aboutLogic.ts` | 140 | The string composition behind the About dialog. |
 | `src/components/appOutputLogic.test.ts` | 279 |  |
@@ -413,8 +413,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/behavioralPanelLogic.ts` | 451 |  |
 | `src/components/branchFilterLogic.test.ts` | 126 |  |
 | `src/components/branchFilterLogic.ts` | 88 |  |
-| `src/components/browserPanelLogic.test.ts` | 505 |  |
-| `src/components/browserPanelLogic.ts` | 452 | Pure decisions for the floating browser panel: when it is mounted, when a |
+| `src/components/browserPanelLogic.test.ts` | 544 |  |
+| `src/components/browserPanelLogic.ts` | 466 | Pure decisions for the floating browser panel: when it is mounted, when a |
 | `src/components/claimChecklistLogic.test.ts` | 147 |  |
 | `src/components/claimChecklistLogic.ts` | 106 |  |
 | `src/components/claimVerifyLogic.test.ts` | 312 |  |
@@ -459,8 +459,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/notesLogic.ts` | 178 | Pure decisions for the Notes / scratchpad panel — creating, renaming, |
 | `src/components/notificationLogic.test.ts` | 169 |  |
 | `src/components/notificationLogic.ts` | 161 | The app's notification service: what deserves a notification, what it says, |
-| `src/components/pluginMenuLogic.test.ts` | 182 |  |
-| `src/components/pluginMenuLogic.ts` | 158 | The **Plugins** titlebar menu: what the optional features offer, and whether |
+| `src/components/pluginMenuLogic.test.ts` | 183 |  |
+| `src/components/pluginMenuLogic.ts` | 154 | The **Plugins** titlebar menu: what the optional features offer, and whether |
 | `src/components/projectViewLogic.test.ts` | 171 |  |
 | `src/components/projectViewLogic.ts` | 222 | Pure decisions for the merged **Project** tab — the view that puts the old |
 | `src/components/renameLogic.test.ts` | 709 |  |
@@ -498,25 +498,25 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/usagesLogic.ts` | 922 | Every decision the usages UI makes, with no React, no DOM and no CodeMirror. |
 | `src/components/workspaceRenameLogic.test.ts` | 246 |  |
 | `src/components/workspaceRenameLogic.ts` | 222 | Custom, user-chosen labels for the open-codebase tabs. |
-| `src/components/workspaceTabsLogic.test.ts` | 241 |  |
-| `src/components/workspaceTabsLogic.ts` | 226 | Pure decisions for the top-level workspace tab strip — adding an open |
+| `src/components/workspaceTabsLogic.test.ts` | 305 |  |
+| `src/components/workspaceTabsLogic.ts` | 294 | Pure decisions for the top-level workspace tab strip — adding an open |
 | `src/editorFontSize.ts` | 52 | Applying the editor font size, and telling live editors it moved. |
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 | The one font size every CodeMirror editor in the app reads. |
-| `src/ipc/api.ts` | 1501 | Typed wrappers over the Tauri command surface. |
+| `src/ipc/api.ts` | 1506 | Typed wrappers over the Tauri command surface. |
 | `src/ipc/types.ts` | 2686 | TypeScript mirrors of the `cb-core` model types. |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
 | `src/reexportGuards.test.ts` | 23 | / <reference types="vite/client" /> |
 | `src/shortcutLogic.test.ts` | 133 |  |
-| `src/shortcutLogic.ts` | 323 |  |
+| `src/shortcutLogic.ts` | 327 |  |
 | `src/shortcuts.ts` | 78 |  |
 | `src/views/ArchitectureView.tsx` | 679 |  |
 | `src/views/ChangesView.tsx` | 1020 |  |
 | `src/views/HistoryView.tsx` | 542 |  |
 | `src/views/InspectView.tsx` | 1086 |  |
-| `src/views/RunView.tsx` | 2328 |  |
+| `src/views/RunView.tsx` | 2336 |  |
 | `src/views/SqlView.tsx` | 1069 |  |
 | `src/views/TestsView.tsx` | 426 |  |
 | `src/views/architecture/DiagramCanvas.tsx` | 760 |  |
@@ -566,18 +566,18 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/windowTransparencyLogic.ts` | 126 | When the window is translucent, and by how much. |
 | `src-tauri/src/browser/agent.rs` | 291 | Answering an agent's browser tool call: the gate, the projection, and the |
 | `src-tauri/src/browser/agent_tests.rs` | 341 |  |
-| `src-tauri/src/browser/host_tests.rs` | 166 | Tests for the two decisions in the host that are not about the webview. |
-| `src-tauri/src/browser/mod.rs` | 726 | The embedded browser **host**: the one place a real web page lives inside |
-| `src-tauri/src/browser/pipe.rs` | 500 | The browser control pipe: the one way an agent's MCP server reaches this |
+| `src-tauri/src/browser/host_tests.rs` | 191 | Tests for the two decisions in the host that are not about the webview. |
+| `src-tauri/src/browser/mod.rs` | 778 | The embedded browser **host**: the one place a real web page lives inside |
+| `src-tauri/src/browser/pipe.rs` | 511 | The browser control pipe: the one way an agent's MCP server reaches this |
 | `src-tauri/src/browser/pipe_tests.rs` | 83 |  |
 | `src-tauri/src/browser/registry.rs` | 133 | Publishing what an MCP client needs to find this application. |
-| `src-tauri/src/browser/registry_tests.rs` | 271 |  |
+| `src-tauri/src/browser/registry_tests.rs` | 284 |  |
 | `src-tauri/src/browser/shared.rs` | 575 | The browser host's **data**: what the panel and an agent read, and every |
 | `src-tauri/src/browser/shared_tests.rs` | 574 | Tests for the browser host's data layer. |
 | `src-tauri/src/commands/about.rs` | 99 | What build is this? — the data behind Help → About. |
 | `src-tauri/src/commands/architecture.rs` | 219 | Architecture-diagram commands. |
 | `src-tauri/src/commands/behavioral.rs` | 485 | Behavioral before/after testing — running the same configuration against |
-| `src-tauri/src/commands/browser.rs` | 368 | Commands behind the embedded browser panel. |
+| `src-tauri/src/commands/browser.rs` | 461 | Commands behind the embedded browser panel. |
 | `src-tauri/src/commands/browser_mcp.rs` | 93 | Commands behind the installable **browser** MCP server. |
 | `src-tauri/src/commands/changelists.rs` | 57 | Change-group commands. |
 | `src-tauri/src/commands/debug.rs` | 986 | Launching applications under a Debug Adapter Protocol adapter. |
@@ -589,7 +589,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/inspect.rs` | 352 | Object-inspection commands. |
 | `src-tauri/src/commands/intents.rs` | 832 | Agent-intent commands. |
 | `src-tauri/src/commands/launcher.rs` | 380 | The app launcher's bridge: run an arbitrary command line, and manage the |
-| `src-tauri/src/commands/lsp.rs` | 537 | Asking this workspace's language servers something, and saying what they do. |
+| `src-tauri/src/commands/lsp.rs` | 545 | Asking this workspace's language servers something, and saying what they do. |
 | `src-tauri/src/commands/mcp.rs` | 92 | Commands behind the installable SQL MCP server. |
 | `src-tauri/src/commands/notes.rs` | 21 | Notes / scratchpad commands. |
 | `src-tauri/src/commands/qgate.rs` | 78 | Commands behind the installable quality-gate Stop hook. |
@@ -610,8 +610,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/mcp_sql.rs` | 370 | The `mcp-sql` mode: this executable as an MCP stdio server. |
 | `src-tauri/src/qgate_run.rs` | 240 | The `quality-gate` mode: deterministic checks when an agent turn ends. |
 | `src-tauri/src/recorder.rs` | 139 | The `record-intent` mode, which is what the installed hooks actually run. |
-| `src-tauri/src/state.rs` | 701 | Shared application state. |
-| `src-tauri/src/state_tests.rs` | 651 | Tests for the multi-workspace [`AppState`]. |
+| `src-tauri/src/state.rs` | 806 | Shared application state. |
+| `src-tauri/src/state_tests.rs` | 774 | Tests for the multi-workspace [`AppState`]. |
 | `scripts/build-sidecar.mjs` | 110 | Publish the object-inspector sidecar into the Tauri bundle. |
 | `scripts/check-docs.mjs` | 70 | Documentation health check. |
 | `scripts/fetch-debuggers.mjs` | 228 | Vendor the debug adapters into the Tauri bundle. |
@@ -759,7 +759,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/lsp/model.rs`: `Availability`, `UsageResult`, `unavailable()`, `with_server()`, `Usage`, `Highlight`, `DefinitionResult`, `unavailable()`, `Target`, `AnchorResult`, `unavailable()`, `DeclarationAnchor`, `RenameResult`, `unavailable()`, `with_server()`, `RangeEdit`, `RenamedFile`, `BufferEdits`, `RenameFailure`, `PrepareRenameResult`, `unavailable()`, `not_renameable()`, `with_server()`, `LspStatus`, `ServerStatus`
 - `crates/core/src/lsp/positions.rs`: `utf16_to_byte()`, `byte_to_utf16()`, `byte_offset()`, `to_editor_line()`, `to_lsp_line()`, `Snippet`, `snippet()`
 - `crates/core/src/lsp/protocol.rs`: `Position`, `Range`, `TextEdit`, `Location`, `LocationLink`, `DecodeError`, `decode_goto()`, `DocumentEdits`, `ResourceOperation`, `WorkspaceEdit`, `decode_workspace_edit()`, `PrepareRenameResponse`, `decode_prepare_rename()`, `Symbol`, `decode_document_symbols()`, `symbol_kind()`, `SyncKind`, `ServerCapabilities`, `from_initialize_result()`, `encoding_is_utf16()`, `initialize_params()`, `TextDocumentIdentifier`, `VersionedTextDocumentIdentifier`, `TextDocumentItem`, `DidOpenTextDocumentParams`, `new()`, `TextDocumentContentChangeEvent`, `DidChangeTextDocumentParams`, `whole_document()`, `document_end()`, `DidCloseTextDocumentParams`, `new()`, `TextDocumentPositionParams`, `new()`, `ReferenceContext`, `ReferenceParams`, `new()`, `RenameParams`, `new()`, `DocumentSymbolParams`, `new()`
-- `crates/core/src/lsp/registry.rs`: `RealProbe`, `Language`, `id()`, `Readiness`, `Timeouts`, `ServerSpec`, `language_id_for()`, `Resolution`, `language_for_extension()`, `resolve()`, `Candidate`, `caller_args()`, `takes_caller_args()`, `parse_extension_version()`
+- `crates/core/src/lsp/registry.rs`: `RealProbe`, `Language`, `id()`, `from_ecosystem()`, `languages_present()`, `Readiness`, `Timeouts`, `ServerSpec`, `language_id_for()`, `Resolution`, `language_for_extension()`, `resolve()`, `Candidate`, `caller_args()`, `takes_caller_args()`, `parse_extension_version()`
 - `crates/core/src/lsp/rename.rs`: `RealFiles`, `new()`, `apply_workspace_edit()`, `enclosing_identifier()`
 - `crates/core/src/lsp/results.rs`: `usages()`, `targets()`, `anchors()`
 - `crates/core/src/lsp/session.rs`: `LspHandle`, `root()`, `generation()`, `status()`, `request_teardown()`, `open_document()`, `change_document()`, `close_document()`, `find_usages()`, `goto_definition()`, `declaration_anchors()`, `prepare_rename()`, `rename()`, `start()`, `start_with_probe()`

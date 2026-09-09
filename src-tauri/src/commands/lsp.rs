@@ -110,7 +110,8 @@ fn ensure_session_interleaved(
             return Ok(handle);
         }
 
-        let root = state.workspace_root()?;
+        let workspace = state.workspace()?;
+        let root = workspace.root.clone();
         // A config that will not parse cannot reach here — `open_workspace` fails
         // on it first — so the fallback is for the ordinary case of no file at
         // all, and `None` means "every built-in default", never "nothing
@@ -119,11 +120,17 @@ fn ensure_session_interleaved(
             .ok()
             .and_then(|saved| saved.lsp);
 
+        // Warm the servers for the languages this workspace actually contains, so
+        // Roslyn/tsserver is coming up before the user opens a file rather than on
+        // the first request. Absent languages, and manifest-adapter ecosystems,
+        // keep starting lazily.
+        let warm = cb_core::lsp::registry::languages_present(&workspace.projects);
+
         // Claimed before the start, so a second caller racing this one supersedes
         // it rather than publishing a second server tree behind its back.
         let generation = state.begin_lsp_session();
         interleave();
-        let handle = session::start(root, config, generation);
+        let handle = session::start(root, config, generation, &warm);
 
         match state.record_lsp_session(handle) {
             // Read back rather than returned, so a swap between the publish and
@@ -479,6 +486,7 @@ mod tests {
             PathBuf::from("/a"),
             None,
             1,
+            &[],
             std::sync::Arc::new(NothingInstalled),
         );
         for _ in 0..200 {

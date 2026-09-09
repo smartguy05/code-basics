@@ -78,10 +78,14 @@ export const COMMANDS: CommandDefinition[] = [
   // Settings and `pluginMenuRows` names it from `PLUGIN_LABELS`. Without the
   // tag the row would be filed nowhere.
   { id: "plugin.browser", label: "Web browser", category: "Agent", context: "global", defaultBinding: null, plugin: "webBrowser" },
-  { id: "search.all", label: "Search All", category: "Search", context: "workspace", defaultBinding: chord("n", { ctrl: true }) },
-  { id: "search.symbols", label: "Search Symbols", category: "Search", context: "workspace", defaultBinding: null },
-  { id: "search.files", label: "Search Files", category: "Search", context: "workspace", defaultBinding: chord("n", { ctrl: true, shift: true }) },
-  { id: "search.actions", label: "Search Actions", category: "Search", context: "workspace", defaultBinding: chord("a", { ctrl: true, shift: true }) },
+  // `allowInText` on the search overlays: the caret is almost always inside a
+  // `.cm-editor` when the user reaches for Search All, so without it
+  // `eventIsTyping` filters the command out of `dispatchShortcut` and Ctrl+N
+  // falls through to the WebView instead of opening the palette.
+  { id: "search.all", label: "Search All", category: "Search", context: "workspace", defaultBinding: chord("n", { ctrl: true }), allowInText: true },
+  { id: "search.symbols", label: "Search Symbols", category: "Search", context: "workspace", defaultBinding: null, allowInText: true },
+  { id: "search.files", label: "Search Files", category: "Search", context: "workspace", defaultBinding: chord("n", { ctrl: true, shift: true }), allowInText: true },
+  { id: "search.actions", label: "Search Actions", category: "Search", context: "workspace", defaultBinding: chord("a", { ctrl: true, shift: true }), allowInText: true },
   { id: "tree.reveal", label: "Select opened file", category: "Navigation", context: "view", defaultBinding: chord("F1", { alt: true }) },
   { id: "tree.collapse", label: "Collapse file tree", category: "Navigation", context: "view", defaultBinding: null },
   { id: "console.find", label: "Find in console", category: "Console", context: "view", defaultBinding: chord("f", { ctrl: true }), allowInText: true },

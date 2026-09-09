@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cb_core::lsp::model::{Availability, ServerStatus};
-use cb_core::lsp::registry::Probe;
+use cb_core::lsp::registry::{Language, Probe};
 use cb_core::lsp::session::{self, LspHandle};
 use cb_core::lsp::settings::{LspConfig, ServerOverride};
 use cb_core::lsp::uri::{to_file_uri, UriStyle};
@@ -200,8 +200,63 @@ fn built(program: &str, build: impl FnOnce(&Path) -> Value) -> Harness {
     let path = dir.path().join("script.json");
     std::fs::write(&path, serde_json::to_vec_pretty(&script).expect("a script")).expect("write");
 
-    let handle = session::start(dir.path().to_path_buf(), Some(config(&path, program)), 1);
+    let handle = session::start(
+        dir.path().to_path_buf(),
+        Some(config(&path, program)),
+        1,
+        &[],
+    );
     Harness { handle, dir }
+}
+
+/// A harness that eagerly warms `warm` at start, as `open_workspace` does for the
+/// languages a workspace contains.
+fn built_warming(script: Value, warm: &[cb_core::lsp::registry::Language]) -> Harness {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let mut script = script;
+    announce_readiness(&mut script);
+    let path = dir.path().join("script.json");
+    std::fs::write(&path, serde_json::to_vec_pretty(&script).expect("a script")).expect("write");
+    let handle = session::start(dir.path().to_path_buf(), Some(config(&path, FAKE)), 1, warm);
+    Harness { handle, dir }
+}
+
+#[tokio::test]
+async fn warming_a_present_language_starts_its_server_with_no_request() {
+    // `open_workspace` warms the languages a workspace contains; the server must
+    // come up on its own, before any usages or rename request. That is the whole
+    // point of warming on open — Roslyn's project load is what it hides.
+    bounded!(async {
+        let harness = built_warming(
+            json!({ "capabilities": capabilities(&[]) }),
+            &[Language::TypeScript],
+        );
+        until(|| harness.typescript_state() == Some(Availability::Ready)).await;
+    });
+}
+
+#[tokio::test]
+async fn warming_only_touches_the_named_languages() {
+    // Warm a *disabled* language (C#): `ensure_started` acts only on an `Idle`
+    // server with a spec, so a disabled one is a no-op. TypeScript is left
+    // unwarmed and stays unstarted — an `Idle` resolved server produces no status
+    // row — proving warming reached neither the disabled language nor an unnamed
+    // one.
+    bounded!(async {
+        let harness = built_warming(
+            json!({ "capabilities": capabilities(&[]) }),
+            &[Language::CSharp],
+        );
+        let started = until_or(Duration::from_millis(750), || {
+            harness.typescript_state().is_some()
+        })
+        .await;
+        assert!(
+            !started,
+            "an unwarmed language must not start: {:?}",
+            harness.typescript_state()
+        );
+    });
 }
 
 /// Make the fake say what the server it is standing in for says.
@@ -276,6 +331,7 @@ fn bare_workspace() -> Harness {
         dir.path().to_path_buf(),
         None,
         1,
+        &[],
         Arc::new(NothingInstalled),
     );
     Harness { handle, dir }
@@ -802,6 +858,7 @@ async fn the_version_on_the_wire_is_the_mirrors_and_never_restarts_after_a_reope
             dir.path().to_path_buf(),
             Some(config(&script_path, FAKE)),
             1,
+            &[],
         );
         let harness = Harness { handle, dir };
 

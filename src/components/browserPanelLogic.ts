@@ -13,11 +13,11 @@
 // ignores `--z-panel`, `--z-notes` and `--z-overlay` in `styles.css` entirely,
 // and `hidden` on a React div does not hide it — confirmed by image in the
 // Phase 4 spike, where both Notes and Search Everywhere were clipped by the
-// page. **That is accepted.** `pageVisible` is deliberately *not* an occlusion
-// mechanism: it does not consult which other panels are open, and adding that
-// would be a redesign rather than a fix.
+// page. **That is accepted** *within a codebase*. `pageVisible` is deliberately
+// *not* an occlusion mechanism: it does not consult which other panels are open,
+// and adding that would be a redesign rather than a fix.
 //
-// It is false for exactly three things, and each is a real absence of a place to
+// It is false for exactly four things, and each is a real absence of a place to
 // paint rather than something being in front:
 //
 //   1. the panel is minimized,
@@ -25,28 +25,36 @@
 //      disabled browser keeps no WebView2 process, no cookie jar and no
 //      connection),
 //   3. the measured rect is unusable — the `createResizeGate` 0×0 lesson,
-//      extended to the DPI case below.
+//      extended to the DPI case below,
+//   4. the codebase this page belongs to is **backgrounded** — bugs 6+7. The
+//      browser is per-codebase now; only the active codebase's page may show, or
+//      a background one paints over the foreground codebase the user switched
+//      to. `active` is which *codebase* is foreground, not which panels are — so
+//      this stays not-an-occlusion-mechanism.
 
 // --- Where the layout lives -------------------------------------------------
 
-/**
- * The localStorage key the browser panel persists its position and size under.
- *
- * Follows the `cb.<thing>.layout` convention shared with the agent panel
- * (`cb.agentPanel.layout`), Notes (`cb.notes.layout`), SQL (`cb.sql.layout`),
- * Running (`cb.running.layout`), the launcher (`cb.launcher.layout`) and the
- * terminals (`cb.terminal.layout:<root>`).
- *
- * Unscoped by workspace, like SQL's and unlike the terminals': there is one
- * browser panel for the whole application — "verify my deployment" is not
- * repo-specific — so there is nothing to scope it to.
- */
 // Type-only, so it is erased at compile time and this module still imports
 // nothing at runtime — which is what keeps it runnable under vitest's node
 // environment with no DOM.
 import type { BrowserAgentRequest, BrowserSnapshot } from "../ipc/types";
 
-export const BROWSER_LAYOUT_KEY = "cb.browser.layout";
+/**
+ * The localStorage key one codebase's browser panel persists its position and
+ * size under.
+ *
+ * Follows the `cb.<thing>.layout` convention shared with the agent panel
+ * (`cb.agentPanel.layout`), Notes (`cb.notes.layout`), SQL (`cb.sql.layout`),
+ * Running (`cb.running.layout`) and the launcher (`cb.launcher.layout`).
+ *
+ * **Scoped per codebase**, like the terminals' `cb.terminal.layout:<root>` and
+ * unlike SQL's: the browser is per-codebase now (each open codebase keeps its
+ * own live page), so each codebase remembers its own geometry — a fresh browser
+ * in one codebase must not adopt another's position.
+ */
+export function browserLayoutKey(root: string): string {
+  return `cb.browser.layout:${root}`;
+}
 
 // --- Open / restore ---------------------------------------------------------
 
@@ -236,6 +244,12 @@ export interface PageVisibilityInput {
   state: BrowserPanelState;
   enabled: boolean;
   minimized: boolean;
+  /**
+   * Whether the codebase this page belongs to is the foreground tab. The
+   * stacking fix (bugs 6+7): only the active codebase's page may show, or a
+   * background one composites over the foreground codebase.
+   */
+  active: boolean;
   rect: PageRectDecision;
 }
 
@@ -243,27 +257,27 @@ export interface PageVisibilityInput {
  * Whether the OS webview should be visible right now.
  *
  * **Not an occlusion mechanism** — see the module header. It consults no other
- * panel, and the page painting over Notes, a terminal or Search Everywhere is
- * an accepted cost of the engine rather than a bug for this function to work
- * around.
+ * panel, and the page painting over Notes, a terminal or Search Everywhere
+ * *within its own codebase* is an accepted cost of the engine. `active` is which
+ * codebase is foreground, not which panels are.
  */
 export function pageVisible(input: PageVisibilityInput): boolean {
-  const { state, enabled, minimized, rect } = input;
-  return (
-    browserPanelMounted(state, enabled) && !minimized && rect.ok
-  );
+  const { state, enabled, minimized, active, rect } = input;
+  return browserPanelMounted(state, enabled) && !minimized && active && rect.ok;
 }
 
 /**
  * Why the page is not on screen even though the panel is, or `null` when it is.
  *
- * Minimized is deliberately **not** a reason: the user did that, they know, and
- * the pill already says so. What needs explaining is the case where the panel is
- * open and expanded and the page still is not there.
+ * Not-mounted, minimized, **and backgrounded** are deliberately not reasons: the
+ * user did each of those, and a scary explanation under a panel they cannot see
+ * (a background codebase) or that says so itself (the pill) would be noise. What
+ * needs explaining is the case where the panel is the foreground codebase's,
+ * open and expanded, and the page still is not there.
  */
 export function hiddenPageReason(input: PageVisibilityInput): string | null {
-  const { state, enabled, minimized, rect } = input;
-  if (!browserPanelMounted(state, enabled) || minimized) return null;
+  const { state, enabled, minimized, active, rect } = input;
+  if (!browserPanelMounted(state, enabled) || minimized || !active) return null;
   return rect.ok ? null : rect.reason;
 }
 

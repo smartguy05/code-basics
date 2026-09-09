@@ -385,14 +385,24 @@ impl LspHandle {
     }
 }
 
-/// Start a session for `root`, resolving every language but starting none.
+/// Start a session for `root`, resolving every language and eagerly starting the
+/// servers for the languages in `warm`.
 ///
 /// Must be called from inside a Tokio runtime: the actor is a spawned task.
 /// Resolution happens **here**, synchronously, so the status surface is complete
 /// the moment the caller has a handle — a handful of directory reads against a
-/// question the user will ask as soon as the window is up.
-pub fn start(root: PathBuf, config: Option<LspConfig>, generation: u64) -> LspHandle {
-    start_with_probe(root, config, generation, Arc::new(RealProbe))
+/// question the user will ask as soon as the window is up. `warm` is normally
+/// [`registry::languages_present`] of the workspace, so a C#/TS project's server
+/// is coming up before the user opens the first file (Roslyn's project load is
+/// slow, and warming it is what hides that latency); an empty slice preserves the
+/// old lazy behaviour for every other caller.
+pub fn start(
+    root: PathBuf,
+    config: Option<LspConfig>,
+    generation: u64,
+    warm: &[Language],
+) -> LspHandle {
+    start_with_probe(root, config, generation, warm, Arc::new(RealProbe))
 }
 
 /// [`start`] with the machine injected.
@@ -404,6 +414,7 @@ pub fn start_with_probe(
     root: PathBuf,
     config: Option<LspConfig>,
     generation: u64,
+    warm: &[Language],
     probe: Arc<dyn Probe + Send + Sync>,
 ) -> LspHandle {
     let status: SharedStatus = Arc::new(Mutex::new(BTreeMap::new()));
@@ -421,6 +432,14 @@ pub fn start_with_probe(
         probe,
     };
     session.resolve_all(config.as_ref());
+    // Start the resolved servers for the present languages before the actor is
+    // running: `ensure_started` spawns a task whose `Started` message queues on
+    // the unbounded channel until `run` drains it. A language that did not
+    // resolve (`Unavailable`/`Disabled`) is a no-op here — `ensure_started` only
+    // acts on an `Idle` server with a spec.
+    for &language in warm {
+        session.ensure_started(language);
+    }
     tokio::spawn(session.run(rx));
 
     LspHandle {

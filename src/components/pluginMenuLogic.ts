@@ -87,21 +87,17 @@ const PLUGINS: PluginEntry[] = [
     noWorkspace: "Open a codebase to install the SQL MCP server for it",
   },
   {
-    // The first row with `needsWorkspace: false`, and the reason is the same one
-    // that makes the panel app-level rather than per-`WorkspaceTab`: "does my
-    // deployment work" is not a question about a repository, and there is one
-    // browser for the whole application. So this row is enabled on the welcome
-    // screen, which is a state no other plugin has ever been openable in —
-    // `a_plugin_that_needs_no_workspace_is_enabled_with_none_open` is the test.
+    // Needs a codebase because the browser is truly per-workspace now (bugs
+    // 6+7): each open codebase keeps its own live page and only the active one
+    // is visible, so there must be a codebase to open the page into. On the
+    // welcome screen it is therefore a disabled row with a reason, like every
+    // other plugin, rather than an opener that would act on nothing.
     feature: "webBrowser",
     commandId: "plugin.browser",
     action: { kind: "browser" },
-    needsWorkspace: false,
-    ready: "Open a web page inside the app",
-    // Unreachable while `needsWorkspace` is false, and kept rather than made
-    // optional: the field is what a future change to that flag would need, and
-    // an empty string would render as a row with no tooltip if it ever were.
-    noWorkspace: "Open a web page inside the app",
+    needsWorkspace: true,
+    ready: "Open a web page inside the active codebase",
+    noWorkspace: "Open a codebase to open a web page in it",
   },
 ];
 

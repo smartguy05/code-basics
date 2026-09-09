@@ -165,6 +165,37 @@ impl Language {
             Language::Python => "python",
         }
     }
+
+    /// The language a project's `ecosystem` implies, for warming a server on
+    /// workspace open — or `None` when there is no dependable mapping.
+    ///
+    /// Only the three built-in ecosystems map: they are literal, so the presence
+    /// of a `.csproj`, a `package.json` or a `Cargo.toml` is real evidence a
+    /// server would be useful. A declarative manifest adapter's `ecosystem` is
+    /// arbitrary user text (`pytest`, `cargo-nextest`, …) and is deliberately not
+    /// guessed at — Python simply keeps starting lazily, exactly as before, which
+    /// is a no-op regression rather than a wrong eager spawn.
+    pub fn from_ecosystem(ecosystem: &str) -> Option<Language> {
+        match ecosystem {
+            "dotnet" => Some(Language::CSharp),
+            "node" => Some(Language::TypeScript),
+            "cargo" => Some(Language::Rust),
+            _ => None,
+        }
+    }
+}
+
+/// The distinct languages worth warming a server for in this workspace, from its
+/// projects' ecosystems. Deduplicated and in a stable order (`Language`'s own),
+/// so a mixed solution warms each server once.
+pub fn languages_present(projects: &[crate::model::Project]) -> Vec<Language> {
+    let mut set = std::collections::BTreeSet::new();
+    for project in projects {
+        if let Some(language) = Language::from_ecosystem(&project.ecosystem) {
+            set.insert(language);
+        }
+    }
+    set.into_iter().collect()
 }
 
 /// When a server's answers can be trusted.

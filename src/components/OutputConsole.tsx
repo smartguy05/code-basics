@@ -234,9 +234,12 @@ export const OutputConsole = forwardRef<ConsoleHandle, OutputConsoleProps>(
 
       // Ctrl+F is intercepted at the window level, capture phase, so the
       // webview's own find bar never sees it. Only the visible console reacts
-      // (hidden tabs have no offsetParent).
+      // (hidden tabs have no offsetParent), and it declines whenever a file
+      // editor is focused so the editor's own `console.find` handler opens its
+      // in-file find instead — the two share the chord and must not both act.
       const unregisterFind = registerCommand("console.find", () => {
         if (!hostRef.current || hostRef.current.offsetParent === null) return false;
+        if (document.activeElement?.closest(".cm-editor") != null) return false;
         setSearchOpen(true);
         setTimeout(() => searchInputRef.current?.focus(), 0);
         return true;

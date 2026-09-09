@@ -131,29 +131,30 @@ describe("pluginMenuRows", () => {
     }
   });
 
-  it("enables the browser with no codebase open, the first plugin that needs none", () => {
-    // Every other plugin acts on the open codebase. This one does not: "does my
-    // deployment work" is not a question about a repository, there is one
-    // browser for the whole application, and it is hosted app-level rather than
-    // per-`WorkspaceTab` for that reason. So it is offered on the welcome
-    // screen — a state no plugin row has ever been enabled in before.
-    const rows = pluginMenuRows({ features: BROWSER_ONLY, workspaceOpen: false });
+  it("enables the browser when a codebase is open", () => {
+    // The browser is now truly per-workspace: each open codebase keeps its own
+    // live page and only the active one is visible. So it needs a codebase to
+    // attach to, like every other plugin.
+    const rows = pluginMenuRows({ features: BROWSER_ONLY, workspaceOpen: true });
     expect(rows.map((r) => r.id)).toEqual(["plugin.browser"]);
     expect(rows[0]?.disabled).toBe(false);
     expect(rows[0]?.action).toEqual({ kind: "browser" });
     expect(rows[0]?.label).toBe("Web browser");
-    expect(rows[0]?.title).not.toContain("Open a codebase");
   });
 
-  it("shows the browser row identically whether or not a codebase is open", () => {
-    // The point of `needsWorkspace: false`: the answer must not move with the
-    // foreground tab, because the panel it opens is not scoped to one.
-    expect(pluginMenuRows({ features: BROWSER_ONLY, workspaceOpen: true })).toEqual(
-      pluginMenuRows({ features: BROWSER_ONLY, workspaceOpen: false }),
-    );
+  it("disables the browser, with a reason, when no codebase is open", () => {
+    // A per-workspace browser has no workspace to open into on the welcome
+    // screen, so it becomes a disabled row that explains itself rather than an
+    // opener that acts on nothing.
+    const rows = pluginMenuRows({ features: BROWSER_ONLY, workspaceOpen: false });
+    expect(rows.map((r) => r.id)).toEqual(["plugin.browser"]);
+    expect(rows[0]?.disabled).toBe(true);
+    expect(rows[0]?.action).toBe(null);
+    expect(rows[0]?.title).toContain("Open a codebase");
   });
 
   it("still shows the Plugins button with only the browser on and nothing open", () => {
+    // A disabled row still explains itself, so the menu is worth opening.
     expect(pluginMenuAvailable({ features: BROWSER_ONLY, workspaceOpen: false })).toBe(true);
   });
 

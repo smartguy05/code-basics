@@ -47,18 +47,22 @@
 //! `connect-src` and no `dangerousRemoteDomainIpcAccess`, and none was added. If
 //! a page fails to load, **do not "fix" a CSP error — there is none.**
 //!
-//! # Why the webview is in a `thread_local!` and not in `AppState`
+//! # Why the webviews are in a `thread_local!` and not in `AppState`
 //!
 //! A wry `WebView` is `!Send` and main-thread-affine. `AppState` is `Sync`,
 //! shared by every command, and `set_workspace` clears caches *while holding a
 //! `std::sync::Mutex` guard* — so nothing in it may be main-thread-bound and
-//! nothing in it may need to `.await`. Putting the webview there does not
+//! nothing in it may need to `.await`. Putting a webview there does not
 //! compile, and forcing it to (an `unsafe impl Send`, a wrapper) trades a
 //! compile error for a deadlock or a cross-thread COM call.
 //!
-//! So the resource lives in [`HOST`], a `thread_local!` on the main thread, and
-//! `AppState` holds a [`BrowserHandle`] — clone-cheap, `Send + Sync`, carrying
-//! only an `AppHandle` and the `Arc<Mutex<`[`BrowserShared`]`>>`. Every
+//! So the resources live in [`HOST`], a `thread_local!` on the main thread —
+//! **one entry per open codebase, keyed by workspace root** (bugs 6+7: each
+//! codebase keeps its own live page and only the active one is visible). The
+//! main thread runs one closure at a time, so there is never a second borrow of
+//! the map. `AppState` holds only per-root data and mints a [`BrowserHandle`]
+//! per call — clone-cheap, `Send + Sync`, carrying an `AppHandle`, the root it
+//! addresses and the `Arc<Mutex<`[`BrowserShared`]`>>` for that root. Every
 //! operation crosses to the main thread through
 //! [`AppHandle::run_on_main_thread`] and returns on a `tokio::sync::oneshot`.
 //! This is the [`cb_core::lsp::session::LspHandle`] reasoning: **never an
@@ -105,7 +109,8 @@ pub mod registry;
 pub mod shared;
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use cb_core::browser::model::{BrowserAvailability, PageText};
@@ -121,14 +126,15 @@ use wry::{NewWindowResponse, PageLoadEvent, Rect, WebContext, WebView, WebViewBu
 pub use shared::{BrowserRect, BrowserShared, BrowserSnapshot, ConsoleBatch, NetworkBatch};
 
 thread_local! {
-    /// The live webview, on the main thread and reachable from nowhere else.
+    /// The live webviews, one per open codebase keyed by workspace root, on the
+    /// main thread and reachable from nowhere else.
     ///
     /// A `thread_local!` rather than a field because the resource is
     /// main-thread-affine and `!Send` — see the module doc. Access is always
     /// `HOST.with(|cell| cell.borrow_mut())` inside a `run_on_main_thread`
-    /// closure, so there is never a second borrow: the main thread runs one
-    /// closure at a time.
-    static HOST: RefCell<Option<Host>> = const { RefCell::new(None) };
+    /// closure, so there is never a second borrow of the map: the main thread
+    /// runs one closure at a time.
+    static HOST: RefCell<HashMap<PathBuf, Host>> = RefCell::new(HashMap::new());
 }
 
 /// The webview and the context it was built from.
@@ -148,20 +154,25 @@ struct Host {
     context: Box<WebContext>,
 }
 
-/// The `Send + Sync` half: what `AppState` holds.
+/// The `Send + Sync` half: what a command mints per call from `AppState`.
 #[derive(Clone)]
 pub struct BrowserHandle {
     app: AppHandle,
+    /// Which codebase's page this handle addresses — the `HOST` map key and the
+    /// key `AppState`'s data map was resolved under. A handle only ever names
+    /// one root, so an agent's handle (minted from the active root) can never
+    /// reach into another codebase's page.
+    root: PathBuf,
     shared: Arc<Mutex<BrowserShared>>,
 }
 
 impl BrowserHandle {
-    /// Pair an app handle with the state `AppState` owns.
+    /// Pair an app handle with one root and the state `AppState` owns for it.
     ///
     /// The data outlives any one handle — a handle is minted per command — which
     /// is why the `Arc` comes in rather than being created here.
-    pub fn from_parts(app: AppHandle, shared: Arc<Mutex<BrowserShared>>) -> Self {
-        Self { app, shared }
+    pub fn from_parts(app: AppHandle, root: PathBuf, shared: Arc<Mutex<BrowserShared>>) -> Self {
+        Self { app, root, shared }
     }
 
     /// Read the host's data. Takes the mutex for the duration of `read` only —
@@ -180,12 +191,20 @@ impl BrowserHandle {
 
     /// Run `work` on the main thread and await its answer.
     ///
-    /// The one seam every operation goes through. `work` receives the host slot
-    /// and the shared data, and runs to completion with the main thread's
-    /// message loop paused — so it must not block, and must not itself await.
+    /// The one seam every operation goes through. `work` receives the whole
+    /// host map plus the root and shared data *this* handle addresses, and runs
+    /// to completion with the main thread's message loop paused — so it must not
+    /// block, and must not itself await. It is handed the whole map (rather than
+    /// only its own slot) so `close` can report whether any *other* codebase's
+    /// browser is still open, for the per-process pipe's lifecycle.
     async fn on_main<T, F>(&self, work: F) -> Result<T, String>
     where
-        F: FnOnce(&AppHandle, &Arc<Mutex<BrowserShared>>, &mut Option<Host>) -> Result<T, String>
+        F: FnOnce(
+                &AppHandle,
+                &Arc<Mutex<BrowserShared>>,
+                &mut HashMap<PathBuf, Host>,
+                &Path,
+            ) -> Result<T, String>
             + Send
             + 'static,
         T: Send + 'static,
@@ -193,11 +212,12 @@ impl BrowserHandle {
         let (reply, answer) = oneshot::channel();
         let app = self.app.clone();
         let shared = self.shared.clone();
+        let root = self.root.clone();
         self.app
             .run_on_main_thread(move || {
                 let outcome = HOST.with(|cell| {
-                    let mut slot = cell.borrow_mut();
-                    work(&app, &shared, &mut slot)
+                    let mut map = cell.borrow_mut();
+                    work(&app, &shared, &mut map, &root)
                 });
                 // The receiver is gone only if the command was cancelled; the
                 // work has already happened either way.
@@ -216,14 +236,21 @@ impl BrowserHandle {
     pub async fn open(&self, rect: BrowserRect, url: Option<String>) -> Result<(), String> {
         let bounds = bounds_for(rect)?;
         self.write(shared::note_opened);
-        self.on_main(move |app, shared, slot| {
-            if let Some(host) = slot.as_ref() {
+        self.on_main(move |app, shared, map, root| {
+            if let Some(host) = map.get(root) {
                 // Already up: this is a re-open of a panel that was only
                 // minimized. Re-place and re-show it rather than recreating it —
                 // recreating would throw away the page, its session and its
                 // scroll position for what the user experiences as un-minimizing.
+                // The show goes through the same `visible_for` backstop that
+                // `set_visible` uses, reading the active root from `AppState`, so
+                // the at-most-one-visible invariant is enforced by code on *both*
+                // show paths rather than resting on a comment about who calls this.
                 host.webview.set_bounds(bounds).map_err(describe)?;
-                host.webview.set_visible(true).map_err(describe)?;
+                let active = app.state::<crate::state::AppState>().active_root_pathbuf();
+                host.webview
+                    .set_visible(visible_for(true, root, active.as_deref()))
+                    .map_err(describe)?;
                 if let Some(url) = url {
                     return load(host, shared, &url);
                 }
@@ -249,7 +276,7 @@ impl BrowserHandle {
                 Some(url) => load(&host, shared, url),
                 None => Ok(()),
             };
-            *slot = Some(host);
+            map.insert(root.to_path_buf(), host);
             outcome
         })
         .await
@@ -264,13 +291,15 @@ impl BrowserHandle {
     /// webview keeps the page running, the cookie jar warm and the connection
     /// open, which is exactly what a user switching the feature off is asking
     /// not to have.
-    pub async fn close(&self, availability: BrowserAvailability) -> Result<(), String> {
+    /// Returns whether any *other* codebase's browser is still open, so the
+    /// caller can keep the per-process control pipe up until the last one closes.
+    pub async fn close(&self, availability: BrowserAvailability) -> Result<bool, String> {
         self.write(|shared| shared::note_closed(shared, availability));
-        self.on_main(move |_, _, slot| {
+        self.on_main(move |_, _, map, root| {
             // Dropped inside the main-thread closure: the destructor is a COM
             // teardown and must run on the thread that created the webview.
-            drop(slot.take());
-            Ok(())
+            drop(map.remove(root));
+            Ok(!map.is_empty())
         })
         .await
     }
@@ -282,7 +311,7 @@ impl BrowserHandle {
     /// red message in front of the user for the ordinary startup sequence.
     pub async fn set_bounds(&self, rect: BrowserRect) -> Result<(), String> {
         let bounds = bounds_for(rect)?;
-        self.on_main(move |_, _, slot| match slot.as_ref() {
+        self.on_main(move |_, _, map, root| match map.get(root) {
             Some(host) => host.webview.set_bounds(bounds).map_err(describe),
             None => Ok(()),
         })
@@ -293,10 +322,21 @@ impl BrowserHandle {
     ///
     /// The minimize mechanism, and the only one that works: a React `hidden`
     /// cannot hide a child HWND that composites above the DOM.
+    ///
+    /// **Defence in depth for the stacking bug:** a request to *show* is honoured
+    /// only for the codebase that is currently in the foreground. The frontend's
+    /// `pageVisible` already gates on `active`, and this refuses again on the
+    /// host side — [`visible_for`] — so a background codebase's page can never be
+    /// left painting over the one the user switched to, even if the frontend
+    /// erred. A request to *hide* always hides.
     pub async fn set_visible(&self, visible: bool) -> Result<(), String> {
-        self.on_main(move |_, _, slot| match slot.as_ref() {
-            Some(host) => host.webview.set_visible(visible).map_err(describe),
-            None => Ok(()),
+        self.on_main(move |app, _, map, root| {
+            let active = app.state::<crate::state::AppState>().active_root_pathbuf();
+            let effective = visible_for(visible, root, active.as_deref());
+            match map.get(root) {
+                Some(host) => host.webview.set_visible(effective).map_err(describe),
+                None => Ok(()),
+            }
         })
         .await
     }
@@ -305,8 +345,8 @@ impl BrowserHandle {
     /// [`navigation_verdict`], which runs again inside the navigation handler
     /// because a page can navigate itself.
     pub async fn navigate(&self, url: String) -> Result<(), String> {
-        self.on_main(move |_, shared, slot| {
-            let host = slot.as_ref().ok_or_else(no_page)?;
+        self.on_main(move |_, shared, map, root| {
+            let host = map.get(root).ok_or_else(no_page)?;
             load(host, shared, &url)
         })
         .await
@@ -314,8 +354,8 @@ impl BrowserHandle {
 
     /// Reload the current page.
     pub async fn reload(&self) -> Result<(), String> {
-        self.on_main(|_, _, slot| {
-            slot.as_ref()
+        self.on_main(|_, _, map, root| {
+            map.get(root)
                 .ok_or_else(no_page)?
                 .webview
                 .reload()
@@ -339,8 +379,8 @@ impl BrowserHandle {
         } else {
             "try{history.forward()}catch(e){}"
         };
-        self.on_main(move |_, _, slot| {
-            slot.as_ref()
+        self.on_main(move |_, _, map, root| {
+            map.get(root)
                 .ok_or_else(no_page)?
                 .webview
                 .evaluate_script(script)
@@ -431,8 +471,8 @@ impl BrowserHandle {
         // send exactly once — hence the mutex around the sender rather than a
         // move.
         let sender = Mutex::new(Some(reply));
-        self.on_main(move |_, _, slot| {
-            let host = slot.as_ref().ok_or_else(no_page)?;
+        self.on_main(move |_, _, map, root| {
+            let host = map.get(root).ok_or_else(no_page)?;
             host.webview
                 .evaluate_script_with_callback(&script, move |result| {
                     if let Ok(mut slot) = sender.lock() {
@@ -500,6 +540,18 @@ pub fn bounds_for(rect: BrowserRect) -> Result<Rect, String> {
         position: LogicalPosition::new(rect.left, rect.top).into(),
         size: LogicalSize::new(rect.width, rect.height).into(),
     })
+}
+
+/// Whether a page may actually be shown, given which codebase is in the
+/// foreground.
+///
+/// A page may be shown **only** for the active codebase — an OS webview
+/// composites above the DOM, so a background one would paint over the foreground
+/// codebase. A request to hide always hides, whatever is active. This is the
+/// host-side backstop to the frontend's `pageVisible` `active` gate; kept as a
+/// free function so the rule is unit-tested without a webview.
+pub fn visible_for(requested: bool, root: &Path, active: Option<&Path>) -> bool {
+    requested && active == Some(root)
 }
 
 fn no_page() -> String {

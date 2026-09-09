@@ -2,6 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { ArchitectureView } from "../views/ArchitectureView";
 import { AskPanel } from "./AskPanel";
 import { BehavioralPanel } from "./BehavioralPanel";
+import { BrowserPanel } from "./BrowserPanel";
+import {
+  CLOSED_BROWSER_PANEL,
+  browserPanelAfterFeatureChange,
+  browserPanelMounted,
+  closeBrowserPanel,
+  openBrowserPanel,
+} from "./browserPanelLogic";
 import { HistoryView } from "../views/HistoryView";
 import { InspectView } from "../views/InspectView";
 import { RunView } from "../views/RunView";
@@ -120,6 +128,17 @@ export interface WorkspaceTabHandle {
    * nothing.
    */
   openMcp(): void;
+  /**
+   * Open the embedded browser for this codebase, or restore it when it is
+   * already open and minimized.
+   *
+   * Part of the handle for the same reason `openSql` is: the Plugins menu is
+   * global titlebar chrome and the browser is per-codebase now — each open
+   * codebase keeps its own live page and only the active one is visible. The
+   * feature gate is inside the tab, so calling this while `webBrowser` is off
+   * does nothing.
+   */
+  openBrowser(): void;
 }
 
 /**
@@ -254,6 +273,22 @@ export function WorkspaceTab({
   useEffect(() => {
     setSqlPanel((state) => sqlPanelAfterFeatureChange(state, sqlEnabled));
   }, [sqlEnabled]);
+
+  /**
+   * The embedded browser: a floating window per codebase, mirroring the SQL
+   * console. Each open codebase keeps its own live page; only the active one is
+   * visible (the `active` gate inside `BrowserPanel`).
+   */
+  const [browserPanel, setBrowserPanel] = useState(CLOSED_BROWSER_PANEL);
+  const browserEnabled = featureEnabled(features, "webBrowser");
+  const openBrowser = () => setBrowserPanel(openBrowserPanel);
+  // Switching the feature off unmounts the browser rather than hiding it — a
+  // hidden webview keeps a WebView2 process, its cookie jar and whatever the
+  // page polls alive. The decision returns the same object when nothing changes,
+  // so this cannot loop.
+  useEffect(() => {
+    setBrowserPanel((state) => browserPanelAfterFeatureChange(state, browserEnabled));
+  }, [browserEnabled]);
 
   /**
    * The SQL MCP server installer: a transient modal, so a plain boolean is
@@ -604,6 +639,7 @@ export function WorkspaceTab({
     openSql,
     openAsk,
     openMcp,
+    openBrowser,
   });
   handleRef.current = {
     openTerminal,
@@ -615,6 +651,7 @@ export function WorkspaceTab({
     openSql,
     openAsk,
     openMcp,
+    openBrowser,
   };
   useEffect(() => {
     const stable: WorkspaceTabHandle = {
@@ -628,6 +665,7 @@ export function WorkspaceTab({
       openSql: () => handleRef.current.openSql(),
       openAsk: () => handleRef.current.openAsk(),
       openMcp: () => handleRef.current.openMcp(),
+      openBrowser: () => handleRef.current.openBrowser(),
     };
     onRegister(workspace.root, stable);
     return () => onRegister(workspace.root, null);
@@ -809,6 +847,25 @@ export function WorkspaceTab({
           rather than at the call site so no caller has to re-derive it. */}
       {mcpPanelOpen && mcpEnabled && (
         <McpServerPanel onClose={() => setMcpPanelOpen(false)} />
+      )}
+
+      {/* The embedded browser — per codebase, mirroring the SQL console.
+          Mounted while the user has it open *and* the feature is on (the two are
+          different facts). It stays mounted while this codebase is backgrounded
+          (`hidden={!active}` on the wrapper) so the page, its session and any
+          running SPA survive a tab switch; the OS webview is hidden through the
+          host by the `active`-gated `sync`, so a background codebase's page
+          cannot paint over the foreground one. Switching the feature off
+          unmounts it, which drops the WebView2 process tree. */}
+      {browserPanelMounted(browserPanel, browserEnabled) && (
+        <BrowserPanel
+          key={workspace.root}
+          root={workspace.root}
+          active={active}
+          restoreRequest={browserPanel.restoreToken}
+          enabled={browserEnabled}
+          onClose={() => setBrowserPanel(closeBrowserPanel)}
+        />
       )}
 
       {terminals.map((t, index) => (

@@ -1,8 +1,25 @@
 # The browser panel
 
 A floating window inside the app hosting a real web page, so "does my deployment
-work" is answerable without leaving it. One instance for the whole application,
-not one per open codebase.
+work" is answerable without leaving it. **Per codebase**: each open codebase
+keeps its own live page (webview, cookie jar, consent), and only the *active*
+codebase's page is ever visible. An OS webview composites above the DOM and a
+background `WorkspaceTab` is only `hidden`, so a single app-wide webview left a
+*visible* page painting over whichever codebase the user switched to — keying the
+webview, its data slot and the panel by workspace root is what fixes that.
+
+The webviews live in a `thread_local! HashMap<PathBuf, Host>` on the main thread;
+`AppState.browser` is a `HashMap<PathBuf, Arc<Mutex<BrowserShared>>>`; the panel
+is mounted inside `WorkspaceTab` like the SQL console, keyed
+`cb.browser.layout:<root>`. Visibility follows the active workspace two ways: the
+frontend's `pageVisible`/`sync` gate on an `active` prop, and the host's
+`set_visible` refuses `set_visible(true)` for any non-active root
+(`visible_for`). The agent control pipe is per **process** (one
+`code-basics.browser.<pid>`, shared by every open panel), but every tool call
+resolves the **active** codebase's page afresh via `AppState::active_browser` —
+the one place an agent handle is minted — so an agent can never read a background
+or a different codebase's authenticated page, and consent (a field of each root's
+`BrowserShared`) cannot bleed across codebases.
 
 - Decisions: [`crates/core/src/browser/`](../../crates/core/src/browser/mod.rs)
 - Host (the webview itself): [`src-tauri/src/browser/`](../../src-tauri/src/browser/mod.rs)
@@ -76,9 +93,12 @@ every command, and `set_workspace` clears caches *while holding a
 `std::sync::Mutex` guard* — so nothing in it may be main-thread-bound and nothing
 in it may need to `.await`.
 
-So the resource lives in a `thread_local!` on the main thread, and `AppState`
-holds only **data** (`BrowserShared`: availability, url, title, consent, two
-bounded rings, two refusal counters). Every operation crosses to the main thread
+So the resources live in a `thread_local!` map on the main thread (one `Host`
+per codebase, keyed by root), and `AppState` holds only **data** — a
+`HashMap<PathBuf, Arc<Mutex<BrowserShared>>>` (each `BrowserShared`:
+availability, url, title, consent, two bounded rings, two refusal counters). A
+`BrowserHandle` is minted per call carrying the root it addresses, so it can only
+ever reach one codebase's page. Every operation crosses to the main thread
 through `AppHandle::run_on_main_thread` and returns on a `tokio::sync::oneshot`.
 This is the `LspHandle` reasoning: never an `Arc<Mutex<the resource>>`.
 
@@ -198,8 +218,10 @@ the entry outlives a crash, so `instances::choose_instance` takes liveness as a
 parameter and `liveness::alive` re-probes, comparing the **executable path** as
 well as the pid. A pid is not identity.
 
-The listener exists only while a panel is open, and that is what makes five of the six
-refusals readable from the file:
+The listener exists only while **some** panel is open — it is per *process*, not
+per panel, so it starts on the first open, is a no-op on every open after, and
+stops only when the last codebase's panel closes. That is what makes five of the
+six refusals readable from the file:
 
 | the file says | the answer |
 | --- | --- |
@@ -219,6 +241,23 @@ it. `--instance` is a disambiguator and **not** a permission.
 a panel that opened while the pipe failed to create — so its sentence names
 both. A user told to "open the panel" while looking at an open panel has been
 sent to do something they cannot do.
+
+### The active codebase is resolved per call
+
+The browser is per codebase, so a single process may have several panels open at
+once — but an agent must only ever reach the one the user is looking at. The pipe
+is the one place a browser handle is minted for an agent (`pipe::answer_line`),
+and it mints it from `AppState::active_browser`, which reads the active pointer
+and nothing else. So resolution happens **fresh, per call**: a background or a
+different codebase's authenticated page is unreachable by construction, and
+consent — a field of each root's `BrowserShared` — cannot bleed across codebases.
+When the active codebase has no browser open, the handle resolves to a transient
+`PanelClosed` slot and the agent gets the ordinary "open the panel" guidance,
+never another codebase's page. A tab switch mid-call is bounded: resolution is
+taken once at call arrival, so a read that began for the then-active (and
+consented) codebase completes against it — `ran_on_the_granted_page` still checks
+the origin, and the `set_visible` backstop keeps that page from being *visible*
+under the new foreground.
 
 ### What guards the pipe, stated honestly
 

@@ -65,6 +65,31 @@ fn a_degenerate_rect_is_refused() {
     }
 }
 
+// --- Only the active workspace's page may be shown --------------------------
+
+#[test]
+fn visible_for_shows_only_the_active_root() {
+    // Defence in depth for the stacking bug: even if the frontend erred and
+    // asked to show a background workspace's page, the host refuses. A request
+    // to *hide* always hides, whatever is active.
+    let a = Path::new("/a");
+    let b = Path::new("/b");
+    assert!(visible_for(true, a, Some(a)), "the active root must show");
+    assert!(
+        !visible_for(true, a, Some(b)),
+        "a background root must never show over the foreground one"
+    );
+    assert!(
+        !visible_for(true, a, None),
+        "with nothing active, nothing shows"
+    );
+    assert!(
+        !visible_for(false, a, Some(a)),
+        "hide is honoured even for the active root"
+    );
+    assert!(!visible_for(false, a, Some(b)));
+}
+
 // --- The envelope every script answers in ----------------------------------
 
 #[test]

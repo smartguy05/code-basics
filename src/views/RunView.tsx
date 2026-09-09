@@ -1738,6 +1738,26 @@ export function RunView({
       )}
 
       <div className="main">
+        {/* The tab strip lives at the top of `.main`, above both the run
+            toolbar and the diff pane, so an open diff still shows its tab (with
+            pin/close) — the strip used to sit inside the `hidden={isDiff}`
+            console area and vanished the moment a diff became the active tab.
+            Pinned tabs get their own band above the rest; with none pinned only
+            the normal strip renders. */}
+        {openFiles.length > 0 && (
+          <>
+            {pinnedTabs.length > 0 && (
+              <div className="console-tabs pinned-tabs">
+                {pinnedTabs.map(renderFileTab)}
+              </div>
+            )}
+            {unpinnedTabs.length > 0 && (
+              <div className="console-tabs">
+                {unpinnedTabs.map(renderFileTab)}
+              </div>
+            )}
+          </>
+        )}
         {/* The main area shows the active tab, and the toolbar follows it.
 
             The order is load-bearing. `DiffPane` renders its own `.toolbar`
@@ -2146,18 +2166,6 @@ export function RunView({
                       : { flex: `0 1 ${Math.round(split * 100)}%` }
                   }
                 >
-                  {/* Pinned tabs get their own row above the rest; with none
-                      pinned only the normal strip renders, unchanged. */}
-                  {pinnedTabs.length > 0 && (
-                    <div className="console-tabs pinned-tabs">
-                      {pinnedTabs.map(renderFileTab)}
-                    </div>
-                  )}
-                  {unpinnedTabs.length > 0 && (
-                    <div className="console-tabs">
-                      {unpinnedTabs.map(renderFileTab)}
-                    </div>
-                  )}
                   <div className="editor-area">
                     {/* Diff tabs are shown by the one `DiffPane` above, not
                         here. The filter is what keeps them out: `FileEditor`

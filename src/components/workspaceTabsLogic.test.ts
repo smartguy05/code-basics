@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  acknowledgeAttention,
   addOpenWorkspace,
+  ATTENTION_FLASH_MS,
+  attentionActive,
   closeOpenWorkspace,
   mergeSignal,
+  nextPulseExpiry,
+  pulseAttention,
   shouldFlashWorkspaceTab,
   tabLabels,
   tabSignalClass,
@@ -237,5 +242,64 @@ describe("tabSignalClass", () => {
   it("is empty with no signal", () => {
     expect(tabSignalClass("/a", "/b", null)).toBe("");
     expect(tabSignalClass("/a", "/b", undefined)).toBe("");
+  });
+});
+
+describe("attention pulse", () => {
+  it("arms a flash on the rising edge and reports it active within the window", () => {
+    const state = pulseAttention({}, "/a", 1000);
+    expect(state).toEqual({ "/a": 1000 });
+    expect(attentionActive(state, "/a", 1000)).toBe(true);
+    expect(attentionActive(state, "/a", 1000 + ATTENTION_FLASH_MS - 1)).toBe(true);
+  });
+
+  it("settles after the window elapses", () => {
+    const state = pulseAttention({}, "/a", 1000);
+    expect(attentionActive(state, "/a", 1000 + ATTENTION_FLASH_MS)).toBe(false);
+  });
+
+  it("does not re-arm while flashing (same reference, keeps the original start)", () => {
+    const state = pulseAttention({}, "/a", 1000);
+    const again = pulseAttention(state, "/a", 3000);
+    expect(again).toBe(state);
+    expect(attentionActive(again, "/a", 1000 + ATTENTION_FLASH_MS)).toBe(false);
+  });
+
+  it("does not re-arm once settled — this is what stops constant bells blinking", () => {
+    const state = pulseAttention({}, "/a", 1000);
+    const later = pulseAttention(state, "/a", 1000 + ATTENTION_FLASH_MS + 5000);
+    expect(later).toBe(state);
+    expect(attentionActive(later, "/a", 1000 + ATTENTION_FLASH_MS + 5000)).toBe(false);
+  });
+
+  it("re-arms only after acknowledge", () => {
+    const flashing = pulseAttention({}, "/a", 1000);
+    const cleared = acknowledgeAttention(flashing, "/a");
+    expect(cleared).toEqual({});
+    const fresh = pulseAttention(cleared, "/a", 9000);
+    expect(fresh).toEqual({ "/a": 9000 });
+    expect(attentionActive(fresh, "/a", 9000)).toBe(true);
+  });
+
+  it("acknowledge is a no-op (same reference) when nothing is pulsing", () => {
+    const state = { "/a": 1000 };
+    expect(acknowledgeAttention(state, "/b")).toBe(state);
+  });
+
+  it("tracks pulses per root independently", () => {
+    let state = pulseAttention({}, "/a", 1000);
+    state = pulseAttention(state, "/b", 2000);
+    expect(attentionActive(state, "/a", 2000)).toBe(true);
+    expect(attentionActive(state, "/b", 2000)).toBe(true);
+    expect(attentionActive(state, "/c", 2000)).toBe(false);
+  });
+
+  it("reports the soonest in-flight expiry, ignoring settled pulses", () => {
+    const state = { "/a": 1000, "/b": 3000 };
+    // At 2000: /a expires in (1000+4000-2000)=3000ms, /b in 5000ms → soonest 3000.
+    expect(nextPulseExpiry(state, 2000)).toBe(3000);
+    // Once every pulse has settled, there is nothing left to schedule.
+    expect(nextPulseExpiry(state, 3000 + ATTENTION_FLASH_MS)).toBeNull();
+    expect(nextPulseExpiry({}, 0)).toBeNull();
   });
 });

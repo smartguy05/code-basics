@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BrowserAgentRequest, BrowserSnapshot } from "../ipc/types";
 import {
-  BROWSER_LAYOUT_KEY,
+  browserLayoutKey,
   consentBanner,
   READ_CONSENT_ACTION,
   WRITE_CONSENT_ACTION,
@@ -28,15 +28,22 @@ function open(): BrowserPanelState {
   return openBrowserPanel(CLOSED_BROWSER_PANEL);
 }
 
-describe("BROWSER_LAYOUT_KEY", () => {
-  it("follows the cb.<thing>.layout convention", () => {
-    expect(BROWSER_LAYOUT_KEY).toBe("cb.browser.layout");
+describe("browserLayoutKey", () => {
+  it("is scoped per codebase, like the terminal key", () => {
+    // Each open codebase keeps its own live page now, so its geometry is its
+    // own too — a fresh browser in one codebase must not adopt another's
+    // remembered position.
+    expect(browserLayoutKey("C:/x")).toBe("cb.browser.layout:C:/x");
+  });
+
+  it("differs for two different roots", () => {
+    expect(browserLayoutKey("C:/a")).not.toBe(browserLayoutKey("C:/b"));
   });
 
   it("does not collide with any other panel's key", () => {
-    // Every key in the app today. A collision would make two panels overwrite
-    // each other's remembered position, which reads as "my window keeps
-    // jumping" and is close to impossible to attribute.
+    // Every unscoped key in the app today. A collision would make two panels
+    // overwrite each other's remembered position, which reads as "my window
+    // keeps jumping" and is close to impossible to attribute.
     for (const other of [
       "cb.sql.layout",
       "cb.notes.layout",
@@ -44,12 +51,8 @@ describe("BROWSER_LAYOUT_KEY", () => {
       "cb.running.layout",
       "cb.launcher.layout",
     ]) {
-      expect(BROWSER_LAYOUT_KEY).not.toBe(other);
+      expect(browserLayoutKey("C:/x")).not.toBe(other);
     }
-  });
-
-  it("is not a terminal key, which is scoped per codebase", () => {
-    expect(BROWSER_LAYOUT_KEY.startsWith("cb.terminal.layout")).toBe(false);
   });
 });
 
@@ -213,9 +216,15 @@ describe("pageRect", () => {
 });
 
 describe("pageVisible", () => {
-  const base = { state: open(), enabled: true, minimized: false, rect: GOOD };
+  const base = {
+    state: open(),
+    enabled: true,
+    minimized: false,
+    active: true,
+    rect: GOOD,
+  };
 
-  it("shows the page when the panel is open, enabled, expanded and measured", () => {
+  it("shows the page when the panel is open, enabled, expanded, foreground and measured", () => {
     expect(pageVisible(base)).toBe(true);
   });
 
@@ -238,13 +247,25 @@ describe("pageVisible", () => {
     ).toBe(false);
   });
 
+  it("hides it when the workspace is backgrounded", () => {
+    // The stacking fix: an OS webview composites above the DOM, so a background
+    // workspace's page would paint over the foreground one. Only the active
+    // workspace's page may show.
+    expect(pageVisible({ ...base, active: false })).toBe(false);
+  });
+
+  it("shows only the active workspace's page", () => {
+    expect(pageVisible({ ...base, active: true })).toBe(true);
+    expect(pageVisible({ ...base, active: false })).toBe(false);
+  });
+
   it("is not an occlusion mechanism", () => {
-    // The user accepted that the page paints over other panels. This function
-    // takes no argument describing what else is on screen, and that is the
-    // whole guarantee — a future "hide it while Notes is open" belongs in a
-    // redesign, not here.
+    // The user accepted that the page paints over other panels *within its own
+    // workspace*. This function takes no argument describing what else is on
+    // screen — `active` is which workspace is foreground, not which panels are.
     const input = { ...base };
     expect(Object.keys(input).sort()).toEqual([
+      "active",
       "enabled",
       "minimized",
       "rect",
@@ -255,7 +276,13 @@ describe("pageVisible", () => {
 });
 
 describe("hiddenPageReason", () => {
-  const base = { state: open(), enabled: true, minimized: false, rect: GOOD };
+  const base = {
+    state: open(),
+    enabled: true,
+    minimized: false,
+    active: true,
+    rect: GOOD,
+  };
 
   it("is null when the page is on screen", () => {
     expect(hiddenPageReason(base)).toBeNull();
@@ -276,6 +303,18 @@ describe("hiddenPageReason", () => {
       hiddenPageReason({
         ...base,
         minimized: true,
+        rect: { ok: false, reason: "the panel has no size on screen yet" },
+      }),
+    ).toBeNull();
+  });
+
+  it("is null when the workspace is backgrounded, even with a refused rect", () => {
+    // The user switched tabs; a scary reason under a hidden panel would be
+    // noise, exactly like the minimized case.
+    expect(
+      hiddenPageReason({
+        ...base,
+        active: false,
         rect: { ok: false, reason: "the panel has no size on screen yet" },
       }),
     ).toBeNull();

@@ -85,24 +85,28 @@ pub struct AppState {
     /// rescan and a `close` of the workspace it was started from — exactly the
     /// argument [`AppState::pty`] makes for a terminal.
     pub sql: SqlSessions,
-    /// The embedded browser panel's **data** — its availability, url, title,
-    /// consent and bounded logs.
+    /// The embedded browser panels' **data**, one slot per open codebase keyed
+    /// by workspace root — availability, url, title, consent and bounded logs.
     ///
-    /// Only the data. The wry `WebView` itself is `!Send` and main-thread-affine
-    /// and lives in a `thread_local!` in [`crate::browser`]; this state is
-    /// `std::sync::Mutex`-guarded and `set_workspace` clears caches while
-    /// holding a guard, so nothing here may need the main thread or an `.await`.
-    /// [`AppState::browser`] pairs this with an `AppHandle` to make the
-    /// clone-cheap handle that can reach the thread owning the webview — the
-    /// same reasoning as [`cb_core::lsp::session::LspHandle`]: never an
-    /// `Arc<Mutex<the resource>>`.
+    /// Only the data. The wry `WebView`s themselves are `!Send` and
+    /// main-thread-affine and live in a `thread_local!` map in [`crate::browser`]
+    /// keyed by the same root; this state is `std::sync::Mutex`-guarded and
+    /// `set_workspace` clears caches while holding a guard, so nothing here may
+    /// need the main thread or an `.await`. [`AppState::browser`] pairs one
+    /// root's slot with an `AppHandle` to make the clone-cheap handle that can
+    /// reach the thread owning the webview — the same reasoning as
+    /// [`cb_core::lsp::session::LspHandle`]: never an `Arc<Mutex<the resource>>`.
     ///
-    /// Global and **not** per-workspace, like [`AppState::pty`]: there is one
-    /// browser panel for the whole application ("verify my deployment" is not
-    /// repo-specific), and a workspace-scoped one would leave a *visible* OS
-    /// webview painting over a codebase the user had switched away from, because
-    /// a background `WorkspaceTab` is only `hidden`.
-    browser: Arc<Mutex<crate::browser::BrowserShared>>,
+    /// **Per-workspace**, and that is the whole of bugs 6+7: each open codebase
+    /// keeps its own live page, and only the *active* one is ever visible. An OS
+    /// webview composites above the DOM and a background `WorkspaceTab` is only
+    /// `hidden`, so a single app-wide webview left a *visible* page painting over
+    /// whichever codebase the user switched to. Consent lives inside each slot's
+    /// `BrowserShared`, so a grant made in one codebase is per-root **structurally**
+    /// and cannot reach an agent acting on another. The agent pipe resolves the
+    /// active root per call ([`AppState::active_browser`]); [`AppState::close`]
+    /// drops the closed codebase's slot.
+    browser: Mutex<HashMap<PathBuf, Arc<Mutex<crate::browser::BrowserShared>>>>,
 
     /// The browser control pipe, while a browser panel is open.
     ///
@@ -133,7 +137,7 @@ impl Default for AppState {
             pty: PtyManager::with_store(running.clone()),
             running,
             sql: SqlSessions::new(),
-            browser: Arc::new(Mutex::new(crate::browser::BrowserShared::new())),
+            browser: Mutex::new(HashMap::new()),
             #[cfg(windows)]
             browser_pipe: Mutex::new(None),
         }
@@ -380,6 +384,15 @@ impl AppState {
     pub fn close(&self, root: &Path) -> (Option<Arc<WorkspaceSlot>>, Option<PathBuf>) {
         let removed = self.map().remove(root);
 
+        // Drop this codebase's browser data slot. The webview itself
+        // (`HOST[root]`) is dropped by the frontend unmount path
+        // (`BrowserPanel` cleanup → `browser_close(root)`); this is the
+        // belt-and-braces for the `Send`-only data half.
+        self.browser
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(root);
+
         let mut active = self.active_lock();
         if active.as_deref() == Some(root) {
             *active = self.map().keys().next().cloned();
@@ -623,8 +636,71 @@ impl AppState {
         store.clone()
     }
 
-    /// The browser panel's handle: this state's data, plus a way to reach the
-    /// main thread that owns the webview.
+    /// The active workspace's root, or `None` when nothing is open.
+    ///
+    /// A thin clone of the active pointer, exposed for the browser host's
+    /// `set_visible` gate: only the foreground codebase's page may be shown, and
+    /// the host reads this to refuse a non-active root.
+    pub fn active_root_pathbuf(&self) -> Option<PathBuf> {
+        self.active_lock().clone()
+    }
+
+    /// The per-root browser data slot, created on first ask.
+    ///
+    /// Create-on-demand mirrors how the single `BrowserShared` persisted for the
+    /// process life in the app-wide design: a root that has never opened a
+    /// browser gets an empty (`PanelClosed`) slot, which reads correctly and
+    /// costs one small allocation.
+    pub fn browser_shared(&self, root: &Path) -> Arc<Mutex<crate::browser::BrowserShared>> {
+        let mut map = self
+            .browser
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        map.entry(root.to_path_buf())
+            .or_insert_with(|| Arc::new(Mutex::new(crate::browser::BrowserShared::new())))
+            .clone()
+    }
+
+    /// The **active** workspace's browser data, and the root it belongs to.
+    ///
+    /// **The security choke point.** It reads the active pointer and nothing
+    /// else, so an agent — whose only handle is minted from here — can never be
+    /// routed to a background workspace's authenticated page. When there is no
+    /// active workspace, or the active one never opened a browser, it returns a
+    /// transient `PanelClosed` slot (never another root's data), which the agent
+    /// gate refuses with "open the panel" guidance.
+    pub fn active_browser_shared(&self) -> (PathBuf, Arc<Mutex<crate::browser::BrowserShared>>) {
+        let active = self.active_lock().clone();
+        match active {
+            Some(root) => {
+                let existing = {
+                    let map = self
+                        .browser
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    map.get(&root).cloned()
+                };
+                match existing {
+                    Some(shared) => (root, shared),
+                    // Active workspace, browser never opened → a fresh
+                    // PanelClosed slot. Deliberately NOT another root's data.
+                    None => (
+                        root,
+                        Arc::new(Mutex::new(crate::browser::BrowserShared::new())),
+                    ),
+                }
+            }
+            // Nothing open at all → a PanelClosed placeholder; the root is
+            // irrelevant because the availability gate refuses before any
+            // webview is reached.
+            None => (
+                PathBuf::new(),
+                Arc::new(Mutex::new(crate::browser::BrowserShared::new())),
+            ),
+        }
+    }
+
+    /// A browser handle for one specific codebase's page.
     ///
     /// Takes the `AppHandle` as an argument rather than storing one, because
     /// `AppState` is constructed **before** there is an app — `AppState::default`
@@ -634,8 +710,32 @@ impl AppState {
     /// do anything about; a command already has the `AppHandle` (as
     /// `start_debug` does), so pairing the two here costs nothing and cannot be
     /// in the wrong state.
-    pub fn browser(&self, app: tauri::AppHandle) -> crate::browser::BrowserHandle {
-        crate::browser::BrowserHandle::from_parts(app, self.browser.clone())
+    pub fn browser(&self, app: tauri::AppHandle, root: &Path) -> crate::browser::BrowserHandle {
+        crate::browser::BrowserHandle::from_parts(
+            app,
+            root.to_path_buf(),
+            self.browser_shared(root),
+        )
+    }
+
+    /// The handle the agent pipe answers on: always the **active** root's page.
+    pub fn active_browser(&self, app: tauri::AppHandle) -> crate::browser::BrowserHandle {
+        let (root, shared) = self.active_browser_shared();
+        crate::browser::BrowserHandle::from_parts(app, root, shared)
+    }
+
+    /// The listener currently published for the browser control pipe, if any.
+    ///
+    /// Read by `browser_close` to re-publish an intact listener when other
+    /// workspaces still have a browser open — the pipe is per-process and must
+    /// outlive every individual panel.
+    #[cfg(windows)]
+    pub fn browser_pipe_published(&self) -> Option<cb_core::browser::instances::Listener> {
+        self.browser_pipe
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|p| p.published())
     }
 
     /// Hand the browser control pipe over to this state, stopping whatever was
@@ -667,29 +767,34 @@ impl AppState {
         self.set_browser_pipe(None);
     }
 
-    /// Read the browser panel's data without an `AppHandle` and without touching
-    /// the main thread.
+    /// Read one codebase's browser data without an `AppHandle` and without
+    /// touching the main thread.
     ///
     /// Separate from [`AppState::browser`] because the *reads* — status, the
     /// console log, the network log — need no webview at all, and a command that
     /// crossed to the main thread to answer them would be a poll that can be
     /// blocked by whatever the page is doing.
-    pub fn browser_data<T>(&self, read: impl FnOnce(&crate::browser::BrowserShared) -> T) -> T {
-        let guard = self
-            .browser
+    pub fn browser_data<T>(
+        &self,
+        root: &Path,
+        read: impl FnOnce(&crate::browser::BrowserShared) -> T,
+    ) -> T {
+        let shared = self.browser_shared(root);
+        let guard = shared
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         read(&guard)
     }
 
-    /// Change the browser panel's data. Consent is the one thing that moves
+    /// Change one codebase's browser data. Consent is the one thing that moves
     /// through here without the webview being involved at all.
     pub fn browser_data_mut<T>(
         &self,
+        root: &Path,
         write: impl FnOnce(&mut crate::browser::BrowserShared) -> T,
     ) -> T {
-        let mut guard = self
-            .browser
+        let shared = self.browser_shared(root);
+        let mut guard = shared
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         write(&mut guard)

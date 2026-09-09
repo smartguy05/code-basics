@@ -67,11 +67,12 @@ use cb_core::browser::tools;
 use cb_core::browser::wire::{self, RequestProblem};
 use cb_core::lsp::jsonrpc::{self, Incoming};
 use serde_json::Value;
+use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
 use super::agent::{self, Peer};
-use super::BrowserHandle;
+use crate::state::AppState;
 
 /// The pipe this process listens on.
 pub fn pipe_name(pid: u32) -> String {
@@ -109,7 +110,7 @@ impl PipeListener {
 ///
 /// Must be called from inside the Tokio runtime — every browser command is
 /// `async`, so it is.
-pub fn start(handle: BrowserHandle, token: String) -> Result<PipeListener, String> {
+pub fn start(app: AppHandle, token: String) -> Result<PipeListener, String> {
     let name = pipe_name(std::process::id());
     // The first instance claims the name; see the module docs on
     // `first_pipe_instance`.
@@ -119,7 +120,7 @@ pub fn start(handle: BrowserHandle, token: String) -> Result<PipeListener, Strin
     let acceptor = tokio::spawn(accept_loop(
         name.clone(),
         server,
-        handle,
+        app,
         token.clone(),
         running.clone(),
     ));
@@ -140,7 +141,7 @@ pub fn start(handle: BrowserHandle, token: String) -> Result<PipeListener, Strin
 async fn accept_loop(
     name: String,
     mut server: NamedPipeServer,
-    handle: BrowserHandle,
+    app: AppHandle,
     token: String,
     running: Arc<AtomicBool>,
 ) {
@@ -162,7 +163,7 @@ async fn accept_loop(
                 eprintln!("code-basics browser pipe: {error}");
                 tokio::spawn(serve_connection(
                     connected,
-                    handle.clone(),
+                    app.clone(),
                     token.clone(),
                     running.clone(),
                 ));
@@ -171,7 +172,7 @@ async fn accept_loop(
         };
         tokio::spawn(serve_connection(
             connected,
-            handle.clone(),
+            app.clone(),
             token.clone(),
             running.clone(),
         ));
@@ -181,7 +182,7 @@ async fn accept_loop(
 /// Answer one client until it goes away.
 async fn serve_connection(
     mut pipe: NamedPipeServer,
-    handle: BrowserHandle,
+    app: AppHandle,
     token: String,
     running: Arc<AtomicBool>,
 ) {
@@ -209,7 +210,7 @@ async fn serve_connection(
             if !running.load(Ordering::SeqCst) {
                 return;
             }
-            if let Some(reply) = answer_line(line, &handle, &token, &peer).await {
+            if let Some(reply) = answer_line(line, &app, &token, &peer).await {
                 let encoded = framing::encode(&reply);
                 if pipe.write_all(&encoded).await.is_err() {
                     return;
@@ -222,7 +223,7 @@ async fn serve_connection(
 /// The reply one line calls for, or [`None`] when it calls for none.
 async fn answer_line(
     line: framing::Line,
-    handle: &BrowserHandle,
+    app: &AppHandle,
     token: &str,
     peer: &Peer,
 ) -> Option<Value> {
@@ -269,7 +270,17 @@ async fn answer_line(
         }
     };
 
-    let answer = agent::answer(handle, call, peer).await;
+    // Resolve the **active** codebase's browser fresh, per call. A background
+    // codebase's page is unreachable from here by construction: this is the only
+    // place a handle is minted for the agent, and `active_browser` reads the
+    // active pointer and nothing else, so the handle can only ever name the
+    // foreground codebase. The `State` guard is dropped before the await below —
+    // it is never held across it.
+    let handle = {
+        let state = app.state::<AppState>();
+        state.active_browser(app.clone())
+    };
+    let answer = agent::answer(&handle, call, peer).await;
     Some(wire::answer_value(&id, &answer))
 }
 
