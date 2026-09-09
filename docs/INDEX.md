@@ -307,8 +307,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/sql/dsn_tests.rs` | 397 |  |
 | `crates/core/src/sql/format.rs` | 259 | Rendering database values as display strings for the results grid. |
 | `crates/core/src/sql/format_tests.rs` | 187 | Tests for [`super`]: the six ways a cell can be wrong on the way to the grid. |
-| `crates/core/src/sql/guard.rs` | 640 | The read-only guard: parse a statement with `sqlparser` and decide whether it |
-| `crates/core/src/sql/guard_tests.rs` | 498 |  |
+| `crates/core/src/sql/guard.rs` | 654 | The read-only guard: parse a statement with `sqlparser` and decide whether it |
+| `crates/core/src/sql/guard_tests.rs` | 541 |  |
 | `crates/core/src/sql/mod.rs` | 58 | The SQL console: connect to a database the workspace already talks to, run a |
 | `crates/core/src/sql/model.rs` | 307 | Wire types for the SQL console: the request to run a query, the result set |
 | `crates/core/src/sql/model_tests.rs` | 585 | The wire shape of everything the SQL console sends the frontend. |
@@ -353,7 +353,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/sql_mssql.rs` | 733 | The SQL Server half of the SQL console, against a real server. |
 | `crates/core/tests/sql_postgres.rs` | 811 | The PostgreSQL half of the SQL subsystem's end-to-end proof. |
 | `crates/core/tests/sql_sqlite.rs` | 1073 | The first test in the SQL subsystem that touches a real database. |
-| `src/App.tsx` | 1406 |  |
+| `src/App.tsx` | 1443 |  |
 | `src/appearance.ts` | 83 |  |
 | `src/appearanceLogic.test.ts` | 70 |  |
 | `src/appearanceLogic.ts` | 168 |  |
@@ -361,14 +361,16 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/AppOutputPanel.tsx` | 237 |  |
 | `src/components/AskPanel.tsx` | 265 |  |
 | `src/components/AttachConfirm.tsx` | 63 |  |
-| `src/components/BehavioralPanel.tsx` | 402 |  |
+| `src/components/BehavioralPanel.tsx` | 412 |  |
 | `src/components/BranchMenu.tsx` | 462 |  |
 | `src/components/BrowserMcpPanel.tsx` | 227 |  |
-| `src/components/BrowserPanel.tsx` | 608 |  |
+| `src/components/BrowserPanel.tsx` | 727 |  |
 | `src/components/ConfigEditor.tsx` | 313 |  |
-| `src/components/ContextMenu.tsx` | 111 |  |
+| `src/components/ContextMenu.tsx` | 117 |  |
 | `src/components/DiffPane.tsx` | 441 |  |
 | `src/components/DiffView.tsx` | 967 |  |
+| `src/components/Dock.tsx` | 48 | The shared minimized-window dock: one fixed strip that renders every |
+| `src/components/DockContext.tsx` | 75 | The React plumbing for the shared minimized-window dock. All *decisions* live |
 | `src/components/EnvironmentPicker.tsx` | 107 |  |
 | `src/components/ErosionPanel.tsx` | 101 |  |
 | `src/components/ErrorBoundary.tsx` | 65 |  |
@@ -381,28 +383,28 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/LspStatus.tsx` | 184 |  |
 | `src/components/McpServerPanel.tsx` | 216 |  |
 | `src/components/MenuBar.tsx` | 437 |  |
-| `src/components/NotesPanel.tsx` | 385 |  |
+| `src/components/NotesPanel.tsx` | 395 |  |
 | `src/components/NotificationHost.tsx` | 79 |  |
 | `src/components/ObjectTree.tsx` | 357 |  |
 | `src/components/OutputConsole.tsx` | 487 |  |
 | `src/components/PillColorMenu.tsx` | 84 |  |
 | `src/components/PlanPreview.tsx` | 60 |  |
-| `src/components/ReviewPanel.tsx` | 489 |  |
+| `src/components/ReviewPanel.tsx` | 499 |  |
 | `src/components/RiderImportDialog.tsx` | 135 |  |
 | `src/components/RunConfigMenu.tsx` | 183 |  |
 | `src/components/RunningPanel.tsx` | 240 |  |
-| `src/components/SearchEverywhere.tsx` | 492 |  |
+| `src/components/SearchEverywhere.tsx` | 497 |  |
 | `src/components/SettingsDialog.tsx` | 230 |  |
 | `src/components/SetupPrompt.tsx` | 115 |  |
 | `src/components/Sidebar.tsx` | 50 |  |
 | `src/components/SqlConnectionPicker.tsx` | 624 |  |
-| `src/components/SqlPanel.tsx` | 184 |  |
+| `src/components/SqlPanel.tsx` | 191 |  |
 | `src/components/SqlResultGrid.tsx` | 217 |  |
 | `src/components/StashPanel.tsx` | 288 |  |
-| `src/components/TerminalPanel.tsx` | 558 |  |
+| `src/components/TerminalPanel.tsx` | 576 |  |
 | `src/components/TerminalView.tsx` | 178 |  |
 | `src/components/TestTree.tsx` | 125 |  |
-| `src/components/WorkspaceTab.tsx` | 891 |  |
+| `src/components/WorkspaceTab.tsx` | 901 |  |
 | `src/components/aboutLogic.test.ts` | 134 |  |
 | `src/components/aboutLogic.ts` | 140 | The string composition behind the About dialog. |
 | `src/components/appOutputLogic.test.ts` | 279 |  |
@@ -413,8 +415,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/behavioralPanelLogic.ts` | 451 |  |
 | `src/components/branchFilterLogic.test.ts` | 126 |  |
 | `src/components/branchFilterLogic.ts` | 88 |  |
-| `src/components/browserPanelLogic.test.ts` | 544 |  |
-| `src/components/browserPanelLogic.ts` | 466 | Pure decisions for the floating browser panel: when it is mounted, when a |
+| `src/components/browserPanelLogic.test.ts` | 633 |  |
+| `src/components/browserPanelLogic.ts` | 544 | Pure decisions for the floating browser panel: when it is mounted, when a |
 | `src/components/claimChecklistLogic.test.ts` | 147 |  |
 | `src/components/claimChecklistLogic.ts` | 106 |  |
 | `src/components/claimVerifyLogic.test.ts` | 312 |  |
@@ -431,6 +433,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/diffLogic.ts` | 401 |  |
 | `src/components/diffPaneLogic.test.ts` | 253 |  |
 | `src/components/diffPaneLogic.ts` | 150 |  |
+| `src/components/dockLogic.test.ts` | 97 |  |
+| `src/components/dockLogic.ts` | 118 | Pure decisions for the shared minimized-window **dock** — the single strip |
 | `src/components/editorSourceLogic.test.ts` | 199 |  |
 | `src/components/editorSourceLogic.ts` | 196 | What backs an open editor tab. |
 | `src/components/enhancementsLogic.test.ts` | 118 |  |
@@ -459,14 +463,15 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/notesLogic.ts` | 178 | Pure decisions for the Notes / scratchpad panel — creating, renaming, |
 | `src/components/notificationLogic.test.ts` | 169 |  |
 | `src/components/notificationLogic.ts` | 161 | The app's notification service: what deserves a notification, what it says, |
+| `src/components/occlusionContext.tsx` | 84 | Tells the embedded browser panel when some DOM surface is on screen that the |
 | `src/components/pluginMenuLogic.test.ts` | 183 |  |
 | `src/components/pluginMenuLogic.ts` | 154 | The **Plugins** titlebar menu: what the optional features offer, and whether |
 | `src/components/projectViewLogic.test.ts` | 171 |  |
 | `src/components/projectViewLogic.ts` | 222 | Pure decisions for the merged **Project** tab — the view that puts the old |
 | `src/components/renameLogic.test.ts` | 709 |  |
 | `src/components/renameLogic.ts` | 756 | Every decision F2 makes, kept out of the editor so it can be tested. |
-| `src/components/reviewLayoutLogic.test.ts` | 174 |  |
-| `src/components/reviewLayoutLogic.ts` | 172 | Pure decisions for positioning the floating agent panel — the clamp |
+| `src/components/reviewLayoutLogic.test.ts` | 215 |  |
+| `src/components/reviewLayoutLogic.ts` | 197 | Pure decisions for positioning the floating agent panel — the clamp |
 | `src/components/reviewLogic.test.ts` | 182 |  |
 | `src/components/reviewLogic.ts` | 141 | Pure decisions for the adversarial-review panel — extracted so they are |
 | `src/components/reviewStreamLogic.test.ts` | 147 |  |
@@ -485,8 +490,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/sqlPickerLogic.ts` | 242 |  |
 | `src/components/stashLogic.test.ts` | 33 |  |
 | `src/components/stashLogic.ts` | 21 |  |
-| `src/components/terminalLogic.test.ts` | 487 |  |
-| `src/components/terminalLogic.ts` | 403 | Pure decisions for the floating terminals — naming, cascade staggering, |
+| `src/components/terminalLogic.test.ts` | 474 |  |
+| `src/components/terminalLogic.ts` | 389 | Pure decisions for the floating terminals — naming, cascade staggering, |
 | `src/components/terminalMenuLogic.test.ts` | 350 |  |
 | `src/components/terminalMenuLogic.ts` | 343 | Pure decisions for the titlebar's terminal split button — which rows its |
 | `src/components/terminalShellLogic.test.ts` | 162 |  |

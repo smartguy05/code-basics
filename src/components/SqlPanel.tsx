@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SqlView } from "../views/SqlView";
+import { useDockEntry } from "./DockContext";
+import { dockId } from "./dockLogic";
 import type { Workspace } from "../ipc/types";
 import {
   clampPanelPosition,
@@ -59,6 +61,20 @@ export function SqlPanel({
   const [minimized, setMinimized] = useState(false);
 
   useEffect(() => setMinimized(false), [restoreRequest]);
+
+  const restore = useCallback(() => setMinimized(false), []);
+  useDockEntry(
+    minimized
+      ? {
+          id: dockId(workspace.root, "sql"),
+          scope: workspace.root,
+          label: "SQL",
+          order: 0,
+          status: workspace.name,
+          onRestore: restore,
+        }
+      : null,
+  );
 
   const [pos, setPos] = useState<PanelLayout | undefined>(() => {
     const saved = loadPanelLayout(localStorage, SQL_LAYOUT_KEY);
@@ -139,16 +155,7 @@ export function SqlPanel({
 
   return (
     <>
-      {minimized && (
-        <button
-          className="review-pill sql-pill"
-          onClick={() => setMinimized(false)}
-          title="Restore the SQL console (it keeps its connection)"
-        >
-          <span>SQL</span>
-        </button>
-      )}
-
+      {/* Minimized pill lives in the shared dock now (see `useDockEntry` above). */}
       {/* `.sql-panel` is the positioned, clipping ancestor the two overlays
           `SqlView` renders — the connection picker and the writes confirmation —
           are scoped to in the stylesheet. Both are `position: fixed` there,

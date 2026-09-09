@@ -8,12 +8,15 @@ import {
   browserPanelAfterFeatureChange,
   browserPanelMounted,
   CLOSED_BROWSER_PANEL,
+  clampBrowserTop,
   closeBrowserPanel,
   hiddenPageReason,
+  occludedByPanels,
   openBrowserPanel,
   pageRect,
   pageVisible,
   pillLabel,
+  rectsOverlap,
   urlBarValue,
   type BrowserPanelState,
   type PageRectDecision,
@@ -221,10 +224,12 @@ describe("pageVisible", () => {
     enabled: true,
     minimized: false,
     active: true,
+    setupOpen: false,
+    occluded: false,
     rect: GOOD,
   };
 
-  it("shows the page when the panel is open, enabled, expanded, foreground and measured", () => {
+  it("shows the page when the panel is open, enabled, expanded, foreground, unobscured and measured", () => {
     expect(pageVisible(base)).toBe(true);
   });
 
@@ -259,19 +264,14 @@ describe("pageVisible", () => {
     expect(pageVisible({ ...base, active: false })).toBe(false);
   });
 
-  it("is not an occlusion mechanism", () => {
-    // The user accepted that the page paints over other panels *within its own
-    // workspace*. This function takes no argument describing what else is on
-    // screen — `active` is which workspace is foreground, not which panels are.
-    const input = { ...base };
-    expect(Object.keys(input).sort()).toEqual([
-      "active",
-      "enabled",
-      "minimized",
-      "rect",
-      "state",
-    ]);
-    expect(pageVisible(input)).toBe(true);
+  it("hides it while the agent-setup modal is open (bug 2)", () => {
+    // The modal is DOM and the webview composites above it, so it would open
+    // behind the page unless the page hides.
+    expect(pageVisible({ ...base, setupOpen: true })).toBe(false);
+  });
+
+  it("hides it while an occluding surface covers the page (bug 3)", () => {
+    expect(pageVisible({ ...base, occluded: true })).toBe(false);
   });
 });
 
@@ -281,6 +281,8 @@ describe("hiddenPageReason", () => {
     enabled: true,
     minimized: false,
     active: true,
+    setupOpen: false,
+    occluded: false,
     rect: GOOD,
   };
 
@@ -324,6 +326,93 @@ describe("hiddenPageReason", () => {
     expect(
       hiddenPageReason({ ...base, enabled: false, rect: { ok: false, reason: "x" } }),
     ).toBeNull();
+  });
+
+  it("says nothing while the setup modal is open, even with a refused rect", () => {
+    expect(
+      hiddenPageReason({
+        ...base,
+        setupOpen: true,
+        rect: { ok: false, reason: "the panel has no size on screen yet" },
+      }),
+    ).toBeNull();
+  });
+
+  it("says nothing while an occluding surface covers it — the surface is the explanation", () => {
+    expect(
+      hiddenPageReason({
+        ...base,
+        occluded: true,
+        rect: { ok: false, reason: "the panel has no size on screen yet" },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("rectsOverlap", () => {
+  const page: PanelGeometry = { left: 100, top: 100, width: 200, height: 200 };
+
+  it("is true when two rects overlap", () => {
+    expect(rectsOverlap(page, { left: 250, top: 250, width: 100, height: 100 })).toBe(true);
+  });
+
+  it("is false for edge-touching rects (a panel flush beside the page)", () => {
+    // b starts exactly at page's right edge (300) — covering no pixel of it.
+    expect(rectsOverlap(page, { left: 300, top: 100, width: 100, height: 100 })).toBe(false);
+  });
+
+  it("is false for fully disjoint rects", () => {
+    expect(rectsOverlap(page, { left: 500, top: 500, width: 50, height: 50 })).toBe(false);
+  });
+
+  it("is true when one rect is entirely inside the other", () => {
+    expect(rectsOverlap(page, { left: 150, top: 150, width: 20, height: 20 })).toBe(true);
+  });
+});
+
+describe("occludedByPanels", () => {
+  const page: PanelGeometry = { left: 100, top: 100, width: 200, height: 200 };
+
+  it("is false for an empty list", () => {
+    expect(occludedByPanels(page, [])).toBe(false);
+  });
+
+  it("is true when any panel overlaps the page", () => {
+    expect(
+      occludedByPanels(page, [
+        { left: 500, top: 500, width: 50, height: 50 },
+        { left: 150, top: 150, width: 40, height: 40 },
+      ]),
+    ).toBe(true);
+  });
+
+  it("is false when every panel is beside or clear of the page", () => {
+    expect(
+      occludedByPanels(page, [
+        { left: 300, top: 100, width: 100, height: 100 },
+        { left: 100, top: 400, width: 100, height: 100 },
+      ]),
+    ).toBe(false);
+  });
+});
+
+describe("clampBrowserTop", () => {
+  it("pushes a rect whose top is above the app chrome down to it, shrinking height", () => {
+    // top 10 under a chrome bottom of 80: page must start at 80 and lose 70 of
+    // its height so the bottom edge stays put.
+    expect(
+      clampBrowserTop({ left: 40, top: 10, width: 800, height: 500 }, 80),
+    ).toEqual({ left: 40, top: 80, width: 800, height: 430 });
+  });
+
+  it("leaves a rect already below the chrome unchanged", () => {
+    const rect = { left: 40, top: 120, width: 800, height: 500 };
+    expect(clampBrowserTop(rect, 80)).toEqual(rect);
+  });
+
+  it("never yields a negative height", () => {
+    const clamped = clampBrowserTop({ left: 0, top: 0, width: 100, height: 30 }, 80);
+    expect(clamped.height).toBe(0);
   });
 });
 

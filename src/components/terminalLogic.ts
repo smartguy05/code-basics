@@ -187,20 +187,6 @@ export function recolorTerminal(
   return list.map((t) => (t.key === key ? { ...t, color } : t));
 }
 
-/** The step, in px, between one minimized pill and the next, stacked upward. */
-const PILL_STEP = 48;
-
-/**
- * The `bottom` offset, in px, of a minimized terminal pill at position `index`
- * among the open terminals. The base slot (`bottom: 16`) is reserved for the
- * global Notes bar, so terminals start one step up and never land on it — the
- * fix for the Notes/terminal pill overlap. Pills then stack upward so several
- * minimized terminals do not share a spot either.
- */
-export function pillBottom(index: number, step: number = PILL_STEP): number {
-  return 16 + (index + 1) * step;
-}
-
 /** The step, in px, each cascaded terminal is offset from the previous. */
 const CASCADE_STEP = 28;
 /** How many steps before the cascade wraps back to the start. */
@@ -348,10 +334,10 @@ export const TERMINAL_STACK_SPAN = 100;
  *
  * The order is a list of terminal keys, bottom-most first, kept **separately**
  * from the `terminals` array. That separation is the point: the array index
- * drives `pillBottom` and `cascadeShift`, which are positional identity, while
- * this is temporal recency. Reordering the array to raise a panel would
- * teleport its minimized pill to another slot and shift every un-dragged panel
- * diagonally, so the two facts never share a representation.
+ * drives `cascadeShift` (a fresh terminal's open position), which is positional
+ * identity, while this is temporal recency. Reordering the array to raise a panel
+ * would shift every un-dragged panel diagonally, so the two facts never share a
+ * representation.
  *
  * Returns the **same array** when the key is already top, so the caller's
  * `setState` bails out and clicking the front terminal — much the commonest

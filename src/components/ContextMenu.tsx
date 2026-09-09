@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useOccluder } from "./occlusionContext";
 
 /**
  * A floating right-click menu: a click-catching backdrop, and a panel at the
@@ -47,6 +48,11 @@ export function ContextMenu({
   onClose: () => void;
   children: ReactNode;
 }) {
+  // While a menu is open, the embedded browser page (an OS surface above the DOM)
+  // must hide, or it paints over the menu. Mounted only while open, so this is a
+  // plain acquire-on-mount.
+  useOccluder(true);
+
   const panel = useRef<HTMLDivElement>(null);
   /**
    * The correction applied after measuring, `null` until then.

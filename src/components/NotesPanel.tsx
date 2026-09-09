@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../ipc/api";
 import type { Note } from "../ipc/types";
+import { useDockEntry } from "./DockContext";
+import { dockId } from "./dockLogic";
 import {
   clampPanelPosition,
   clampPanelSize,
@@ -197,6 +199,23 @@ export function NotesPanel({
 
   const active = notes.find((n) => n.id === activeId);
 
+  // Notes is global (belongs to no codebase) and pinned to the dock's leading
+  // slot. Restoring is a stable setter, so the closure needs no memo beyond this.
+  const restore = useCallback(() => setMinimized(false), []);
+  useDockEntry(
+    minimized
+      ? {
+          id: dockId("global", "notes"),
+          scope: "global",
+          label: "Notes",
+          order: 0,
+          pinned: true,
+          color: active?.color,
+          onRestore: restore,
+        }
+      : null,
+  );
+
   const onAdd = () => {
     const { notes: next, activeId: id } = addNote(notes, seqRef.current, Date.now());
     seqRef.current += 1;
@@ -267,17 +286,8 @@ export function NotesPanel({
 
   return (
     <>
-      {minimized && (
-        <button
-          className="review-pill notes-pill"
-          onClick={() => setMinimized(false)}
-          title="Restore notes"
-          style={active?.color ? { background: active.color } : undefined}
-        >
-          <span>Notes</span>
-        </button>
-      )}
-
+      {/* Minimized pill lives in the shared dock now (see `useDockEntry` above),
+          not a fixed corner of its own. */}
       <div
         className="review-panel notes-panel"
         hidden={minimized}

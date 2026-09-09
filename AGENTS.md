@@ -222,10 +222,11 @@ working tree; conflicted files are never offered.
   must therefore be granted by `webviews` and appear in no capability naming its
   window — which is why `capabilities/default.json` says `"webviews": ["main"]`.
 - The browser page is an **OS surface**, not a DOM layer: it composites above
-  everything, ignores the `--z-panel`/`--z-notes`/`--z-overlay` bands, and
-  `hidden` on a React div does not hide it. Painting over the other panels while
-  open is an accepted trade-off; being visible when **minimized, feature-off, or
-  at a degenerate rect** is a bug.
+  everything, ignores the `--z-panel`/`--z-notes`/`--z-dock`/`--z-overlay` bands, and
+  `hidden` on a React div does not hide it — so anything that must appear over it hides
+  the page (`pageVisible`/`occlusionContext`, overlap-scoped, not blanket). It is a bug
+  for it to be visible when **minimized, feature-off, at a degenerate rect, its workspace
+  not foreground, its setup modal open, or a menu/modal/overlapping panel covering it**.
 - Anything that shows or positions that surface must be **generation-stamped and
   abandon its writes when superseded**, checked before *each* write rather than
   once. `sync()` awaits a scale factor and two IPC calls having captured

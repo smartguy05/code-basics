@@ -17,13 +17,19 @@ import {
   READ_CONSENT_ACTION,
   WRITE_CONSENT_ACTION,
   browserLayoutKey,
+  clampBrowserTop,
   hiddenPageReason,
+  occludedByPanels,
   pageRect,
   pageVisible,
   pillLabel,
   urlBarValue,
   type PanelGeometry,
 } from "./browserPanelLogic";
+import { resizeFromHandle, type ResizeEdge } from "./reviewLayoutLogic";
+import { useDockEntry } from "./DockContext";
+import { dockId } from "./dockLogic";
+import { useOcclusionCount } from "./occlusionContext";
 
 /**
  * The embedded browser as a floating window.
@@ -40,16 +46,16 @@ import {
  * Rust host (`src-tauri/src/browser/mod.rs`), and it composites **above** the
  * DOM: it ignores `--z-panel`, `--z-notes` and `--z-overlay`, and `hidden` on a
  * React div does not hide it. So `.browser-page` below is a *placeholder* whose
- * only job is to be measured; the host is told its rect and paints there. That
- * also means a terminal, Notes or Search Everywhere dragged over this panel is
- * covered by the page — **accepted**, not a bug to work around here.
+ * only job is to be measured; the host is told its rect and paints there.
  *
- * Three things do hide it, and all three go through the host:
- *
- *  1. minimized → `browser_set_visible(false)`, the panel staying mounted so the
- *     page, its session and its running SPA survive (the `SqlPanel` rule),
- *  2. unmounted → `browser_close`, which **drops** the webview,
- *  3. an unusable rect → left hidden with `hiddenPageReason` shown in its place.
+ * Because it composites above the DOM, anything DOM that must appear over it is
+ * made visible by *hiding the page* — the six cases in `pageVisible`, all routed
+ * through the host: minimized, feature-off (→ `browser_close`, dropping the
+ * webview), an unusable rect (left hidden with `hiddenPageReason` in its place),
+ * a backgrounded codebase, the panel's own setup modal (bug 2), and an occluding
+ * surface over its rect (bug 3) — an open menu/modal (counted via
+ * `occlusionContext`) or a peer floating panel that actually overlaps the page
+ * (`occludedByPanels`, measured in `sync`).
  *
  * # Two CLAUDE.md gotchas that apply directly, and did cost a feature once
  *
@@ -131,12 +137,17 @@ export function BrowserPanel({
     const saved = loadPanelLayout(localStorage, browserLayoutKey(root));
     return saved.left !== undefined && saved.top !== undefined ? saved : undefined;
   });
-  const [size] = useState<PanelSize | undefined>(() => {
+  const [size, setSize] = useState<PanelSize | undefined>(() => {
     const saved = loadPanelLayout(localStorage, browserLayoutKey(root));
     return saved.width !== undefined && saved.height !== undefined
       ? { width: saved.width, height: saved.height }
       : undefined;
   });
+
+  // How many DOM overlays (menus, modals, Search Everywhere) are open. Each would
+  // otherwise be painted over by the page (bug 3); the page hides while any is up.
+  // Peer floating panels are handled geometrically in `sync`, not counted here.
+  const occludedByOverlay = useOcclusionCount() > 0;
 
   /**
    * Measure the placeholder and decide, through the pure `pageRect`, whether
@@ -153,13 +164,18 @@ export function BrowserPanel({
     if (!element) return { ok: false, reason: "the panel is not on screen" };
     const box = element.getBoundingClientRect();
     const scaleFactor = await getCurrentWindow().scaleFactor();
+    // Never let the page rect rise above the app's own title/tab chrome: a panel
+    // dragged to the very top would otherwise push the page under the titlebar,
+    // where a titlebar menu drops *into* it (bug 3). The height shrinks so the
+    // bottom edge stays put.
+    const clamped = clampBrowserTop(
+      { left: box.left, top: box.top, width: box.width, height: box.height },
+      measureChromeBottom(),
+    );
     // Viewport coordinates are relative to the main webview's client area, and
     // the host's bounds are relative to the window's — the same rectangle,
     // because the main webview fills it.
-    return pageRect(
-      { left: box.left, top: box.top, width: box.width, height: box.height },
-      { devicePixelRatio: window.devicePixelRatio, scaleFactor },
-    );
+    return pageRect(clamped, { devicePixelRatio: window.devicePixelRatio, scaleFactor });
   }, []);
 
   /**
@@ -190,22 +206,24 @@ export function BrowserPanel({
 
     const decision = await measure();
     if (superseded()) return;
-    const visible = pageVisible({
+    // Occluded if an overlay/menu/modal is open (counted) or a peer floating panel
+    // actually overlaps the page's rect (geometry). Peer overlap is checked here
+    // rather than via a signal because the app tracks no cross-panel raise order —
+    // what the user sees as "covering the page" is precisely a rect on top of it.
+    const occluded =
+      occludedByOverlay ||
+      (decision.ok && occludedByPanels(decision.rect, peerPanelRects(panelRef.current)));
+    const input = {
       state: { open: true, restoreToken: 0 },
       enabled: true,
       minimized,
       active,
+      setupOpen,
+      occluded,
       rect: decision,
-    });
-    setHidden(
-      hiddenPageReason({
-        state: { open: true, restoreToken: 0 },
-        enabled: true,
-        minimized,
-        active,
-        rect: decision,
-      }),
-    );
+    };
+    const visible = pageVisible(input);
+    setHidden(hiddenPageReason(input));
     try {
       if (decision.ok) {
         await api.browserSetBounds(root, decision.rect);
@@ -216,7 +234,7 @@ export function BrowserPanel({
       if (superseded()) return;
       setError(String(e));
     }
-  }, [measure, minimized, active, root]);
+  }, [measure, minimized, active, root, setupOpen, occludedByOverlay]);
 
   // Re-run `sync` when this codebase moves between foreground and background.
   // A switch-away must call `set_visible(false)` deterministically, and a
@@ -315,6 +333,10 @@ export function BrowserPanel({
 
     schedule();
     window.addEventListener("resize", schedule);
+    // A peer floating panel dragged over the page changes no React state here, so
+    // re-check occlusion when any drag ends. Cheap: `schedule` is debounced and a
+    // superseded `sync` abandons its writes.
+    window.addEventListener("pointerup", schedule);
     const observer =
       typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
     if (observer && pageRef.current) observer.observe(pageRef.current);
@@ -326,6 +348,7 @@ export function BrowserPanel({
     return () => {
       if (timer) clearTimeout(timer);
       window.removeEventListener("resize", schedule);
+      window.removeEventListener("pointerup", schedule);
       observer?.disconnect();
       void unlisten.then((off) => off()).catch(() => {});
     };
@@ -415,6 +438,49 @@ export function BrowserPanel({
     header.addEventListener("pointerup", onUp);
   };
 
+  // Resize by an explicit handle rather than the native `resize: both` grip: that
+  // grip sits in the bottom-right corner *inside* `.browser-page`, which the OS
+  // webview composites over and so swallows the press — the page could not be
+  // resized at all (bug 1). The handles live in a gutter the webview's rect never
+  // covers. Same pointer plumbing as the header drag: capture, `sync` on every
+  // move so the page tracks the frame live, persist on release. The arithmetic is
+  // the pure, tested `resizeFromHandle`.
+  const onResizePointerDown = (edge: ResizeEdge) => (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const panel = panelRef.current;
+    if (!panel) return;
+    const start = { width: panel.offsetWidth, height: panel.offsetHeight };
+    const originX = e.clientX;
+    const originY = e.clientY;
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+
+    let latest: PanelSize = start;
+    const onMove = (ev: PointerEvent) => {
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      latest = resizeFromHandle(
+        edge,
+        start,
+        { dx: ev.clientX - originX, dy: ev.clientY - originY },
+        viewport,
+      );
+      setSize(latest);
+      void sync();
+    };
+    const onUp = () => {
+      handle.releasePointerCapture(e.pointerId);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      const saved = loadPanelLayout(localStorage, browserLayoutKey(root));
+      savePanelLayout(localStorage, { ...saved, ...latest }, browserLayoutKey(root));
+      void sync();
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+  };
+
   const submit = async () => {
     const typed = draft;
     if (typed === null) return;
@@ -464,18 +530,22 @@ export function BrowserPanel({
   // would be a button that always errors.
   const banner = consentBanner(snapshot);
 
+  const restore = useCallback(() => setMinimized(false), []);
+  useDockEntry(
+    minimized
+      ? {
+          id: dockId(root, "browser"),
+          scope: root,
+          label: pillLabel(title, url),
+          order: 0,
+          onRestore: restore,
+        }
+      : null,
+  );
+
   return (
     <>
-      {minimized && (
-        <button
-          className="review-pill browser-pill"
-          onClick={() => setMinimized(false)}
-          title="Restore the browser (the page keeps running)"
-        >
-          <span>{pillLabel(title, url)}</span>
-        </button>
-      )}
-
+      {/* Minimized pill lives in the shared dock now (see `useDockEntry` above). */}
       <div
         className="review-panel browser-panel"
         hidden={minimized}
@@ -600,9 +670,58 @@ export function BrowserPanel({
         <div className="browser-page" ref={pageRef}>
           {hidden && <div className="browser-page-note">{hidden}</div>}
         </div>
+
+        {/* Explicit resize handles in the gutter around `.browser-page`, since the
+            OS webview covers the native corner grip. E/S/SE only. */}
+        <div
+          className="browser-resize browser-resize-e"
+          onPointerDown={onResizePointerDown("e")}
+          aria-hidden
+        />
+        <div
+          className="browser-resize browser-resize-s"
+          onPointerDown={onResizePointerDown("s")}
+          aria-hidden
+        />
+        <div
+          className="browser-resize browser-resize-se"
+          onPointerDown={onResizePointerDown("se")}
+          aria-hidden
+        />
       </div>
 
       {setupOpen && <BrowserMcpPanel onClose={() => setSetupOpen(false)} />}
     </>
   );
+}
+
+// --- Occlusion measurement (impure; the decisions are in browserPanelLogic) ---
+
+/**
+ * The bottom edge (in CSS px) of the app's own title/tab chrome, so the page rect
+ * can be kept below it. Prefers the tab strip, falls back to the titlebar, and to
+ * 0 when neither is found (no clamp) — a missing bar must not push the page down.
+ */
+function measureChromeBottom(): number {
+  const tabs = document.querySelector(".ws-tabs") ?? document.querySelector(".titlebar");
+  return tabs ? tabs.getBoundingClientRect().bottom : 0;
+}
+
+/**
+ * The on-screen rects of the floating panels that could cover the page, excluding
+ * the browser panel itself (`self`). Every floating panel shares the
+ * `.review-panel` base and the dock is `.dock`; a hidden (minimized) panel
+ * measures 0×0 and so overlaps nothing. Returned to `occludedByPanels`, which
+ * decides — this only gathers.
+ */
+function peerPanelRects(self: HTMLElement | null): PanelGeometry[] {
+  const nodes = document.querySelectorAll<HTMLElement>(".review-panel, .dock");
+  const rects: PanelGeometry[] = [];
+  nodes.forEach((node) => {
+    if (node === self) return;
+    const box = node.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) return;
+    rects.push({ left: box.left, top: box.top, width: box.width, height: box.height });
+  });
+  return rects;
 }

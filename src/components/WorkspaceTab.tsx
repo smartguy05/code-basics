@@ -15,6 +15,7 @@ import { InspectView } from "../views/InspectView";
 import { RunView } from "../views/RunView";
 import { ReviewPanel } from "./ReviewPanel";
 import { SearchEverywhere } from "./SearchEverywhere";
+import { Occluder } from "./occlusionContext";
 import { SetupPrompt } from "./SetupPrompt";
 import { McpServerPanel } from "./McpServerPanel";
 import { SqlPanel } from "./SqlPanel";
@@ -777,19 +778,23 @@ export function WorkspaceTab({
       )}
 
       {showSetup && (
-        <SetupPrompt
-          onDismiss={() => setShowSetup(false)}
-          onDontAskAgain={() => {
-            setDismissed(localStorage, workspace.root);
-            setShowSetup(false);
-          }}
-          onInstalled={() => setShowSetup(false)}
-        />
+        <>
+          <Occluder />
+          <SetupPrompt
+            onDismiss={() => setShowSetup(false)}
+            onDontAskAgain={() => {
+              setDismissed(localStorage, workspace.root);
+              setShowSetup(false);
+            }}
+            onInstalled={() => setShowSetup(false)}
+          />
+        </>
       )}
 
       {agentPanel && (
         <ReviewPanel
           key={`${agentPanel.title}:${agentPanel.initialPromptId ?? ""}:${agentPanel.token}`}
+          root={workspace.root}
           onClose={() => setAgentPanel(null)}
           initialPromptId={agentPanel.initialPromptId}
           initialPromptBody={agentPanel.initialPromptBody}
@@ -802,6 +807,7 @@ export function WorkspaceTab({
       {behavioralPanel && (
         <BehavioralPanel
           key={behavioralPanel.token}
+          root={workspace.root}
           configId={behavioralPanel.configId}
           httpFiles={behavioralPanel.httpFiles}
           verify={behavioralPanel.verify}
@@ -846,7 +852,10 @@ export function WorkspaceTab({
           it is an unmount and nothing is lost by that. The feature gate is here
           rather than at the call site so no caller has to re-derive it. */}
       {mcpPanelOpen && mcpEnabled && (
-        <McpServerPanel onClose={() => setMcpPanelOpen(false)} />
+        <>
+          <Occluder />
+          <McpServerPanel onClose={() => setMcpPanelOpen(false)} />
+        </>
       )}
 
       {/* The embedded browser — per codebase, mirroring the SQL console.
@@ -874,6 +883,7 @@ export function WorkspaceTab({
           title={t.title}
           cwd={t.cwd}
           command={t.command}
+          number={t.number}
           index={index}
           stackOffset={stackOffset(stackOrder, t.key)}
           color={t.color}

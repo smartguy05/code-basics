@@ -63,6 +63,10 @@
   --z-panel: 60;
   --z-panel-stack-span: 100;
   --z-notes: 200;
+  /* The shared minimized-window dock. Above Notes (200) so its pills are always
+     clickable over every floating panel, below overlays (300) so a modal or the
+     launcher backdrop still covers it. */
+  --z-dock: 250;
   --z-overlay: 300;
 
   /* The window background's opacity. Written by `windowTransparency.ts` and by
@@ -1362,12 +1366,10 @@ textarea:focus {
   display: none;
 }
 
-/* The minimized restore pill. */
+/* The minimized restore pill. Positioning is owned by the shared dock (`.dock`
+   below): pills are static flex children of that one strip, so this class now
+   carries only the pill's *look*, not where it sits. */
 .review-pill {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  z-index: var(--z-panel);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1377,6 +1379,37 @@ textarea:focus {
   background: var(--bg-raised);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
   cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+/* The shared minimized-window dock: one fixed strip along the bottom-left that
+   holds every minimized panel's pill. `flex-wrap` lets a long row of pills wrap
+   upward rather than run off-screen. Replaces the old per-panel fixed corners
+   that collided (Notes over Review) or scattered (SQL/Browser bottom-left,
+   terminals cascading). */
+.dock {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: var(--z-dock);
+  display: flex;
+  flex-wrap: wrap-reverse;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+}
+
+/* A dock pill is a `.review-pill` laid out by the strip. A slightly tighter shape
+   than the old free-floating pills, since several now sit side by side. */
+.dock-pill {
+  max-width: 260px;
+}
+
+.dock-pill-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* A small indeterminate spinner shown while a review is running. */
@@ -1613,15 +1646,8 @@ textarea:focus {
   z-index: var(--z-notes);
 }
 
-/* Minimized: a thin labeled bar pinned to the right, not a rounded pill — the
-   requested "collapse to a thin bar with a label that expands back". */
-.notes-pill {
-  z-index: var(--z-notes);
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: calc(var(--ui-font-size) - 1px);
-  writing-mode: horizontal-tb;
-}
+/* Notes minimizes into the shared dock now (`.dock` / `.dock-pill`), like every
+   other panel — its own `.notes-pill` corner is gone. */
 
 .notes-tabs {
   display: flex;
@@ -5353,19 +5379,8 @@ button.danger:hover:not(:disabled) {
   max-height: calc(100% - 48px);
 }
 
-/* Minimized: a thin labelled bar like Notes', but pinned bottom-LEFT. The
-   bottom-right column is taken — `.review-pill` bases there and
-   `terminalLogic.pillBottom` reserves the base slot for the Notes bar and
-   stacks terminal pills upward from one step above it — so a right-hand SQL
-   pill would land on a terminal's. Nothing occupies the left corner. */
-.sql-pill {
-  right: auto;
-  left: 16px;
-  bottom: 16px;
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: calc(var(--ui-font-size) - 1px);
-}
+/* The SQL console minimizes into the shared dock now (`.dock`), so it no longer
+   needs a corner of its own. */
 
 /* ---------------------------------------------------------------------------
    The titlebar terminal split button's menu (`terminalMenuLogic.ts`).
@@ -5561,6 +5576,40 @@ button.danger:hover:not(:disabled) {
 .browser-panel {
   width: min(1100px, 78vw);
   height: min(720px, 74vh);
+  /* No native `resize` grip: it sits in the bottom-right corner *inside*
+     `.browser-page`, which the OS webview composites over and so swallows the
+     press. Explicit handles below live in a gutter the webview never covers. */
+  resize: none;
+}
+
+/* The resize handles, in the gutter around `.browser-page` (its right/bottom
+   margin) so the OS webview — which composites above the DOM — can never cover
+   them. 10px matches the gutter. E starts below the header so it never overlaps
+   the header controls. */
+.browser-resize {
+  position: absolute;
+  z-index: 1;
+}
+.browser-resize-e {
+  top: 44px;
+  right: 0;
+  bottom: 10px;
+  width: 10px;
+  cursor: ew-resize;
+}
+.browser-resize-s {
+  left: 0;
+  right: 10px;
+  bottom: 0;
+  height: 10px;
+  cursor: ns-resize;
+}
+.browser-resize-se {
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nwse-resize;
 }
 
 /* The header holds the nav buttons and the URL bar, so it needs to lay them out
@@ -5603,6 +5652,10 @@ button.danger:hover:not(:disabled) {
   flex: 1;
   overflow: hidden;
   background: var(--bg);
+  /* A right/bottom gutter that the OS webview's rect (this element's box) stops
+     short of, so the resize handles above have somewhere to live that the webview
+     does not composite over. */
+  margin: 0 10px 10px 0;
 }
 
 /* Why the page is not on screen, in its place. Never an unexplained blank. */
@@ -5623,19 +5676,8 @@ button.danger:hover:not(:disabled) {
   white-space: pre-wrap;
 }
 
-/* Minimized: a pill, pinned bottom-left above the SQL bar's slot. The
-   bottom-right column is taken (`.review-pill` bases there and
-   `terminalLogic.pillBottom` stacks terminal pills upward from one step above
-   the Notes bar), and `.sql-pill` already owns the bottom-left corner — so this
-   sits one step above it rather than on top of it. */
-.browser-pill {
-  right: auto;
-  left: 16px;
-  bottom: 60px;
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: calc(var(--ui-font-size) - 1px);
-}
+/* The browser minimizes into the shared dock now (`.dock`), so it no longer
+   picks a corner of its own. */
 
 /* The browser panel's automation consent banner.
    Four kinds, and only one of them draws the eye: `asked` is a request waiting

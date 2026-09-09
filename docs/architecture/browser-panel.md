@@ -72,19 +72,26 @@ If a page fails to load, **do not "fix" a CSP error — there is none.**
 ## An OS webview is not a DOM layer
 
 The page is a WebView2 child HWND. It composites **above the whole DOM**: it
-ignores `--z-panel`, `--z-notes` and `--z-overlay` in `styles.css`, and `hidden`
-on a React div does not hide it. Confirmed by image: Notes, Search Everywhere and
-the *Optional features* modal — the one a user would open to switch the browser
-off — are all clipped by the page while the panel is open.
+ignores `--z-panel`, `--z-notes`, `--z-dock` and `--z-overlay` in `styles.css`,
+and `hidden` on a React div does not hide it.
 
-**This is accepted. There is deliberately no occlusion mechanism.** Three things
-hide the page, and all three go through the host:
+**So the only way to make DOM chrome appear over the page is to hide the page** —
+`pageVisible` (`browserPanelLogic.ts`) is false for six cases, and all go through
+the host:
 
 | Case | Mechanism | Why not the others |
 |---|---|---|
 | Minimized | `browser_set_visible(false)`, panel stays mounted | The page, its session and its running SPA survive — the `SqlPanel`/`AppOutputPanel` rule |
 | Plugin switched off | `browser_close`, which **drops** the wry `WebView` | A disabled browser must keep no WebView2 process, no cookie jar and no connection. Measured: six `msedgewebview2` processes → zero, and the child HWND gone |
 | Unusable rect | left hidden, with `hiddenPageReason` rendered in its place | The `createResizeGate` 0×0 lesson, extended to the DPI case |
+| Backgrounded codebase | `set_visible(false)`, gated by `visible_for` | A background codebase's page must not paint over the foreground one |
+| Setup modal open | `pageVisible` false while `setupOpen` | The Agents modal (`BrowserMcpPanel`) is DOM; the page would open in front of it |
+| Occluding surface over its rect | `pageVisible` false while `occluded` | A menu/modal/Search-Everywhere (counted via `occlusionContext`, mount `<Occluder/>`) or a peer floating panel that **actually overlaps** the page (`occludedByPanels` in `sync`, re-checked on `pointerup`). Overlap-scoped, not blanket — blanket flickers |
+
+`clampBrowserTop` additionally keeps the page rect below the app's tab strip, so a
+panel dragged to the top cannot push the page under the titlebar. **Resize** uses
+explicit E/S/SE handles (`resizeFromHandle`) in a gutter around `.browser-page`,
+because the native `resize: both` grip sits under the webview and cannot be grabbed.
 
 ## Why the webview is not in `AppState`
 

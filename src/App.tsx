@@ -12,6 +12,10 @@ import { MenuBar } from "./components/MenuBar";
 import { isInside } from "./components/launcherLogic";
 import { NotesPanel } from "./components/NotesPanel";
 import { NotificationHost } from "./components/NotificationHost";
+import { Dock } from "./components/Dock";
+import { DockProvider, type LiveDockEntry, type SetDockEntry } from "./components/DockContext";
+import { removeEntry, upsertEntry } from "./components/dockLogic";
+import { OcclusionProvider, Occluder } from "./components/occlusionContext";
 import { pluginMenuAvailable, pluginMenuRows } from "./components/pluginMenuLogic";
 import {
   describeUnexpectedStop,
@@ -292,6 +296,15 @@ export function App() {
   }, []);
   const dismissNote = useCallback((id: string) => {
     setNotifications((list) => dismissNotification(list, id));
+  }, []);
+
+  // The shared minimized-window dock. Every floating panel registers here while
+  // minimized (via `useDockEntry`); `Dock` lays them out in one strip, scoped to
+  // the active codebase. The setter is stable so registering does not re-render
+  // the other panels — only this component and `Dock` update.
+  const [dockEntries, setDockEntries] = useState<LiveDockEntry[]>([]);
+  const setDockEntry = useCallback<SetDockEntry>((id, entry) => {
+    setDockEntries((list) => (entry ? upsertEntry(list, entry) : removeEntry(list, id)));
   }, []);
 
   /**
@@ -1022,6 +1035,8 @@ export function App() {
   const labels = tabLabels(openWorkspaces, wsLabels);
 
   return (
+    <OcclusionProvider>
+    <DockProvider setDockEntry={setDockEntry}>
     <div className="app">
       {/* Three zones, not a flex row with a spacer: the branch widget is meant to
           sit in the *window's* centre, and a spacer can only centre it when the
@@ -1315,16 +1330,29 @@ export function App() {
       {/* The global Notes / scratchpad panel — one instance, not per-workspace.
           Its "send to agent" runs in the foreground tab. */}
       {featuresOpen && (
-        <FeaturesPicker
-          features={features}
-          onChange={setFeatures}
-          onClose={() => setFeaturesOpen(false)}
-        />
+        <>
+          <Occluder />
+          <FeaturesPicker
+            features={features}
+            onChange={setFeatures}
+            onClose={() => setFeaturesOpen(false)}
+          />
+        </>
       )}
 
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <>
+          <Occluder />
+          <SettingsDialog onClose={() => setSettingsOpen(false)} />
+        </>
+      )}
 
-      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
+      {aboutOpen && (
+        <>
+          <Occluder />
+          <AboutDialog onClose={() => setAboutOpen(false)} />
+        </>
+      )}
 
       {notesOpen && (
         <NotesPanel
@@ -1348,11 +1376,14 @@ export function App() {
 
       {/* The app launcher's picker: an overlay, closed as soon as it launches. */}
       {launcherOpen && (
-        <LauncherPicker
-          root={activeRoot}
-          onLaunch={launchApp}
-          onClose={() => setLauncherOpen(false)}
-        />
+        <>
+          <Occluder />
+          <LauncherPicker
+            root={activeRoot}
+            onLaunch={launchApp}
+            onClose={() => setLauncherOpen(false)}
+          />
+        </>
       )}
 
       {/* The launched apps' output. Mounted while any tab exists - hidden, never
@@ -1379,6 +1410,10 @@ export function App() {
           service dying is often nobody's tab to outline. */}
       <NotificationHost notifications={notifications} onDismiss={dismissNote} />
 
+      {/* The shared minimized-window dock: every minimized floating panel's pill,
+          scoped to the active codebase, in one collision-free strip. */}
+      <Dock entries={dockEntries} activeRoot={activeRoot} />
+
       {/* Bottom status bar: the active codebase's folder name and full path,
           moved here from the titlebar. */}
       <div className="statusbar">
@@ -1402,5 +1437,7 @@ export function App() {
         />
       </div>
     </div>
+    </DockProvider>
+    </OcclusionProvider>
   );
 }

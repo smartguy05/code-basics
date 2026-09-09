@@ -40,7 +40,12 @@ Three layers, each because the one above it can be wrong:
 2. The read-only guard classifies the statement with `writes_allowed = false`.
    Anything not positively recognised as a read is refused — including statements
    the guard simply does not know. **The connection's own `allowWrites` setting
-   is not consulted on this path.**
+   is not consulted on this path.** (Transaction-control statements — `BEGIN`,
+   `COMMIT`, `ROLLBACK`, `SAVEPOINT`, `RELEASE SAVEPOINT` — are classified as
+   *neutral reads*: they modify no data, so a `BEGIN; UPDATE …; COMMIT;` batch is
+   judged by the write inside it and, on the interactive console, is lifted when
+   `allowWrites` is on. Here on the agent path `writes_allowed` is always false,
+   so the enclosed write is still refused.)
 3. The handle is opened with `writes_allowed: false`, so the engine's own
    mechanism fires: `SQLITE_OPEN_READONLY`, a read-only PostgreSQL session, a
    rolled-back SQL Server transaction.

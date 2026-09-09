@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useOccluder } from "./occlusionContext";
 import * as api from "../ipc/api";
 import {
   actionableIds,
@@ -110,6 +111,10 @@ export function SearchEverywhere({
    * acted on by the tab that receives the choice.
    */
   const [actionable, setActionable] = useState<ReadonlySet<string> | null>(null);
+
+  // While this full-screen overlay is open, the embedded browser page (an OS
+  // surface above the DOM) must hide or it paints over the search results.
+  useOccluder(open);
 
   const inputRef = useRef<HTMLInputElement>(null);
 

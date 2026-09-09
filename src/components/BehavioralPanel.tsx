@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { OutputConsole, type ConsoleHandle } from "./OutputConsole";
+import { useDockEntry } from "./DockContext";
+import { dockId } from "./dockLogic";
 import * as api from "../ipc/api";
 import type { BehavioralDelta, BehavioralReport, ProcessEvent } from "../ipc/types";
 import {
@@ -39,6 +41,7 @@ import {
  * their per-card before/after badges.
  */
 export function BehavioralPanel({
+  root,
   configId,
   httpFiles,
   verify,
@@ -46,6 +49,8 @@ export function BehavioralPanel({
   onVerify,
   onClose,
 }: {
+  /** The codebase this panel belongs to — scopes its minimized dock pill. */
+  root: string;
   configId: string;
   /**
    * The explicit `.http` files to replay, or `null` to let the backend discover
@@ -136,10 +141,11 @@ export function BehavioralPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const restore = () => {
+  // Stable (only stable setters) so the dock entry can exclude it from its deps.
+  const restore = useCallback(() => {
     setMinimized(false);
     setAttention(false);
-  };
+  }, []);
 
   // Drag the panel by its header (same pointer plumbing as the agent panel; the
   // clamp decision is the shared, tested `reviewLayoutLogic`). A press that
@@ -184,20 +190,24 @@ export function BehavioralPanel({
           ? behavioralScoreLine(report.scorecard)
           : "Finished";
 
+  useDockEntry(
+    minimized
+      ? {
+          id: dockId(root, "behavioral"),
+          scope: root,
+          label: title,
+          order: 2,
+          status,
+          attention,
+          spinner: phase === "running",
+          onRestore: restore,
+        }
+      : null,
+  );
+
   return (
     <>
-      {minimized && (
-        <button
-          className={`review-pill${attention ? " attention" : ""}`}
-          onClick={restore}
-          title={attention ? "The before/after run finished" : "Restore the before/after window"}
-        >
-          {phase === "running" && <span className="review-spinner" aria-hidden />}
-          <span>
-            {title} — {attention ? "finished" : status}
-          </span>
-        </button>
-      )}
+      {/* Minimized pill lives in the shared dock now (see `useDockEntry` above). */}
 
       <div
         className="review-panel"
