@@ -39,14 +39,17 @@ pub enum FeatureId {
     AskCodebase,
     /// The read-only SQL MCP server a coding agent can be pointed at.
     McpSqlServer,
+    /// The embedded web browser panel.
+    WebBrowser,
 }
 
 impl FeatureId {
     /// Every feature this build knows about, in the order the picker lists them.
-    pub const ALL: [FeatureId; 3] = [
+    pub const ALL: [FeatureId; 4] = [
         FeatureId::SqlConsole,
         FeatureId::AskCodebase,
         FeatureId::McpSqlServer,
+        FeatureId::WebBrowser,
     ];
 
     /// Stable id used across IPC, in the store file, and by both installers.
@@ -55,6 +58,7 @@ impl FeatureId {
             FeatureId::SqlConsole => "sqlConsole",
             FeatureId::AskCodebase => "askCodebase",
             FeatureId::McpSqlServer => "mcpSqlServer",
+            FeatureId::WebBrowser => "webBrowser",
         }
     }
 
@@ -64,6 +68,7 @@ impl FeatureId {
             FeatureId::SqlConsole => "SQL console",
             FeatureId::AskCodebase => "Ask the codebase",
             FeatureId::McpSqlServer => "SQL MCP server",
+            FeatureId::WebBrowser => "Web browser",
         }
     }
 
@@ -76,6 +81,9 @@ impl FeatureId {
             }
             FeatureId::McpSqlServer => {
                 "Let a coding agent read the databases you expose, over MCP."
+            }
+            FeatureId::WebBrowser => {
+                "A floating browser panel, for checking a deployment without leaving the app."
             }
         }
     }
@@ -105,6 +113,12 @@ impl FeatureId {
             FeatureId::SqlConsole => true,
             FeatureId::AskCodebase => true,
             FeatureId::McpSqlServer => true,
+            // On, like the other three, for the reason above: an existing app
+            // gaining capability, launched most often with no installer to ask
+            // the question. It opens no port and grants an agent nothing — the
+            // page is only what the user navigates to, and automation consent is
+            // a separate per-page click that defaults to withheld.
+            FeatureId::WebBrowser => true,
         }
     }
 

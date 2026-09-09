@@ -211,3 +211,28 @@ working tree; conflicted files are never offered.
   files actually written — from the approved plan, not a second read — and states
   both silent-no-op conditions: a project `.mcp.json` needs the agent's approval
   before it loads, and a running agent will not see the change until it restarts.
+- A capability granted by window label reaches **every** webview of that window:
+  `RuntimeAuthority::resolve_access` matches a capability's `webviews` *or* its
+  `windows`, and a child webview inherits its parent's window label. So grant by
+  `webviews` (`capabilities/default.json`), and anything hosting untrusted content
+  must appear in no capability that names its window.
+- A capability granted by **window** label reaches every webview of that window
+  (`RuntimeAuthority::resolve_access` matches webviews OR windows, and a child
+  webview of `main` has window label `main`). Anything hosting untrusted content
+  must therefore be granted by `webviews` and appear in no capability naming its
+  window — which is why `capabilities/default.json` says `"webviews": ["main"]`.
+- The browser page is an **OS surface**, not a DOM layer: it composites above
+  everything, ignores the `--z-panel`/`--z-notes`/`--z-overlay` bands, and
+  `hidden` on a React div does not hide it. Painting over the other panels while
+  open is an accepted trade-off; being visible when **minimized, feature-off, or
+  at a degenerate rect** is a bug.
+- Anything that shows or positions that surface must be **generation-stamped and
+  abandon its writes when superseded**, checked before *each* write rather than
+  once. `sync()` awaits a scale factor and two IPC calls having captured
+  `minimized` at entry, so without it a stale run re-shows a window the user
+  cannot dismiss over what they are reading.
+- Never open a pipe, path or address a *file* merely states. `instances::pipe_name(pid)`
+  is derived from a pid already verified against its recorded executable; a
+  registry naming anything else is refused as tampering rather than corrected,
+  because that refusal is the only visible symptom of a local process answering
+  an agent as if it were this application.

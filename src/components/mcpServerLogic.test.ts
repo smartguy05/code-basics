@@ -176,3 +176,29 @@ describe("writtenNote", () => {
     expect(note.toLowerCase()).toMatch(/restart|running/);
   });
 });
+
+describe("planOutcome names the server it is talking about", () => {
+  it("keeps the SQL wording when no label is given", () => {
+    // The existing call site passes no label and must keep the exact words it
+    // had, which is why the parameter is defaulted rather than required.
+    const outcome = planOutcome(
+      { provider: "claudeCode", scope: "project", writes: [], caveats: [] },
+      "remove",
+    );
+    expect(outcome.kind).toBe("nothing");
+    expect(outcome.kind === "nothing" && outcome.message).toContain("SQL MCP server");
+  });
+
+  it("names the browser server when that is what is being removed", () => {
+    // Two servers come out of one executable and a user may have both; being
+    // told the wrong one held no entry would send them looking in the wrong
+    // file.
+    const outcome = planOutcome(
+      { provider: "codex", scope: "user", writes: [], caveats: [] },
+      "remove",
+      "browser MCP server",
+    );
+    expect(outcome.kind === "nothing" && outcome.message).toContain("browser MCP server");
+    expect(outcome.kind === "nothing" && outcome.message).not.toContain("SQL");
+  });
+});

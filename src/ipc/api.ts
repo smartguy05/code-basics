@@ -2,6 +2,11 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  BrowserConsoleBatch,
+  BrowserNetworkBatch,
+  BrowserPageText,
+  BrowserRect,
+  BrowserSnapshot,
   AboutInfo,
   AgentCommand,
   AnchorResult,
@@ -1403,3 +1408,94 @@ export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
 }
+
+// --- The embedded browser panel --------------------------------------------
+//
+// Every one of these is `async` on the Rust side and must stay so: the host
+// reaches a main-thread-affine wry `WebView` through `run_on_main_thread`, and
+// Tauri warns that webview creation deadlocks from a synchronous command on
+// Windows. See `src-tauri/src/browser/mod.rs`.
+
+/**
+ * Open the page at `rect`, optionally navigating straight to `url` (raw user
+ * input — the backend normalises and may refuse it). Creates the webview, or
+ * re-places and re-shows one that was only minimized.
+ */
+export const browserOpen = (rect: BrowserRect, url: string | null) =>
+  invoke<BrowserSnapshot>("browser_open", { rect, url });
+
+/**
+ * Close the panel, **dropping** the webview and its WebView2 process tree.
+ * `pluginDisabled` says why: "the user switched the browser off" and "the panel
+ * is closed" are one click apart and an agent acts on the difference.
+ */
+export const browserClose = (pluginDisabled: boolean) =>
+  invoke<BrowserSnapshot>("browser_close", { pluginDisabled });
+
+/** Move and resize the page to follow the panel. Logical pixels. */
+export const browserSetBounds = (rect: BrowserRect) =>
+  invoke<void>("browser_set_bounds", { rect });
+
+/**
+ * Show or hide the OS surface — the only mechanism that works. The page is a
+ * child HWND compositing above the DOM, so a React `hidden` cannot hide it.
+ */
+export const browserSetVisible = (visible: boolean) =>
+  invoke<void>("browser_set_visible", { visible });
+
+/** Navigate to whatever the user typed. A search phrase is refused, not searched. */
+export const browserNavigate = (input: string) =>
+  invoke<BrowserSnapshot>("browser_navigate", { input });
+
+export const browserBack = () => invoke<void>("browser_back");
+export const browserForward = () => invoke<void>("browser_forward");
+export const browserReload = () => invoke<void>("browser_reload");
+
+/** The whole readable state. A pure data read — no main thread, cheap to poll. */
+export const browserState = () => invoke<BrowserSnapshot>("browser_state");
+
+/** Console rows after `cursor`, with what the cursor missed. */
+export const browserConsole = (cursor: number) =>
+  invoke<BrowserConsoleBatch>("browser_console", { cursor });
+
+/** Network rows after `cursor`, with the coverage note. */
+export const browserNetwork = (cursor: number) =>
+  invoke<BrowserNetworkBatch>("browser_network", { cursor });
+
+/** The page's rendered text. Refused unless the page is `ready`. */
+export const browserPageText = () =>
+  invoke<BrowserPageText>("browser_page_text");
+
+/** Record consent the user gave or withdrew. The only thing that moves it. */
+export const browserSetAutomationConsent = (reads: boolean, writes: boolean) =>
+  invoke<BrowserSnapshot>("browser_set_automation_consent", { reads, writes });
+
+// --- The browser MCP server's installer ------------------------------------
+//
+// The same five-call shape as the SQL server's (`mcpServerStatus` and friends)
+// because it is the same machinery: `cb_core::browser::install` reuses
+// `mcp::install`'s merge rather than growing a second one. Separate calls
+// rather than a `kind` parameter, because the two servers carry different
+// caveats and the failure mode of one shared call is showing somebody the
+// database warning before granting an agent their browser session.
+
+/** Where the browser MCP server is installed for `provider`, if anywhere. */
+export const browserMcpStatus = (provider: ProviderId) =>
+  invoke<InstallScope | null>("browser_mcp_status", { provider });
+
+/** Exactly what installing it would write. Touches nothing. */
+export const browserMcpInstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("browser_mcp_install_plan", { provider, scope });
+
+/** Perform an install the user has confirmed; returns the new status. */
+export const installBrowserMcp = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("install_browser_mcp", { provider, scope });
+
+/** Exactly what removing it would rewrite. A zero-write plan means nothing of
+ * ours was there. */
+export const browserMcpUninstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("browser_mcp_uninstall_plan", { provider, scope });
+
+/** Perform a removal the user has confirmed; returns the new status. */
+export const uninstallBrowserMcp = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("uninstall_browser_mcp", { provider, scope });

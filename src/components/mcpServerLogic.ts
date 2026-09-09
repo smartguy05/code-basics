@@ -125,13 +125,27 @@ export type PlanOutcome =
   | { kind: "confirm"; plan: InstallPlan }
   | { kind: "nothing"; message: string };
 
-export function planOutcome(plan: InstallPlan, mode: McpMode): PlanOutcome {
+/**
+ * `serverLabel` names which server the "nothing to remove" sentence is about.
+ *
+ * Optional, and defaulted to the SQL server rather than made required, so the
+ * existing call site keeps the exact words it had. This module is otherwise
+ * entirely generic — provider labels, scope options, the confirm wording, the
+ * written note — which is why the browser MCP server reuses it whole instead of
+ * getting a second copy; this one sentence was the only thing in it that named
+ * a particular server.
+ */
+export function planOutcome(
+  plan: InstallPlan,
+  mode: McpMode,
+  serverLabel = "SQL MCP server",
+): PlanOutcome {
   if (plan.writes.length > 0) return { kind: "confirm", plan };
   return {
     kind: "nothing",
     message:
       mode === "remove"
-        ? "Nothing to remove — this configuration holds no entry for the SQL MCP server."
+        ? `Nothing to remove — this configuration holds no entry for the ${serverLabel}.`
         : "The installer produced no changes, which it should never do. Nothing has been written.",
   };
 }

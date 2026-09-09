@@ -442,9 +442,11 @@ FunctionEnd
 Var FeatureSqlConsole
 Var FeatureAskCodebase
 Var FeatureMcpSqlServer
+Var FeatureWebBrowser
 Var FeatureSqlConsoleCheckbox
 Var FeatureAskCodebaseCheckbox
 Var FeatureMcpSqlServerCheckbox
+Var FeatureWebBrowserCheckbox
 
 Page custom PageFeatures PageLeaveFeatures
 
@@ -487,6 +489,11 @@ Function PageFeatures
   ${NSD_CreateLabel} 14u 98u -14u 20u "Let a coding agent read the databases you expose, over MCP."
   Pop $0
 
+  ${NSD_CreateCheckBox} 0 116u 100% 10u "Web browser"
+  Pop $FeatureWebBrowserCheckbox
+  ${NSD_CreateLabel} 14u 128u -14u 20u "A floating browser panel, for checking a deployment without leaving the app."
+  Pop $0
+
   ${If} $FeatureSqlConsole != "0"
     ${NSD_Check} $FeatureSqlConsoleCheckbox
   ${EndIf}
@@ -495,6 +502,9 @@ Function PageFeatures
   ${EndIf}
   ${If} $FeatureMcpSqlServer != "0"
     ${NSD_Check} $FeatureMcpSqlServerCheckbox
+  ${EndIf}
+  ${If} $FeatureWebBrowser != "0"
+    ${NSD_Check} $FeatureWebBrowserCheckbox
   ${EndIf}
 
   ${NSD_SetFocus} $FeatureSqlConsoleCheckbox
@@ -522,6 +532,13 @@ Function PageLeaveFeatures
   ${Else}
     StrCpy $FeatureMcpSqlServer 0
   ${EndIf}
+
+  ${NSD_GetState} $FeatureWebBrowserCheckbox $0
+  ${If} $0 = ${BST_CHECKED}
+    StrCpy $FeatureWebBrowser 1
+  ${Else}
+    StrCpy $FeatureWebBrowser 0
+  ${EndIf}
 FunctionEnd
 
 ; Writes the installer seed that cb_core::features::store reads exactly once:
@@ -529,7 +546,7 @@ FunctionEnd
 ; then writes it through to <config>\code-basics\features.json.
 ;
 ; The bytes are exactly this, with no trailing newline:
-;   {"version":1,"enabled":{"sqlConsole":true,"askCodebase":true,"mcpSqlServer":true}}
+;   {"version":1,"enabled":{"sqlConsole":true,"askCodebase":true,"mcpSqlServer":true,"webBrowser":true}}
 ;
 ; Two encoding notes. FileWrite in a Unicode installer writes the string as
 ; ANSI (the active codepage), not UTF-16 -- which is what is wanted here,
@@ -567,6 +584,12 @@ Function WriteFeaturesSeed
   ${EndIf}
   FileWrite $9 ',"mcpSqlServer":'
   ${If} $FeatureMcpSqlServer == "0"
+    FileWrite $9 'false'
+  ${Else}
+    FileWrite $9 'true'
+  ${EndIf}
+  FileWrite $9 ',"webBrowser":'
+  ${If} $FeatureWebBrowser == "0"
     FileWrite $9 'false'
   ${Else}
     FileWrite $9 'true'

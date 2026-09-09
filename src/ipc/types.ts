@@ -2503,3 +2503,184 @@ export interface AboutInfo {
    */
   buildDate: string;
 }
+
+// ---------------------------------------------------------------------------
+// The embedded browser panel
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the embedded browser is. Mirrors `cb_core::browser::model::
+ * BrowserAvailability`, pinned by `serialisation_shape` there.
+ *
+ * **Six answers, never collapsed into one**, because each licenses something
+ * different: `pluginDisabled` is a setting to change, `panelClosed` is one
+ * click away, `blank` is a panel with no page, `loading` is a page whose text
+ * would be *wrong rather than absent*, `ready` is the only state a read may be
+ * attempted in, and `failed` is a navigation this app could not start.
+ */
+export type BrowserAvailability =
+  | "pluginDisabled"
+  | "panelClosed"
+  | "blank"
+  | "loading"
+  | "ready"
+  | "failed";
+
+/** How a captured console message was ranked. `other` is the abstention. */
+export type BrowserConsoleLevel =
+  | "debug"
+  | "log"
+  | "info"
+  | "warn"
+  | "error"
+  | "other";
+
+/** One captured console message. `seq` is a cursor, not an index. */
+export interface BrowserConsoleEntry {
+  seq: number;
+  level: BrowserConsoleLevel;
+  /**
+   * The `console` method as the page spelled it (`"warn"`, `"table"`), or
+   * `"onerror"` / `"unhandledrejection"` for the two window events that are
+   * captured and are not console calls at all. Kept beside `level` because the
+   * level is this app's ranking and this is the page's own word.
+   */
+  method: string;
+  text: string;
+}
+
+/**
+ * How one network row was observed — and therefore what it can say. A
+ * `resource` row comes from a `PerformanceObserver` and has no status and no
+ * real method; only `fetch`/`xhr` rows can report one.
+ */
+export type BrowserNetworkSource = "fetch" | "xhr" | "resource";
+
+/** One observed network request. */
+export interface BrowserNetworkEntry {
+  seq: number;
+  url: string;
+  method: string;
+  /** `null` for a `resource` row and for a fetch that never completed. */
+  status: number | null;
+  durationMs: number | null;
+  transferSize: number | null;
+  source: BrowserNetworkSource;
+}
+
+/**
+ * Text extracted from the page, and what was left out. `totalChars` is the
+ * whole page's length, never the returned slice's — `returnedChars ===
+ * totalChars` is the only way to know you have all of it.
+ */
+export interface BrowserPageText {
+  text: string;
+  totalChars: number;
+  returnedChars: number;
+  truncated: boolean;
+}
+
+/**
+ * What an agent may do with the page the user is looking at. `writes` without
+ * `reads` is unrepresentable on the Rust side, and `origin` is what the flags
+ * were granted against — an origin change resets both, so navigating never
+ * grants consent and never renews it. Not persisted.
+ */
+/**
+ * The last program that asked to read or drive the page, and what it asked
+ * for. Mirrors the Rust `AgentRequest`.
+ *
+ * This is what lets the consent banner say *who is asking* rather than "an
+ * agent". The name comes from the connected pipe client's own process image,
+ * never from anything the caller sent — a self-reported name is the one field a
+ * rogue caller would lie about.
+ */
+export interface BrowserAgentRequest {
+  pid: number;
+  /** The client executable's file name, e.g. `codex.cmd`. */
+  program: string;
+  /** The MCP tool it called, e.g. `browser_page_text`. */
+  tool: string;
+  /** Whether it asked for something that would change the page. */
+  needsWrites: boolean;
+  /** Whether it was refused for want of consent. `false` means it ran. */
+  refused: boolean;
+}
+
+export interface BrowserAutomationConsent {
+  reads: boolean;
+  writes: boolean;
+  origin: string | null;
+}
+
+/**
+ * Everything the panel renders, in one read. Mirrors the Rust
+ * `BrowserSnapshot`, pinned by `snapshot_serialises_with_the_keys_the_ui_reads`
+ * in `src-tauri/src/browser/shared_tests.rs` — unusually for this file the
+ * struct lives in the host rather than `cb-core`, on the `AboutInfo` precedent,
+ * because it is a projection of the host's own state.
+ */
+export interface BrowserSnapshot {
+  availability: BrowserAvailability;
+  /**
+   * The current page's address. From the navigation handler, not
+   * `WebView::url()` — the Phase 4 spike measured that returning an empty
+   * string while a document was loaded.
+   */
+  url: string | null;
+  title: string | null;
+  /** The page's origin, `null` for every opaque one (`about:blank` included). */
+  origin: string | null;
+  consent: BrowserAutomationConsent;
+  /** Navigations the origin rule refused — a page reaching for `tauri://`. */
+  refusedNavigations: number;
+  /** Messages from the page parsed and *not* applied. A prober is visible. */
+  rejectedMessages: number;
+  lastRefusal: string | null;
+  /**
+   * The last agent request over the control pipe, or `null` when nothing has
+   * asked. Cleared with everything else a page owns, because "codex.cmd wanted
+   * to read this page" is a statement about a page.
+   */
+  lastAgentRequest: BrowserAgentRequest | null;
+}
+
+/** A panel rect in logical pixels, relative to the window's client area. */
+export interface BrowserRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** Console rows after a cursor, and how many the cursor missed. */
+export interface BrowserConsoleBatch {
+  entries: BrowserConsoleEntry[];
+  /**
+   * Rows this page's own log lost to the buffer cap before this read. Never
+   * silently zero.
+   */
+  missed: number;
+  /**
+   * Rows that belonged to a page that is gone and were discarded with it. A
+   * different fact from `missed`, and only `missed` says the record in front of
+   * the reader is partial.
+   */
+  discarded: number;
+  nextCursor: number;
+}
+
+/** Network rows after a cursor, plus what the instrumentation cannot see. */
+export interface BrowserNetworkBatch {
+  entries: BrowserNetworkEntry[];
+  missed: number;
+  /** See `BrowserConsoleBatch.discarded`. */
+  discarded: number;
+  nextCursor: number;
+  /**
+   * `NETWORK_COVERAGE_NOTE` — carried on every answer, empty list included.
+   * These rows are not DevTools' network panel: no headers, no bodies, statuses
+   * only for fetch/XHR, and nothing at all from before the init script ran.
+   */
+  coverage: string;
+}

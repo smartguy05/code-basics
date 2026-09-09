@@ -508,8 +508,11 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tempfile",
  "tokio",
  "uuid",
+ "windows-sys 0.61.2",
+ "wry",
 ]
 
 [[package]]

@@ -5540,3 +5540,151 @@ button.danger:hover:not(:disabled) {
 .shortcut-list > div:first-child .shortcut-section {
   margin-top: 0;
 }
+
+/* ======================================================================== */
+/* The embedded browser panel                                               */
+/* ======================================================================== */
+
+/* Reuses the `.review-panel` base (float, drag, resize, minimize) and writes NO
+   z-index, so it stays in the base panel band beside Review/Behavioral/Apps/SQL.
+   The band is moot for the page itself and not for the panel: the WebView2 child
+   HWND composites above the *whole* DOM regardless of any band, which is the
+   accepted cost recorded in `browserPanelLogic.ts` and in the host's module doc.
+   What the band still decides is where the panel's own chrome — the header and
+   the URL bar — sits relative to the other panels.
+
+   Sized generously by default — a page rendered at agent-panel width is a mobile
+   layout, which is not what "check my deployment" means — but deliberately not
+   *almost the whole viewport*: `clampPanelPosition` keeps a panel on screen, so
+   one sized 88vw × 86vh saturates the clamp on the first drag and reads as a
+   window that will not move. */
+.browser-panel {
+  width: min(1100px, 78vw);
+  height: min(720px, 74vh);
+}
+
+/* The header holds the nav buttons and the URL bar, so it needs to lay them out
+   rather than just label the panel. `flex: 1` on the field is what makes the
+   drag exemption matter — it covers most of the header's width. */
+.browser-header {
+  gap: 6px;
+  /* A drag across a header of buttons otherwise selects their labels, which
+     leaves the whole strip highlighted blue after every move. The URL bar opts
+     back in below — a field whose text cannot be selected is worse than a
+     header that highlights. */
+  user-select: none;
+}
+
+/* The drag handle, and the only part of this header that is not a control. The
+   URL bar is `flex: 1`, so without a real width here the panel is draggable
+   only by three characters — which is how the undraggable version was found.
+   `cursor: move` says so, and `user-select: none` stops a drag selecting the
+   word instead of moving the window. */
+.browser-header strong {
+  padding: 2px 10px;
+  cursor: move;
+  user-select: none;
+}
+
+.browser-url {
+  flex: 1;
+  min-width: 120px;
+  user-select: text;
+  font-family: var(--mono);
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+/* The rectangle the OS webview is painted over. It holds no content of its own
+   — the page is not in the DOM — so it must not be transparent: the window is
+   translucent (`--app-bg-opacity`), and a see-through hole where the page has
+   not painted yet shows the desktop through the panel. */
+.browser-page {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* Why the page is not on screen, in its place. Never an unexplained blank. */
+.browser-page-note {
+  padding: 16px;
+  max-width: 60ch;
+  color: var(--fg-muted, #9aa0a6);
+  font-size: calc(var(--ui-font-size) - 1px);
+  line-height: 1.5;
+}
+
+.browser-error {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-strong);
+  background: #3a1d1d;
+  color: #ffb4b4;
+  font-size: calc(var(--ui-font-size) - 1px);
+  white-space: pre-wrap;
+}
+
+/* Minimized: a pill, pinned bottom-left above the SQL bar's slot. The
+   bottom-right column is taken (`.review-pill` bases there and
+   `terminalLogic.pillBottom` stacks terminal pills upward from one step above
+   the Notes bar), and `.sql-pill` already owns the bottom-left corner — so this
+   sits one step above it rather than on top of it. */
+.browser-pill {
+  right: auto;
+  left: 16px;
+  bottom: 60px;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: calc(var(--ui-font-size) - 1px);
+}
+
+/* The browser panel's automation consent banner.
+   Four kinds, and only one of them draws the eye: `asked` is a request waiting
+   on the user, so it gets the warning colour, while `granted`/`active`/`idle`
+   are standing state and must not look like alarms - a banner that always
+   shouts is one people stop reading, and this one is the control every agent
+   refusal points at by name. */
+/* A COLUMN, deliberately, and this is not a style preference.
+   The first version was one wrapping row (message with `flex: 1`, then the
+   buttons). With a short message the buttons fit beside it; with a long one -
+   which is the state that matters, because that is the state where an agent has
+   asked for something - they wrapped onto a second line that ended up in the
+   band the page's WebView2 child HWND paints over. The result was buttons that
+   were **invisible and still clickable**: a stray click in that strip granted
+   read-and-control with nothing on screen to say so, which is the worst
+   combination available here.
+   An explicit column makes the banner's height a plain function of its content,
+   and the page's own ResizeObserver already follows `.browser-page` shrinking. */
+.browser-consent {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 5px 8px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.browser-consent-message {
+  /* No `flex: 1` and no `min-width`: in a column it is a full-width row, and
+     the two properties are what let it squeeze the buttons out of view. */
+  line-height: 1.4;
+}
+.browser-consent-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.browser-consent-idle .browser-consent-message,
+.browser-consent-granted .browser-consent-message {
+  color: var(--fg-faint);
+}
+.browser-consent-asked {
+  background: var(--warn-bg, rgba(220, 160, 40, 0.14));
+  border-bottom-color: var(--warn, #c8912a);
+}
+.browser-consent-active .browser-consent-message {
+  color: var(--fg);
+}
+.browser-consent button {
+  white-space: nowrap;
+}

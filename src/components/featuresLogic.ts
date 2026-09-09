@@ -8,7 +8,11 @@
 import type { FeatureInfo } from "../ipc/types";
 
 /** The feature ids this build knows about. Mirrors `cb_core::features::FeatureId`. */
-export type FeatureKey = "sqlConsole" | "askCodebase" | "mcpSqlServer";
+export type FeatureKey =
+  | "sqlConsole"
+  | "askCodebase"
+  | "mcpSqlServer"
+  | "webBrowser";
 
 /**
  * Whether a feature is on.

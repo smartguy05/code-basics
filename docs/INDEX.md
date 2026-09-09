@@ -62,6 +62,43 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/behavioral/worktree.rs` | 329 | An on-demand, isolated checkout of a commit to build and test against. |
 | `crates/core/src/behavioral/worktree_tests.rs` | 135 |  |
 | `crates/core/src/bin/fake_lsp.rs` | 779 | A scripted stand-in for a language server, used only by the transport tests. |
+| `crates/core/src/browser/argv.rs` | 78 | Is this process the browser MCP server, or the application? |
+| `crates/core/src/browser/argv_tests.rs` | 98 |  |
+| `crates/core/src/browser/consent.rs` | 333 | Whether an agent may read, or move, the page the user is looking at. |
+| `crates/core/src/browser/consent_tests.rs` | 422 | Who may read and drive the page. Included by `consent.rs`. |
+| `crates/core/src/browser/console.rs` | 67 | Which level a captured console message carries. |
+| `crates/core/src/browser/console_tests.rs` | 124 | Console level ranking, and the abstention. Included by `console.rs`. |
+| `crates/core/src/browser/framing.rs` | 69 | The wire format of the browser control pipe — **reused, not rewritten**. |
+| `crates/core/src/browser/framing_tests.rs` | 95 | That the reuse is real and behaves as the browser pipe needs. Included by |
+| `crates/core/src/browser/install.rs` | 247 | Writing the browser MCP server into an agent's configuration. |
+| `crates/core/src/browser/install_tests.rs` | 339 |  |
+| `crates/core/src/browser/instances.rs` | 451 | Which running application an MCP browser client should talk to — and the |
+| `crates/core/src/browser/instances_tests.rs` | 477 |  |
+| `crates/core/src/browser/ipc.rs` | 334 | Every byte the page sends back. **This is the attack surface.** |
+| `crates/core/src/browser/ipc_tests.rs` | 379 | The hostile-input boundary. Included by `ipc.rs`. |
+| `crates/core/src/browser/liveness.rs` | 71 | The one platform seam of the browser instance registry: is this entry's |
+| `crates/core/src/browser/liveness_tests.rs` | 95 |  |
+| `crates/core/src/browser/mod.rs` | 105 | The embedded browser: every decision it makes, none of the machinery it |
+| `crates/core/src/browser/model.rs` | 309 | The browser types that cross IPC, and the distinctions they exist to keep. |
+| `crates/core/src/browser/model_tests.rs` | 341 | Key-pinning for the browser wire types, and the distinctions they exist for. |
+| `crates/core/src/browser/origin.rs` | 240 | Where the page may never go, and what counts as "the same page". |
+| `crates/core/src/browser/origin_tests.rs` | 262 | Navigation refusals and origin comparison. Included by `origin.rs`. |
+| `crates/core/src/browser/render.rs` | 453 | Turning what the application knows into the words an agent reads. |
+| `crates/core/src/browser/render_tests.rs` | 553 |  |
+| `crates/core/src/browser/ring.rs` | 211 | A bounded log that says what it lost. |
+| `crates/core/src/browser/ring_tests.rs` | 281 | What a bounded log lost, and how a reader learns it. Included by `ring.rs`. |
+| `crates/core/src/browser/script.rs` | 488 | The scripts injected into the page, and how their arguments are encoded. |
+| `crates/core/src/browser/script_tests.rs` | 452 | Script assembly: the try/catch wrapper and the encoding. Included by `script.rs`. |
+| `crates/core/src/browser/serve.rs` | 155 | The browser MCP server's handshake, and the shape of every answer it sends. |
+| `crates/core/src/browser/serve_tests.rs` | 214 |  |
+| `crates/core/src/browser/text.rs` | 56 | Cutting a page's text down to a readable size, and admitting it. |
+| `crates/core/src/browser/text_tests.rs` | 123 | Truncation that reports the total. Included by `text.rs`. |
+| `crates/core/src/browser/tools.rs` | 485 | The thirteen browser tools, their schemas, and how a call is read. |
+| `crates/core/src/browser/tools_tests.rs` | 402 |  |
+| `crates/core/src/browser/url.rs` | 273 | What the URL bar accepts, and — mostly — what it refuses. |
+| `crates/core/src/browser/url_tests.rs` | 276 | What the URL bar accepts and refuses. Included by `url.rs`. |
+| `crates/core/src/browser/wire.rs` | 309 | What travels on the browser control pipe, in both directions. |
+| `crates/core/src/browser/wire_tests.rs` | 292 |  |
 | `crates/core/src/changelists.rs` | 203 | Change groups: named buckets for the files in a working tree. |
 | `crates/core/src/changelists_tests.rs` | 344 | Tests for change groups. Included by `changelists.rs` under `#[cfg(test)]`. |
 | `crates/core/src/config.rs` | 1072 | The workspace configuration file, `.code-basics/config.json`. |
@@ -89,8 +126,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/erosion/rules_tests.rs` | 198 | Tests for erosion rule loading and the built-in set. |
 | `crates/core/src/erosion/scan.rs` | 368 | Running the rules over a diff. |
 | `crates/core/src/erosion/scan_tests.rs` | 507 | Tests for the erosion diff scan. |
-| `crates/core/src/features/features_tests.rs` | 114 |  |
-| `crates/core/src/features/mod.rs` | 190 | Optional features: which of the app's non-core capabilities are switched on. |
+| `crates/core/src/features/features_tests.rs` | 118 |  |
+| `crates/core/src/features/mod.rs` | 204 | Optional features: which of the app's non-core capabilities are switched on. |
 | `crates/core/src/features/store.rs` | 198 | Reading and writing `code-basics/features.json`, and the installer seed. |
 | `crates/core/src/features/store_tests.rs` | 573 |  |
 | `crates/core/src/files.rs` | 432 | Workspace file access for the directory tree and file editor. |
@@ -159,7 +196,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/launcher/recents_tests.rs` | 343 |  |
 | `crates/core/src/launcher/store.rs` | 90 | The launchers file on disk: `<config>/code-basics/launchers.json`. |
 | `crates/core/src/launcher/store_tests.rs` | 93 |  |
-| `crates/core/src/lib.rs` | 50 | Core logic for `code-basics`. |
+| `crates/core/src/lib.rs` | 51 | Core logic for `code-basics`. |
 | `crates/core/src/lsp/client.rs` | 1295 | One language server, from handshake to shutdown, as questions and answers. |
 | `crates/core/src/lsp/client_tests.rs` | 658 | Unit tests for the parts of the client that need no server. |
 | `crates/core/src/lsp/documents.rs` | 370 | What each server has been told about each open document. |
@@ -206,7 +243,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/mcp/install/mod.rs` | 178 | Installing the SQL MCP server into an agent's configuration — previewed |
 | `crates/core/src/mcp/install/mod_tests.rs` | 86 |  |
 | `crates/core/src/mcp/install/plan.rs` | 233 | The install, the uninstall, the status and the caveats — mirroring |
-| `crates/core/src/mcp/install/plan_tests.rs` | 296 |  |
+| `crates/core/src/mcp/install/plan_tests.rs` | 316 |  |
 | `crates/core/src/mcp/mod.rs` | 71 | The SQL MCP server: what an agent may ask this app's databases, and what it |
 | `crates/core/src/mcp/ndjson.rs` | 148 | Line-delimited JSON framing: the MCP stdio wire. |
 | `crates/core/src/mcp/ndjson_tests.rs` | 144 |  |
@@ -316,7 +353,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/sql_mssql.rs` | 733 | The SQL Server half of the SQL console, against a real server. |
 | `crates/core/tests/sql_postgres.rs` | 811 | The PostgreSQL half of the SQL subsystem's end-to-end proof. |
 | `crates/core/tests/sql_sqlite.rs` | 1073 | The first test in the SQL subsystem that touches a real database. |
-| `src/App.tsx` | 1351 |  |
+| `src/App.tsx` | 1405 |  |
 | `src/appearance.ts` | 83 |  |
 | `src/appearanceLogic.test.ts` | 70 |  |
 | `src/appearanceLogic.ts` | 168 |  |
@@ -326,6 +363,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/AttachConfirm.tsx` | 63 |  |
 | `src/components/BehavioralPanel.tsx` | 402 |  |
 | `src/components/BranchMenu.tsx` | 462 |  |
+| `src/components/BrowserMcpPanel.tsx` | 227 |  |
+| `src/components/BrowserPanel.tsx` | 578 |  |
 | `src/components/ConfigEditor.tsx` | 313 |  |
 | `src/components/ContextMenu.tsx` | 111 |  |
 | `src/components/DiffPane.tsx` | 441 |  |
@@ -374,6 +413,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/behavioralPanelLogic.ts` | 451 |  |
 | `src/components/branchFilterLogic.test.ts` | 126 |  |
 | `src/components/branchFilterLogic.ts` | 88 |  |
+| `src/components/browserPanelLogic.test.ts` | 505 |  |
+| `src/components/browserPanelLogic.ts` | 452 | Pure decisions for the floating browser panel: when it is mounted, when a |
 | `src/components/claimChecklistLogic.test.ts` | 147 |  |
 | `src/components/claimChecklistLogic.ts` | 106 |  |
 | `src/components/claimVerifyLogic.test.ts` | 312 |  |
@@ -397,7 +438,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/erosionLogic.test.ts` | 78 |  |
 | `src/components/erosionLogic.ts` | 69 |  |
 | `src/components/featuresLogic.test.ts` | 130 |  |
-| `src/components/featuresLogic.ts` | 69 | Decision logic for optional features: what is switched on, and what that hides. |
+| `src/components/featuresLogic.ts` | 73 | Decision logic for optional features: what is switched on, and what that hides. |
 | `src/components/fileIconLogic.test.ts` | 129 |  |
 | `src/components/fileIconLogic.ts` | 159 | Which file-type icon a row shows. |
 | `src/components/fileTreeLogic.test.ts` | 159 |  |
@@ -412,14 +453,14 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/launcherLogic.ts` | 163 | Pure decisions for the app launcher's picker — whether a command line needs |
 | `src/components/lspStatusLogic.test.ts` | 409 |  |
 | `src/components/lspStatusLogic.ts` | 300 |  |
-| `src/components/mcpServerLogic.test.ts` | 178 |  |
-| `src/components/mcpServerLogic.ts` | 177 | Decision logic for the SQL MCP server installer panel. |
+| `src/components/mcpServerLogic.test.ts` | 204 |  |
+| `src/components/mcpServerLogic.ts` | 191 | Decision logic for the SQL MCP server installer panel. |
 | `src/components/notesLogic.test.ts` | 219 |  |
 | `src/components/notesLogic.ts` | 178 | Pure decisions for the Notes / scratchpad panel — creating, renaming, |
 | `src/components/notificationLogic.test.ts` | 169 |  |
 | `src/components/notificationLogic.ts` | 161 | The app's notification service: what deserves a notification, what it says, |
-| `src/components/pluginMenuLogic.test.ts` | 162 |  |
-| `src/components/pluginMenuLogic.ts` | 137 | The **Plugins** titlebar menu: what the optional features offer, and whether |
+| `src/components/pluginMenuLogic.test.ts` | 182 |  |
+| `src/components/pluginMenuLogic.ts` | 158 | The **Plugins** titlebar menu: what the optional features offer, and whether |
 | `src/components/projectViewLogic.test.ts` | 171 |  |
 | `src/components/projectViewLogic.ts` | 222 | Pure decisions for the merged **Project** tab — the view that puts the old |
 | `src/components/renameLogic.test.ts` | 709 |  |
@@ -462,14 +503,14 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/editorFontSize.ts` | 52 | Applying the editor font size, and telling live editors it moved. |
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 | The one font size every CodeMirror editor in the app reads. |
-| `src/ipc/api.ts` | 1405 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 2505 | TypeScript mirrors of the `cb-core` model types. |
+| `src/ipc/api.ts` | 1501 | Typed wrappers over the Tauri command surface. |
+| `src/ipc/types.ts` | 2686 | TypeScript mirrors of the `cb-core` model types. |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
 | `src/reexportGuards.test.ts` | 23 | / <reference types="vite/client" /> |
 | `src/shortcutLogic.test.ts` | 133 |  |
-| `src/shortcutLogic.ts` | 314 |  |
+| `src/shortcutLogic.ts` | 323 |  |
 | `src/shortcuts.ts` | 78 |  |
 | `src/views/ArchitectureView.tsx` | 679 |  |
 | `src/views/ChangesView.tsx` | 1020 |  |
@@ -523,9 +564,21 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/windowTransparency.ts` | 20 | The DOM half of window transparency — one custom property, written in one |
 | `src/windowTransparencyLogic.test.ts` | 119 |  |
 | `src/windowTransparencyLogic.ts` | 126 | When the window is translucent, and by how much. |
+| `src-tauri/src/browser/agent.rs` | 291 | Answering an agent's browser tool call: the gate, the projection, and the |
+| `src-tauri/src/browser/agent_tests.rs` | 341 |  |
+| `src-tauri/src/browser/host_tests.rs` | 166 | Tests for the two decisions in the host that are not about the webview. |
+| `src-tauri/src/browser/mod.rs` | 726 | The embedded browser **host**: the one place a real web page lives inside |
+| `src-tauri/src/browser/pipe.rs` | 500 | The browser control pipe: the one way an agent's MCP server reaches this |
+| `src-tauri/src/browser/pipe_tests.rs` | 83 |  |
+| `src-tauri/src/browser/registry.rs` | 133 | Publishing what an MCP client needs to find this application. |
+| `src-tauri/src/browser/registry_tests.rs` | 271 |  |
+| `src-tauri/src/browser/shared.rs` | 575 | The browser host's **data**: what the panel and an agent read, and every |
+| `src-tauri/src/browser/shared_tests.rs` | 574 | Tests for the browser host's data layer. |
 | `src-tauri/src/commands/about.rs` | 99 | What build is this? — the data behind Help → About. |
 | `src-tauri/src/commands/architecture.rs` | 219 | Architecture-diagram commands. |
 | `src-tauri/src/commands/behavioral.rs` | 485 | Behavioral before/after testing — running the same configuration against |
+| `src-tauri/src/commands/browser.rs` | 368 | Commands behind the embedded browser panel. |
+| `src-tauri/src/commands/browser_mcp.rs` | 93 | Commands behind the installable **browser** MCP server. |
 | `src-tauri/src/commands/changelists.rs` | 57 | Change-group commands. |
 | `src-tauri/src/commands/debug.rs` | 986 | Launching applications under a Debug Adapter Protocol adapter. |
 | `src-tauri/src/commands/enhancements.rs` | 136 | Instruction-template commands. |
@@ -550,13 +603,15 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/symbols.rs` | 234 | The command palette's surface: searching the workspace, and asking after |
 | `src-tauri/src/commands/terminal.rs` | 277 | Interactive floating terminals. |
 | `src-tauri/src/commands/workspace.rs` | 258 | Workspace and configuration commands. |
-| `src-tauri/src/lib.rs` | 319 | The Tauri shell. |
+| `src-tauri/src/lib.rs` | 372 | The Tauri shell. |
 | `src-tauri/src/main.rs` | 6 | Suppress the extra console window on Windows in release builds. |
+| `src-tauri/src/mcp_browser.rs` | 336 | The `mcp-browser` mode: this executable as an MCP stdio server that talks to |
+| `src-tauri/src/mcp_browser_tests.rs` | 189 |  |
 | `src-tauri/src/mcp_sql.rs` | 370 | The `mcp-sql` mode: this executable as an MCP stdio server. |
 | `src-tauri/src/qgate_run.rs` | 240 | The `quality-gate` mode: deterministic checks when an agent turn ends. |
 | `src-tauri/src/recorder.rs` | 139 | The `record-intent` mode, which is what the installed hooks actually run. |
-| `src-tauri/src/state.rs` | 594 | Shared application state. |
-| `src-tauri/src/state_tests.rs` | 605 | Tests for the multi-workspace [`AppState`]. |
+| `src-tauri/src/state.rs` | 701 | Shared application state. |
+| `src-tauri/src/state_tests.rs` | 651 | Tests for the multi-workspace [`AppState`]. |
 | `scripts/build-sidecar.mjs` | 110 | Publish the object-inspector sidecar into the Tauri bundle. |
 | `scripts/check-docs.mjs` | 70 | Documentation health check. |
 | `scripts/fetch-debuggers.mjs` | 228 | Vendor the debug adapters into the Tauri bundle. |
@@ -584,6 +639,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **changelists** (`src-tauri/src/commands/changelists.rs`): `git_changelists`, `git_create_changelist`, `git_delete_changelist`, `git_rename_changelist`, `git_assign_to_changelist`
 - **intents** (`src-tauri/src/commands/intents.rs`): `intent_groups`, `stage_intent_group`, `revert_intent_group`, `reject_intent_group`, `intent_capture_status`, `intent_install_plan`, `enable_intent_capture`, `intent_uninstall_plan`, `disable_intent_capture`, `import_intent_history`, `intent_prune_preview`, `prune_intent_history`, `clear_intent_history`, `set_card_intent`, `clear_card_intent`, `move_card_edits`
 - **mcp** (`src-tauri/src/commands/mcp.rs`): `mcp_server_status`, `mcp_server_install_plan`, `install_mcp_server`, `mcp_server_uninstall_plan`, `uninstall_mcp_server`
+- **browser_mcp** (`src-tauri/src/commands/browser_mcp.rs`): `browser_mcp_status`, `browser_mcp_install_plan`, `install_browser_mcp`, `browser_mcp_uninstall_plan`, `uninstall_browser_mcp`
 - **qgate** (`src-tauri/src/commands/qgate.rs`): `quality_gate_status`, `quality_gate_install_plan`, `install_quality_gate`, `quality_gate_uninstall_plan`, `uninstall_quality_gate`
 - **setup** (`src-tauri/src/commands/setup.rs`): `setup_install_plan`, `install_setup`
 - **behavioral** (`src-tauri/src/commands/behavioral.rs`): `behavioral_diff`, `behavioral_clear`
@@ -593,13 +649,14 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **architecture** (`src-tauri/src/commands/architecture.rs`): `arch_project_graph`, `arch_render_graph`, `arch_component_graph`, `arch_render_component_graph`, `arch_list_diagrams`, `arch_read_diagram`, `arch_write_diagram`, `arch_validate`
 - **symbols** (`src-tauri/src/commands/symbols.rs`): `search_everywhere`, `symbol_index_status`, `rebuild_symbol_index`
 - **lsp** (`src-tauri/src/commands/lsp.rs`): `lsp_status`, `lsp_restart`, `lsp_open_document`, `lsp_change_document`, `lsp_close_document`, `lsp_find_usages`, `lsp_goto_definition`, `lsp_declaration_anchors`, `lsp_prepare_rename`, `lsp_rename`
+- **browser** (`src-tauri/src/commands/browser.rs`): `browser_open`, `browser_close`, `browser_set_bounds`, `browser_set_visible`, `browser_navigate`, `browser_back`, `browser_forward`, `browser_reload`, `browser_state`, `browser_console`, `browser_network`, `browser_page_text`, `browser_set_automation_consent`
 - **terminal** (`src-tauri/src/commands/terminal.rs`): `terminal_open`, `terminal_write`, `terminal_resize`, `terminal_close`, `terminal_list`, `terminal_set_label`, `list_shells`
 - **running** (`src-tauri/src/commands/running.rs`): `list_running`, `kill_running`
 - **sql** (`src-tauri/src/commands/sql.rs`): `sql_list_connections`, `sql_discover`, `sql_save_connection`, `sql_delete_connection`, `sql_rename_connection`, `sql_set_allow_writes`, `sql_set_expose_to_agents`, `sql_test_connection`, `sql_test_connection_string`, `sql_list_objects`, `sql_list_columns`, `sql_execute`, `sql_cancel`
 
 ## Frontend IPC wrappers (`src/ipc/api.ts`)
 
-`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `fsCreateFile`, `fsCreateDir`, `fsRename`, `fsDelete`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `listFeatures`, `setFeature`, `readNotes`, `writeNotes`, `aboutInfo`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `startDebug`, `stopDebug`, `debugIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `agentInteractiveCommand`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listShells`, `listLaunchables`, `launchCommand`, `stopCommand`, `saveLaunchable`, `deleteLaunchable`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashPaths`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `intentPrunePreview`, `pruneIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `moveCardEdits`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `mcpServerStatus`, `mcpServerInstallPlan`, `installMcpServer`, `mcpServerUninstallPlan`, `uninstallMcpServer`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspRestart`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `lspPrepareRename`, `lspRename`, `sqlListConnections`, `sqlDiscover`, `sqlSaveConnection`, `sqlDeleteConnection`, `sqlRenameConnection`, `sqlSetAllowWrites`, `sqlSetExposeToAgents`, `sqlTestConnection`, `sqlTestConnectionString`, `sqlListObjects`, `sqlListColumns`, `sqlExecute`, `sqlCancel`, `errorMessage`
+`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `fsCreateFile`, `fsCreateDir`, `fsRename`, `fsDelete`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `listFeatures`, `setFeature`, `readNotes`, `writeNotes`, `aboutInfo`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `startDebug`, `stopDebug`, `debugIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `agentInteractiveCommand`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listShells`, `listLaunchables`, `launchCommand`, `stopCommand`, `saveLaunchable`, `deleteLaunchable`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashPaths`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `intentPrunePreview`, `pruneIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `moveCardEdits`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `mcpServerStatus`, `mcpServerInstallPlan`, `installMcpServer`, `mcpServerUninstallPlan`, `uninstallMcpServer`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspRestart`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `lspPrepareRename`, `lspRename`, `sqlListConnections`, `sqlDiscover`, `sqlSaveConnection`, `sqlDeleteConnection`, `sqlRenameConnection`, `sqlSetAllowWrites`, `sqlSetExposeToAgents`, `sqlTestConnection`, `sqlTestConnectionString`, `sqlListObjects`, `sqlListColumns`, `sqlExecute`, `sqlCancel`, `errorMessage`, `browserOpen`, `browserClose`, `browserSetBounds`, `browserSetVisible`, `browserNavigate`, `browserBack`, `browserForward`, `browserReload`, `browserState`, `browserConsole`, `browserNetwork`, `browserPageText`, `browserSetAutomationConsent`, `browserMcpStatus`, `browserMcpInstallPlan`, `installBrowserMcp`, `browserMcpUninstallPlan`, `uninstallBrowserMcp`
 
 ## Public core API (`cb-core`)
 
@@ -627,6 +684,24 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/behavioral/replay.rs`: `record_from_parts()`, `ready_backoff()`, `send()`, `await_ready()`
 - `crates/core/src/behavioral/scenario.rs`: `SideResult`, `unready()`, `ReplayPlan`, `plan_replay()`, `LaunchChoice`, `choose_launch_config()`, `pair_and_diff()`
 - `crates/core/src/behavioral/worktree.rs`: `WorktreeOptions`, `BaselineWorktree`, `create()`, `path()`, `head_oid()`, `adopted()`, `keep_for_reuse()`, `finish()`, `teardown()`, `clear_all()`
+- `crates/core/src/browser/argv.rs`: `is_mcp_browser_invocation()`, `McpBrowserInvocation`, `parse_mcp_browser_args()`
+- `crates/core/src/browser/consent.rs`: `BrowserTool`, `Category`, `category()`, `name()`, `BrowserState`, `plugin_disabled()`, `ready()`, `Decision`, `allowed()`, `reason()`, `read_ran_on_the_granted_page()`, `decide()`
+- `crates/core/src/browser/console.rs`: `classify_level()`, `is_noteworthy()`
+- `crates/core/src/browser/framing.rs`: `pipe_decoder()`
+- `crates/core/src/browser/install.rs`: `browser_mcp_entry()`, `status_for()`, `install_plan_for()`, `uninstall_plan_for()`, `caveats_for()`
+- `crates/core/src/browser/instances.rs`: `Listener`, `pipe_name()`, `BrowserInstance`, `InstancesFile`, `InstanceError`, `code()`, `sentence()`, `instances_path()`, `load()`, `save()`, `upsert()`, `remove()`, `choose_instance()`
+- `crates/core/src/browser/ipc.rs`: `PageMessage`, `PageMessageProblem`, `parse_page_message()`, `accept_eval_reply()`
+- `crates/core/src/browser/liveness.rs`: `alive()`, `same_executable()`
+- `crates/core/src/browser/model.rs`: `BrowserAvailability`, `licenses_a_read()`, `reason()`, `ConsoleLevel`, `ConsoleEntry`, `NetworkSource`, `NetworkEntry`, `PageText`, `AutomationConsent`, `ConsentWire`, `none()`, `reads_only()`, `reads_and_writes()`, `reads()`, `writes()`, `origin()`, `after_origin_change()`
+- `crates/core/src/browser/origin.rs`: `NavigationVerdict`, `allowed()`, `Refusal`, `navigation_verdict()`, `origin_of()`, `same_origin()`
+- `crates/core/src/browser/render.rs`: `AgentStatus`, `status()`, `current_url()`, `page_text()`, `outline()`, `console()`, `network()`, `acted()`, `navigated()`, `history_step()`
+- `crates/core/src/browser/ring.rs`: `Slice`, `Ring`, `new()`, `push()`, `dropped()`, `len()`, `is_empty()`, `capacity()`, `latest_seq()`, `since()`, `clear()`
+- `crates/core/src/browser/script.rs`: `ScriptError`, `json_string()`, `init_script()`, `page_text_script()`, `read_page_script()`, `click_script()`, `type_script()`, `press_key_script()`
+- `crates/core/src/browser/serve.rs`: `initialize_result()`, `tools_list_result()`, `answer_result()`, `unsupported_answer()`, `unknown_tool_answer()`
+- `crates/core/src/browser/text.rs`: `truncate_page_text()`
+- `crates/core/src/browser/tools.rs`: `descriptors()`, `BrowserToolCall`, `tool()`, `parse_call()`, `is_known()`, `unknown_tool_sentence()`
+- `crates/core/src/browser/url.rs`: `UrlError`, `normalize_input()`
+- `crates/core/src/browser/wire.rs`: `Request`, `ToolAnswer`, `ok()`, `refused()`, `request_value()`, `answer_value()`, `RequestProblem`, `code()`, `sentence()`, `answer()`, `parse_request()`, `token_matches()`, `PipeFailure`, `code()`, `sentence()`, `answer()`, `parse_answer()`
 - `crates/core/src/changelists.rs`: `Changelist`, `Changelists`, `group_of()`, `changelists_path()`, `load()`, `save()`, `create()`, `remove()`, `rename()`, `assign()`
 - `crates/core/src/config.rs`: `WorkspaceConfig`, `dump_capture_enabled()`, `inspector_caps()`, `keep_dumps()`, `max_dump_megabytes()`, `config_dir()`, `config_path()`, `results_dir()`, `lsp_log_dir()`, `load()`, `rider_config_id()`, `ensure_gitignore()`, `save()`, `merge()`, `apply()`, `sort_configs()`, `set_favorite()`, `set_order()`, `upsert()`, `remove()`
 - `crates/core/src/dap/breakpoints.rs`: `BindState`, `from_body()`, `is_verified()`, `Breakpoint`, `new()`, `apply()`, `effective_line()`, `detach()`, `BreakpointSet`, `toggle()`, `in_file()`, `lines_in_file()`, `files()`, `is_empty()`, `total()`, `apply_response()`, `apply_event()`, `detach_all()`

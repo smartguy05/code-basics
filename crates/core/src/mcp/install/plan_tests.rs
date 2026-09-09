@@ -3,6 +3,22 @@ use crate::intents::providers::{apply_writes, claude_code::ClaudeCode, Provider}
 use std::fs;
 use tempfile::tempdir;
 
+/// An isolated stand-in for the user's home directory.
+///
+/// **Mandatory, not tidiness.** `status_for` checks project scope and then
+/// **user** scope, and user scope is the real `~/.claude.json`. Passing `None`
+/// for `home` therefore asks a question about the machine the test is running
+/// on: these two tests passed for months and began failing the moment someone
+/// actually installed the server for themselves, because `status_for` correctly
+/// answered `Some(User)` where the test had hard-coded `None`.
+///
+/// A test that reads the developer's own configuration is not testing this code.
+/// `config_target` takes `home: Option<&Path>` precisely so it never has to.
+fn isolated_home(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let home = dir.path().join("home");
+    fs::create_dir_all(&home).expect("an empty home to look in");
+    home
+}
 fn apply(plan: &InstallPlan) {
     apply_writes(&plan.writes).expect("writes apply");
 }
@@ -10,8 +26,10 @@ fn apply(plan: &InstallPlan) {
 #[test]
 fn a_project_install_writes_dot_mcp_json_and_reads_back_as_installed() {
     let root = tempdir().unwrap();
+    let home = isolated_home(&root);
+    let home = Some(home.as_path());
 
-    assert_eq!(status_for(ProviderId::ClaudeCode, root.path(), None), None);
+    assert_eq!(status_for(ProviderId::ClaudeCode, root.path(), home), None);
 
     let plan = install_plan_for(
         ProviderId::ClaudeCode,
@@ -26,7 +44,7 @@ fn a_project_install_writes_dot_mcp_json_and_reads_back_as_installed() {
     apply(&plan);
 
     assert_eq!(
-        status_for(ProviderId::ClaudeCode, root.path(), None),
+        status_for(ProviderId::ClaudeCode, root.path(), home),
         Some(InstallScope::Project)
     );
 
@@ -146,6 +164,8 @@ fn a_codex_install_writes_config_toml_and_reads_back_as_installed() {
 #[test]
 fn uninstalling_a_file_that_holds_no_entry_of_ours_produces_no_write() {
     let root = tempdir().unwrap();
+    let home = isolated_home(&root);
+    let home = Some(home.as_path());
 
     let plan = uninstall_plan_for(
         ProviderId::ClaudeCode,
@@ -174,7 +194,7 @@ fn uninstalling_a_file_that_holds_no_entry_of_ours_produces_no_write() {
     .unwrap();
     assert_eq!(plan.writes.len(), 1);
     apply(&plan);
-    assert_eq!(status_for(ProviderId::ClaudeCode, root.path(), None), None);
+    assert_eq!(status_for(ProviderId::ClaudeCode, root.path(), home), None);
 }
 
 /// The sentence that is this feature's real security boundary. It must appear

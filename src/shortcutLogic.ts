@@ -38,6 +38,7 @@ export const PLUGIN_LABELS: Record<string, string> = {
   sqlConsole: "SQL Console",
   askCodebase: "Ask the codebase",
   mcpSqlServer: "SQL MCP server",
+  webBrowser: "Web browser",
 };
 
 const chord = (key: string, over: Partial<Omit<ShortcutChord, "key">> = {}): ShortcutChord => ({
@@ -69,6 +70,14 @@ export const COMMANDS: CommandDefinition[] = [
   // `PLUGIN_LABELS` rather than showing the raw feature id.
   { id: "plugin.mcp", label: "SQL MCP server", category: "Agent", context: "workspace", defaultBinding: null, plugin: "mcpSqlServer" },
   { id: "agent.review", label: "Review changes", category: "Agent", context: "workspace", defaultBinding: null },
+  // The embedded browser panel. `context: "global"` and no default chord: it is
+  // the first plugin that acts on no codebase at all ("verify my deployment" is
+  // not repo-specific), and the titlebar Plugins menu is how it is reached.
+  //
+  // Tagged `plugin` so `commandSections` files the row under its own heading in
+  // Settings and `pluginMenuRows` names it from `PLUGIN_LABELS`. Without the
+  // tag the row would be filed nowhere.
+  { id: "plugin.browser", label: "Web browser", category: "Agent", context: "global", defaultBinding: null, plugin: "webBrowser" },
   { id: "search.all", label: "Search All", category: "Search", context: "workspace", defaultBinding: chord("n", { ctrl: true }) },
   { id: "search.symbols", label: "Search Symbols", category: "Search", context: "workspace", defaultBinding: null },
   { id: "search.files", label: "Search Files", category: "Search", context: "workspace", defaultBinding: chord("n", { ctrl: true, shift: true }) },

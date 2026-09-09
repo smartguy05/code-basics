@@ -58,70 +58,17 @@ All four look like broken code, all four have wasted real time, and the obvious 
 - **`cargo build` fails on `cb-app.exe` with `Access is denied. (os error 5)` and no compiler diagnostic.** The app is running and Windows will not let a running exe be replaced. Compilation is fine. Prove it with `cargo check --workspace --all-targets` or a build into a scratch `CARGO_TARGET_DIR`, and say the app is holding the file — do not kill it, since that discards whatever the user had open.
 - **`cargo test -p cb-core` appears to hang in the `process::` tests.** Concurrent cargo invocations block on the shared `target/` lock, and those tests spawn real child processes late in the run, so the stall lands somewhere plausible. The suite finishes in about a minute. Re-run before reporting the suite as broken — a subagent's build report is a claim, not evidence. If you give a parallel agent its own `CARGO_TARGET_DIR` to dodge the lock, **read the disk-space rule below first**.
 
-### The frontend logic tests CAN be run without pnpm — shim vitest and use `tsc`
+### The frontend logic tests can be run without pnpm
 
-The junction block stops `pnpm test`, but it does **not** stop `npx tsc`, and the
-`*Logic.ts` modules import nothing at runtime except vitest's `describe`/`it`/`expect`.
-So the pure-logic half of the frontend gate is reachable after all:
+When the `node_modules` junction blocks `pnpm test`, the pure `*Logic.ts` half of
+the frontend gate is still reachable by compiling with `tsc` against a hand-written
+vitest shim. The recipe, the three files that need more than it, and the two shim
+details that otherwise produce dozens of false failures are in
+[the development guide](docs/guides/development.md#running-the-frontend-logic-tests-without-pnpm).
 
-1. `npx tsc <the .ts files> --outDir <scratch>/out --module commonjs --target es2022
-   --moduleResolution node --skipLibCheck --strict --noUncheckedIndexedAccess`
-   — CommonJS matters: node then resolves `./featuresLogic` with no `.js` suffix rewriting.
-2. Put a hand-written `vitest` shim at `<scratch>/node_modules/vitest/index.js` exporting
-   `describe`/`it`/`expect`/`vi`. Node's upward `node_modules` lookup finds it, and the
-   scratch dir has no junctions.
-3. `node <scratch>/out/components/<name>.test.js`.
+### On Windows, a PTY spawn can be re-parsed by `cmd.exe`
 
-Three files need more than the recipe, and each one **scores zero without saying so** —
-a file that dies at `require` never reaches the shim's exit handler, so it prints
-`0 passed, 0 failed` and reads as an empty file rather than a crash. Scan **stderr per
-file**, not just the summary line. `views/architecture/nodeTargets.test.ts` (42 tests)
-imports a cb-core JSON fixture and needs `--resolveJsonModule --esModuleInterop --rootDir .`,
-compiled on its own since `--rootDir .` relocates a whole-tree build; `components/language.test.ts`
-(14) needs `@codemirror/language` and `reexportGuards.test.ts` (1) needs Vite's
-`import.meta.glob`, so both are unrunnable here like the `.tsx`.
-
-And the shim inverts one very common call: `makeExpect(actual, negated)` takes a second
-argument as the negation flag, but vitest's second argument is a **message string** — truthy,
-so every `expect(x, "why").toBe(...)` asserts the opposite and fails on correct code. That is
-most of the standing failures; do not chase them as bugs.
-
-Measured: **1179 of 1190 logic tests pass** this way. Two shim details are needed or you get
-dozens of false failures — `toEqual` must ignore keys whose value is `undefined` (vitest does),
-and you need `toMatch`/`toBeCloseTo`/`toMatchObject`/`toBeNaN` beyond the obvious matchers.
-
-What this does **not** cover, and must not be claimed: it is not vitest (no coverage, no
-`environment`, no config), and it cannot touch `.tsx` — every React component still needs
-`react` through the junction. So `AskPanel.tsx`, `FeaturesPicker.tsx` and the views remain
-unverifiable here. Typechecking the whole project still fails on the react cascade; only the
-listed pure files typecheck clean.
-
-### On Windows, a PTY spawn *can* be re-parsed by `cmd.exe`. The launcher path cannot.
-
-Found by adversarially reviewing the "Ask the codebase" feature, then reproduced with
-`CreateProcessW` directly. Five doc comments across the tree asserted "there is no shell to
-interpret any of it". That is true for a real `.exe` and **false for a `.cmd`/`.bat` target**.
-
-- `process::resolve::resolve_program` walks `PATHEXT`, so a bare name resolves to a `.CMD`
-  when no `.EXE` exists. On a dev box `claude` is `claude.exe` (safe) but `codex` is
-  `codex.cmd` (an npm shim) — so the two agents take *different* paths for the same code.
-- `portable-pty`'s `CommandBuilder::append_quoted` implements **MSVC argv quoting only**. It
-  has none of the CVE-2024-24576 batch mitigation that `std::process::Command` gained, and it
-  emits an argument unquoted unless it contains a space, tab, newline or `"`. So `cmd.exe`
-  re-parses the line: `&` splits it, and `%VAR%` expands **even inside quotes**.
-- It applies to the **program path too**, not just the arguments (`cmdbuilder.rs` quotes the
-  exe with the same function) — a PATH directory named `foo&calc` is enough.
-
-`crates/core/src/pty/argv.rs` is the guard: `check_batch_argv` runs at the one spawn seam in
-`PtyManager::open_inner`, **after** `resolve_program` (checking the typed name instead of the
-resolved path would miss `codex` → `codex.cmd` entirely and make the whole thing theatre).
-It refuses precisely the hazardous inputs rather than the feature, and deliberately does
-**not** apply to a real executable, where MSVC quoting is correct — that asymmetry is pinned
-by `the_same_argument_is_allowed_for_a_real_executable`.
-
-**The contrast worth remembering:** `process::Supervisor` (`tokio::process`) *does* carry the
-std fix, so the app launcher and the headless review were never exposed. Only the PTY path is.
-Anything new that sends caller-supplied text as argv through `pty/` must go through the guard.
+`process::resolve::resolve_program` walks `PATHEXT`, so a bare name resolves to a `.CMD` when no `.EXE` exists — `claude` is an exe here but `codex` is an npm `.cmd` shim, so two agents take different paths through the same code. `portable-pty` implements MSVC argv quoting only, with none of the CVE-2024-24576 batch mitigation `std::process::Command` gained, so `cmd.exe` re-parses the line: `&` splits it and `%VAR%` expands **even inside quotes**, and it applies to the program path as well as the arguments. `crates/core/src/pty/argv.rs`'s `check_batch_argv` is the guard, applied at the one spawn seam **after** `resolve_program` — checking the typed name would miss `codex` → `codex.cmd` entirely. `process::Supervisor` (tokio) carries the std fix and was never exposed; only the PTY path is. Anything new sending caller-supplied text as argv through `pty/` must go through the guard. Full detail: [the Tauri shell guide](docs/architecture/tauri-shell.md#pty-argv-on-windows).
 
 ### A private `CARGO_TARGET_DIR` costs 2–6 GB. Budget it.
 
@@ -167,6 +114,27 @@ SQL). They cost a working feature that shipped inert and a click that silently d
   `TerminalPanel.restore()` already did this and was the precedent nobody connected.
 
 Before putting any interactive control in a panel header, assume both apply.
+
+### An OS webview is not a DOM layer
+
+The browser panel's page is a **WebView2 child HWND**, not an element, so it
+composites **above the whole DOM**: it ignores `--z-panel`, `--z-notes` and
+`--z-overlay` entirely, and `hidden` on a React div does not hide it. Confirmed
+by image — Notes, Search Everywhere and even the *Optional features* modal you
+would use to switch the browser off are all clipped by the page. **This is
+accepted; do not build an occlusion mechanism.** Hiding it goes through the Rust
+host: minimized is `set_visible(false)` with the panel mounted, feature-off
+**drops** the webview, an unusable rect leaves it hidden with a stated reason.
+
+And **no Tauri-created webview may ever host remote content in this app** — Tauri
+injects `__TAURI_INTERNALS__` into every webview it creates and the
+`plugin:__TAURI_CHANNEL__|fetch` handler reads a process-global channel queue
+without checking ownership, so a remote page could read this app's PTY, process,
+debug and SQL channels. Hence raw `wry` (not `tauri::wry`, which is
+`cfg(target_os = "android")`), and hence `capabilities/default.json` granting by
+`webviews` rather than `windows`. The whole argument, the two header gotchas this
+panel re-proved, and what the spike measured are in
+[the browser panel guide](docs/architecture/browser-panel.md).
 
 ### Returning `false` from xterm's key handler does not stop the webview
 
@@ -236,6 +204,7 @@ Three layers with a strict dependency rule:
    - `pty/` — the app's **second** process path and the only bidirectional one, behind the floating terminals: a real pseudo-terminal (ConPTY/forkpty via `portable-pty`) with stdin open and resizable, so an interactive program (Claude Code's TUI included) runs unchanged. `Supervisor` is deliberately *not* reused — it spawns `stdin`-null and streams to exit. `PtyManager` mirrors `Supervisor`'s shape (clone-cheap handle over a session map) but uses a `std::sync::Mutex` because the reader/waiter threads have no async runtime; `close` reuses `process::kill_tree` so a shell's `claude`/`node` children die with it. `shell.rs` also answers *what shells are here* (`detect_shells`), and is deliberately the opposite of the `pick_shell` beside it: `pick_shell` falls back to its last candidate, `detected_shells` **omits** what it cannot find, so an empty list is a real answer (`spec_program` still falls back to `default_shell()`). `wsl.exe` is never offered — it ships in `System32` regardless of whether a distribution exists, so presence is not evidence a shell would start. Two things the pure `shell.rs` pins: Enter over a PTY is `\r` not `\n`, and a user-opened terminal must be a clean **top-level** session — `is_session_marker` strips the inherited Claude Code child-session markers (`CLAUDE_CODE_*` plus bare `CLAUDECODE`/`CLAUDE_PID`/`CLAUDE_EFFORT`/`AI_AGENT`) before spawning, or a nested `claude` runs with transcripts off and the parent's IPC socket. `TerminalEvent` is one merged stream (no stdout/stderr split, no `Started` banner), unlike `ProcessEvent`.
    - `invocation.rs` — turns a `RunConfig` into a command line: `build()` (the single dispatch point over the adapters), `plan_compound` (compound member resolution + env layering, resolve-all-before-start-any), `rerun_filter` (the "re-run failed" guard).
    - `erosion/` — a rules-based, **no-model** scan over the diff for changes that quietly weaken the codebase (a deleted assertion, an `[Ignore]`/`.skip` test, a widened `catch`, an introduced `.unwrap()`, a `TODO` in a production path, a removed timeout, a dropped log). Each rule is **one regex against one *side*** of the diff and a match is only taken on a line of that origin, never context (getting the side backwards is how a rules scan makes noise); `rules.rs` ships built-ins per ecosystem (.cs / ts-js / .rs), **extended never shadowed** by `.code-basics/erosion/*.toml` like `adapters/manifest`. `scan.rs::scan_diffs` yields `ErosionReport { flags, warnings }` — each flag cites the exact line plus the `DiffLine::index` for the click highlight, a bad regex lands in `warnings` rather than being dropped, and the detector **ranks nothing** (a pure producer of located facts).
+   - `browser/` — every decision the **embedded browser panel** makes, and none of the machinery: `model.rs` (six `BrowserAvailability` variants, and an `AutomationConsent` whose private fields make `writes && !reads` unrepresentable), `url.rs` (**a search phrase is refused, not searched** — this is not a search box), `origin.rs` (where a page may never go, including the app's own origins and the dev server), `ring.rs` (a bounded log that **counts what it dropped**, so a reader is told about a gap), `text.rs` (truncation reports the **real** total), `console.rs`, `script.rs` (every injected script wrapped so it cannot throw, because `evaluate_script_with_callback` **swallows the exception on Windows** and reports the literal `null` — an unwrapped script reports an *empty page* rather than failing), `ipc.rs` (every byte the page sends back, treated as hostile), `consent.rs`, `framing.rs`. The host is `src-tauri/src/browser/`; read its module doc before touching either. **Agent access** adds seven more, and they are where the abstentions are sharpest: `argv.rs` (the fifth self-dispatch mode, `mcp-browser`), `instances.rs` (which running application to talk to — **five** `InstanceError` variants because *start the app*, *switch the plugin on*, *open the panel*, *tell me which window* and *reinstall the entry* are five different things for the user to do, and `Ambiguous` **refuses rather than picking**, since driving a browser in a window the user is not looking at is worse than asking), `liveness.rs` (the one platform seam: a pid is not identity, so the recorded **executable path** is compared and an unidentifiable process is *not alive*), `wire.rs` (the pipe carries a tool call one way and **the words the agent will read** the other, so the six-state distinction lives in one place; a protocol mismatch is reported *before* the token, since a caller speaking another wire may have put the token elsewhere), `tools.rs` (thirteen tools, and **deliberately no `browser_evaluate`** — arbitrary JS in a live authenticated session is a general-purpose credential-exfiltration tool and no consent wording makes it proportionate; the honesty notes about what the console and network instrumentation *cannot* see are in the descriptions themselves, because a model reads those and nothing else), `render.rs` (every answer, and an absence never passes for a fact about the page), `install.rs` (reuses `mcp::install`'s merge wholesale; its caveats are the browser's own, because what an agent gains here is the page the user is looking at in their own logged-in session). The pipe is `\\.\pipe\code-basics.browser.<pid>`, exists **only while a panel is open**, and carries an explicit DACL because a NULL security descriptor on a named pipe grants read access to *Everyone* — the DACL keeps other accounts out and nothing else, the registry token is a speed bump, and **consent is the actual control**. Full guide: `docs/architecture/browser-panel.md`.
    - `behavioral/` — the **runtime** counterpart to the intent `git/coverage` Scorecard: run a config against `HEAD` (materialised in an isolated `git worktree`, `worktree.rs` — net-new, since every other checkout mutates the single working tree in place; `Drop`-guarded, oid-cached, and reusing the same Windows read-only-directory handling as `checkout_tree_tolerating_locks`) and against the working tree, then diff the *observable* outcomes: test results (`compare.rs`, joined by `full_name`; `Other` is never a pass), console output (`console.rs`, masking timestamps/ids/both run roots and comparing as multisets), and HTTP responses replayed from `.http` files (`httpfile.rs` pure parse + `@readiness`, `replay.rs` the only networking layer, `http.rs` diff with volatile headers ignored and JSON compared structurally). `attribute.rs` pins each delta to the one intent card whose files it points at, or abstains to an unattributed bucket — and two of the three kinds **always** abstain, which is a rule and not a gap: an `.http` request's handler is not derivable so `candidate_paths` returns an empty set for HTTP, and `compare.rs` sets every `CaseDelta.files_hint` to `Vec::new()` so a test delta has nothing to match on, leaving console (whose changed lines may name exactly one card's files) as the only kind that can attribute; `scenario.rs`/`prepare.rs` are the pure, tested seams the untestable command delegates to. Same abstain rule, **sharpened for how weak runtime evidence is**: equal-after-masking is *no* delta, a single-run test flip is capped at `Medium`, and a never-ready server / missing-or-ambiguous launch config / no `@readiness` each become a warning rather than a fabricated result. HTTP replay is **strictly sequential** (base then work — same port) and can never hang on a server that will not exit (the detached run task is cancelled with a retry that closes the spawn/registration race, then awaited under a timeout).
 2. **`src-tauri`** — thin bridge only: app state (`state.rs`) and the `#[tauri::command]` surface in `commands/{workspace,run,debug,secrets,git,changelists,intents,files,inspect,symbols,architecture,lsp,erosion,behavioral,terminal,notes,launcher}.rs`, registered in `lib.rs` (`behavioral_diff`/`behavioral_clear` stream a before/after run and return a `BehavioralReport`; `terminal_open`/`terminal_write`/`terminal_resize`/`terminal_close`/`terminal_list` drive the floating PTY terminals — output over a `Channel<TerminalEvent>`, keystrokes and resize back as calls; `launch_command`/`stop_command` run and stop an arbitrary command line — in the **global** supervisor, not the active codebase's, so closing that tab does not kill an app the user launched — while `list_launchables`/`save_launchable`/`delete_launchable`, like the notes commands, take **no** `AppState` because the launcher store is user-global; `read_notes`/`write_notes` are the global notes store and, like `list_prompts` and `save_note_as_instruction`, take **no** `AppState` because notes and the instruction library are user-owned, not per-repo; `start_review` now accepts an optional inline `prompt_body` — a note sent to the agent — in place of a library `prompt_id`; `start_debug`/`stop_debug`/`debug_ids` launch a configuration under a debug adapter, and `start_debug` is the one command taking an `AppHandle`, because the bundled adapters are resolved through `BaseDirectory::Resource` exactly as `inspect.rs` resolves the sidecar). Each `WorkspaceSlot` gains a `DebugSessions` map beside its `Supervisor`, and Run and Debug each cancel the other's generation for the same config id — one live generation per configuration. New backend functionality goes in `cb-core` first; commands here should stay small. Config-to-adapter dispatch lives in `cb_core::invocation` — its `build()` is the **single** point that maps a `RunConfig` to an ecosystem adapter; do not add a second. `AppState` holds seven things: `workspace`, the `Supervisor`, `last_test_run` (keyed by config id), `last_inspect` — one slot, not a map, deliberately, because a capture is a copy of process memory — `symbols` (an `Arc<SymbolIndex>` so a search takes a handle and drops the lock) beside a `symbols_building` flag, `lsp` (an `LspHandle`), and `pty` (a `PtyManager` for the floating terminals — like `Supervisor` a clone-cheap handle, and unlike the caches **not** per-workspace: a terminal is keyed by its own id and is not cleared by `set_workspace`). The LSP session is an **actor handle and not an `Arc<Mutex<..>>`**, for a reason worth keeping: `AppState` uses `std::sync::Mutex` and `set_workspace` clears its caches *while holding the guard*, so teardown cannot `.await` — `request_teardown()` is a non-blocking send, which is what keeps check-and-act one atomic step. `record_lsp_session` returns `Result<(), LspHandle>` and is `#[must_use]`, handing the handle **back** on rejection, because unlike the other caches a rejected session is a running process tree and a `bool` would let a caller leak a language server. The symbol index is built on a **background thread** and never awaited: `open_workspace`/`rescan_workspace` spawn it, the `setup` hook covers a workspace named on the command line, and `record_symbols` discards a build whose root is no longer open so opening A then B cannot serve A's paths under B. `recorder.rs` is the one non-window entry point: an agent hook re-invokes this binary as `record-intent`, which reads a payload from stdin and exits without ever creating a window.
 
@@ -431,12 +400,37 @@ Three layers with a strict dependency rule:
   `writtenNote` names the files written — from the approved plan, not a second
   read — and states both silent-no-op conditions: a project `.mcp.json` needs the
   agent's approval before it loads, and a running agent needs a restart.
+- A capability granted by **window** label reaches every webview of that window
+  (`RuntimeAuthority::resolve_access` matches webviews OR windows, and a child
+  webview of `main` has window label `main`). Anything hosting untrusted content
+  must therefore be granted by `webviews` and appear in no capability naming its
+  window — which is why `capabilities/default.json` says `"webviews": ["main"]`.
+- The browser page is an **OS surface**, not a DOM layer: it composites above
+  everything, ignores the `--z-panel`/`--z-notes`/`--z-overlay` bands, and
+  `hidden` on a React div does not hide it. Painting over the other panels while
+  open is an accepted trade-off; being visible when **minimized, feature-off, or
+  at a degenerate rect** is a bug.
+- Anything that shows or positions that surface must be **generation-stamped and
+  abandon its writes when superseded**, checked before *each* write rather than
+  once. `sync()` awaits a scale factor and two IPC calls having captured
+  `minimized` at entry, so without it a stale run re-shows a window the user
+  cannot dismiss over what they are reading.
+- Never open a pipe, path or address a *file* merely states. `instances::pipe_name(pid)`
+  is derived from a pid already verified against its recorded executable; a
+  registry naming anything else is refused as tampering rather than corrected,
+  because that refusal is the only visible symptom of a local process answering
+  an agent as if it were this application.
 - The Changes file list carries a multi-selection separate from the file the
   diff pane shows. A right-click inside the selection acts on all of it; a
   right-click outside it acts on that one row. A Shift-range follows the order
   the rows are *rendered*, not the flat order. Stashing selected files takes
   only those paths — every other change, staged or not, stays in the working
   tree — and a conflicted file is never offered.
+- A capability granted by window label reaches **every** webview of that window:
+  `RuntimeAuthority::resolve_access` matches a capability's `webviews` *or* its
+  `windows`, and a child webview inherits its parent's window label. So grant by
+  `webviews` (`capabilities/default.json`), and anything hosting untrusted content
+  must appear in no capability that names its window.
 
 - `docs/INDEX.md` is a **generated** map of every source file (with one-line purpose), the full Tauri command surface, the `ipc/api.ts` wrappers, and each `cb-core` module's public API. **Consult it first when locating code** — it is usually faster than searching. Never edit it by hand.
 - `pnpm docs:index` regenerates it (`scripts/generate-index.mjs`). Run it after adding/removing source files, Tauri commands, or public core APIs.

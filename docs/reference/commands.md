@@ -147,6 +147,27 @@ Both adapters are **bundled with the installer** (`pnpm debuggers:fetch` vendors
 | `terminal_set_label` | `id: String`, `root: String`, `label: String` | `()` | Updates a terminal's title in the running-process registry after a rename, so the Running panel shows it |
 | `list_shells` | – | `DetectedShells` (`shells`, `defaultId`) | The shells found on this machine, in preference order, each with its **resolved absolute path** as `program` — what a picker passes back to `terminal_open`. Read-only: nothing is spawned. A candidate that cannot be found, whose path `cmd.exe` would re-read, or which is really the WSL `bash.exe` launcher is **omitted** rather than offered broken or disabled, so an empty list is a legitimate answer (terminals still open on `default_shell`). `defaultId` is the id `default_shell` resolves to, or an explicit `null` when it matches nothing detected. `wsl` and `git-bash.exe` are deliberately never listed |
 
+## Embedded browser
+
+`src-tauri/src/commands/browser.rs` over `src-tauri/src/browser/` and `cb_core::browser` — the floating browser panel. The page is a **raw wry** child webview, not a Tauri one, and never a Tauri one: Tauri injects `__TAURI_INTERNALS__` into every webview it creates and the `plugin:__TAURI_CHANNEL__|fetch` handler reads a process-global channel queue without checking ownership, so remote content in a Tauri-created webview could read this app's PTY, process, debug and SQL channels. The host's module doc has the full argument.
+
+**Every command here is `async`**, and that is not style: Tauri warns that webview creation deadlocks from a synchronous command on Windows, and the host reaches a main-thread-affine `!Send` `WebView` through `run_on_main_thread` plus a `oneshot`.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `browser_open` | `rect: BrowserRect`, `url: String?` | `BrowserSnapshot` | Creates the child webview at `rect` (**logical** px, client-area relative), or re-places and re-shows one that was only minimized — never recreates it, which would throw away the page, its session and its scroll position. `url` is raw user input, normalised by `cb_core::browser::url` |
+| `browser_close` | `pluginDisabled: bool` | `BrowserSnapshot` | **Drops** the webview, taking the WebView2 process tree with it. `pluginDisabled` says why, because "the plugin is off" and "the panel is closed" are one click apart and an agent acts on the difference |
+| `browser_set_bounds` | `rect: BrowserRect` | `()` | Moves and resizes the page to follow the panel. Refuses a non-finite or zero-size rect rather than placing an OS surface at an unpredictable position; a no-op when no page is open |
+| `browser_set_visible` | `visible: bool` | `()` | The minimize mechanism. A child HWND composites above the DOM, so a React `hidden` cannot hide it |
+| `browser_navigate` | `input: String` | `BrowserSnapshot` | Normalises what the user typed (a bare host becomes `https`, `localhost:PORT` becomes `http`) and loads it. **A search phrase is refused, not searched** — this is not a search box. Refuses `javascript:`, `data:`, `file:`, every custom scheme, every `about:` page but `blank`, and the app's own origins |
+| `browser_back` / `browser_forward` | – | `()` | `history.back()` / `history.forward()`: wry 0.55.1 exposes no `go_back`/`go_forward`. A page with empty history does nothing and reports success, because the DOM gives no answer either way |
+| `browser_reload` | – | `()` | Reloads the current page |
+| `browser_state` | – | `BrowserSnapshot` | Availability (six variants, never collapsed), url, title, origin, consent, and the refused-navigation and rejected-message counters. A pure data read — never touches the main thread, so it is cheap to poll |
+| `browser_console` | `cursor: u64` | `BrowserConsoleBatch` | Captured `console.*`, `onerror` and `unhandledrejection` after `cursor`, plus `missed` — rows evicted before this read, never a silent gap. An unrecognised console method ranks as `other`, never `error` |
+| `browser_network` | `cursor: u64` | `BrowserNetworkBatch` | Observed requests after `cursor`. **Not DevTools' network panel**, and every answer carries `coverage` saying so: a patched `fetch`/`XHR` plus a `PerformanceObserver`, so no headers, no bodies, statuses only for fetch/XHR rows, and nothing at all from before the init script ran |
+| `browser_page_text` | – | `BrowserPageText` | `document.body.innerText`, truncated in Rust so `totalChars` is the **real** page length. Refused unless the page is `ready`: a page mid-load yields text that is wrong rather than absent |
+| `browser_set_automation_consent` | `reads: bool`, `writes: bool` | `BrowserSnapshot` | The only thing that moves automation consent. Scoped to the page's origin and dropped on an origin change, so navigating never grants it and never renews it; `writes` implies `reads`; refused when the page is not `ready` or has an opaque origin. Not persisted |
+
 ## The app launcher
 
 `src-tauri/src/commands/launcher.rs` — arbitrary command lines the user runs beside the detected
@@ -262,6 +283,11 @@ Nothing new crosses IPC: a status is exactly `InstallScope | null`, and the plan
 | `install_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install. The entry is `command` = this executable + `args` = `["mcp-sql"]` (plus `--workspace <root>` at project scope), so no path is ever quoted into a string. Returns the new status |
 | `mcp_server_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change removing the server would make. **Touches nothing.** An empty `writes` means that configuration holds no entry of ours — the panel says so rather than disabling a button. Every other configured server survives |
 | `uninstall_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed removal, backing the file up first. Returns the new status (`null` once removed) |
+| `browser_mcp_status` | `provider: ProviderId` | `InstallScope \| null` | Where the **browser** MCP server is installed for this workspace and provider (project wins over user), or `null`. A different server name from the SQL one, so the two are reported separately |
+| `browser_mcp_install_plan` | `provider`, `scope` | `InstallPlan` | Exactly what installing the browser server would write. Touches nothing. The caveats are the browser feature own ones, not the SQL server ones: what an agent gains here is the page the user is looking at, in their own logged-in session |
+| `install_browser_mcp` | `provider`, `scope` | `InstallScope \| null` | Applies a confirmed browser-server install through `apply_writes_atomically`, then re-reads the status from disk |
+| `browser_mcp_uninstall_plan` | `provider`, `scope` | `InstallPlan` | What removing it would rewrite. Zero writes means no entry of ours was there |
+| `uninstall_browser_mcp` | `provider`, `scope` | `InstallScope \| null` | Applies a confirmed removal, then re-reads the status |
 
 Codex has no project scope: `mcp_server_install_plan(codex, project)` is an error naming `$CODEX_HOME/config.toml`, rather than inventing a `<root>/.codex/config.toml` that would look installed and never be read.
 

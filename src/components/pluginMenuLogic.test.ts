@@ -10,22 +10,15 @@ const feature = (id: string, enabled: boolean): FeatureInfo => ({
   enabled,
 });
 
-const ON = [
-  feature("sqlConsole", true),
-  feature("askCodebase", true),
-  feature("mcpSqlServer", true),
-];
-const OFF = [
-  feature("sqlConsole", false),
-  feature("askCodebase", false),
-  feature("mcpSqlServer", false),
-];
+const ALL_KEYS = ["sqlConsole", "askCodebase", "mcpSqlServer", "webBrowser"];
+const ON = ALL_KEYS.map((f) => feature(f, true));
+const OFF = ALL_KEYS.map((f) => feature(f, false));
 /** Exactly one feature on, so a test can tell the rows apart. */
-const only = (id: string) =>
-  ["sqlConsole", "askCodebase", "mcpSqlServer"].map((f) => feature(f, f === id));
+const only = (id: string) => ALL_KEYS.map((f) => feature(f, f === id));
 const SQL_ONLY = only("sqlConsole");
 const ASK_ONLY = only("askCodebase");
 const MCP_ONLY = only("mcpSqlServer");
+const BROWSER_ONLY = only("webBrowser");
 
 describe("pluginMenuRows", () => {
   it("offers the SQL console when its feature is on and a codebase is open", () => {
@@ -48,6 +41,7 @@ describe("pluginMenuRows", () => {
       "view.sql",
       "agent.ask",
       "plugin.mcp",
+      "plugin.browser",
     ]);
   });
 
@@ -135,6 +129,32 @@ describe("pluginMenuRows", () => {
         expect(row.title.length).toBeGreaterThan(0);
       }
     }
+  });
+
+  it("enables the browser with no codebase open, the first plugin that needs none", () => {
+    // Every other plugin acts on the open codebase. This one does not: "does my
+    // deployment work" is not a question about a repository, there is one
+    // browser for the whole application, and it is hosted app-level rather than
+    // per-`WorkspaceTab` for that reason. So it is offered on the welcome
+    // screen — a state no plugin row has ever been enabled in before.
+    const rows = pluginMenuRows({ features: BROWSER_ONLY, workspaceOpen: false });
+    expect(rows.map((r) => r.id)).toEqual(["plugin.browser"]);
+    expect(rows[0]?.disabled).toBe(false);
+    expect(rows[0]?.action).toEqual({ kind: "browser" });
+    expect(rows[0]?.label).toBe("Web browser");
+    expect(rows[0]?.title).not.toContain("Open a codebase");
+  });
+
+  it("shows the browser row identically whether or not a codebase is open", () => {
+    // The point of `needsWorkspace: false`: the answer must not move with the
+    // foreground tab, because the panel it opens is not scoped to one.
+    expect(pluginMenuRows({ features: BROWSER_ONLY, workspaceOpen: true })).toEqual(
+      pluginMenuRows({ features: BROWSER_ONLY, workspaceOpen: false }),
+    );
+  });
+
+  it("still shows the Plugins button with only the browser on and nothing open", () => {
+    expect(pluginMenuAvailable({ features: BROWSER_ONLY, workspaceOpen: false })).toBe(true);
   });
 
   it("shows nothing while the features are still being read", () => {

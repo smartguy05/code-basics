@@ -16,7 +16,11 @@ import { PLUGIN_LABELS } from "../shortcutLogic";
 import type { FeatureInfo } from "../ipc/types";
 
 /** What clicking a plugin row does. One variant per plugin. */
-export type PluginAction = { kind: "sql" } | { kind: "ask" } | { kind: "mcp" };
+export type PluginAction =
+  | { kind: "sql" }
+  | { kind: "ask" }
+  | { kind: "mcp" }
+  | { kind: "browser" };
 
 export interface PluginRow {
   /** The command id this row corresponds to, and the React key. */
@@ -81,6 +85,23 @@ const PLUGINS: PluginEntry[] = [
     needsWorkspace: true,
     ready: "Let a coding agent read the databases you expose, over MCP",
     noWorkspace: "Open a codebase to install the SQL MCP server for it",
+  },
+  {
+    // The first row with `needsWorkspace: false`, and the reason is the same one
+    // that makes the panel app-level rather than per-`WorkspaceTab`: "does my
+    // deployment work" is not a question about a repository, and there is one
+    // browser for the whole application. So this row is enabled on the welcome
+    // screen, which is a state no other plugin has ever been openable in —
+    // `a_plugin_that_needs_no_workspace_is_enabled_with_none_open` is the test.
+    feature: "webBrowser",
+    commandId: "plugin.browser",
+    action: { kind: "browser" },
+    needsWorkspace: false,
+    ready: "Open a web page inside the app",
+    // Unreachable while `needsWorkspace` is false, and kept rather than made
+    // optional: the field is what a future change to that flag would need, and
+    // an empty string would render as a row with no tooltip if it ever were.
+    noWorkspace: "Open a web page inside the app",
   },
 ];
 

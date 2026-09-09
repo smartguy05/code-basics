@@ -91,3 +91,30 @@ Every command returns `Result<T, String>` — errors cross IPC as plain human-re
 A `Repo` handle is opened per call rather than held in `AppState`: libgit2's `Repository` is not `Sync`, and opening is cheap next to any operation performed on it.
 
 Related: [the frontend](frontend.md) · [the IPC type contract](ipc-contract.md).
+
+## PTY argv on Windows
+
+Found by adversarially reviewing the "Ask the codebase" feature, then reproduced with
+`CreateProcessW` directly. Five doc comments across the tree asserted "there is no shell to
+interpret any of it". That is true for a real `.exe` and **false for a `.cmd`/`.bat` target**.
+
+- `process::resolve::resolve_program` walks `PATHEXT`, so a bare name resolves to a `.CMD`
+  when no `.EXE` exists. On a dev box `claude` is `claude.exe` (safe) but `codex` is
+  `codex.cmd` (an npm shim) — so the two agents take *different* paths for the same code.
+- `portable-pty`'s `CommandBuilder::append_quoted` implements **MSVC argv quoting only**. It
+  has none of the CVE-2024-24576 batch mitigation that `std::process::Command` gained, and it
+  emits an argument unquoted unless it contains a space, tab, newline or `"`. So `cmd.exe`
+  re-parses the line: `&` splits it, and `%VAR%` expands **even inside quotes**.
+- It applies to the **program path too**, not just the arguments (`cmdbuilder.rs` quotes the
+  exe with the same function) — a PATH directory named `foo&calc` is enough.
+
+`crates/core/src/pty/argv.rs` is the guard: `check_batch_argv` runs at the one spawn seam in
+`PtyManager::open_inner`, **after** `resolve_program` (checking the typed name instead of the
+resolved path would miss `codex` → `codex.cmd` entirely and make the whole thing theatre).
+It refuses precisely the hazardous inputs rather than the feature, and deliberately does
+**not** apply to a real executable, where MSVC quoting is correct — that asymmetry is pinned
+by `the_same_argument_is_allowed_for_a_real_executable`.
+
+**The contrast worth remembering:** `process::Supervisor` (`tokio::process`) *does* carry the
+std fix, so the app launcher and the headless review were never exposed. Only the PTY path is.
+Anything new that sends caller-supplied text as argv through `pty/` must go through the guard.
