@@ -1581,3 +1581,32 @@ export const browserMcpUninstallPlan = (provider: ProviderId, scope: InstallScop
 /** Perform a removal the user has confirmed; returns the new status. */
 export const uninstallBrowserMcp = (provider: ProviderId, scope: InstallScope) =>
   invoke<InstallScope | null>("uninstall_browser_mcp", { provider, scope });
+
+// --- The Roslyn / LSP MCP server's installer -------------------------------
+//
+// The same five-call shape as the SQL and browser servers because it is the
+// same machinery: `cb_core::roslyn::install` reuses `mcp::install`'s merge
+// rather than growing a second one. Separate calls rather than a `kind`
+// parameter, because the three servers carry different caveats and the failure
+// mode of one shared call is showing somebody the wrong warning before install.
+
+/** Where the Roslyn MCP server is installed for `provider`, if anywhere. */
+export const roslynMcpStatus = (provider: ProviderId) =>
+  invoke<InstallScope | null>("roslyn_mcp_server_status", { provider });
+
+/** Exactly what installing it would write. Touches nothing. */
+export const roslynMcpInstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("roslyn_mcp_server_install_plan", { provider, scope });
+
+/** Perform an install the user has confirmed; returns the new status. */
+export const installRoslynMcp = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("install_roslyn_mcp_server", { provider, scope });
+
+/** Exactly what removing it would rewrite. A zero-write plan means nothing of
+ * ours was there. */
+export const roslynMcpUninstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("roslyn_mcp_server_uninstall_plan", { provider, scope });
+
+/** Perform a removal the user has confirmed; returns the new status. */
+export const uninstallRoslynMcp = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("uninstall_roslyn_mcp_server", { provider, scope });

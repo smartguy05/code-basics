@@ -30,10 +30,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::lsp::model::{
-    Availability, DeclarationAnchor, DefinitionResult, Highlight, Target, Usage, UsageResult,
+    Availability, DeclarationAnchor, DefinitionResult, DiagnosticRow, DiagnosticSeverity,
+    DiagnosticsResult, Highlight, OverloadResult, ParameterInfo, SignatureInfo, Target,
+    TypeHierarchyResult, TypeNode, Usage, UsageResult,
 };
 use crate::lsp::positions::{self, byte_to_utf16, to_editor_line};
-use crate::lsp::protocol::{Location, Symbol};
+use crate::lsp::protocol::{
+    symbol_kind, Diagnostic, Location, SignatureHelp, Symbol, TypeHierarchyItem,
+};
 use crate::lsp::uri;
 use crate::symbols::declarations::SymbolKind;
 use crate::symbols::index::relative_to_root;
@@ -391,6 +395,150 @@ fn bare_name(name: &str) -> String {
         head
     };
     head.trim().to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Type hierarchy
+// ---------------------------------------------------------------------------
+
+/// A type's supertypes and subtypes, as the frontend reads them.
+///
+/// The outcome is always [`Availability::Ready`] — this is reached once a server
+/// has answered. A `None` `item` (the caret was not on a type) is still `Ready`
+/// with an empty everything; a refused *direction* is the caller's to note. No
+/// [`TextProvider`]: a type node carries no snippet, only where to jump.
+pub fn type_hierarchy(
+    root: &Path,
+    item: Option<&TypeHierarchyItem>,
+    supertypes: &[TypeHierarchyItem],
+    subtypes: &[TypeHierarchyItem],
+) -> TypeHierarchyResult {
+    TypeHierarchyResult {
+        outcome: Availability::Ready,
+        item: item.map(|item| type_node(root, item)),
+        supertypes: supertypes.iter().map(|i| type_node(root, i)).collect(),
+        subtypes: subtypes.iter().map(|i| type_node(root, i)).collect(),
+        message: None,
+        server: None,
+    }
+}
+
+/// One hierarchy item as a jumpable node, resolving its URI to a path or
+/// abstaining — the same rule [`resolve`] follows for a [`Location`].
+///
+/// The line and column come from the **selection range** (the identifier), not
+/// the declaration range, so a jump lands on the type's name rather than on its
+/// `public`/`class` keyword.
+fn type_node(root: &Path, item: &TypeHierarchyItem) -> TypeNode {
+    let absolute = uri::from_file_uri(&item.uri);
+    let relative = absolute
+        .as_deref()
+        .and_then(|absolute| relative_to_root(root, absolute));
+    let label = match &relative {
+        Some(path) => path.to_string_lossy().into_owned(),
+        None => item.uri.clone(),
+    };
+    TypeNode {
+        name: item.name.clone(),
+        kind: symbol_kind(item.kind),
+        detail: item.detail.clone(),
+        path: relative,
+        label,
+        line: to_editor_line(item.selection_range.start.line),
+        character: item.selection_range.start.character,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Overloads
+// ---------------------------------------------------------------------------
+
+/// A signature-help answer as the overloads list.
+///
+/// `None` (the caret is not inside a call) is a `Ready` answer with no
+/// signatures, distinct from a call whose overload set is genuinely empty only
+/// in that the caller may add a message; the shape is the same and both are real.
+pub fn overloads(help: Option<SignatureHelp>) -> OverloadResult {
+    let Some(help) = help else {
+        return OverloadResult {
+            outcome: Availability::Ready,
+            signatures: Vec::new(),
+            active_signature: None,
+            active_parameter: None,
+            message: None,
+            server: None,
+        };
+    };
+    OverloadResult {
+        outcome: Availability::Ready,
+        signatures: help
+            .signatures
+            .into_iter()
+            .map(|signature| SignatureInfo {
+                label: signature.label,
+                documentation: signature.documentation,
+                parameters: signature
+                    .parameters
+                    .into_iter()
+                    .map(|parameter| ParameterInfo {
+                        label: parameter.label,
+                        documentation: parameter.documentation,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        active_signature: help.active_signature,
+        active_parameter: help.active_parameter,
+        message: None,
+        server: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+/// The pull-diagnostics list, as the frontend reads it.
+///
+/// The outcome is always [`Availability::Ready`]: this is reached once the server
+/// has answered, and an empty list is a clean file. Every row is on the file that
+/// was asked about, so no path is carried.
+pub fn diagnostics(items: &[Diagnostic]) -> DiagnosticsResult {
+    DiagnosticsResult {
+        outcome: Availability::Ready,
+        diagnostics: items.iter().map(diagnostic_row).collect(),
+        message: None,
+        server: None,
+    }
+}
+
+fn diagnostic_row(diagnostic: &Diagnostic) -> DiagnosticRow {
+    DiagnosticRow {
+        severity: severity_of(diagnostic.severity),
+        line: to_editor_line(diagnostic.range.start.line),
+        character: diagnostic.range.start.character,
+        end_line: to_editor_line(diagnostic.range.end.line),
+        end_character: diagnostic.range.end.character,
+        message: diagnostic.message.clone(),
+        source: diagnostic.source.clone(),
+        code: diagnostic.code.clone(),
+    }
+}
+
+/// The protocol's severity numbers as the model's enum.
+///
+/// An absent or out-of-range severity renders [`DiagnosticSeverity::Warning`] — a
+/// deliberate middle rather than a guess at `Error` (over-alarms) or `Hint`
+/// (hides). The three servers this app runs all send a severity, so the fallback
+/// is an edge.
+fn severity_of(severity: Option<u32>) -> DiagnosticSeverity {
+    match severity {
+        Some(1) => DiagnosticSeverity::Error,
+        Some(2) => DiagnosticSeverity::Warning,
+        Some(3) => DiagnosticSeverity::Information,
+        Some(4) => DiagnosticSeverity::Hint,
+        _ => DiagnosticSeverity::Warning,
+    }
 }
 
 #[cfg(test)]

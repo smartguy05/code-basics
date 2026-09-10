@@ -1281,6 +1281,7 @@ export function App() {
                 if (row.action.kind === "mcp") activeHandle()?.openMcp();
                 if (row.action.kind === "browser") activeHandle()?.openBrowser();
                 if (row.action.kind === "tasks") activeHandle()?.openTasks();
+                if (row.action.kind === "roslynMcp") activeHandle()?.openRoslynMcp();
               }}
             >
               {row.label}

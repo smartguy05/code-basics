@@ -31,6 +31,7 @@ pub mod process;
 pub mod pty;
 pub mod qgate;
 pub mod review;
+pub mod roslyn;
 pub mod rules;
 pub mod running;
 pub mod secrets;

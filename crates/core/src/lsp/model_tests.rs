@@ -308,6 +308,319 @@ fn symbol_kind_still_serialises_as_the_lower_case_strings_types_ts_mirrors() {
 }
 
 // ---------------------------------------------------------------------------
+// Type hierarchy
+// ---------------------------------------------------------------------------
+
+#[test]
+fn type_node_serialises_with_the_keys_the_ui_reads() {
+    let node = TypeNode {
+        name: "Order".into(),
+        kind: SymbolKind::Class,
+        detail: Some("Shop.Domain".into()),
+        path: Some(PathBuf::from("src/order.cs")),
+        label: "src/order.cs".into(),
+        line: 12,
+        character: 13,
+    };
+    let value = serde_json::to_value(&node).unwrap();
+    assert_eq!(
+        keys(&value),
+        [
+            "character",
+            "detail",
+            "kind",
+            "label",
+            "line",
+            "name",
+            "path"
+        ]
+    );
+    assert_eq!(value["kind"], json!("class"));
+}
+
+#[test]
+fn a_type_node_outside_the_workspace_carries_a_null_path_and_detail() {
+    let node = TypeNode {
+        name: "Entity".into(),
+        kind: SymbolKind::Class,
+        detail: None,
+        path: None,
+        label: "metadata:/Entity".into(),
+        line: 1,
+        character: 0,
+    };
+    let value = serde_json::to_value(&node).unwrap();
+    present_and_null(&value, "path");
+    present_and_null(&value, "detail");
+}
+
+#[test]
+fn type_hierarchy_result_serialises_with_the_keys_the_ui_reads() {
+    let result = TypeHierarchyResult {
+        outcome: Availability::Ready,
+        item: None,
+        supertypes: vec![],
+        subtypes: vec![],
+        message: None,
+        server: None,
+    };
+    let value = serde_json::to_value(&result).unwrap();
+    assert_eq!(
+        keys(&value),
+        [
+            "item",
+            "message",
+            "outcome",
+            "server",
+            "subtypes",
+            "supertypes"
+        ]
+    );
+    // `item: None` when the caret was not on a type — a real answer, present and
+    // null so the frontend can tell it from a forgotten field.
+    present_and_null(&value, "item");
+    present_and_null(&value, "message");
+    present_and_null(&value, "server");
+}
+
+#[test]
+fn a_type_hierarchy_that_could_not_be_asked_carries_no_item_and_a_reason() {
+    let result = TypeHierarchyResult::unavailable(Availability::Unsupported, "no provider");
+    let value = serde_json::to_value(&result).unwrap();
+    present_and_null(&value, "item");
+    assert_eq!(value["supertypes"], json!([]));
+    assert_eq!(value["subtypes"], json!([]));
+    assert!(value["message"].is_string());
+}
+
+#[test]
+fn type_hierarchy_round_trips_through_json() {
+    let result = TypeHierarchyResult {
+        outcome: Availability::Ready,
+        item: Some(TypeNode {
+            name: "Order".into(),
+            kind: SymbolKind::Class,
+            detail: None,
+            path: Some(PathBuf::from("a.cs")),
+            label: "a.cs".into(),
+            line: 1,
+            character: 6,
+        }),
+        supertypes: vec![TypeNode {
+            name: "Entity".into(),
+            kind: SymbolKind::Class,
+            detail: Some("Base".into()),
+            path: None,
+            label: "metadata:/Entity".into(),
+            line: 1,
+            character: 0,
+        }],
+        subtypes: vec![],
+        message: Some("No subtypes: ...".into()),
+        server: Some("csharp".into()),
+    };
+    let round =
+        serde_json::from_value::<TypeHierarchyResult>(serde_json::to_value(&result).unwrap());
+    assert_eq!(round.unwrap(), result);
+}
+
+// ---------------------------------------------------------------------------
+// Overloads
+// ---------------------------------------------------------------------------
+
+#[test]
+fn overload_result_serialises_with_the_keys_the_ui_reads() {
+    let result = OverloadResult {
+        outcome: Availability::Ready,
+        signatures: vec![SignatureInfo {
+            label: "Add(int a, int b)".into(),
+            documentation: None,
+            parameters: vec![ParameterInfo {
+                label: "int a".into(),
+                documentation: None,
+            }],
+        }],
+        active_signature: Some(0),
+        active_parameter: Some(1),
+        message: None,
+        server: Some("csharp".into()),
+    };
+    let value = serde_json::to_value(&result).unwrap();
+    assert_eq!(
+        keys(&value),
+        [
+            "activeParameter",
+            "activeSignature",
+            "message",
+            "outcome",
+            "server",
+            "signatures"
+        ]
+    );
+    present_and_null(&value, "message");
+    assert_eq!(
+        keys(&value["signatures"][0]),
+        ["documentation", "label", "parameters"]
+    );
+    assert_eq!(
+        keys(&value["signatures"][0]["parameters"][0]),
+        ["documentation", "label"]
+    );
+}
+
+#[test]
+fn an_overload_result_that_could_not_be_asked_carries_no_active_index() {
+    // `activeSignature: None` is "the server did not say", never `0` — those are
+    // different facts, the same rule as `total`.
+    let result = OverloadResult::unavailable(Availability::Loading, "still loading");
+    let value = serde_json::to_value(&result).unwrap();
+    present_and_null(&value, "activeSignature");
+    present_and_null(&value, "activeParameter");
+    assert_eq!(value["signatures"], json!([]));
+    present_and_null(&value, "server");
+}
+
+#[test]
+fn overload_result_round_trips_through_json() {
+    let result = OverloadResult {
+        outcome: Availability::Ready,
+        signatures: vec![SignatureInfo {
+            label: "f(x)".into(),
+            documentation: Some("does f".into()),
+            parameters: vec![ParameterInfo {
+                label: "x".into(),
+                documentation: Some("the x".into()),
+            }],
+        }],
+        active_signature: None,
+        active_parameter: None,
+        message: None,
+        server: None,
+    };
+    let round = serde_json::from_value::<OverloadResult>(serde_json::to_value(&result).unwrap());
+    assert_eq!(round.unwrap(), result);
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn diagnostic_severity_serialises_to_its_exact_string() {
+    let pairs = [
+        (DiagnosticSeverity::Error, "error"),
+        (DiagnosticSeverity::Warning, "warning"),
+        (DiagnosticSeverity::Information, "information"),
+        (DiagnosticSeverity::Hint, "hint"),
+    ];
+    for (variant, text) in pairs {
+        assert_eq!(serde_json::to_value(variant).unwrap(), json!(text));
+        assert_eq!(
+            serde_json::from_value::<DiagnosticSeverity>(json!(text)).unwrap(),
+            variant
+        );
+    }
+}
+
+#[test]
+fn diagnostic_severity_has_exactly_four_variants() {
+    // An exhaustive match, so adding a variant fails to compile until `types.ts`
+    // and this list are updated together.
+    let spelling = |severity: DiagnosticSeverity| match severity {
+        DiagnosticSeverity::Error => "error",
+        DiagnosticSeverity::Warning => "warning",
+        DiagnosticSeverity::Information => "information",
+        DiagnosticSeverity::Hint => "hint",
+    };
+    for severity in [
+        DiagnosticSeverity::Error,
+        DiagnosticSeverity::Warning,
+        DiagnosticSeverity::Information,
+        DiagnosticSeverity::Hint,
+    ] {
+        assert_eq!(
+            serde_json::to_value(severity).unwrap(),
+            json!(spelling(severity))
+        );
+    }
+}
+
+#[test]
+fn diagnostic_row_serialises_with_the_keys_the_ui_reads() {
+    let row = DiagnosticRow {
+        severity: DiagnosticSeverity::Error,
+        line: 12,
+        character: 4,
+        end_line: 12,
+        end_character: 9,
+        message: "cannot find `Foo`".into(),
+        source: Some("rustc".into()),
+        code: Some("E0425".into()),
+    };
+    let value = serde_json::to_value(&row).unwrap();
+    assert_eq!(
+        keys(&value),
+        [
+            "character",
+            "code",
+            "endCharacter",
+            "endLine",
+            "line",
+            "message",
+            "severity",
+            "source"
+        ]
+    );
+    assert_eq!(value["severity"], json!("error"));
+}
+
+#[test]
+fn diagnostics_result_serialises_with_the_keys_the_ui_reads() {
+    let result = DiagnosticsResult {
+        outcome: Availability::Ready,
+        diagnostics: vec![],
+        message: None,
+        server: Some("csharp".into()),
+    };
+    let value = serde_json::to_value(&result).unwrap();
+    assert_eq!(
+        keys(&value),
+        ["diagnostics", "message", "outcome", "server"]
+    );
+    present_and_null(&value, "message");
+}
+
+#[test]
+fn a_diagnostics_result_that_could_not_be_asked_is_empty_with_a_reason() {
+    let result = DiagnosticsResult::unavailable(Availability::Failed, "the server died");
+    let value = serde_json::to_value(&result).unwrap();
+    assert_eq!(value["diagnostics"], json!([]));
+    present_and_null(&value, "server");
+    assert!(value["message"].is_string());
+}
+
+#[test]
+fn diagnostics_round_trip_through_json() {
+    let result = DiagnosticsResult {
+        outcome: Availability::Ready,
+        diagnostics: vec![DiagnosticRow {
+            severity: DiagnosticSeverity::Warning,
+            line: 1,
+            character: 0,
+            end_line: 1,
+            end_character: 3,
+            message: "unused".into(),
+            source: None,
+            code: None,
+        }],
+        message: None,
+        server: Some("rust".into()),
+    };
+    let round = serde_json::from_value::<DiagnosticsResult>(serde_json::to_value(&result).unwrap());
+    assert_eq!(round.unwrap(), result);
+}
+
+// ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
 

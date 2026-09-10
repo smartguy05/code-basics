@@ -436,6 +436,99 @@ fn the_other_two_shapes_are_empty_with_a_reason() {
     assert_eq!(anchors.message.as_deref(), Some("dead"));
 }
 
+#[test]
+fn the_new_result_shapes_are_empty_with_a_reason_and_never_a_count() {
+    // The abstain matrix for the four new questions: not one of them may ship a
+    // count, a signature, a diagnostic or a hierarchy node when it could not be
+    // asked — the same rule `total: None` enforces for usages.
+    let type_hierarchy = Unready {
+        outcome: Availability::Unsupported,
+        message: "no typeHierarchyProvider".to_string(),
+        server: Some("typescript".to_string()),
+    }
+    .type_hierarchy();
+    assert_eq!(type_hierarchy.outcome, Availability::Unsupported);
+    assert!(type_hierarchy.item.is_none());
+    assert!(type_hierarchy.supertypes.is_empty());
+    assert!(type_hierarchy.subtypes.is_empty());
+    assert_eq!(type_hierarchy.server.as_deref(), Some("typescript"));
+    assert_eq!(
+        type_hierarchy.message.as_deref(),
+        Some("no typeHierarchyProvider")
+    );
+
+    let overloads = Unready {
+        outcome: Availability::Loading,
+        message: "still loading".to_string(),
+        server: None,
+    }
+    .overloads();
+    assert_eq!(overloads.outcome, Availability::Loading);
+    assert!(overloads.signatures.is_empty());
+    assert_eq!(overloads.active_signature, None);
+    assert_eq!(overloads.active_parameter, None);
+    assert_eq!(overloads.server, None);
+
+    let diagnostics = Unready {
+        outcome: Availability::Failed,
+        message: "the server died".to_string(),
+        server: Some("csharp".to_string()),
+    }
+    .diagnostics();
+    assert_eq!(diagnostics.outcome, Availability::Failed);
+    assert!(diagnostics.diagnostics.is_empty());
+    assert_eq!(diagnostics.server.as_deref(), Some("csharp"));
+    assert_eq!(diagnostics.message.as_deref(), Some("the server died"));
+}
+
+#[test]
+fn find_references_reports_a_torn_down_session_as_failed_with_a_reason() {
+    // Every new question routes an absent actor through the same
+    // `Availability::Failed` + `TORN_DOWN` shape as the existing ones — a bucket
+    // with a reason attached, not a claim that a server misbehaved.
+    let usages = Unready {
+        outcome: Availability::Failed,
+        message: TORN_DOWN.to_string(),
+        server: None,
+    }
+    .usages();
+    assert_eq!(usages.outcome, Availability::Failed);
+    assert_eq!(usages.total, None);
+    assert!(usages
+        .message
+        .as_deref()
+        .is_some_and(|m| m.contains("closed")));
+}
+
+#[test]
+fn a_refused_hierarchy_direction_is_empty_and_names_which_direction_it_was() {
+    // `refused` is the generic core of `group`, so a type-hierarchy direction
+    // that was refused adds a note about the conversation rather than an empty
+    // list that reads as "there are none".
+    let mut notes = Vec::new();
+    let mut refusals = Vec::new();
+    let items: Vec<Location> = refused(
+        Err(RequestError::Unsupported {
+            method: "typeHierarchy/supertypes",
+            capability: "typeHierarchyProvider",
+        }),
+        "supertypes",
+        &mut notes,
+        &mut refusals,
+    );
+    assert!(items.is_empty());
+    assert_eq!(refusals, vec![Availability::Unsupported]);
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].contains("supertypes"), "{:?}", notes[0]);
+
+    // A both-directions refusal takes the most severe reason, never `Ready` —
+    // the same rule the goto groups follow.
+    assert_eq!(
+        worst(&[Availability::Unsupported, Availability::Failed]),
+        Availability::Failed
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------------

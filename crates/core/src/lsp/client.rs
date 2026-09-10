@@ -74,11 +74,13 @@ use thiserror::Error;
 use tokio::sync::{broadcast, watch};
 
 use super::protocol::{
-    decode_document_symbols, decode_goto, decode_prepare_rename, decode_workspace_edit,
-    document_end, initialize_params, method, DecodeError, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbolParams, Location,
-    Position, PrepareRenameResponse, ReferenceParams, RenameParams, ServerCapabilities, Symbol,
-    SyncKind, TextDocumentPositionParams, WorkspaceEdit,
+    decode_diagnostics, decode_document_symbols, decode_goto, decode_prepare_rename,
+    decode_signature_help, decode_type_hierarchy, decode_workspace_edit, document_end,
+    initialize_params, method, DecodeError, Diagnostic, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
+    DocumentSymbolParams, Location, Position, PrepareRenameResponse, ReferenceParams, RenameParams,
+    ServerCapabilities, SignatureHelp, Symbol, SyncKind, TextDocumentPositionParams,
+    TypeHierarchyItem, TypeHierarchyItemParams, WorkspaceEdit,
 };
 use super::registry::{caller_args, takes_caller_args, Readiness, ServerSpec, Timeouts};
 use super::transport::{Death, Launch, Notification, RequestFailure, SignalFilter, Transport};
@@ -736,6 +738,113 @@ impl Client {
             .ask(method, as_params(&params), self.spec.timeouts.request)
             .await?;
         decode_workspace_edit(value).map_err(|error| malformed(method, error))
+    }
+
+    // -----------------------------------------------------------------------
+    // The semantic questions the agent MCP forwards
+    // -----------------------------------------------------------------------
+
+    /// Resolve the caret onto a type hierarchy item, or nothing if it is not on
+    /// a type.
+    ///
+    /// An empty list is a **real answer** — the caret is not on a type — and the
+    /// caller renders it as such, never as a failure. Gated on
+    /// `typeHierarchyProvider`; the two follow-up requests share the same gate.
+    pub async fn prepare_type_hierarchy(
+        &self,
+        path: &Path,
+        position: Position,
+    ) -> Result<Vec<TypeHierarchyItem>, RequestError> {
+        let method = method::PREPARE_TYPE_HIERARCHY;
+        self.require(
+            self.capabilities.type_hierarchy,
+            method,
+            "typeHierarchyProvider",
+        )?;
+        let uri = self.uri_for(path)?;
+        let params = TextDocumentPositionParams::new(&uri, position);
+        let value = self
+            .ask(method, as_params(&params), self.spec.timeouts.request)
+            .await?;
+        decode_type_hierarchy(value).map_err(|error| malformed(method, error))
+    }
+
+    /// The types `item` derives from.
+    pub async fn type_supertypes(
+        &self,
+        item: TypeHierarchyItem,
+    ) -> Result<Vec<TypeHierarchyItem>, RequestError> {
+        self.type_hierarchy_step(method::TYPE_HIERARCHY_SUPERTYPES, item)
+            .await
+    }
+
+    /// The types that derive from `item`.
+    pub async fn type_subtypes(
+        &self,
+        item: TypeHierarchyItem,
+    ) -> Result<Vec<TypeHierarchyItem>, RequestError> {
+        self.type_hierarchy_step(method::TYPE_HIERARCHY_SUBTYPES, item)
+            .await
+    }
+
+    /// `supertypes` and `subtypes` differ only in the method name and take the
+    /// item rather than a position, so one body serves both — the item is handed
+    /// straight back, `data` and all, because the server round-trips its own
+    /// resolution state through it.
+    async fn type_hierarchy_step(
+        &self,
+        method: &'static str,
+        item: TypeHierarchyItem,
+    ) -> Result<Vec<TypeHierarchyItem>, RequestError> {
+        self.require(
+            self.capabilities.type_hierarchy,
+            method,
+            "typeHierarchyProvider",
+        )?;
+        let params = TypeHierarchyItemParams::new(item);
+        let value = self
+            .ask(method, as_params(&params), self.spec.timeouts.request)
+            .await?;
+        decode_type_hierarchy(value).map_err(|error| malformed(method, error))
+    }
+
+    /// The overloads visible at `position`.
+    ///
+    /// `Ok(None)` means the caret is not inside a call — a real answer, distinct
+    /// from an empty overload set. Gated on `signatureHelpProvider`.
+    pub async fn signature_help(
+        &self,
+        path: &Path,
+        position: Position,
+    ) -> Result<Option<SignatureHelp>, RequestError> {
+        let method = method::SIGNATURE_HELP;
+        self.require(
+            self.capabilities.signature_help,
+            method,
+            "signatureHelpProvider",
+        )?;
+        let uri = self.uri_for(path)?;
+        let params = TextDocumentPositionParams::new(&uri, position);
+        let value = self
+            .ask(method, as_params(&params), self.spec.timeouts.request)
+            .await?;
+        decode_signature_help(value).map_err(|error| malformed(method, error))
+    }
+
+    /// The *pull* diagnostics for one document.
+    ///
+    /// An empty list is a clean file — a real answer — because this is a request
+    /// with a reply, not the asynchronous `publishDiagnostics` push. Gated on
+    /// `diagnosticProvider`.
+    pub async fn diagnostics(&self, path: &Path) -> Result<Vec<Diagnostic>, RequestError> {
+        let method = method::DIAGNOSTIC;
+        self.require(self.capabilities.diagnostic, method, "diagnosticProvider")?;
+        let uri = self.uri_for(path)?;
+        let params = DocumentDiagnosticParams::new(&uri);
+        let value = self
+            .ask(method, as_params(&params), self.spec.timeouts.request)
+            .await?;
+        decode_diagnostics(value).map_err(|error| malformed(method, error))
     }
 
     // -----------------------------------------------------------------------

@@ -2098,6 +2098,123 @@ export interface PrepareRenameResult {
   server: string | null;
 }
 
+/**
+ * One type in an inheritance graph, and where it is declared.
+ *
+ * Mirrors `cb_core::lsp::model::TypeNode`; `path`/`detail` are `T | null` for the
+ * same reasons as {@link Target}, so branch on `=== null`, never on `?`.
+ */
+export interface TypeNode {
+  name: string;
+  kind: SymbolKind;
+  /** The server's one-line detail, or `null`. */
+  detail: string | null;
+  /** Workspace-relative, forward slashes. `null` when outside the workspace or a
+   * non-`file:` document — shown, not opened. */
+  path: string | null;
+  label: string;
+  /** **1-based**, matching the editor gutter. */
+  line: number;
+  /** **0-based UTF-16 code units**; see {@link Target.character}. */
+  character: number;
+}
+
+/**
+ * A type's place in the inheritance graph, or the reason there is none.
+ *
+ * `item` is `null` when the caret was not on a type — a **real** `"ready"` answer,
+ * not a failure. And there is one `outcome` for two lists: a refused *direction*
+ * keeps `"ready"` and names itself in `message`, so an empty `supertypes` or
+ * `subtypes` means "there are none" only when `message` is `null`.
+ */
+export interface TypeHierarchyResult {
+  outcome: Availability;
+  item: TypeNode | null;
+  supertypes: TypeNode[];
+  subtypes: TypeNode[];
+  message: string | null;
+  server: string | null;
+}
+
+/** One callable signature available at a call site. */
+export interface SignatureInfo {
+  /** The whole signature, exactly as the server rendered it. */
+  label: string;
+  /** Plain-text documentation (a `MarkupContent`'s value verbatim), or `null`. */
+  documentation: string | null;
+  parameters: ParameterInfo[];
+}
+
+/** One parameter of a signature. */
+export interface ParameterInfo {
+  /** The parameter's own text — the backend resolves both the substring and the
+   * `[start, end]` offset forms to this before it crosses. */
+  label: string;
+  documentation: string | null;
+}
+
+/**
+ * The overloads at a call site, or the reason there are none.
+ *
+ * `activeSignature`/`activeParameter` are `null` when the server did not say —
+ * never `0`, which is a different fact (it chose the first). An empty
+ * `signatures` on a `"ready"` outcome means the caret is not inside a call.
+ */
+export interface OverloadResult {
+  outcome: Availability;
+  signatures: SignatureInfo[];
+  /** **0-based** into `signatures`, or `null`. */
+  activeSignature: number | null;
+  /** **0-based**, or `null`. */
+  activeParameter: number | null;
+  message: string | null;
+  server: string | null;
+}
+
+/**
+ * How serious one diagnostic is.
+ *
+ * The four the protocol numbers 1..=4. A diagnostic that omits its severity is
+ * rendered `"warning"` by the backend — a deliberate middle, not a guess. Pinned
+ * against these spellings by `diagnostic_severity_serialises_to_its_exact_string`
+ * in `crates/core/src/lsp/model_tests.rs`.
+ */
+export type DiagnosticSeverity = "error" | "warning" | "information" | "hint";
+
+/**
+ * One diagnostic on the file that was asked about.
+ *
+ * No path: every row is on the requested file. The range is **1-based line,
+ * 0-based UTF-16 character**, half-open; see {@link RangeEdit}.
+ */
+export interface DiagnosticRow {
+  severity: DiagnosticSeverity;
+  line: number;
+  character: number;
+  endLine: number;
+  endCharacter: number;
+  message: string;
+  /** The tool that raised it (`rustc`, `roslyn`, `ts`), or `null`. */
+  source: string | null;
+  /** The rule/error code as a string even when the server sent a number, or
+   * `null`. */
+  code: string | null;
+}
+
+/**
+ * Every diagnostic on one file, or the reason there is no list.
+ *
+ * **Pull, not push.** These come from a request with a reply, so an empty
+ * `diagnostics` on a `"ready"` outcome means the file is clean — a real answer,
+ * distinct from "not arrived yet", which the push stream could not disambiguate.
+ */
+export interface DiagnosticsResult {
+  outcome: Availability;
+  diagnostics: DiagnosticRow[];
+  message: string | null;
+  server: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Debugging (`cb_core::dap::model`)
 // ---------------------------------------------------------------------------

@@ -15,6 +15,14 @@ const ON = ALL_KEYS.map((f) => feature(f, true));
 const OFF = ALL_KEYS.map((f) => feature(f, false));
 /** Exactly one feature on, so a test can tell the rows apart. */
 const only = (id: string) => ALL_KEYS.map((f) => feature(f, f === id));
+/**
+ * The row ids with the always-on Roslyn server dropped, so a test naming one
+ * optional feature can assert exactly its rows. The Roslyn row's own behaviour
+ * is covered by its dedicated block.
+ */
+const optionalIds = (rows: { id: string }[]) =>
+  rows.map((r) => r.id).filter((id) => id !== "plugin.roslyn");
+
 const SQL_ONLY = only("sqlConsole");
 const ASK_ONLY = only("askCodebase");
 const MCP_ONLY = only("mcpSqlServer");
@@ -24,32 +32,35 @@ const TASKS_ONLY = only("tasks");
 describe("pluginMenuRows", () => {
   it("offers the SQL console when its feature is on and a codebase is open", () => {
     const rows = pluginMenuRows({ features: SQL_ONLY, workspaceOpen: true });
-    expect(rows.map((r) => r.id)).toEqual(["view.sql"]);
+    expect(optionalIds(rows)).toEqual(["view.sql"]);
     expect(rows[0]?.disabled).toBe(false);
     expect(rows[0]?.action).toEqual({ kind: "sql" });
   });
 
   it("offers Ask the codebase, which was reachable only by its chord before", () => {
     const rows = pluginMenuRows({ features: ASK_ONLY, workspaceOpen: true });
-    expect(rows.map((r) => r.id)).toEqual(["agent.ask"]);
+    expect(optionalIds(rows)).toEqual(["agent.ask"]);
     expect(rows[0]?.label).toBe("Ask the codebase");
     expect(rows[0]?.disabled).toBe(false);
     expect(rows[0]?.action).toEqual({ kind: "ask" });
   });
 
   it("lists every plugin when all are on", () => {
+    // The Roslyn MCP server is always-on (the LSP is not an optional feature),
+    // so it is always the last row regardless of which features are enabled.
     expect(pluginMenuRows({ features: ON, workspaceOpen: true }).map((r) => r.id)).toEqual([
       "view.sql",
       "agent.ask",
       "plugin.mcp",
       "plugin.browser",
       "plugin.tasks",
+      "plugin.roslyn",
     ]);
   });
 
   it("offers the SQL MCP server when its feature is on and a codebase is open", () => {
     const rows = pluginMenuRows({ features: MCP_ONLY, workspaceOpen: true });
-    expect(rows.map((r) => r.id)).toEqual(["plugin.mcp"]);
+    expect(optionalIds(rows)).toEqual(["plugin.mcp"]);
     expect(rows[0]?.label).toBe("SQL MCP server");
     expect(rows[0]?.disabled).toBe(false);
     expect(rows[0]?.action).toEqual({ kind: "mcp" });
@@ -80,7 +91,7 @@ describe("pluginMenuRows", () => {
   });
 
   it("omits Ask the codebase on its own when only that feature is off", () => {
-    expect(pluginMenuRows({ features: SQL_ONLY, workspaceOpen: true }).map((r) => r.id)).toEqual([
+    expect(optionalIds(pluginMenuRows({ features: SQL_ONLY, workspaceOpen: true }))).toEqual([
       "view.sql",
     ]);
   });
@@ -103,15 +114,18 @@ describe("pluginMenuRows", () => {
 
   it("omits a switched-off plugin rather than disabling it", () => {
     // "You switched this off" is a decision the user already made and does not
-    // need arguing with.
-    expect(pluginMenuRows({ features: OFF, workspaceOpen: true })).toEqual([]);
+    // need arguing with. Only the always-on Roslyn server survives every
+    // optional feature being off.
+    expect(pluginMenuRows({ features: OFF, workspaceOpen: true }).map((r) => r.id)).toEqual([
+      "plugin.roslyn",
+    ]);
   });
 
   it("disables — and explains — a plugin that needs a codebase when none is open", () => {
     // Unlike a switched-off feature, this is a state the user is one click from
     // leaving, so it is worth showing with a reason.
     const rows = pluginMenuRows({ features: SQL_ONLY, workspaceOpen: false });
-    expect(rows).toHaveLength(1);
+    expect(optionalIds(rows)).toEqual(["view.sql"]);
     expect(rows[0]?.disabled).toBe(true);
     expect(rows[0]?.title).toContain("Open a codebase");
   });
@@ -138,7 +152,7 @@ describe("pluginMenuRows", () => {
     // live page and only the active one is visible. So it needs a codebase to
     // attach to, like every other plugin.
     const rows = pluginMenuRows({ features: BROWSER_ONLY, workspaceOpen: true });
-    expect(rows.map((r) => r.id)).toEqual(["plugin.browser"]);
+    expect(optionalIds(rows)).toEqual(["plugin.browser"]);
     expect(rows[0]?.disabled).toBe(false);
     expect(rows[0]?.action).toEqual({ kind: "browser" });
     expect(rows[0]?.label).toBe("Web browser");
@@ -149,7 +163,7 @@ describe("pluginMenuRows", () => {
     // screen, so it becomes a disabled row that explains itself rather than an
     // opener that acts on nothing.
     const rows = pluginMenuRows({ features: BROWSER_ONLY, workspaceOpen: false });
-    expect(rows.map((r) => r.id)).toEqual(["plugin.browser"]);
+    expect(optionalIds(rows)).toEqual(["plugin.browser"]);
     expect(rows[0]?.disabled).toBe(true);
     expect(rows[0]?.action).toBe(null);
     expect(rows[0]?.title).toContain("Open a codebase");
@@ -157,7 +171,7 @@ describe("pluginMenuRows", () => {
 
   it("offers the Tasks panel when its feature is on and a codebase is open", () => {
     const rows = pluginMenuRows({ features: TASKS_ONLY, workspaceOpen: true });
-    expect(rows.map((r) => r.id)).toEqual(["plugin.tasks"]);
+    expect(optionalIds(rows)).toEqual(["plugin.tasks"]);
     expect(rows[0]?.disabled).toBe(false);
     expect(rows[0]?.action).toEqual({ kind: "tasks" });
     expect(rows[0]?.label).toBe("Tasks");
@@ -166,7 +180,7 @@ describe("pluginMenuRows", () => {
   it("disables the Tasks panel, with a reason, when no codebase is open", () => {
     // The task store is per-repository, so there must be a codebase to read it.
     const rows = pluginMenuRows({ features: TASKS_ONLY, workspaceOpen: false });
-    expect(rows.map((r) => r.id)).toEqual(["plugin.tasks"]);
+    expect(optionalIds(rows)).toEqual(["plugin.tasks"]);
     expect(rows[0]?.disabled).toBe(true);
     expect(rows[0]?.action).toBe(null);
     expect(rows[0]?.title).toContain("Open a codebase");
@@ -184,11 +198,39 @@ describe("pluginMenuRows", () => {
   });
 });
 
+describe("Roslyn MCP server (always-on)", () => {
+  it("offers the Roslyn server even when every optional feature is off", () => {
+    // The LSP is always running, so its installer has no feature gate: it is
+    // present whatever the optional features are set to.
+    const rows = pluginMenuRows({ features: OFF, workspaceOpen: true });
+    const roslyn = rows.find((r) => r.id === "plugin.roslyn");
+    expect(roslyn?.label).toBe("Roslyn MCP server");
+    expect(roslyn?.disabled).toBe(false);
+    expect(roslyn?.action).toEqual({ kind: "roslynMcp" });
+  });
+
+  it("disables the Roslyn server, with a reason, when no codebase is open", () => {
+    // A project-scope install writes .mcp.json at a repository root, and the
+    // status is read per repository, so there must be a codebase.
+    const rows = pluginMenuRows({ features: OFF, workspaceOpen: false });
+    const roslyn = rows.find((r) => r.id === "plugin.roslyn");
+    expect(roslyn?.disabled).toBe(true);
+    expect(roslyn?.action).toBe(null);
+    expect(roslyn?.title).toContain("Open a codebase");
+  });
+
+  it("is still gone while the features are being read", () => {
+    // `null` is "not read yet", and short-circuits before any row — including
+    // the always-on one — so the menu never flashes on startup.
+    expect(pluginMenuRows({ features: null, workspaceOpen: true })).toEqual([]);
+  });
+});
+
 describe("pluginMenuAvailable", () => {
-  it("hides the button when every plugin is off", () => {
-    // An empty menu is a dead end that still costs a click to discover, and the
-    // titlebar is where space is most contested.
-    expect(pluginMenuAvailable({ features: OFF, workspaceOpen: true })).toBe(false);
+  it("shows the button even when every optional feature is off", () => {
+    // The always-on Roslyn server means there is always at least one row, so the
+    // Plugins button is now always worth showing once the features have loaded.
+    expect(pluginMenuAvailable({ features: OFF, workspaceOpen: true })).toBe(true);
   });
 
   it("hides it before the features have been read", () => {

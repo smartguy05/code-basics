@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::lsp::model::{Availability, Highlight};
+use crate::lsp::model::{Availability, DiagnosticSeverity, Highlight};
 use crate::lsp::protocol::{Location, Position, Range, Symbol};
 use crate::symbols::declarations::SymbolKind;
 
@@ -667,4 +667,156 @@ fn two_identical_declarations_still_get_distinct_ids() {
         .collect();
     assert_eq!(ids.len(), 2);
     assert_ne!(ids[0], ids[1]);
+}
+
+// ---------------------------------------------------------------------------
+// Type hierarchy
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_type_hierarchy_node_resolves_its_uri_and_aims_at_the_identifier() {
+    use crate::lsp::protocol::decode_type_hierarchy;
+
+    let item = &decode_type_hierarchy(serde_json::json!([{
+        "name": "Order",
+        "kind": 5,
+        "detail": "Shop.Domain",
+        "uri": uri("Order.cs"),
+        "range": { "start": {"line": 3, "character": 0}, "end": {"line": 40, "character": 1} },
+        "selectionRange": { "start": {"line": 3, "character": 13}, "end": {"line": 3, "character": 18} }
+    }]))
+    .expect("legal")[0];
+
+    let result = type_hierarchy(Path::new(ROOT), Some(item), &[], &[]);
+    assert_eq!(result.outcome, Availability::Ready);
+    let node = result.item.expect("an item");
+    assert_eq!(node.name, "Order");
+    assert_eq!(node.kind, SymbolKind::Class);
+    assert_eq!(node.detail.as_deref(), Some("Shop.Domain"));
+    // Workspace-relative with forward slashes, from the identifier range.
+    assert_eq!(node.path.as_deref(), Some(Path::new("Order.cs")));
+    assert_eq!(node.label, "Order.cs");
+    assert_eq!(node.line, 4, "selection line 3 (0-based) is gutter line 4");
+    assert_eq!(node.character, 13, "the identifier column, 0-based");
+}
+
+#[test]
+fn a_type_hierarchy_node_outside_the_root_keeps_its_row_with_no_path() {
+    use crate::lsp::protocol::decode_type_hierarchy;
+
+    let item = &decode_type_hierarchy(serde_json::json!([{
+        "name": "Object",
+        "kind": 5,
+        "uri": "metadata:/System.Object",
+        "range": { "start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1} },
+        "selectionRange": { "start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1} }
+    }]))
+    .expect("legal")[0];
+
+    let result = type_hierarchy(Path::new(ROOT), None, std::slice::from_ref(item), &[]);
+    assert!(result.item.is_none(), "the caret was not on a type here");
+    assert_eq!(result.supertypes.len(), 1);
+    let base = &result.supertypes[0];
+    assert_eq!(base.path, None, "a metadata URI is shown, not opened");
+    assert_eq!(base.label, "metadata:/System.Object");
+}
+
+// ---------------------------------------------------------------------------
+// Overloads
+// ---------------------------------------------------------------------------
+
+#[test]
+fn no_signature_help_is_a_ready_empty_overload_set() {
+    let result = overloads(None);
+    assert_eq!(result.outcome, Availability::Ready);
+    assert!(result.signatures.is_empty());
+    assert_eq!(result.active_signature, None);
+    assert_eq!(result.active_parameter, None);
+}
+
+#[test]
+fn signature_help_maps_signatures_and_active_indices_through() {
+    use crate::lsp::protocol::decode_signature_help;
+
+    let help = decode_signature_help(serde_json::json!({
+        "signatures": [
+            { "label": "Add(int a, int b)",
+              "documentation": "adds",
+              "parameters": [ {"label": "int a"}, {"label": [11, 16]} ] }
+        ],
+        "activeSignature": 0,
+        "activeParameter": 1
+    }))
+    .expect("legal");
+
+    let result = overloads(help);
+    assert_eq!(result.outcome, Availability::Ready);
+    assert_eq!(result.active_signature, Some(0));
+    assert_eq!(result.active_parameter, Some(1));
+    assert_eq!(result.signatures.len(), 1);
+    let signature = &result.signatures[0];
+    assert_eq!(signature.label, "Add(int a, int b)");
+    assert_eq!(signature.documentation.as_deref(), Some("adds"));
+    assert_eq!(signature.parameters[0].label, "int a");
+    // The offset form [11,16] over "Add(int a, int b)" is "int b".
+    assert_eq!(signature.parameters[1].label, "int b");
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn diagnostics_map_ranges_severities_and_codes_through() {
+    use crate::lsp::protocol::decode_diagnostics;
+
+    let items = decode_diagnostics(serde_json::json!({
+        "kind": "full",
+        "items": [
+            { "range": {"start": {"line": 11, "character": 4}, "end": {"line": 11, "character": 9}},
+              "severity": 1, "message": "cannot find `Foo`", "source": "rustc", "code": "E0425" },
+            { "range": {"start": {"line": 2, "character": 0}, "end": {"line": 2, "character": 3}},
+              "severity": 2, "message": "unused" }
+        ]
+    }))
+    .expect("legal");
+
+    let result = diagnostics(&items);
+    assert_eq!(result.outcome, Availability::Ready);
+    assert_eq!(result.diagnostics.len(), 2);
+    let first = &result.diagnostics[0];
+    assert_eq!(first.severity, DiagnosticSeverity::Error);
+    assert_eq!(first.line, 12, "0-based line 11 is gutter line 12");
+    assert_eq!(first.character, 4);
+    assert_eq!(first.end_line, 12);
+    assert_eq!(first.end_character, 9);
+    assert_eq!(first.source.as_deref(), Some("rustc"));
+    assert_eq!(first.code.as_deref(), Some("E0425"));
+    assert_eq!(result.diagnostics[1].severity, DiagnosticSeverity::Warning);
+    assert_eq!(result.diagnostics[1].source, None);
+    assert_eq!(result.diagnostics[1].code, None);
+}
+
+#[test]
+fn a_diagnostic_with_no_severity_renders_as_a_warning_not_a_guess() {
+    use crate::lsp::protocol::decode_diagnostics;
+
+    let items = decode_diagnostics(serde_json::json!({
+        "kind": "full",
+        "items": [
+            { "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+              "message": "no severity here" }
+        ]
+    }))
+    .expect("legal");
+    let result = diagnostics(&items);
+    assert_eq!(result.diagnostics[0].severity, DiagnosticSeverity::Warning);
+}
+
+#[test]
+fn a_clean_file_is_a_ready_empty_diagnostics_list() {
+    let result = diagnostics(&[]);
+    assert_eq!(result.outcome, Availability::Ready);
+    assert!(result.diagnostics.is_empty());
+    assert_eq!(result.message, None);
 }

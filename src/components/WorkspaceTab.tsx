@@ -21,6 +21,7 @@ import { SearchEverywhere } from "./SearchEverywhere";
 import { Occluder } from "./occlusionContext";
 import { SetupPrompt } from "./SetupPrompt";
 import { McpServerPanel } from "./McpServerPanel";
+import { RoslynMcpPanel } from "./RoslynMcpPanel";
 import { SqlPanel } from "./SqlPanel";
 import { TasksPanel } from "./TasksPanel";
 import { shouldPrompt, setDismissed } from "./setupPromptLogic";
@@ -161,6 +162,15 @@ export interface WorkspaceTabHandle {
    * so calling this while `tasks` is off does nothing.
    */
   openTasks(): void;
+  /**
+   * Open the Roslyn / LSP MCP server's installer for this codebase.
+   *
+   * Part of the handle for the same reason `openMcp` is: the Plugins menu is
+   * global titlebar chrome and this acts on the foreground codebase (a
+   * project-scope install writes `.mcp.json` at its root). Unlike `openMcp`
+   * there is no feature gate — the language server is always-on.
+   */
+  openRoslynMcp(): void;
 }
 
 /**
@@ -338,6 +348,13 @@ export function WorkspaceTab({
   useEffect(() => {
     if (!mcpEnabled) setMcpPanelOpen(false);
   }, [mcpEnabled]);
+
+  // The Roslyn / LSP MCP server's installer. Unlike the SQL one there is no
+  // feature gate: the language server is always-on, so the panel is
+  // unconditional. A transient modal, so closing it is an unmount and nothing is
+  // lost by that.
+  const [roslynMcpPanelOpen, setRoslynMcpPanelOpen] = useState(false);
+  const openRoslynMcp = () => setRoslynMcpPanelOpen(true);
 
   /**
    * Keep the selected tab on something that still exists. Turning off the
@@ -726,6 +743,7 @@ export function WorkspaceTab({
     openMcp,
     openBrowser,
     openTasks,
+    openRoslynMcp,
   });
   handleRef.current = {
     openTerminal,
@@ -739,6 +757,7 @@ export function WorkspaceTab({
     openMcp,
     openBrowser,
     openTasks,
+    openRoslynMcp,
   };
   useEffect(() => {
     const stable: WorkspaceTabHandle = {
@@ -754,6 +773,7 @@ export function WorkspaceTab({
       openMcp: () => handleRef.current.openMcp(),
       openBrowser: () => handleRef.current.openBrowser(),
       openTasks: () => handleRef.current.openTasks(),
+      openRoslynMcp: () => handleRef.current.openRoslynMcp(),
     };
     onRegister(workspace.root, stable);
     return () => onRegister(workspace.root, null);
@@ -962,6 +982,16 @@ export function WorkspaceTab({
         <>
           <Occluder />
           <McpServerPanel onClose={() => setMcpPanelOpen(false)} />
+        </>
+      )}
+
+      {/* The Roslyn / LSP MCP installer. No feature gate — the language server is
+          always-on, so the panel is unconditional. A modal, so closing it is an
+          unmount. */}
+      {roslynMcpPanelOpen && (
+        <>
+          <Occluder />
+          <RoslynMcpPanel onClose={() => setRoslynMcpPanelOpen(false)} />
         </>
       )}
 

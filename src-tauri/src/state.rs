@@ -121,6 +121,19 @@ pub struct AppState {
     /// the main thread's `thread_local!`.
     #[cfg(windows)]
     browser_pipe: Mutex<Option<crate::browser::pipe::PipeListener>>,
+
+    /// The Roslyn/LSP control pipe — the one an agent's `mcp-roslyn` server
+    /// reaches this application through.
+    ///
+    /// **Tied to the process, not to any panel**, unlike [`Self::browser_pipe`]:
+    /// the semantic model is per-workspace but the pipe is one per application,
+    /// opened once at startup and never taken down while the app runs. Every call
+    /// resolves its own `--workspace` afresh through [`Self::lsp_for_root`], so a
+    /// live application always carries a listener and there is no "panel closed"
+    /// state to publish. Ordinary `Send + Sync` data — a join handle and a flag —
+    /// exactly as `browser_pipe` is.
+    #[cfg(windows)]
+    roslyn_pipe: Mutex<Option<crate::roslyn::pipe::PipeListener>>,
 }
 
 impl Default for AppState {
@@ -140,6 +153,8 @@ impl Default for AppState {
             browser: Mutex::new(HashMap::new()),
             #[cfg(windows)]
             browser_pipe: Mutex::new(None),
+            #[cfg(windows)]
+            roslyn_pipe: Mutex::new(None),
         }
     }
 }
@@ -223,6 +238,17 @@ impl WorkspaceSlot {
             .lock()
             .map(|w| w.clone())
             .unwrap_or_else(|p| p.into_inner().clone())
+    }
+
+    /// A clone of this slot's language-server handle, if one has been published.
+    ///
+    /// Unlike [`Self::take_lsp`], leaves the handle in place: the Roslyn MCP pipe
+    /// resolves a workspace's session per call and must not disturb it.
+    pub fn lsp(&self) -> Option<LspHandle> {
+        self.lsp
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Take this slot's language-server handle out, for teardown on close.
@@ -636,6 +662,29 @@ impl AppState {
         store.clone()
     }
 
+    /// A handle on **a named** workspace's session, if that workspace is open and
+    /// has published one.
+    ///
+    /// The Roslyn MCP pipe answers by `--workspace`, not by the active pointer, so
+    /// it resolves the session for the repository the agent was scoped to
+    /// regardless of which window is in front. `None` means the workspace is not
+    /// open, or its session is torn down (or never started for a language) — the
+    /// caller turns that into the [`cb_core::roslyn::answer::RoslynRefusal::NoSession`]
+    /// refusal.
+    ///
+    /// Tries the path as given first, then its canonical form, because the
+    /// registry publishes `Workspace.root.display()` and the slot map is keyed by
+    /// the canonical root — the two agree for an ordinary path but a
+    /// canonicalize fallback keeps a separator or short-name difference from
+    /// reading as "not open".
+    pub fn lsp_for_root(&self, root: &Path) -> Option<LspHandle> {
+        if let Some(handle) = self.slot(root).and_then(|slot| slot.lsp()) {
+            return Some(handle);
+        }
+        let canonical = dunce::canonicalize(root).ok()?;
+        self.slot(&canonical).and_then(|slot| slot.lsp())
+    }
+
     /// The active workspace's root, or `None` when nothing is open.
     ///
     /// A thin clone of the active pointer, exposed for the browser host's
@@ -765,6 +814,42 @@ impl AppState {
     #[cfg(windows)]
     pub fn clear_browser_pipe(&self) {
         self.set_browser_pipe(None);
+    }
+
+    /// The listener currently published for the Roslyn control pipe, if any.
+    ///
+    /// Read whenever the registry entry is republished — a workspace opening or
+    /// closing changes the `workspaces` list but not the pipe, which is
+    /// process-global and outlives every individual workspace.
+    #[cfg(windows)]
+    pub fn roslyn_pipe_published(&self) -> Option<cb_core::roslyn::instances::Listener> {
+        self.roslyn_pipe
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|p| p.published())
+    }
+
+    /// Hand the Roslyn control pipe over to this state, stopping whatever was
+    /// there.
+    ///
+    /// Replacing rather than refusing, exactly as [`Self::set_browser_pipe`]: the
+    /// pipe name carries the pid so a second could never bind, and a stale
+    /// listener must not be left running beside a new one.
+    #[cfg(windows)]
+    pub fn set_roslyn_pipe(&self, listener: Option<crate::roslyn::pipe::PipeListener>) {
+        let previous = {
+            let mut slot = self
+                .roslyn_pipe
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            std::mem::replace(&mut *slot, listener)
+        };
+        // Stopped after the guard is dropped: `stop` aborts a task, and holding a
+        // `std::sync::Mutex` across that is the shape to avoid.
+        if let Some(previous) = previous {
+            previous.stop();
+        }
     }
 
     /// Read one codebase's browser data without an `AppHandle` and without

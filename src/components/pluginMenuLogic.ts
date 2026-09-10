@@ -21,7 +21,8 @@ export type PluginAction =
   | { kind: "ask" }
   | { kind: "mcp" }
   | { kind: "browser" }
-  | { kind: "tasks" };
+  | { kind: "tasks" }
+  | { kind: "roslynMcp" };
 
 export interface PluginRow {
   /** The command id this row corresponds to, and the React key. */
@@ -42,7 +43,13 @@ export interface PluginRow {
  * hard-coded SQL button.
  */
 interface PluginEntry {
-  feature: FeatureKey;
+  /**
+   * The optional feature that gates the row, or `null` for an **always-on**
+   * plugin — one backed by something the app always runs, so there is no feature
+   * to switch off. The Roslyn/LSP server is the first of these: the language
+   * server is always warm, so its installer is unconditional.
+   */
+  feature: FeatureKey | null;
   /** The command that opens it; also the row's id, so Settings and this agree. */
   commandId: string;
   action: PluginAction;
@@ -52,6 +59,12 @@ interface PluginEntry {
   ready: string;
   /** Shown when it needs a codebase and there is none. */
   noWorkspace: string;
+  /**
+   * The key into `PLUGIN_LABELS` for the row's name. Defaults to `feature` (a
+   * `FeatureKey` is always a `PLUGIN_LABELS` key), but an always-on plugin has
+   * no feature, so it names its own key here.
+   */
+  labelKey?: string;
 }
 
 const PLUGINS: PluginEntry[] = [
@@ -111,6 +124,20 @@ const PLUGINS: PluginEntry[] = [
     ready: "Open the task list for the active codebase",
     noWorkspace: "Open a codebase to manage its tasks",
   },
+  {
+    // Always-on: the app keeps a warm per-workspace Roslyn/LSP session, so the
+    // installer that points an agent at it has no optional feature to gate on —
+    // it is present whatever the other plugins are set to. It still needs a
+    // codebase, because a project-scope install writes `.mcp.json` at a
+    // repository root and the status is read per repository.
+    feature: null,
+    labelKey: "mcpRoslyn",
+    commandId: "plugin.roslyn",
+    action: { kind: "roslynMcp" },
+    needsWorkspace: true,
+    ready: "Let a coding agent read this codebase's semantic model, over MCP",
+    noWorkspace: "Open a codebase to install the Roslyn MCP server for it",
+  },
 ];
 
 export interface PluginMenuState {
@@ -137,11 +164,14 @@ export function pluginMenuRows(state: PluginMenuState): PluginRow[] {
   if (state.features === null) return [];
   const rows: PluginRow[] = [];
   for (const plugin of PLUGINS) {
-    if (!featureEnabled(state.features, plugin.feature)) continue;
+    // A `null` feature is an always-on plugin: it has nothing to switch off, so
+    // it is never filtered out here.
+    if (plugin.feature !== null && !featureEnabled(state.features, plugin.feature)) continue;
+    const labelKey = plugin.labelKey ?? plugin.feature ?? plugin.commandId;
     const blocked = plugin.needsWorkspace && !state.workspaceOpen;
     rows.push({
       id: plugin.commandId,
-      label: PLUGIN_LABELS[plugin.feature] ?? plugin.feature,
+      label: PLUGIN_LABELS[labelKey] ?? labelKey,
       title: blocked ? plugin.noWorkspace : plugin.ready,
       disabled: blocked,
       action: blocked ? null : plugin.action,

@@ -79,6 +79,16 @@ gitignored (private to the machine). **Assign to AI** persists `owner = ai` then
 launches the agent in an interactive terminal with the task as the prompt;
 **Assign to me** only persists `owner = me`.
 
+The Roslyn MCP server (`mcp-roslyn`, opened as a Plugins-menu panel) exposes four
+**read-only** code-intelligence tools — `find_references`, `get_type_hierarchy`,
+`resolve_overloads`, `get_diagnostics` — to a coding agent by forwarding each call over a
+per-pid named pipe to the running app's already-warm language-server session, rather than
+starting its own. It is scoped by `--workspace` (the consent boundary) and installs into
+the same agent configs as the SQL and Tasks servers with a preview-then-apply flow. Every
+tool is capability-gated and **abstains** (`Unsupported`) for a language whose server does
+not support it; a symbol whose position is ambiguous is refused and listed, never guessed;
+and no internal error text crosses to the agent.
+
 App-owned shortcuts are declared in `src/shortcutLogic.ts` and dispatched by
 `src/shortcuts.ts`. A command shown in Settings must have a registered handler
 or a stable `data-command` target. Editor and terminal native shortcuts are

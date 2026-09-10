@@ -76,7 +76,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/browser/instances_tests.rs` | 477 |  |
 | `crates/core/src/browser/ipc.rs` | 334 | Every byte the page sends back. **This is the attack surface.** |
 | `crates/core/src/browser/ipc_tests.rs` | 379 | The hostile-input boundary. Included by `ipc.rs`. |
-| `crates/core/src/browser/liveness.rs` | 71 | The one platform seam of the browser instance registry: is this entry's |
+| `crates/core/src/browser/liveness.rs` | 39 | The one platform seam of the browser instance registry: is this entry's |
 | `crates/core/src/browser/liveness_tests.rs` | 95 |  |
 | `crates/core/src/browser/mod.rs` | 105 | The embedded browser: every decision it makes, none of the machinery it |
 | `crates/core/src/browser/model.rs` | 309 | The browser types that cross IPC, and the distinctions they exist to keep. |
@@ -198,8 +198,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/launcher/recents_tests.rs` | 343 |  |
 | `crates/core/src/launcher/store.rs` | 90 | The launchers file on disk: `<config>/code-basics/launchers.json`. |
 | `crates/core/src/launcher/store_tests.rs` | 93 |  |
-| `crates/core/src/lib.rs` | 52 | Core logic for `code-basics`. |
-| `crates/core/src/lsp/client.rs` | 1295 | One language server, from handshake to shutdown, as questions and answers. |
+| `crates/core/src/lib.rs` | 53 | Core logic for `code-basics`. |
+| `crates/core/src/lsp/client.rs` | 1404 | One language server, from handshake to shutdown, as questions and answers. |
 | `crates/core/src/lsp/client_tests.rs` | 658 | Unit tests for the parts of the client that need no server. |
 | `crates/core/src/lsp/documents.rs` | 370 | What each server has been told about each open document. |
 | `crates/core/src/lsp/documents_tests.rs` | 598 | Every ordering rule this module claims to obey, one test each. |
@@ -210,20 +210,20 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/lsp/jsonrpc.rs` | 212 | JSON-RPC 2.0, and nothing about LSP. |
 | `crates/core/src/lsp/jsonrpc_tests.rs` | 198 |  |
 | `crates/core/src/lsp/mod.rs` | 174 | Talking to real language servers, so "find usages" can be right. |
-| `crates/core/src/lsp/model.rs` | 544 | The types that cross the IPC boundary for this feature. |
-| `crates/core/src/lsp/model_tests.rs` | 608 | The wire shape of everything this subsystem sends the frontend. |
+| `crates/core/src/lsp/model.rs` | 781 | The types that cross the IPC boundary for this feature. |
+| `crates/core/src/lsp/model_tests.rs` | 921 | The wire shape of everything this subsystem sends the frontend. |
 | `crates/core/src/lsp/positions.rs` | 231 | Counting characters and lines the way LSP does, and the way this app does. |
 | `crates/core/src/lsp/positions_tests.rs` | 342 |  |
-| `crates/core/src/lsp/protocol.rs` | 1198 | The LSP messages this app actually uses, and nothing else. |
-| `crates/core/src/lsp/protocol_tests.rs` | 1740 |  |
+| `crates/core/src/lsp/protocol.rs` | 1544 | The LSP messages this app actually uses, and nothing else. |
+| `crates/core/src/lsp/protocol_tests.rs` | 2035 |  |
 | `crates/core/src/lsp/registry.rs` | 1061 | Which server serves which file, where it is, and what to say when it is absent. |
 | `crates/core/src/lsp/registry_tests.rs` | 1325 |  |
 | `crates/core/src/lsp/rename.rs` | 639 | Turning a server's `WorkspaceEdit` into files on disk, or refusing to. |
 | `crates/core/src/lsp/rename_tests.rs` | 929 | The two phases, every refusal, and the rollback. |
-| `crates/core/src/lsp/results.rs` | 398 | LSP payloads in, the types the frontend reads out. |
-| `crates/core/src/lsp/results_tests.rs` | 670 | Every rule this module claims to obey, one test each. |
-| `crates/core/src/lsp/session.rs` | 1947 | Every language server for one workspace, behind one actor. |
-| `crates/core/src/lsp/session_tests.rs` | 536 | The session's pure decisions, headlessly. |
+| `crates/core/src/lsp/results.rs` | 546 | LSP payloads in, the types the frontend reads out. |
+| `crates/core/src/lsp/results_tests.rs` | 822 | Every rule this module claims to obey, one test each. |
+| `crates/core/src/lsp/session.rs` | 2295 | Every language server for one workspace, behind one actor. |
+| `crates/core/src/lsp/session_tests.rs` | 629 | The session's pure decisions, headlessly. |
 | `crates/core/src/lsp/settings.rs` | 159 | The per-workspace language-server configuration block. |
 | `crates/core/src/lsp/settings_tests.rs` | 172 |  |
 | `crates/core/src/lsp/transport.rs` | 1087 | One live server process, and the bytes going in and out of it. |
@@ -246,7 +246,9 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/mcp/install/mod_tests.rs` | 86 |  |
 | `crates/core/src/mcp/install/plan.rs` | 233 | The install, the uninstall, the status and the caveats — mirroring |
 | `crates/core/src/mcp/install/plan_tests.rs` | 316 |  |
-| `crates/core/src/mcp/mod.rs` | 71 | The SQL MCP server: what an agent may ask this app's databases, and what it |
+| `crates/core/src/mcp/liveness.rs` | 70 | Is a registry entry's process still the executable it recorded? |
+| `crates/core/src/mcp/liveness_tests.rs` | 58 |  |
+| `crates/core/src/mcp/mod.rs` | 72 | The SQL MCP server: what an agent may ask this app's databases, and what it |
 | `crates/core/src/mcp/ndjson.rs` | 148 | Line-delimited JSON framing: the MCP stdio wire. |
 | `crates/core/src/mcp/ndjson_tests.rs` | 144 |  |
 | `crates/core/src/mcp/render.rs` | 283 | Turning an answer into the words an agent reads. |
@@ -274,6 +276,27 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/qgate/mod.rs` | 502 | The quality-gate Stop hook: deterministic checks when an agent turn ends. |
 | `crates/core/src/review.rs` | 429 | Assembling the command line for an in-app adversarial review. |
 | `crates/core/src/review_tests.rs` | 573 | Tests for [`crate::review`] — the pure, agent-aware command-line assembly for |
+| `crates/core/src/roslyn/answer.rs` | 159 | Every answer this server can give that is not data — and they are all |
+| `crates/core/src/roslyn/answer_tests.rs` | 119 |  |
+| `crates/core/src/roslyn/argv.rs` | 88 | Is this process the Roslyn MCP server, or the application? |
+| `crates/core/src/roslyn/argv_tests.rs` | 128 |  |
+| `crates/core/src/roslyn/install.rs` | 238 | Writing the Roslyn MCP server into an agent's configuration. |
+| `crates/core/src/roslyn/install_tests.rs` | 314 |  |
+| `crates/core/src/roslyn/instances.rs` | 425 | Which running application an MCP Roslyn client should talk to — and the five |
+| `crates/core/src/roslyn/instances_tests.rs` | 417 |  |
+| `crates/core/src/roslyn/liveness.rs` | 37 | The one platform seam of the Roslyn instance registry: is this entry's |
+| `crates/core/src/roslyn/liveness_tests.rs` | 75 |  |
+| `crates/core/src/roslyn/mod.rs` | 66 | The Roslyn/LSP MCP server: the app's warm semantic model, exposed to a coding |
+| `crates/core/src/roslyn/render.rs` | 270 | Turning an LSP result into the words an agent reads. |
+| `crates/core/src/roslyn/render_tests.rs` | 346 |  |
+| `crates/core/src/roslyn/serve.rs` | 112 | The Roslyn MCP server's handshake, and the shape of every answer it sends. |
+| `crates/core/src/roslyn/serve_tests.rs` | 109 |  |
+| `crates/core/src/roslyn/symbol.rs` | 131 | Resolving a `{symbol}` target to a position, using a file's declaration |
+| `crates/core/src/roslyn/symbol_tests.rs` | 96 | Tests for resolving a `{symbol}` target against a file's declaration anchors. |
+| `crates/core/src/roslyn/tools.rs` | 382 | The four Roslyn tools, their schemas, and how a call is read. |
+| `crates/core/src/roslyn/tools_tests.rs` | 377 |  |
+| `crates/core/src/roslyn/wire.rs` | 297 | What travels on the Roslyn control pipe, in both directions. |
+| `crates/core/src/roslyn/wire_tests.rs` | 259 |  |
 | `crates/core/src/rules/mod.rs` | 149 | Business-rule invariants, authored as markdown and injected as review |
 | `crates/core/src/rules/rules_tests.rs` | 138 | Tests for rule-doc parsing and loading. |
 | `crates/core/src/running/classify.rs` | 79 | The pure decision behind orphan detection: given records reloaded from disk |
@@ -373,7 +396,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/tests/sql_mssql.rs` | 733 | The SQL Server half of the SQL console, against a real server. |
 | `crates/core/tests/sql_postgres.rs` | 811 | The PostgreSQL half of the SQL subsystem's end-to-end proof. |
 | `crates/core/tests/sql_sqlite.rs` | 1073 | The first test in the SQL subsystem that touches a real database. |
-| `src/App.tsx` | 1474 |  |
+| `src/App.tsx` | 1475 |  |
 | `src/appearance.ts` | 87 |  |
 | `src/appearanceLogic.test.ts` | 89 |  |
 | `src/appearanceLogic.ts` | 196 |  |
@@ -417,6 +440,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/RegionSplitter.tsx` | 53 |  |
 | `src/components/ReviewPanel.tsx` | 499 |  |
 | `src/components/RiderImportDialog.tsx` | 135 |  |
+| `src/components/RoslynMcpPanel.tsx` | 223 |  |
 | `src/components/RunConfigMenu.tsx` | 183 |  |
 | `src/components/RunningPanel.tsx` | 248 |  |
 | `src/components/SearchEverywhere.tsx` | 497 |  |
@@ -432,7 +456,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/TerminalPanel.tsx` | 615 |  |
 | `src/components/TerminalView.tsx` | 178 |  |
 | `src/components/TestTree.tsx` | 125 |  |
-| `src/components/WorkspaceTab.tsx` | 1013 |  |
+| `src/components/WorkspaceTab.tsx` | 1043 |  |
 | `src/components/aboutLogic.test.ts` | 134 |  |
 | `src/components/aboutLogic.ts` | 140 | The string composition behind the About dialog. |
 | `src/components/appOutputLogic.test.ts` | 279 |  |
@@ -495,8 +519,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/components/notificationLogic.test.ts` | 169 |  |
 | `src/components/notificationLogic.ts` | 161 | The app's notification service: what deserves a notification, what it says, |
 | `src/components/occlusionContext.tsx` | 84 | Tells the embedded browser panel when some DOM surface is on screen that the |
-| `src/components/pluginMenuLogic.test.ts` | 202 |  |
-| `src/components/pluginMenuLogic.ts` | 166 | The **Plugins** titlebar menu: what the optional features offer, and whether |
+| `src/components/pluginMenuLogic.test.ts` | 244 |  |
+| `src/components/pluginMenuLogic.ts` | 196 | The **Plugins** titlebar menu: what the optional features offer, and whether |
 | `src/components/projectViewLogic.test.ts` | 171 |  |
 | `src/components/projectViewLogic.ts` | 222 | Pure decisions for the merged **Project** tab — the view that puts the old |
 | `src/components/regionLayoutLogic.test.ts` | 188 |  |
@@ -545,14 +569,14 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/editorFontSize.ts` | 52 | Applying the editor font size, and telling live editors it moved. |
 | `src/editorFontSizeLogic.test.ts` | 114 |  |
 | `src/editorFontSizeLogic.ts` | 94 | The one font size every CodeMirror editor in the app reads. |
-| `src/ipc/api.ts` | 1583 | Typed wrappers over the Tauri command surface. |
-| `src/ipc/types.ts` | 2729 | TypeScript mirrors of the `cb-core` model types. |
+| `src/ipc/api.ts` | 1612 | Typed wrappers over the Tauri command surface. |
+| `src/ipc/types.ts` | 2846 | TypeScript mirrors of the `cb-core` model types. |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
 | `src/reexportGuards.test.ts` | 23 | / <reference types="vite/client" /> |
 | `src/shortcutLogic.test.ts` | 133 |  |
-| `src/shortcutLogic.ts` | 334 |  |
+| `src/shortcutLogic.ts` | 338 |  |
 | `src/shortcuts.ts` | 78 |  |
 | `src/views/ArchitectureView.tsx` | 679 |  |
 | `src/views/ChangesView.tsx` | 1062 |  |
@@ -636,6 +660,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/notes.rs` | 21 | Notes / scratchpad commands. |
 | `src-tauri/src/commands/qgate.rs` | 78 | Commands behind the installable quality-gate Stop hook. |
 | `src-tauri/src/commands/review.rs` | 369 | Launching an in-app adversarial review. |
+| `src-tauri/src/commands/roslyn_mcp.rs` | 94 | Commands behind the installable **Roslyn / LSP** MCP server. |
 | `src-tauri/src/commands/rules.rs` | 22 | Business-rule-doc command. |
 | `src-tauri/src/commands/run.rs` | 473 | Running applications and tests. |
 | `src-tauri/src/commands/running.rs` | 102 | The Running panel's bridge: list every process the app has running (across |
@@ -645,16 +670,23 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/symbols.rs` | 234 | The command palette's surface: searching the workspace, and asking after |
 | `src-tauri/src/commands/tasks.rs` | 349 | Commands behind the per-workspace Tasks panel and its installable MCP server. |
 | `src-tauri/src/commands/terminal.rs` | 277 | Interactive floating terminals. |
-| `src-tauri/src/commands/workspace.rs` | 258 | Workspace and configuration commands. |
-| `src-tauri/src/lib.rs` | 396 | The Tauri shell. |
+| `src-tauri/src/commands/workspace.rs` | 268 | Workspace and configuration commands. |
+| `src-tauri/src/lib.rs` | 431 | The Tauri shell. |
 | `src-tauri/src/main.rs` | 6 | Suppress the extra console window on Windows in release builds. |
 | `src-tauri/src/mcp_browser.rs` | 336 | The `mcp-browser` mode: this executable as an MCP stdio server that talks to |
 | `src-tauri/src/mcp_browser_tests.rs` | 189 |  |
+| `src-tauri/src/mcp_roslyn.rs` | 347 | The `mcp-roslyn` mode: this executable as an MCP stdio server that forwards |
+| `src-tauri/src/mcp_roslyn_tests.rs` | 63 |  |
 | `src-tauri/src/mcp_sql.rs` | 370 | The `mcp-sql` mode: this executable as an MCP stdio server. |
 | `src-tauri/src/mcp_tasks.rs` | 242 | The `mcp-tasks` mode: this executable as the Tasks MCP stdio server. |
 | `src-tauri/src/qgate_run.rs` | 240 | The `quality-gate` mode: deterministic checks when an agent turn ends. |
 | `src-tauri/src/recorder.rs` | 139 | The `record-intent` mode, which is what the installed hooks actually run. |
-| `src-tauri/src/state.rs` | 806 | Shared application state. |
+| `src-tauri/src/roslyn/agent.rs` | 135 | Answering an agent's Roslyn tool call: resolve the location, ask the warm |
+| `src-tauri/src/roslyn/mod.rs` | 46 | The application's side of the Roslyn MCP server: the process-global control |
+| `src-tauri/src/roslyn/pipe.rs` | 476 | The Roslyn control pipe: the one way an agent's `mcp-roslyn` server reaches |
+| `src-tauri/src/roslyn/pipe_tests.rs` | 80 |  |
+| `src-tauri/src/roslyn/registry.rs` | 124 | Publishing what an `mcp-roslyn` client needs to find this application. |
+| `src-tauri/src/state.rs` | 891 | Shared application state. |
 | `src-tauri/src/state_tests.rs` | 774 | Tests for the multi-workspace [`AppState`]. |
 | `scripts/build-sidecar.mjs` | 110 | Publish the object-inspector sidecar into the Tauri bundle. |
 | `scripts/check-docs.mjs` | 70 | Documentation health check. |
@@ -685,6 +717,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - **intents** (`src-tauri/src/commands/intents.rs`): `intent_groups`, `stage_intent_group`, `revert_intent_group`, `reject_intent_group`, `intent_capture_status`, `intent_install_plan`, `enable_intent_capture`, `intent_uninstall_plan`, `disable_intent_capture`, `import_intent_history`, `intent_prune_preview`, `prune_intent_history`, `clear_intent_history`, `set_card_intent`, `clear_card_intent`, `move_card_edits`
 - **mcp** (`src-tauri/src/commands/mcp.rs`): `mcp_server_status`, `mcp_server_install_plan`, `install_mcp_server`, `mcp_server_uninstall_plan`, `uninstall_mcp_server`
 - **browser_mcp** (`src-tauri/src/commands/browser_mcp.rs`): `browser_mcp_status`, `browser_mcp_install_plan`, `install_browser_mcp`, `browser_mcp_uninstall_plan`, `uninstall_browser_mcp`
+- **roslyn_mcp** (`src-tauri/src/commands/roslyn_mcp.rs`): `roslyn_mcp_server_status`, `roslyn_mcp_server_install_plan`, `install_roslyn_mcp_server`, `roslyn_mcp_server_uninstall_plan`, `uninstall_roslyn_mcp_server`
 - **qgate** (`src-tauri/src/commands/qgate.rs`): `quality_gate_status`, `quality_gate_install_plan`, `install_quality_gate`, `quality_gate_uninstall_plan`, `uninstall_quality_gate`
 - **setup** (`src-tauri/src/commands/setup.rs`): `setup_install_plan`, `install_setup`
 - **behavioral** (`src-tauri/src/commands/behavioral.rs`): `behavioral_diff`, `behavioral_clear`
@@ -701,7 +734,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 
 ## Frontend IPC wrappers (`src/ipc/api.ts`)
 
-`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `fsCreateFile`, `fsCreateDir`, `fsRename`, `fsDelete`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `listFeatures`, `setFeature`, `readNotes`, `writeNotes`, `readTasks`, `createTask`, `updateTask`, `assignTask`, `completeTask`, `deleteTask`, `aboutInfo`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `startDebug`, `stopDebug`, `debugIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `agentInteractiveCommand`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listShells`, `listLaunchables`, `launchCommand`, `stopCommand`, `saveLaunchable`, `deleteLaunchable`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitAddWorktree`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashPaths`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `intentPrunePreview`, `pruneIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `moveCardEdits`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `mcpServerStatus`, `mcpServerInstallPlan`, `installMcpServer`, `mcpServerUninstallPlan`, `uninstallMcpServer`, `tasksMcpStatus`, `tasksMcpInstallPlan`, `installTasksMcpServer`, `tasksMcpUninstallPlan`, `uninstallTasksMcpServer`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspRestart`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `lspPrepareRename`, `lspRename`, `sqlListConnections`, `sqlDiscover`, `sqlSaveConnection`, `sqlDeleteConnection`, `sqlRenameConnection`, `sqlSetAllowWrites`, `sqlSetExposeToAgents`, `sqlTestConnection`, `sqlTestConnectionString`, `sqlListObjects`, `sqlListColumns`, `sqlExecute`, `sqlCancel`, `errorMessage`, `browserOpen`, `browserClose`, `browserSetBounds`, `browserSetVisible`, `browserNavigate`, `browserBack`, `browserForward`, `browserReload`, `browserState`, `browserConsole`, `browserNetwork`, `browserPageText`, `browserSetAutomationConsent`, `browserMcpStatus`, `browserMcpInstallPlan`, `installBrowserMcp`, `browserMcpUninstallPlan`, `uninstallBrowserMcp`
+`openWorkspace`, `currentWorkspace`, `rescanWorkspace`, `listOpenWorkspaces`, `setActiveWorkspace`, `closeWorkspace`, `saveConfig`, `deleteConfig`, `launchProfiles`, `setFavorite`, `setConfigOrder`, `readProjectSecrets`, `writeProjectSecrets`, `previewRiderImport`, `applyRiderImport`, `fsListDir`, `fsReadFile`, `fsWriteFile`, `fsCreateFile`, `fsCreateDir`, `fsRename`, `fsDelete`, `listEnhancements`, `addEnhancement`, `removeEnhancement`, `listPrompts`, `agentRuns`, `markAgentRun`, `saveNoteAsInstruction`, `listFeatures`, `setFeature`, `readNotes`, `writeNotes`, `readTasks`, `createTask`, `updateTask`, `assignTask`, `completeTask`, `deleteTask`, `aboutInfo`, `startRun`, `buildProject`, `cancelRun`, `runningIds`, `startDebug`, `stopDebug`, `debugIds`, `runTests`, `lastTestRun`, `coverageOfChange`, `startReview`, `cancelReview`, `reviewAgents`, `agentInteractiveCommand`, `terminalOpen`, `terminalSetLabel`, `terminalWrite`, `terminalResize`, `terminalClose`, `terminalList`, `listShells`, `listLaunchables`, `launchCommand`, `stopCommand`, `saveLaunchable`, `deleteLaunchable`, `listRunning`, `killRunning`, `gitStatus`, `gitFileDiff`, `gitFileContents`, `gitWriteFile`, `gitStageFile`, `gitUnstageFile`, `gitStageLines`, `gitUnstageLines`, `gitRevertLines`, `gitDiscardFile`, `gitCommit`, `gitBranches`, `gitCreateBranch`, `gitCheckoutBranch`, `gitAddWorktree`, `gitCheckoutRemoteBranch`, `gitDeleteBranch`, `gitMergeBranch`, `gitAbortMerge`, `gitChangelists`, `gitCreateChangelist`, `gitDeleteChangelist`, `gitRenameChangelist`, `gitAssignToChangelist`, `gitHistory`, `gitCommitDiff`, `gitCommitFileContents`, `gitCommitFileWhy`, `gitStashSave`, `gitStashPaths`, `gitStashList`, `gitStashPop`, `gitStashApply`, `gitStashDrop`, `gitStashClear`, `gitNetwork`, `intentGroups`, `erosionScan`, `listRules`, `stageIntentGroup`, `revertIntentGroup`, `rejectIntentGroup`, `intentCaptureStatus`, `intentInstallPlan`, `enableIntentCapture`, `intentUninstallPlan`, `disableIntentCapture`, `importIntentHistory`, `intentPrunePreview`, `pruneIntentHistory`, `clearIntentHistory`, `setCardIntent`, `clearCardIntent`, `moveCardEdits`, `qualityGateStatus`, `qualityGateInstallPlan`, `installQualityGate`, `qualityGateUninstallPlan`, `uninstallQualityGate`, `mcpServerStatus`, `mcpServerInstallPlan`, `installMcpServer`, `mcpServerUninstallPlan`, `uninstallMcpServer`, `tasksMcpStatus`, `tasksMcpInstallPlan`, `installTasksMcpServer`, `tasksMcpUninstallPlan`, `uninstallTasksMcpServer`, `setupInstallPlan`, `installSetup`, `behavioralDiff`, `behavioralClear`, `inspectStatus`, `inspectCapture`, `inspectAttachable`, `inspectRunDump`, `inspectLast`, `inspectClear`, `searchEverywhere`, `symbolIndexStatus`, `rebuildSymbolIndex`, `archProjectGraph`, `archRenderGraph`, `archComponentGraph`, `archRenderComponentGraph`, `archListDiagrams`, `archReadDiagram`, `archWriteDiagram`, `archValidate`, `lspStatus`, `lspRestart`, `lspOpenDocument`, `lspChangeDocument`, `lspCloseDocument`, `lspFindUsages`, `lspGotoDefinition`, `lspDeclarationAnchors`, `lspPrepareRename`, `lspRename`, `sqlListConnections`, `sqlDiscover`, `sqlSaveConnection`, `sqlDeleteConnection`, `sqlRenameConnection`, `sqlSetAllowWrites`, `sqlSetExposeToAgents`, `sqlTestConnection`, `sqlTestConnectionString`, `sqlListObjects`, `sqlListColumns`, `sqlExecute`, `sqlCancel`, `errorMessage`, `browserOpen`, `browserClose`, `browserSetBounds`, `browserSetVisible`, `browserNavigate`, `browserBack`, `browserForward`, `browserReload`, `browserState`, `browserConsole`, `browserNetwork`, `browserPageText`, `browserSetAutomationConsent`, `browserMcpStatus`, `browserMcpInstallPlan`, `installBrowserMcp`, `browserMcpUninstallPlan`, `uninstallBrowserMcp`, `roslynMcpStatus`, `roslynMcpInstallPlan`, `installRoslynMcp`, `roslynMcpUninstallPlan`, `uninstallRoslynMcp`
 
 ## Public core API (`cb-core`)
 
@@ -736,7 +769,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/browser/install.rs`: `browser_mcp_entry()`, `status_for()`, `install_plan_for()`, `uninstall_plan_for()`, `caveats_for()`
 - `crates/core/src/browser/instances.rs`: `Listener`, `pipe_name()`, `BrowserInstance`, `InstancesFile`, `InstanceError`, `code()`, `sentence()`, `instances_path()`, `load()`, `save()`, `upsert()`, `remove()`, `choose_instance()`
 - `crates/core/src/browser/ipc.rs`: `PageMessage`, `PageMessageProblem`, `parse_page_message()`, `accept_eval_reply()`
-- `crates/core/src/browser/liveness.rs`: `alive()`, `same_executable()`
+- `crates/core/src/browser/liveness.rs`: `alive()`
 - `crates/core/src/browser/model.rs`: `BrowserAvailability`, `licenses_a_read()`, `reason()`, `ConsoleLevel`, `ConsoleEntry`, `NetworkSource`, `NetworkEntry`, `PageText`, `AutomationConsent`, `ConsentWire`, `none()`, `reads_only()`, `reads_and_writes()`, `reads()`, `writes()`, `origin()`, `after_origin_change()`
 - `crates/core/src/browser/origin.rs`: `NavigationVerdict`, `allowed()`, `Refusal`, `navigation_verdict()`, `origin_of()`, `same_origin()`
 - `crates/core/src/browser/render.rs`: `AgentStatus`, `status()`, `current_url()`, `page_text()`, `outline()`, `console()`, `network()`, `acted()`, `navigated()`, `history_step()`
@@ -797,18 +830,18 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/launcher/parse.rs`: `Tokens`, `tokenise()`, `split_command()`, `shell_flag()`, `shell_args()`, `program_and_args()`
 - `crates/core/src/launcher/recents.rs`: `record_run()`, `group()`, `within_root()`, `rename()`, `set_pinned()`, `set_flags()`, `remove()`, `find()`
 - `crates/core/src/launcher/store.rs`: `launchers_path()`, `load()`, `save()`
-- `crates/core/src/lsp/client.rs`: `ReadyState`, `is_ready()`, `StartFailure`, `RequestError`, `Client`, `start()`, `start_with_ceiling()`, `spec()`, `root()`, `root_uri()`, `capabilities()`, `pid()`, `death()`, `stderr_tail()`, `readiness()`, `wait_ready()`, `shutdown()`, `did_open()`, `did_change()`, `did_close()`, `document_version()`, `references()`, `definition()`, `implementation()`, `type_definition()`, `document_symbols()`, `prepare_rename()`, `rename()`
+- `crates/core/src/lsp/client.rs`: `ReadyState`, `is_ready()`, `StartFailure`, `RequestError`, `Client`, `start()`, `start_with_ceiling()`, `spec()`, `root()`, `root_uri()`, `capabilities()`, `pid()`, `death()`, `stderr_tail()`, `readiness()`, `wait_ready()`, `shutdown()`, `did_open()`, `did_change()`, `did_close()`, `document_version()`, `references()`, `definition()`, `implementation()`, `type_definition()`, `document_symbols()`, `prepare_rename()`, `rename()`, `prepare_type_hierarchy()`, `type_supertypes()`, `type_subtypes()`, `signature_help()`, `diagnostics()`
 - `crates/core/src/lsp/documents.rs`: `SyncAction`, `server()`, `path()`, `Documents`, `new()`, `open()`, `change()`, `close()`, `replay_for()`, `text()`, `version()`, `is_open()`, `open_paths()`, `servers_for()`
 - `crates/core/src/lsp/edits.rs`: `EditError`, `plan()`, `apply()`, `replaced_texts()`
 - `crates/core/src/lsp/framing.rs`: `FramingError`, `encode()`, `Decoder`, `new()`, `with_limits()`, `buffered()`, `push()`
 - `crates/core/src/lsp/jsonrpc.rs`: `RequestId`, `RpcError`, `Incoming`, `ProtocolError`, `classify()`, `Outgoing`, `request()`, `notification()`, `reply()`, `error_reply()`
-- `crates/core/src/lsp/model.rs`: `Availability`, `UsageResult`, `unavailable()`, `with_server()`, `Usage`, `Highlight`, `DefinitionResult`, `unavailable()`, `Target`, `AnchorResult`, `unavailable()`, `DeclarationAnchor`, `RenameResult`, `unavailable()`, `with_server()`, `RangeEdit`, `RenamedFile`, `BufferEdits`, `RenameFailure`, `PrepareRenameResult`, `unavailable()`, `not_renameable()`, `with_server()`, `LspStatus`, `ServerStatus`
+- `crates/core/src/lsp/model.rs`: `Availability`, `UsageResult`, `unavailable()`, `with_server()`, `Usage`, `Highlight`, `DefinitionResult`, `unavailable()`, `Target`, `AnchorResult`, `unavailable()`, `DeclarationAnchor`, `RenameResult`, `unavailable()`, `with_server()`, `RangeEdit`, `RenamedFile`, `BufferEdits`, `RenameFailure`, `PrepareRenameResult`, `unavailable()`, `not_renameable()`, `with_server()`, `TypeNode`, `TypeHierarchyResult`, `unavailable()`, `with_server()`, `SignatureInfo`, `ParameterInfo`, `OverloadResult`, `unavailable()`, `with_server()`, `DiagnosticSeverity`, `DiagnosticRow`, `DiagnosticsResult`, `unavailable()`, `with_server()`, `LspStatus`, `ServerStatus`
 - `crates/core/src/lsp/positions.rs`: `utf16_to_byte()`, `byte_to_utf16()`, `byte_offset()`, `to_editor_line()`, `to_lsp_line()`, `Snippet`, `snippet()`
-- `crates/core/src/lsp/protocol.rs`: `Position`, `Range`, `TextEdit`, `Location`, `LocationLink`, `DecodeError`, `decode_goto()`, `DocumentEdits`, `ResourceOperation`, `WorkspaceEdit`, `decode_workspace_edit()`, `PrepareRenameResponse`, `decode_prepare_rename()`, `Symbol`, `decode_document_symbols()`, `symbol_kind()`, `SyncKind`, `ServerCapabilities`, `from_initialize_result()`, `encoding_is_utf16()`, `initialize_params()`, `TextDocumentIdentifier`, `VersionedTextDocumentIdentifier`, `TextDocumentItem`, `DidOpenTextDocumentParams`, `new()`, `TextDocumentContentChangeEvent`, `DidChangeTextDocumentParams`, `whole_document()`, `document_end()`, `DidCloseTextDocumentParams`, `new()`, `TextDocumentPositionParams`, `new()`, `ReferenceContext`, `ReferenceParams`, `new()`, `RenameParams`, `new()`, `DocumentSymbolParams`, `new()`
+- `crates/core/src/lsp/protocol.rs`: `Position`, `Range`, `TextEdit`, `Location`, `LocationLink`, `DecodeError`, `decode_goto()`, `DocumentEdits`, `ResourceOperation`, `WorkspaceEdit`, `decode_workspace_edit()`, `PrepareRenameResponse`, `decode_prepare_rename()`, `Symbol`, `decode_document_symbols()`, `symbol_kind()`, `TypeHierarchyItem`, `TypeHierarchyItemParams`, `new()`, `decode_type_hierarchy()`, `SignatureHelp`, `SignatureInformation`, `ParameterInformation`, `decode_signature_help()`, `Diagnostic`, `DocumentDiagnosticParams`, `new()`, `decode_diagnostics()`, `SyncKind`, `ServerCapabilities`, `from_initialize_result()`, `encoding_is_utf16()`, `initialize_params()`, `TextDocumentIdentifier`, `VersionedTextDocumentIdentifier`, `TextDocumentItem`, `DidOpenTextDocumentParams`, `new()`, `TextDocumentContentChangeEvent`, `DidChangeTextDocumentParams`, `whole_document()`, `document_end()`, `DidCloseTextDocumentParams`, `new()`, `TextDocumentPositionParams`, `new()`, `ReferenceContext`, `ReferenceParams`, `new()`, `RenameParams`, `new()`, `DocumentSymbolParams`, `new()`
 - `crates/core/src/lsp/registry.rs`: `RealProbe`, `Language`, `id()`, `from_ecosystem()`, `languages_present()`, `Readiness`, `Timeouts`, `ServerSpec`, `language_id_for()`, `Resolution`, `language_for_extension()`, `resolve()`, `Candidate`, `caller_args()`, `takes_caller_args()`, `parse_extension_version()`
 - `crates/core/src/lsp/rename.rs`: `RealFiles`, `new()`, `apply_workspace_edit()`, `enclosing_identifier()`
-- `crates/core/src/lsp/results.rs`: `usages()`, `targets()`, `anchors()`
-- `crates/core/src/lsp/session.rs`: `LspHandle`, `root()`, `generation()`, `status()`, `request_teardown()`, `open_document()`, `change_document()`, `close_document()`, `find_usages()`, `goto_definition()`, `declaration_anchors()`, `prepare_rename()`, `rename()`, `start()`, `start_with_probe()`
+- `crates/core/src/lsp/results.rs`: `usages()`, `targets()`, `anchors()`, `type_hierarchy()`, `overloads()`, `diagnostics()`
+- `crates/core/src/lsp/session.rs`: `LspHandle`, `root()`, `generation()`, `status()`, `request_teardown()`, `open_document()`, `change_document()`, `close_document()`, `find_usages()`, `goto_definition()`, `declaration_anchors()`, `prepare_rename()`, `rename()`, `find_references()`, `get_type_hierarchy()`, `resolve_overloads()`, `get_diagnostics()`, `start()`, `start_with_probe()`
 - `crates/core/src/lsp/settings.rs`: `LspConfig`, `server()`, `ServerOverride`, `is_disabled()`, `UriStyleSetting`, `style()`
 - `crates/core/src/lsp/transport.rs`: `DeathReason`, `Death`, `RequestFailure`, `Launch`, `Notification`, `Transport`, `spawn()`, `pid()`, `death()`, `watch_death()`, `notifications()`, `signal()`, `stderr_tail()`, `allocate_id()`, `is_pending()`, `request()`, `request_with_id()`, `notify()`, `cancel()`, `shutdown()`, `answer_for()`, `RestartDecision`, `RestartPolicy`, `new()`, `with_window()`, `is_failed()`, `on_death()`
 - `crates/core/src/lsp/uri.rs`: `UriStyle`, `to_file_uri()`, `from_file_uri()`
@@ -820,6 +853,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/mcp/install/mcp_merge.rs`: `merged_text()`, `merged_into_text()`, `removal_text()`, `plan_removal()`, `is_installed_in()`, `is_installed()`, `installed_state()`
 - `crates/core/src/mcp/install/mod.rs`: `read_existing()`, `McpConfigTarget`, `path()`, `config_target()`
 - `crates/core/src/mcp/install/plan.rs`: `status_for()`, `install_plan_for()`, `uninstall_plan_for()`, `caveats_for()`
+- `crates/core/src/mcp/liveness.rs`: `alive_by()`, `same_executable()`
 - `crates/core/src/mcp/ndjson.rs`: `NdjsonError`, `Line`, `encode()`, `LineDecoder`, `new()`, `with_limit()`, `is_poisoned()`, `push()`
 - `crates/core/src/mcp/render.rs`: `cap_notice()`, `result()`, `value()`, `enforcement()`, `strength()`, `connections()`, `tables()`, `columns()`, `status()`
 - `crates/core/src/mcp/serve.rs`: `negotiated_version()`, `initialize_result()`, `tools_list_result()`, `Route`, `route()`, `success()`, `failure()`, `parse_failure()`, `list_connections_answer()`, `catalog_objects()`, `catalog_columns()`
@@ -837,6 +871,16 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/qgate/install.rs`: `status()`, `status_for()`, `settings_path()`, `install_plan()`, `install_plan_for()`, `uninstall_plan()`, `uninstall_plan_for()`, `merged_into()`
 - `crates/core/src/qgate/mod.rs`: `Gate`, `label()`, `command()`, `gates_for_changes()`, `touched_source()`, `touched_memories()`, `should_remind_memories()`, `erosion_reminder()`, `GateVerdict`, `unresolved_packages()`, `declared_dependencies()`, `read_gate_output()`, `has_unresolved_rejection()`, `should_skip_for_loop()`, `has_typecheck_script()`, `is_quality_gate_invocation()`, `QGateInvocation`, `parse_qgate_args()`
 - `crates/core/src/review.rs`: `ReviewAgent`, `AgentMode`, `id()`, `from_id()`, `id()`, `label()`, `program()`, `models()`, `default_model()`, `from_id()`, `models_for()`, `codex_models()`, `parse_codex_models()`, `resolve_model()`, `compose_prompt()`, `resolve_prompt_body()`, `agent_args()`, `detect_agents()`, `agent_args_interactive()`
+- `crates/core/src/roslyn/answer.rs`: `RoslynRefusal`, `from_availability()`, `code()`, `sentence()`, `path_within_root()`
+- `crates/core/src/roslyn/argv.rs`: `is_mcp_roslyn_invocation()`, `McpRoslynInvocation`, `parse_mcp_roslyn_args()`
+- `crates/core/src/roslyn/install.rs`: `roslyn_mcp_entry()`, `status_for()`, `install_plan_for()`, `uninstall_plan_for()`, `caveats_for()`
+- `crates/core/src/roslyn/instances.rs`: `Listener`, `pipe_name()`, `RoslynInstance`, `has_workspace()`, `InstancesFile`, `InstanceError`, `code()`, `sentence()`, `instances_path()`, `load()`, `save()`, `upsert()`, `remove()`, `choose_instance()`
+- `crates/core/src/roslyn/liveness.rs`: `alive()`
+- `crates/core/src/roslyn/render.rs`: `find_references()`, `diagnostics()`, `type_hierarchy()`, `overloads()`
+- `crates/core/src/roslyn/serve.rs`: `initialize_result()`, `tools_list_result()`, `answer_result()`, `unknown_tool_answer()`
+- `crates/core/src/roslyn/symbol.rs`: `Located`, `locate_symbol()`
+- `crates/core/src/roslyn/tools.rs`: `descriptors()`, `Target`, `RoslynToolCall`, `path()`, `name()`, `parse_call()`, `is_known()`, `unknown_tool_sentence()`
+- `crates/core/src/roslyn/wire.rs`: `Request`, `ToolAnswer`, `ok()`, `refused()`, `request_value()`, `answer_value()`, `RequestProblem`, `code()`, `sentence()`, `answer()`, `parse_request()`, `token_matches()`, `PipeFailure`, `code()`, `sentence()`, `answer()`, `parse_answer()`
 - `crates/core/src/rules/mod.rs`: `RuleDoc`, `RulesReport`, `rules_dir()`, `parse_rule_doc()`, `load_rules()`
 - `crates/core/src/running/classify.rs`: `ProcInfo`, `OrphanClassification`, `classify_orphans()`, `identity_matches()`
 - `crates/core/src/running/mod.rs`: `RunMeta`, `observe()`
