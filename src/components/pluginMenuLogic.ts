@@ -20,7 +20,8 @@ export type PluginAction =
   | { kind: "sql" }
   | { kind: "ask" }
   | { kind: "mcp" }
-  | { kind: "browser" };
+  | { kind: "browser" }
+  | { kind: "tasks" };
 
 export interface PluginRow {
   /** The command id this row corresponds to, and the React key. */
@@ -98,6 +99,17 @@ const PLUGINS: PluginEntry[] = [
     needsWorkspace: true,
     ready: "Open a web page inside the active codebase",
     noWorkspace: "Open a codebase to open a web page in it",
+  },
+  {
+    // Needs a codebase because the task list is per-repository: the file lives
+    // under the opened workspace's `.code-basics/` and is gitignored, so there
+    // must be a codebase for the panel to read and write.
+    feature: "tasks",
+    commandId: "plugin.tasks",
+    action: { kind: "tasks" },
+    needsWorkspace: true,
+    ready: "Open the task list for the active codebase",
+    noWorkspace: "Open a codebase to manage its tasks",
   },
 ];
 

@@ -312,6 +312,9 @@ const IGNORED: &[&str] = &[
     // Run-once record: which "Run Agent" prompts finished on this machine.
     // Local state, not something to share through the repository.
     crate::enhancements::runs::RUNS_FILE,
+    // The per-workspace task list: one developer's personal to-do items for this
+    // repo, kept local exactly like `runs.json` rather than shared with the team.
+    crate::tasks::TASKS_FILE,
 ];
 
 /// Make sure `.code-basics/.gitignore` lists everything local.

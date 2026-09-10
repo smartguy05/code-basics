@@ -46,12 +46,14 @@ describe("windowBackgroundOpacity", () => {
     ).toBe(OPAQUE_PERCENT);
   });
 
-  it("is translucent on the welcome screen", () => {
-    // The emptiest editor area there is, and it has no editor to open. Making
-    // this the one opaque state would mean the app starts opaque, flashes
-    // translucent when a folder is opened, and goes opaque again on the first
-    // file — three changes to reach the state it should have started in.
-    expect(windowBackgroundOpacity({ ...base, activeRoot: null, editorTabsByRoot: {} })).toBe(60);
+  it("is opaque on the welcome screen", () => {
+    // No codebase is open, so there is nothing whose editor could report empty.
+    // Translucency begins only once an OPEN codebase reports an empty editor;
+    // the welcome screen stays fully opaque so the app does not start
+    // see-through before any folder is opened.
+    expect(windowBackgroundOpacity({ ...base, activeRoot: null, editorTabsByRoot: {} })).toBe(
+      OPAQUE_PERCENT,
+    );
   });
 
   it("is opaque for a codebase that has not reported its editor yet", () => {

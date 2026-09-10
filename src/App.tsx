@@ -1278,6 +1278,7 @@ export function App() {
                 if (row.action.kind === "ask") activeHandle()?.openAsk();
                 if (row.action.kind === "mcp") activeHandle()?.openMcp();
                 if (row.action.kind === "browser") activeHandle()?.openBrowser();
+                if (row.action.kind === "tasks") activeHandle()?.openTasks();
               }}
             >
               {row.label}

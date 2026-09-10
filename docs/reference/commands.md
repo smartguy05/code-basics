@@ -65,6 +65,29 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `read_notes` | — | `NotesFile` | The global notes; a missing or unreadable file is an empty set, not an error |
 | `write_notes` | `file: NotesFile` | `()` | Overwrite the global notes file, creating its directory if absent |
 
+## Tasks (plugin)
+
+`src-tauri/src/commands/tasks.rs` — the per-codebase task list behind the optional **Tasks** plugin, plus the install bridge for its write-capable MCP server. Unlike notes the store is **per-workspace**, `<root>/.code-basics/tasks.json` (gitignored, like `runs.json`), so every command takes an explicit `root` — several codebases can be open at once, and the panel names its own. The wall clock is stamped at the command edge (never in `cb-core`) so the pure store helpers stay testable with a fixed time. A write that names no task is **refused** (`no task with that id`) rather than saving an unchanged file and reporting success. See [the Tasks plugin guide](../guides/tasks-plugin.md).
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `read_tasks` | `root: PathBuf` | `TasksFile` | This workspace's task list; a missing or unreadable file is an empty list, not an error (`cb_core::tasks::load` tolerates both) |
+| `create_task` | `root: PathBuf`, `title: String`, `body: String` | `TasksFile` | Append a new open task owned by the user (`owner: me`), returning the updated list. The id is a fresh uuid so the panel and an agent creating in the same millisecond cannot collide |
+| `update_task` | `root: PathBuf`, `id: String`, `title: String`, `body: String` | `TasksFile` | Overwrite a task's title and body, stamping `updatedAtMs` and preserving `createdAtMs` |
+| `assign_task` | `root: PathBuf`, `id: String`, `owner: TaskOwner` | `TasksFile` | Record the task's owner (`me`/`ai`). Launching the agent when the owner becomes the AI is the frontend's job; this only persists the owner |
+| `complete_task` | `root: PathBuf`, `id: String`, `status: TaskStatus` | `TasksFile` | Set a task's status (`done` or back to `open`) |
+| `delete_task` | `root: PathBuf`, `id: String` | `TasksFile` | Remove one task |
+
+The MCP install bridge is the same five-command shape as the SQL and browser servers, over `cb_core::tasks::mcp::install` (which reuses `mcp::install`'s merge wholesale). The server name is `code-basics-tasks` and the entry is this executable + `args` = `["mcp-tasks", "--workspace", <root>]` — the `--workspace` boundary **is** the consent boundary, so an agent configured for one repository cannot reach another's tasks. Writes go through `providers::apply_writes_atomically`.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `tasks_mcp_status` | `root: PathBuf`, `provider: ProviderId` | `InstallScope \| null` | Where the Tasks server is installed for this workspace and provider (project wins over user), or `null` |
+| `tasks_mcp_install_plan` | `root: PathBuf`, `provider: ProviderId`, `scope: InstallScope` | `InstallPlan` | Exactly what installing would write — Claude Code `<root>/.mcp.json` (project) or `~/.claude.json` (user), Codex `$CODEX_HOME/config.toml` (user only). **Touches nothing** — what the preview renders, write-capable caveats included |
+| `install_tasks_mcp_server` | `root: PathBuf`, `provider: ProviderId`, `scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install, then re-read the status from disk |
+| `tasks_mcp_uninstall_plan` | `root: PathBuf`, `provider: ProviderId`, `scope: InstallScope` | `InstallPlan` | The exact change removing the server would make. **Touches nothing.** An empty `writes` means that configuration holds no entry of ours |
+| `uninstall_tasks_mcp_server` | `root: PathBuf`, `provider: ProviderId`, `scope: InstallScope` | `InstallScope \| null` | Perform a confirmed removal, backing the file up first, then re-read the status |
+
 ## About
 
 `src-tauri/src/commands/about.rs` — what build is running, behind **Help → About**. Takes no `AppState` (process metadata belongs to the process, not a workspace), and its `AboutInfo` struct is **local to the command module** rather than in `cb-core`, because it carries no decision the core crate needs to make; the camelCase keys are pinned by `about_info_serialises_with_the_keys_the_ui_reads` in the same file.

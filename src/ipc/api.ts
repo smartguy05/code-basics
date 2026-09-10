@@ -76,6 +76,9 @@ import type {
   SqlTestOutcome,
   StashEntry,
   SymbolIndexStatus,
+  TaskOwner,
+  TaskStatus,
+  TasksFile,
   TerminalEvent,
   TestRunOutcome,
   UsageResult,
@@ -243,6 +246,42 @@ export const readNotes = () => invoke<NotesFile>("read_notes");
 /** Write the global notes file, creating its directory if absent. */
 export const writeNotes = (file: NotesFile) =>
   invoke<void>("write_notes", { file });
+
+// ---------------------------------------------------------------------------
+// Tasks (`cb_core::tasks`) — the per-workspace, gitignored task list. Every
+// command takes an explicit `root`: tasks are per-repository and several
+// codebases can be open at once, so the panel names its own workspace rather
+// than reading the active one. Each mutation returns the whole updated
+// `TasksFile`, so the panel re-renders from the persisted truth.
+// ---------------------------------------------------------------------------
+
+/** Read this workspace's tasks. A missing or unreadable file is an empty list. */
+export const readTasks = (root: string) =>
+  invoke<TasksFile>("read_tasks", { root });
+
+/** Create a new open task owned by the user; returns the updated list. */
+export const createTask = (root: string, title: string, body: string) =>
+  invoke<TasksFile>("create_task", { root, title, body });
+
+/** Overwrite a task's title and body; returns the updated list. */
+export const updateTask = (root: string, id: string, title: string, body: string) =>
+  invoke<TasksFile>("update_task", { root, id, title, body });
+
+/**
+ * Assign a task to the user or the agent; returns the updated list. Launching
+ * the agent when the owner becomes the AI is the frontend's job — this only
+ * records the owner.
+ */
+export const assignTask = (root: string, id: string, owner: TaskOwner) =>
+  invoke<TasksFile>("assign_task", { root, id, owner });
+
+/** Set a task's status (done, or back to open); returns the updated list. */
+export const completeTask = (root: string, id: string, status: TaskStatus) =>
+  invoke<TasksFile>("complete_task", { root, id, status });
+
+/** Remove a task; returns the updated list. */
+export const deleteTask = (root: string, id: string) =>
+  invoke<TasksFile>("delete_task", { root, id });
 
 // ---------------------------------------------------------------------------
 // About (Help -> About)
@@ -906,6 +945,36 @@ export const mcpServerUninstallPlan = (provider: ProviderId, scope: InstallScope
 /** Perform a removal the user has confirmed; returns the new status. */
 export const uninstallMcpServer = (provider: ProviderId, scope: InstallScope) =>
   invoke<InstallScope | null>("uninstall_mcp_server", { provider, scope });
+
+// ---------------------------------------------------------------------------
+// The Tasks MCP server (`tasks/mcp/install`) — the same preview-then-apply shape
+// as the SQL MCP server, over the same four IPC types. Unlike the SQL server it
+// takes a `root`: the store is per-workspace, and a project-scope install bakes
+// `--workspace <root>` in as the consent boundary.
+// ---------------------------------------------------------------------------
+
+/** Where the Tasks MCP server is installed for this workspace and provider, if anywhere. */
+export const tasksMcpStatus = (root: string, provider: ProviderId) =>
+  invoke<InstallScope | null>("tasks_mcp_status", { root, provider });
+
+/** Exactly what installing the Tasks MCP server would write. Touches nothing. */
+export const tasksMcpInstallPlan = (root: string, provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("tasks_mcp_install_plan", { root, provider, scope });
+
+/** Perform an install the user has confirmed; returns the new status. */
+export const installTasksMcpServer = (root: string, provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("install_tasks_mcp_server", { root, provider, scope });
+
+/**
+ * Exactly what removing the Tasks MCP server would rewrite. Touches nothing. An
+ * empty `writes` means that configuration holds no entry of ours.
+ */
+export const tasksMcpUninstallPlan = (root: string, provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("tasks_mcp_uninstall_plan", { root, provider, scope });
+
+/** Perform a removal the user has confirmed; returns the new status. */
+export const uninstallTasksMcpServer = (root: string, provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("uninstall_tasks_mcp_server", { root, provider, scope });
 
 /** First-open setup: exactly what installing every hook at `scope` would write. */
 export const setupInstallPlan = (scope: InstallScope) =>

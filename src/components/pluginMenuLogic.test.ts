@@ -10,7 +10,7 @@ const feature = (id: string, enabled: boolean): FeatureInfo => ({
   enabled,
 });
 
-const ALL_KEYS = ["sqlConsole", "askCodebase", "mcpSqlServer", "webBrowser"];
+const ALL_KEYS = ["sqlConsole", "askCodebase", "mcpSqlServer", "webBrowser", "tasks"];
 const ON = ALL_KEYS.map((f) => feature(f, true));
 const OFF = ALL_KEYS.map((f) => feature(f, false));
 /** Exactly one feature on, so a test can tell the rows apart. */
@@ -19,6 +19,7 @@ const SQL_ONLY = only("sqlConsole");
 const ASK_ONLY = only("askCodebase");
 const MCP_ONLY = only("mcpSqlServer");
 const BROWSER_ONLY = only("webBrowser");
+const TASKS_ONLY = only("tasks");
 
 describe("pluginMenuRows", () => {
   it("offers the SQL console when its feature is on and a codebase is open", () => {
@@ -42,6 +43,7 @@ describe("pluginMenuRows", () => {
       "agent.ask",
       "plugin.mcp",
       "plugin.browser",
+      "plugin.tasks",
     ]);
   });
 
@@ -148,6 +150,23 @@ describe("pluginMenuRows", () => {
     // opener that acts on nothing.
     const rows = pluginMenuRows({ features: BROWSER_ONLY, workspaceOpen: false });
     expect(rows.map((r) => r.id)).toEqual(["plugin.browser"]);
+    expect(rows[0]?.disabled).toBe(true);
+    expect(rows[0]?.action).toBe(null);
+    expect(rows[0]?.title).toContain("Open a codebase");
+  });
+
+  it("offers the Tasks panel when its feature is on and a codebase is open", () => {
+    const rows = pluginMenuRows({ features: TASKS_ONLY, workspaceOpen: true });
+    expect(rows.map((r) => r.id)).toEqual(["plugin.tasks"]);
+    expect(rows[0]?.disabled).toBe(false);
+    expect(rows[0]?.action).toEqual({ kind: "tasks" });
+    expect(rows[0]?.label).toBe("Tasks");
+  });
+
+  it("disables the Tasks panel, with a reason, when no codebase is open", () => {
+    // The task store is per-repository, so there must be a codebase to read it.
+    const rows = pluginMenuRows({ features: TASKS_ONLY, workspaceOpen: false });
+    expect(rows.map((r) => r.id)).toEqual(["plugin.tasks"]);
     expect(rows[0]?.disabled).toBe(true);
     expect(rows[0]?.action).toBe(null);
     expect(rows[0]?.title).toContain("Open a codebase");

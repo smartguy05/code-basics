@@ -39,6 +39,7 @@ export const PLUGIN_LABELS: Record<string, string> = {
   askCodebase: "Ask the codebase",
   mcpSqlServer: "SQL MCP server",
   webBrowser: "Web browser",
+  tasks: "Tasks",
 };
 
 const chord = (key: string, over: Partial<Omit<ShortcutChord, "key">> = {}): ShortcutChord => ({
@@ -78,6 +79,12 @@ export const COMMANDS: CommandDefinition[] = [
   // Settings and `pluginMenuRows` names it from `PLUGIN_LABELS`. Without the
   // tag the row would be filed nowhere.
   { id: "plugin.browser", label: "Web browser", category: "Agent", context: "global", defaultBinding: null, plugin: "webBrowser" },
+  // The per-codebase Tasks panel. Tagged `plugin` so `commandSections` files it
+  // under its own heading in Settings and `pluginMenuRows` names it from
+  // `PLUGIN_LABELS`. Registered as a handler by `WorkspaceTab` only while the
+  // feature is on, exactly as `plugin.mcp` is, so the advertised command always
+  // has a handler and a switched-off feature never acts.
+  { id: "plugin.tasks", label: "Tasks", category: "Panels", context: "workspace", defaultBinding: null, plugin: "tasks" },
   // `allowInText` on the search overlays: the caret is almost always inside a
   // `.cm-editor` when the user reaches for Search All, so without it
   // `eventIsTyping` filters the command out of `dispatchShortcut` and Ctrl+N

@@ -556,6 +556,49 @@ export interface NotesFile {
 }
 
 /**
+ * Whether a task is still to do or finished (`tasks::TaskStatus`). The Rust enum
+ * derives `serde(rename_all = "camelCase")`, so each variant crosses as its own
+ * lowercased name.
+ */
+export type TaskStatus = "open" | "done";
+
+/**
+ * Who a task is assigned to (`tasks::TaskOwner`). `ai` is what "Assign to AI"
+ * records before launching the agent; `me` is the default and what "Assign to
+ * me" hands it back to.
+ */
+export type TaskOwner = "me" | "ai";
+
+/**
+ * One task in the per-workspace task list (`tasks::Task`). Unlike {@link Note}
+ * this store is **per-repository and gitignored**, not user-global. The key
+ * names are pinned by `serialisation_shape_pins_the_wire_keys` in
+ * `crates/core/src/tasks/tasks_tests.rs`.
+ */
+export interface Task {
+  /** Stable id; the React key and the target of every update/assign/delete. */
+  id: string;
+  /** The short one-line title. */
+  title: string;
+  /** The longer description, which also becomes the agent prompt. */
+  body: string;
+  status: TaskStatus;
+  owner: TaskOwner;
+  /** When the task was created, milliseconds since the Unix epoch. */
+  createdAtMs: number;
+  /** When the task was last changed, milliseconds since the Unix epoch. */
+  updatedAtMs: number;
+}
+
+/** The whole per-workspace tasks file (`tasks::TasksFile`). */
+export interface TasksFile {
+  /** Schema version (currently 1), so the format can migrate. */
+  version: number;
+  /** The tasks, in the order the panel shows them. */
+  tasks: Task[];
+}
+
+/**
  * One optional feature and whether it is switched on
  * (`features::FeatureInfo`). Keys pinned by
  * `serialisation_shape_pins_the_wire_keys` in

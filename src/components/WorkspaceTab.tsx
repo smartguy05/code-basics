@@ -22,6 +22,7 @@ import { Occluder } from "./occlusionContext";
 import { SetupPrompt } from "./SetupPrompt";
 import { McpServerPanel } from "./McpServerPanel";
 import { SqlPanel } from "./SqlPanel";
+import { TasksPanel } from "./TasksPanel";
 import { shouldPrompt, setDismissed } from "./setupPromptLogic";
 import { TestsView } from "../views/TestsView";
 import { terminalTitle } from "./askLogic";
@@ -45,6 +46,14 @@ import {
   sqlPanelAfterFeatureChange,
   sqlPanelMounted,
 } from "./sqlPanelLogic";
+import {
+  CLOSED_TASKS_PANEL,
+  closeTasksPanel,
+  openTasksPanel,
+  tasksPanelAfterFeatureChange,
+  tasksPanelMounted,
+} from "./tasksPanelLogic";
+import { loadAgentPrefs, preferredAgentId, preferredModel } from "./reviewLogic";
 import type { TabSignal } from "./workspaceTabsLogic";
 import * as api from "../ipc/api";
 import type { AgentMode } from "../ipc/api";
@@ -142,6 +151,16 @@ export interface WorkspaceTabHandle {
    * does nothing.
    */
   openBrowser(): void;
+  /**
+   * Open the per-codebase Tasks panel, or restore it when it is already open and
+   * minimized.
+   *
+   * Part of the handle for the same reason `openSql` is: the Plugins menu is
+   * global titlebar chrome and the task list is per-codebase (its store lives
+   * under the workspace's `.code-basics/`). The feature gate is inside the tab,
+   * so calling this while `tasks` is off does nothing.
+   */
+  openTasks(): void;
 }
 
 /**
@@ -294,6 +313,19 @@ export function WorkspaceTab({
   }, [browserEnabled]);
 
   /**
+   * The Tasks panel: a floating window per codebase, mirroring the SQL console.
+   * Its store is per-repository and gitignored (`cb_core::tasks`).
+   */
+  const [tasksPanel, setTasksPanel] = useState(CLOSED_TASKS_PANEL);
+  const tasksEnabled = featureEnabled(features, "tasks");
+  const openTasks = () => setTasksPanel(openTasksPanel);
+  // Switching the feature off unmounts the panel rather than hiding it. The
+  // decision returns the same object when nothing changes, so this cannot loop.
+  useEffect(() => {
+    setTasksPanel((state) => tasksPanelAfterFeatureChange(state, tasksEnabled));
+  }, [tasksEnabled]);
+
+  /**
    * The SQL MCP server installer: a transient modal, so a plain boolean is
    * enough — unlike the SQL console there is no live state to preserve, and
    * re-opening it is a fresh read of the install status either way.
@@ -349,9 +381,11 @@ export function WorkspaceTab({
     // command advertised in Settings must have a handler, and a command whose
     // feature is off must not act.
     if (mcpEnabled) registrations.push(registerCommand("plugin.mcp", openMcp));
+    // Registered only while its feature is on, exactly as `plugin.mcp` is.
+    if (tasksEnabled) registrations.push(registerCommand("plugin.tasks", openTasks));
     return () => registrations.forEach((unregister) => unregister());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, shownTabs, sqlEnabled, mcpEnabled]);
+  }, [active, shownTabs, sqlEnabled, mcpEnabled, tasksEnabled]);
   const [showSetup, setShowSetup] = useState(false);
   const [inspectRequest, setInspectRequest] = useState<InspectRequest | null>(null);
   const [openRequest, setOpenRequest] = useState<OpenFileRequest | null>(null);
@@ -578,6 +612,31 @@ export function WorkspaceTab({
       .catch((e) => setAskError(String(e)));
   };
 
+  /**
+   * Launch the agent for a task assigned to the AI, in an interactive terminal.
+   *
+   * Reuses the shared review agent picker's *preference* logic — the same
+   * `agentId`/`model` the Ask box and Review panel remember — rather than
+   * putting a second chooser in the Tasks panel. Delegates the actual spawn to
+   * `openAskTerminal`, so the command line is built by the backend and the same
+   * argv-safety guarantees apply. An agent that has vanished from PATH surfaces
+   * through `openAskTerminal`'s own error toast.
+   */
+  const launchTaskAgent = (prompt: string) => {
+    void api
+      .reviewAgents()
+      .then((list) => {
+        const prefs = loadAgentPrefs(localStorage);
+        const chosen = preferredAgentId(prefs, list);
+        if (chosen === undefined) {
+          setAskError("No coding agent (claude/codex) is installed to run this task.");
+          return;
+        }
+        openAskTerminal(prompt, chosen, preferredModel(prefs, list, chosen));
+      })
+      .catch((e) => setAskError(String(e)));
+  };
+
   const closeTerminal = (key: string) =>
     setTerminals((open) => open.filter((t) => t.key !== key));
   const renameTerminalTo = (key: string, title: string) =>
@@ -647,6 +706,7 @@ export function WorkspaceTab({
     openAsk,
     openMcp,
     openBrowser,
+    openTasks,
   });
   handleRef.current = {
     openTerminal,
@@ -659,6 +719,7 @@ export function WorkspaceTab({
     openAsk,
     openMcp,
     openBrowser,
+    openTasks,
   };
   useEffect(() => {
     const stable: WorkspaceTabHandle = {
@@ -673,6 +734,7 @@ export function WorkspaceTab({
       openAsk: () => handleRef.current.openAsk(),
       openMcp: () => handleRef.current.openMcp(),
       openBrowser: () => handleRef.current.openBrowser(),
+      openTasks: () => handleRef.current.openTasks(),
     };
     onRegister(workspace.root, stable);
     return () => onRegister(workspace.root, null);
@@ -858,6 +920,19 @@ export function WorkspaceTab({
           workspace={workspace}
           restoreRequest={sqlPanel.restoreToken}
           onClose={() => setSqlPanel(closeSqlPanel)}
+        />
+      )}
+
+      {/* The per-codebase Tasks panel — same mount rules as the SQL console:
+          mounted while the user has it open *and* the feature is on, staying
+          mounted (hidden) when minimized so an in-progress edit survives, and
+          unmounted when the feature is switched off. */}
+      {tasksPanelMounted(tasksPanel, tasksEnabled) && (
+        <TasksPanel
+          workspace={workspace}
+          restoreRequest={tasksPanel.restoreToken}
+          onLaunchAgent={launchTaskAgent}
+          onClose={() => setTasksPanel(closeTasksPanel)}
         />
       )}
 

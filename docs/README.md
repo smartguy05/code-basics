@@ -27,6 +27,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 - [Agent intent capture](guides/agent-intent-capture.md) — grouping a diff into the decisions behind it, with Claude Code or Codex
 - [Instruction enhancements](guides/instruction-enhancements.md) — adding reusable instruction sections to CLAUDE.md / AGENTS.md from a menu of `.md` templates
 - [The SQL MCP server](guides/sql-mcp-server.md) - letting an agent read the databases you are already connected to, read-only and by explicit per-connection consent
+- [The Tasks plugin](guides/tasks-plugin.md) — a per-codebase task list, "assign to AI" that launches the agent in a terminal, and a write-capable MCP server
 - [Inspecting objects](guides/inspecting-objects.md) — reading the real heap of a crash dump, and what crash dump capture costs
 - [Language servers](guides/language-servers.md) — which server per language, how to install each, and how to point config at one
 

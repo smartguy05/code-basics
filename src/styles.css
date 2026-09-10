@@ -450,6 +450,9 @@ textarea:focus {
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
   flex-wrap: wrap;
+  /* --bg is opaque; without it a translucent window shows through the top
+     Run/Debug/Stop toolbar (and the diff/diagram toolbars, intentionally). */
+  background: var(--bg);
 }
 
 .split-button {

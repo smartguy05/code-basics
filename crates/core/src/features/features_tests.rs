@@ -9,7 +9,13 @@ fn every_feature_has_a_distinct_stable_id() {
     assert_eq!(ids.len(), count, "two features share an id");
     assert_eq!(
         ids,
-        vec!["askCodebase", "mcpSqlServer", "sqlConsole", "webBrowser"]
+        vec![
+            "askCodebase",
+            "mcpSqlServer",
+            "sqlConsole",
+            "tasks",
+            "webBrowser"
+        ]
     );
 }
 
@@ -113,6 +119,7 @@ fn every_feature_states_its_own_default() {
             ("askCodebase", true),
             ("mcpSqlServer", true),
             ("webBrowser", true),
+            ("tasks", true),
         ]
     );
 }

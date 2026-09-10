@@ -64,9 +64,20 @@ runtime decision (`src/windowTransparencyLogic.ts`), because that decision spans
 open codebases. Its rule is that a codebase which has not reported whether its
 editor area is empty has not reported it empty: an unknown root resolves to
 fully opaque, which is what stops the window flashing translucent during
-startup. Only the active codebase is consulted. `applyAppearance` must never
+startup. The **welcome screen** (no codebase open, `activeRoot === null`) is also
+fully opaque; translucency begins only once an open codebase reports an empty
+editor. Only the active codebase is consulted. `applyAppearance` must never
 write `--app-bg-opacity` — it cannot know the editor state, and a second writer
-would race the one in `App`.
+would race the one in `App`. Floating chrome paints its own opaque surface so it
+stays readable over a translucent window; the top Run/Debug/Stop `.toolbar` does
+the same (`background: var(--bg)`).
+
+The Tasks plugin panel is **per-workspace**, unlike the global Notes panel: every
+tasks command takes the panel's own `root` explicitly rather than reading the
+active workspace, since several codebases can be open at once. Its store is
+gitignored (private to the machine). **Assign to AI** persists `owner = ai` then
+launches the agent in an interactive terminal with the task as the prompt;
+**Assign to me** only persists `owner = me`.
 
 App-owned shortcuts are declared in `src/shortcutLogic.ts` and dispatched by
 `src/shortcuts.ts`. A command shown in Settings must have a registered handler

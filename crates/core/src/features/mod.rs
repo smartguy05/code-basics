@@ -41,15 +41,18 @@ pub enum FeatureId {
     McpSqlServer,
     /// The embedded web browser panel.
     WebBrowser,
+    /// The per-codebase task list panel and its MCP server.
+    Tasks,
 }
 
 impl FeatureId {
     /// Every feature this build knows about, in the order the picker lists them.
-    pub const ALL: [FeatureId; 4] = [
+    pub const ALL: [FeatureId; 5] = [
         FeatureId::SqlConsole,
         FeatureId::AskCodebase,
         FeatureId::McpSqlServer,
         FeatureId::WebBrowser,
+        FeatureId::Tasks,
     ];
 
     /// Stable id used across IPC, in the store file, and by both installers.
@@ -59,6 +62,7 @@ impl FeatureId {
             FeatureId::AskCodebase => "askCodebase",
             FeatureId::McpSqlServer => "mcpSqlServer",
             FeatureId::WebBrowser => "webBrowser",
+            FeatureId::Tasks => "tasks",
         }
     }
 
@@ -69,6 +73,7 @@ impl FeatureId {
             FeatureId::AskCodebase => "Ask the codebase",
             FeatureId::McpSqlServer => "SQL MCP server",
             FeatureId::WebBrowser => "Web browser",
+            FeatureId::Tasks => "Tasks",
         }
     }
 
@@ -85,6 +90,7 @@ impl FeatureId {
             FeatureId::WebBrowser => {
                 "A floating browser panel, for checking a deployment without leaving the app."
             }
+            FeatureId::Tasks => "A per-codebase task list an agent can read and write over MCP.",
         }
     }
 
@@ -119,6 +125,11 @@ impl FeatureId {
             // page is only what the user navigates to, and automation consent is
             // a separate per-page click that defaults to withheld.
             FeatureId::WebBrowser => true,
+            // On, like the others: an existing app gaining capability. The list
+            // itself is a local, gitignored file; pointing an agent's MCP config
+            // at it is a separate, previewed install step, so the feature being
+            // visible grants nothing on its own.
+            FeatureId::Tasks => true,
         }
     }
 

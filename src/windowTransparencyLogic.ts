@@ -59,11 +59,11 @@ export function windowBackgroundOpacity(state: WindowTranslucency): number {
   // it — and the declaration it would take is the one painting the background.
   if (!Number.isFinite(state.opacity)) return OPAQUE_PERCENT;
 
-  // The welcome screen is the emptiest editor area there is, and it has no
-  // editor to open. Making it the one opaque state would mean the app starts
-  // opaque, flashes translucent when a folder is opened, and goes opaque again
-  // on the first file — three changes to arrive where it should have started.
-  if (state.activeRoot === null) return state.opacity;
+  // The welcome screen: no codebase is open, so there is nothing whose editor
+  // could report empty. Translucency begins only once an OPEN codebase reports
+  // an empty editor — until then the window stays fully opaque, so the app does
+  // not start see-through before any folder is opened.
+  if (state.activeRoot === null) return OPAQUE_PERCENT;
 
   const open = state.editorTabsByRoot[state.activeRoot];
   // Not yet reported, or reported and then deleted on unmount. Guessing "empty"

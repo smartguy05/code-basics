@@ -42,12 +42,14 @@ mod commands {
     pub mod setup;
     pub mod sql;
     pub mod symbols;
+    pub mod tasks;
     pub mod terminal;
     pub mod workspace;
 }
 
 mod mcp_browser;
 mod mcp_sql;
+mod mcp_tasks;
 mod qgate_run;
 mod recorder;
 
@@ -104,6 +106,16 @@ pub fn run() {
     // an MCP frame.
     if mcp_browser::is_mcp_browser_invocation() {
         mcp_browser::run();
+    }
+
+    // The fifth self-dispatch mode, and the third MCP server out of this one
+    // executable: the Tasks server. Unlike `mcp-sql` it is write-capable by
+    // design — creating and updating tasks is the point — and unlike the
+    // browser server it answers directly out of the per-workspace task store
+    // rather than forwarding to a window. Same two rules as the others: never a
+    // window, and never a byte on stdout that is not an MCP frame.
+    if mcp_tasks::is_mcp_tasks_invocation() {
+        mcp_tasks::run();
     }
 
     let state = AppState::default();
@@ -186,6 +198,17 @@ pub fn run() {
             commands::features::set_feature,
             commands::notes::read_notes,
             commands::notes::write_notes,
+            commands::tasks::read_tasks,
+            commands::tasks::create_task,
+            commands::tasks::update_task,
+            commands::tasks::assign_task,
+            commands::tasks::complete_task,
+            commands::tasks::delete_task,
+            commands::tasks::tasks_mcp_status,
+            commands::tasks::tasks_mcp_install_plan,
+            commands::tasks::install_tasks_mcp_server,
+            commands::tasks::tasks_mcp_uninstall_plan,
+            commands::tasks::uninstall_tasks_mcp_server,
             commands::about::about_info,
             commands::files::fs_list_dir,
             commands::files::fs_read_file,

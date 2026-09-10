@@ -37,6 +37,7 @@ pub mod secrets;
 pub mod setup;
 pub mod sql;
 pub mod symbols;
+pub mod tasks;
 pub mod testing;
 pub mod workspace;
 

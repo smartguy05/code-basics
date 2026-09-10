@@ -12,7 +12,8 @@ export type FeatureKey =
   | "sqlConsole"
   | "askCodebase"
   | "mcpSqlServer"
-  | "webBrowser";
+  | "webBrowser"
+  | "tasks";
 
 /**
  * Whether a feature is on.
