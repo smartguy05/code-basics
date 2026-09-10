@@ -19,7 +19,7 @@ import {
   browserLayoutKey,
   clampBrowserTop,
   hiddenPageReason,
-  occludedByPanels,
+  occludedByAbovePanels,
   pageRect,
   pageVisible,
   pillLabel,
@@ -30,6 +30,7 @@ import { resizeFromHandle, type ResizeEdge } from "./reviewLayoutLogic";
 import { useDockEntry } from "./DockContext";
 import { dockId } from "./dockLogic";
 import { useOcclusionCount } from "./occlusionContext";
+import { useFocusEntry, useFocusOffset, useFocusOrder } from "./focusOrderContext";
 
 /**
  * The embedded browser as a floating window.
@@ -54,8 +55,9 @@ import { useOcclusionCount } from "./occlusionContext";
  * webview), an unusable rect (left hidden with `hiddenPageReason` in its place),
  * a backgrounded codebase, the panel's own setup modal (bug 2), and an occluding
  * surface over its rect (bug 3) — an open menu/modal (counted via
- * `occlusionContext`) or a peer floating panel that actually overlaps the page
- * (`occludedByPanels`, measured in `sync`).
+ * `occlusionContext`) or a peer floating panel that is stacked *above* this one in
+ * the shared focus order and overlaps the page (`occludedByAbovePanels`, measured
+ * in `sync`). A peer the browser was raised over no longer hides the page.
  *
  * # Two CLAUDE.md gotchas that apply directly, and did cost a feature once
  *
@@ -74,6 +76,7 @@ import { useOcclusionCount } from "./occlusionContext";
  */
 export function BrowserPanel({
   root,
+  focusId,
   active,
   restoreRequest,
   enabled,
@@ -85,6 +88,12 @@ export function BrowserPanel({
    * remembered per codebase (`browserLayoutKey`).
    */
   root: string;
+  /**
+   * This panel's id in the app-wide focus order (`focusOrderContext`), namespaced
+   * by codebase. Clicking the panel raises it over terminals and Notes; the same
+   * order drives both its chrome z-index and which peers may occlude its page.
+   */
+  focusId: string;
   /**
    * Whether this codebase is the foreground tab. Drives the OS webview's
    * visibility through `pageVisible`/`sync`: a backgrounded codebase's page is
@@ -149,6 +158,18 @@ export function BrowserPanel({
   // Peer floating panels are handled geometrically in `sync`, not counted here.
   const occludedByOverlay = useOcclusionCount() > 0;
 
+  // This panel's place in the app-wide focus order. `useFocusEntry` raises it on
+  // mount and releases it on unmount; `raiseBrowser` (on pointerdown) and the
+  // restore effect below bring it forward on click/restore. `myOffset` is both its
+  // chrome `--cb-stack` and the threshold peers must beat to occlude its page.
+  const raiseBrowser = useFocusEntry(focusId);
+  const myOffset = useFocusOffset(focusId);
+  const { order: focusOrder } = useFocusOrder();
+  // Restoring a minimized panel is a click's worth of intent — bring it forward.
+  useEffect(() => {
+    if (!minimized) raiseBrowser();
+  }, [minimized, raiseBrowser]);
+
   /**
    * Measure the placeholder and decide, through the pure `pageRect`, whether
    * there is a rect worth handing the host.
@@ -206,13 +227,13 @@ export function BrowserPanel({
 
     const decision = await measure();
     if (superseded()) return;
-    // Occluded if an overlay/menu/modal is open (counted) or a peer floating panel
-    // actually overlaps the page's rect (geometry). Peer overlap is checked here
-    // rather than via a signal because the app tracks no cross-panel raise order —
-    // what the user sees as "covering the page" is precisely a rect on top of it.
+    // Occluded if an overlay/menu/modal is open (counted, always on top) or a peer
+    // floating panel that is stacked *above* this one in the focus order overlaps
+    // the page's rect. Raise-aware: a terminal/Notes the browser was raised over no
+    // longer blanks the page — clicking the browser really does bring it forward.
     const occluded =
       occludedByOverlay ||
-      (decision.ok && occludedByPanels(decision.rect, peerPanelRects(panelRef.current)));
+      (decision.ok && occludedByAbovePanels(decision.rect, myOffset, peerPanelRects(panelRef.current)));
     const input = {
       state: { open: true, restoreToken: 0 },
       enabled: true,
@@ -234,7 +255,7 @@ export function BrowserPanel({
       if (superseded()) return;
       setError(String(e));
     }
-  }, [measure, minimized, active, root, setupOpen, occludedByOverlay]);
+  }, [measure, minimized, active, root, setupOpen, occludedByOverlay, myOffset]);
 
   // Re-run `sync` when this codebase moves between foreground and background.
   // A switch-away must call `set_visible(false)` deterministically, and a
@@ -244,6 +265,16 @@ export function BrowserPanel({
   useEffect(() => {
     void sync();
   }, [active, sync]);
+
+  // Re-check occlusion whenever the shared focus order changes. A peer raised
+  // *above* this panel must blank the page, and a peer this panel was raised over
+  // must reveal it — but a raise that leaves this panel's own offset unchanged (it
+  // was already at the band floor and a terminal appeared above it) would not move
+  // `sync`'s deps, so trigger explicitly. The generation stamp abandons stale runs.
+  useEffect(() => {
+    void sync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusOrder]);
 
   // Create the page on mount, and drop it on unmount. `browser_close` really
   // does take the WebView2 process tree with it (verified in the Phase 4
@@ -550,7 +581,12 @@ export function BrowserPanel({
         className="review-panel browser-panel"
         hidden={minimized}
         ref={panelRef}
+        // Capture phase on the root so clicking anywhere in the panel raises it,
+        // before the header drag and without preventing the default (drag/URL-bar
+        // focus intact). This is the click that finally brings the page forward.
+        onPointerDownCapture={raiseBrowser}
         style={{
+          ...({ "--cb-stack": myOffset } as React.CSSProperties),
           ...(pos ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" } : {}),
           ...(size ? { width: size.width, height: size.height } : {}),
         }}
@@ -708,20 +744,27 @@ function measureChromeBottom(): number {
 }
 
 /**
- * The on-screen rects of the floating panels that could cover the page, excluding
- * the browser panel itself (`self`). Every floating panel shares the
- * `.review-panel` base and the dock is `.dock`; a hidden (minimized) panel
- * measures 0×0 and so overlaps nothing. Returned to `occludedByPanels`, which
- * decides — this only gathers.
+ * The on-screen rects of the floating panels that could cover the page, each with
+ * its focus-order offset, excluding the browser panel itself (`self`). Every
+ * floating panel shares the `.review-panel` base and writes its focus ordinal into
+ * the `--cb-stack` CSS variable (the dock is `.dock`, which sits in its own higher
+ * band and carries no `--cb-stack`, so it reads 0 — harmless, since a peer must be
+ * strictly *above* the browser to occlude and the dock never overlaps the page).
+ * A hidden (minimized) panel measures 0×0 and so overlaps nothing. Returned to
+ * `occludedByAbovePanels`, which decides — this only gathers.
  */
-function peerPanelRects(self: HTMLElement | null): PanelGeometry[] {
+function peerPanelRects(self: HTMLElement | null): { rect: PanelGeometry; offset: number }[] {
   const nodes = document.querySelectorAll<HTMLElement>(".review-panel, .dock");
-  const rects: PanelGeometry[] = [];
+  const peers: { rect: PanelGeometry; offset: number }[] = [];
   nodes.forEach((node) => {
     if (node === self) return;
     const box = node.getBoundingClientRect();
     if (box.width <= 0 || box.height <= 0) return;
-    rects.push({ left: box.left, top: box.top, width: box.width, height: box.height });
+    const offset = Number.parseInt(node.style.getPropertyValue("--cb-stack"), 10) || 0;
+    peers.push({
+      rect: { left: box.left, top: box.top, width: box.width, height: box.height },
+      offset,
+    });
   });
-  return rects;
+  return peers;
 }

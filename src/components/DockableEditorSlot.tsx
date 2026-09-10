@@ -1,14 +1,16 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { StablePortal } from "./StablePortal";
 import { slotKey, useRegions } from "./RegionContext";
 import type { Dockable } from "./regionLayoutLogic";
 
 /**
  * Hosts one editor or diff tab so it can float in the center or dock in a
- * region, **without remounting** its `children`. It always renders `children`
- * through a portal — into the region slot when docked, otherwise into a center
- * host it owns — so a `FileEditor` (whose buffer is only saved on Ctrl+S) keeps
- * its unsaved edits, language-server document and scroll across a dock/undock.
+ * region, **without remounting** its `children`. It renders `children` through a
+ * {@link StablePortal} — a single host node imperatively moved between the region
+ * slot (when docked) and a center host it owns — so a `FileEditor` (whose buffer
+ * is only saved on Ctrl+S) keeps its unsaved edits, language-server document and
+ * scroll across a dock/undock. Swapping `createPortal`'s container instead would
+ * remount the children and discard all of that; moving the host node does not.
  *
  * The center host is a plain div inside the editor area; when this tab is not
  * the active center tab it is `display:none` (mounted, so the portaled editor
@@ -64,7 +66,7 @@ export function DockableEditorSlot({
           }}
         />
       )}
-      {target && createPortal(children, target)}
+      <StablePortal target={target}>{children}</StablePortal>
     </>
   );
 }

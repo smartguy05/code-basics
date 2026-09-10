@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArchitectureView } from "../views/ArchitectureView";
 import { AskPanel } from "./AskPanel";
 import { BehavioralPanel } from "./BehavioralPanel";
@@ -30,13 +30,13 @@ import {
   makeAgentTerminal,
   makeTerminal,
   nextTerminalNumber,
-  raiseTerminal,
   recolorTerminal,
   renameTerminal,
-  stackOffset,
-  syncStackOrder,
   type TerminalDescriptor,
 } from "./terminalLogic";
+import { focusOffset } from "./focusOrderLogic";
+import { useFocusOrder } from "./focusOrderContext";
+import { dockId } from "./dockLogic";
 import { loadTerminalShell, resolvePreferredShell } from "./terminalShellLogic";
 import { sendToAgentTitle } from "./notesLogic";
 import {
@@ -440,20 +440,39 @@ export function WorkspaceTab({
   // not docked into a region — see `DockableTerminal`.
   const [floatLayer, setFloatLayer] = useState<HTMLDivElement | null>(null);
 
-  // Which terminal is in front, bottom-most key first. Kept *beside* `terminals`
-  // rather than by reordering it: the array index places each pill and cascade
-  // offset, so raising by reordering would teleport pills and shift un-dragged
-  // panels. One reconciling effect keeps this in step with what is open, so it
-  // cannot drift the way separate edits in `openTerminal`/`closeTerminal` could.
-  const [stackOrder, setStackOrder] = useState<string[]>([]);
+  // Which panel is in front is now one app-wide focus order (`focusOrderContext`)
+  // spanning this codebase's terminals and browser plus the global Notes, so "last
+  // clicked is on top" holds across all of them. The order is kept *beside*
+  // `terminals` rather than by reordering the array: the array index places each
+  // pill and cascade offset, so raising by reordering would teleport pills.
+  const { order: focusOrder, raise: raiseFocus, release: releaseFocus } = useFocusOrder();
+  // A terminal's focus id is namespaced by codebase (two codebases each host a
+  // `term-1`), and keyed by the stable `number` — like its dock id — so it does
+  // not change when an earlier terminal closes.
+  const termFocusId = useCallback(
+    (number: number) => dockId(workspace.root, `term-${number}`),
+    [workspace.root],
+  );
+  const browserFocusId = dockId(workspace.root, "browser");
+
+  // Keep the focus order in step with what is open: raise a newly opened terminal
+  // (so it starts on top) and release a closed one (so it stops consuming raise
+  // budget). Only this codebase's terminal ids are touched — the browser and Notes
+  // manage their own presence — so a prune here never drops another panel.
+  const knownTermIds = useRef<Set<string>>(new Set());
   useEffect(() => {
-    setStackOrder((order) =>
-      syncStackOrder(
-        order,
-        terminals.map((t) => t.key),
-      ),
-    );
-  }, [terminals]);
+    const current = new Set(terminals.map((t) => termFocusId(t.number)));
+    for (const id of current) if (!knownTermIds.current.has(id)) raiseFocus(id);
+    for (const id of knownTermIds.current) if (!current.has(id)) releaseFocus(id);
+    knownTermIds.current = current;
+  }, [terminals, termFocusId, raiseFocus, releaseFocus]);
+  // Release every terminal when the whole codebase tab unmounts (codebase closed).
+  useEffect(
+    () => () => {
+      for (const id of knownTermIds.current) releaseFocus(id);
+    },
+    [releaseFocus],
+  );
 
   // Which of this codebase's terminals currently want attention (bell while
   // minimized). Aggregated so `App` flashes the tab while any of them does.
@@ -958,6 +977,7 @@ export function WorkspaceTab({
         <BrowserPanel
           key={workspace.root}
           root={workspace.root}
+          focusId={browserFocusId}
           active={active}
           restoreRequest={browserPanel.restoreToken}
           enabled={browserEnabled}
@@ -976,11 +996,11 @@ export function WorkspaceTab({
           key={t.key}
           descriptor={t}
           index={index}
-          stackOffset={stackOffset(stackOrder, t.key)}
+          stackOffset={focusOffset(focusOrder, termFocusId(t.number))}
           workspaceActive={active}
           floatLayer={floatLayer}
           onClose={() => closeTerminal(t.key)}
-          onRaise={() => setStackOrder((order) => raiseTerminal(order, t.key))}
+          onRaise={() => raiseFocus(termFocusId(t.number))}
           onAttentionChange={(wants) => setTerminalAttention(t.key, wants)}
           onCompleted={(success) => onSignal(workspace.root, success ? "done" : "error")}
           onRename={(title) => renameTerminalTo(t.key, title)}

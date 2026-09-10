@@ -73,7 +73,10 @@ If a page fails to load, **do not "fix" a CSP error — there is none.**
 
 The page is a WebView2 child HWND. It composites **above the whole DOM**: it
 ignores `--z-panel`, `--z-notes`, `--z-dock` and `--z-overlay` in `styles.css`,
-and `hidden` on a React div does not hide it.
+and `hidden` on a React div does not hide it. The panel's **DOM chrome** does join
+the app-wide focus order (`focusOrderContext`) like terminals and Notes — clicking
+it raises the chrome and, through raise-aware occlusion, reveals the page — but the
+page surface itself is only ever shown/hidden, never z-ordered.
 
 **So the only way to make DOM chrome appear over the page is to hide the page** —
 `pageVisible` (`browserPanelLogic.ts`) is false for six cases, and all go through
@@ -86,7 +89,7 @@ the host:
 | Unusable rect | left hidden, with `hiddenPageReason` rendered in its place | The `createResizeGate` 0×0 lesson, extended to the DPI case |
 | Backgrounded codebase | `set_visible(false)`, gated by `visible_for` | A background codebase's page must not paint over the foreground one |
 | Setup modal open | `pageVisible` false while `setupOpen` | The Agents modal (`BrowserMcpPanel`) is DOM; the page would open in front of it |
-| Occluding surface over its rect | `pageVisible` false while `occluded` | A menu/modal/Search-Everywhere (counted via `occlusionContext`, mount `<Occluder/>`) or a peer floating panel that **actually overlaps** the page (`occludedByPanels` in `sync`, re-checked on `pointerup`). Overlap-scoped, not blanket — blanket flickers |
+| Occluding surface **above it** over its rect | `pageVisible` false while `occluded` | A menu/modal/Search-Everywhere (counted via `occlusionContext`, mount `<Occluder/>`) or a peer floating panel that **overlaps the page and sits above it in the shared focus order** (`occludedByAbovePanels` in `sync`, re-checked on `pointerup` and on any focus-order change). Overlap-scoped **and** raise-aware — a peer the browser was raised over does not blank the page, which is what lets clicking the browser bring it forward. Blanket would flicker; ignoring the raise order would trap the page behind whatever overlaps it |
 
 `clampBrowserTop` additionally keeps the page rect below the app's tab strip, so a
 panel dragged to the top cannot push the page under the titlebar. **Resize** uses

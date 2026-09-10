@@ -332,12 +332,32 @@ export function rectsOverlap(a: PanelGeometry, b: PanelGeometry): boolean {
 /**
  * Whether any of `others` overlaps the page rect. The caller collects the peer
  * floating panels' rects (a terminal, Notes, a review panel dragged over the
- * page); an empty list is not occluded. Geometry rather than a focus/raise order
- * because the app tracks no cross-panel raise order — and what the user sees as
- * "covering the page" is precisely a rect on top of it.
+ * page); an empty list is not occluded.
+ *
+ * Kept for reference and simpler callers; the browser now uses the raise-aware
+ * {@link occludedByAbovePanels} so a panel it was raised over does not blank it.
  */
 export function occludedByPanels(page: PanelGeometry, others: PanelGeometry[]): boolean {
   return others.some((other) => rectsOverlap(page, other));
+}
+
+/**
+ * Whether any peer that is stacked **strictly above** the page overlaps it.
+ *
+ * This is what makes "click the browser to bring it forward" real. The page is a
+ * WebView2 surface hidden only by occlusion; before this, *any* overlapping peer
+ * blanked it, so no click could win. Now a peer occludes only when its focus-order
+ * offset is greater than the browser's own — a terminal or Notes the browser was
+ * raised over sits below it and leaves the page visible, while one clicked *after*
+ * the browser rises above it and blanks the page again. Equal offset is not
+ * "above" (a tie cannot claim the front), so it does not occlude.
+ */
+export function occludedByAbovePanels(
+  page: PanelGeometry,
+  pageOffset: number,
+  peers: { rect: PanelGeometry; offset: number }[],
+): boolean {
+  return peers.some((p) => p.offset > pageOffset && rectsOverlap(page, p.rect));
 }
 
 /**

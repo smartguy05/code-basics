@@ -33,12 +33,23 @@ duplicate editors impossible), `pruneLayout`, and per-root persistence under
 
 ## The runtime — a portal registry
 
-The one hard constraint (no remount) is met with **portals**. `RegionContext`
-(`RegionProvider`) owns the layout and a **slot registry**: `RegionHost` lays out
-empty DOM slots and registers each one; the content owners portal into the
-matching slot. A portal's container can change without unmounting its children, so
-a dockable moves between the center and a region — or between regions — with no
-remount, keeping the `FileEditor` document and the xterm session alive.
+The one hard constraint (no remount) is met with a **stable portal host**.
+`RegionContext` (`RegionProvider`) owns the layout and a **slot registry**:
+`RegionHost` lays out empty DOM slots and registers each one; the content owners
+render through `StablePortal` (`components/StablePortal.tsx`), which keeps **one
+host node for the component's whole life** and moves *that node* between the center
+host and a region slot with `appendChild`. An imperative DOM move does not touch
+React's tree, so a dockable moves between the center and a region — or between
+regions — with no remount, keeping the `FileEditor` document and the xterm session
+alive.
+
+> **Why not swap the portal container directly?** Changing the container passed to
+> `createPortal` is **not** a re-parent in React — it deletes the old portal fiber
+> (unmounting the children and running their effect cleanups) and creates a fresh
+> one. That is exactly what used to happen on every dock/undock: a docked
+> terminal's mount-once effect tore down its PTY and spawned a new empty shell, and
+> a docked editor lost its CodeMirror buffer and language-server document. Keeping
+> the container stable and moving the node is what fixes it.
 
 - **Editors**: `RunView` wraps each `FileEditor` in `DockableEditorSlot`, which
   owns a center host and portals the editor into a region slot when docked.

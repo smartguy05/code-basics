@@ -235,9 +235,17 @@ working tree; conflicted files are never offered.
 - The browser page is an **OS surface**, not a DOM layer: it composites above
   everything, ignores the `--z-panel`/`--z-notes`/`--z-dock`/`--z-overlay` bands, and
   `hidden` on a React div does not hide it — so anything that must appear over it hides
-  the page (`pageVisible`/`occlusionContext`, overlap-scoped, not blanket). It is a bug
-  for it to be visible when **minimized, feature-off, at a degenerate rect, its workspace
-  not foreground, its setup modal open, or a menu/modal/overlapping panel covering it**.
+  the page (`pageVisible`/`occlusionContext`, overlap-scoped, not blanket). Occlusion is
+  **raise-aware** (`occludedByAbovePanels`): the panel joins the app-wide focus order
+  (`focusOrderContext`) with terminals and Notes, so only a peer *stacked above* the
+  browser blanks the page — clicking the browser brings it to the front. It is a bug for
+  it to be visible when **minimized, feature-off, at a degenerate rect, its workspace not
+  foreground, its setup modal open, or a menu/modal/above-it panel covering it**.
+- **Split docking never remounts a moved editor/terminal.** `DockableTerminal`/
+  `DockableEditorSlot` portal through `components/StablePortal.tsx` — one stable host node
+  moved between the float layer and a region slot with `appendChild`. Swapping
+  `createPortal`'s container instead *does* remount in React, which closed a docked
+  terminal's PTY and discarded a docked editor's CodeMirror/LSP state (the bug this fixes).
 - Anything that shows or positions that surface must be **generation-stamped and
   abandon its writes when superseded**, checked before *each* write rather than
   once. `sync()` awaits a scale factor and two IPC calls having captured

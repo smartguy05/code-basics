@@ -11,6 +11,7 @@ import {
   clampBrowserTop,
   closeBrowserPanel,
   hiddenPageReason,
+  occludedByAbovePanels,
   occludedByPanels,
   openBrowserPanel,
   pageRect,
@@ -393,6 +394,44 @@ describe("occludedByPanels", () => {
         { left: 100, top: 400, width: 100, height: 100 },
       ]),
     ).toBe(false);
+  });
+});
+
+describe("occludedByAbovePanels", () => {
+  const page: PanelGeometry = { left: 100, top: 100, width: 200, height: 200 };
+  const overlapping: PanelGeometry = { left: 150, top: 150, width: 40, height: 40 };
+  const clear: PanelGeometry = { left: 500, top: 500, width: 50, height: 50 };
+
+  it("is false for an empty list", () => {
+    expect(occludedByAbovePanels(page, 5, [])).toBe(false);
+  });
+
+  it("is true when a higher-offset peer overlaps the page", () => {
+    expect(occludedByAbovePanels(page, 3, [{ rect: overlapping, offset: 7 }])).toBe(true);
+  });
+
+  it("is false when a higher-offset peer does not overlap", () => {
+    expect(occludedByAbovePanels(page, 3, [{ rect: clear, offset: 7 }])).toBe(false);
+  });
+
+  it("is false when a LOWER-offset peer overlaps (the raised browser wins)", () => {
+    // The regression this fix is about: a terminal the browser was raised over
+    // must not blank the page.
+    expect(occludedByAbovePanels(page, 7, [{ rect: overlapping, offset: 3 }])).toBe(false);
+  });
+
+  it("is false when an EQUAL-offset peer overlaps (a tie is not 'above')", () => {
+    expect(occludedByAbovePanels(page, 5, [{ rect: overlapping, offset: 5 }])).toBe(false);
+  });
+
+  it("occludes when any above-peer overlaps, even amid below/clear peers", () => {
+    expect(
+      occludedByAbovePanels(page, 4, [
+        { rect: overlapping, offset: 2 }, // below — ignored
+        { rect: clear, offset: 9 }, // above but clear — ignored
+        { rect: overlapping, offset: 6 }, // above and overlapping — occludes
+      ]),
+    ).toBe(true);
   });
 });
 

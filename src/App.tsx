@@ -16,6 +16,7 @@ import { Dock } from "./components/Dock";
 import { DockProvider, type LiveDockEntry, type SetDockEntry } from "./components/DockContext";
 import { removeEntry, upsertEntry } from "./components/dockLogic";
 import { OcclusionProvider, Occluder } from "./components/occlusionContext";
+import { FocusOrderProvider } from "./components/focusOrderContext";
 import { pluginMenuAvailable, pluginMenuRows } from "./components/pluginMenuLogic";
 import {
   describeUnexpectedStop,
@@ -1041,6 +1042,7 @@ export function App() {
 
   return (
     <OcclusionProvider>
+    <FocusOrderProvider>
     <DockProvider setDockEntry={setDockEntry}>
     <div className="app">
       {/* Three zones, not a flex row with a spacer: the branch widget is meant to
@@ -1466,6 +1468,7 @@ export function App() {
       </div>
     </div>
     </DockProvider>
+    </FocusOrderProvider>
     </OcclusionProvider>
   );
 }

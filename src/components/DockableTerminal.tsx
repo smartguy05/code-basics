@@ -1,16 +1,17 @@
 import { useEffect } from "react";
-import { createPortal } from "react-dom";
+import { StablePortal } from "./StablePortal";
 import { TerminalPanel } from "./TerminalPanel";
 import { slotKey, useRegions } from "./RegionContext";
 import type { Dockable } from "./regionLayoutLogic";
 import type { TerminalDescriptor } from "./terminalLogic";
 
 /**
- * A terminal that can float or dock. It always renders its `TerminalPanel`
- * through a portal — into a docked region's slot when docked, otherwise into the
- * per-codebase floating layer — so moving between the two only changes the
- * portal's container and never remounts the panel, keeping the xterm session and
- * its scrollback alive. Both targets live inside the codebase's `hidden`-able
+ * A terminal that can float or dock. It renders its `TerminalPanel` through a
+ * {@link StablePortal} — a single, unchanging host node that is imperatively moved
+ * between the docked region's slot and the per-codebase floating layer. Moving the
+ * host with `appendChild` (rather than swapping `createPortal`'s container, which
+ * React treats as a remount) keeps the xterm session and its scrollback alive
+ * across dock/undock. Both targets live inside the codebase's `hidden`-able
  * subtree, so a backgrounded codebase's terminals stay hidden exactly as before.
  */
 export function DockableTerminal({
@@ -79,6 +80,5 @@ export function DockableTerminal({
   );
 
   const target = slotNode ?? floatLayer;
-  if (!target) return null;
-  return createPortal(panel, target);
+  return <StablePortal target={target}>{panel}</StablePortal>;
 }
