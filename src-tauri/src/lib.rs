@@ -409,13 +409,26 @@ pub fn run() {
             // exit), tree-kill everything it started so nothing is orphaned.
             // Every spawning handle — per-workspace supervisors, the global
             // supervisor and the PTY manager — records into the one shared
-            // registry, so its live set is the complete set of live pids.
-            // A true crash (panic = abort) cannot run this; that case stays
-            // covered by the next-launch orphan detection in `.setup`.
+            // registry, so its live set is the complete set of live pids. The
+            // one exception is the language servers: they are spawned straight
+            // through `lsp::transport` and never touch the running store, so they
+            // are reaped separately just below. A true crash (panic = abort)
+            // cannot run any of this; that case stays covered by the next-launch
+            // orphan detection in `.setup`.
             if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
                 use tauri::Manager;
-                for record in app_handle.state::<AppState>().running.live() {
+                let state = app_handle.state::<AppState>();
+                for record in state.running.live() {
                     cb_core::process::kill_tree(record.pid);
+                }
+                // The LSP trees (Roslyn + its `BuildHost` children, node, …). The
+                // handle's own async teardown cannot run here — the runtime is
+                // being abandoned — so the pids are read synchronously off the
+                // shared snapshot and killed the same way the running set is.
+                for handle in state.all_lsp_handles() {
+                    for pid in handle.server_pids() {
+                        cb_core::process::kill_tree(pid);
+                    }
                 }
                 // And take this application out of the browser instance
                 // registry. Not load-bearing - liveness is re-probed, so a

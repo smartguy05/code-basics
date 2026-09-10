@@ -159,6 +159,7 @@ pub struct LspHandle {
     generation: u64,
     tx: mpsc::UnboundedSender<Message>,
     status: SharedStatus,
+    pids: SharedPids,
 }
 
 /// The status snapshot, written only by the actor and read by every handle.
@@ -166,6 +167,17 @@ pub struct LspHandle {
 /// A `std::sync::Mutex` on purpose, and never held across an `.await`:
 /// [`LspHandle::status`] has to be callable from inside `AppState`'s own guard.
 type SharedStatus = Arc<Mutex<BTreeMap<Language, ServerStatus>>>;
+
+/// The live server pids, one per language, written only by the actor and read by
+/// every handle.
+///
+/// A `std::sync::Mutex` for the same reason as [`SharedStatus`], but its one
+/// caller is sharper: the app-exit handler reads it to tree-kill every language
+/// server on the way down, from a runtime it is abandoning — so it must be a
+/// synchronous, lock-only read that never touches the actor. It mirrors the
+/// state transitions through [`Session::refresh_status`], the single choke point
+/// every server's lifecycle already funnels through.
+type SharedPids = Arc<Mutex<BTreeMap<Language, u32>>>;
 
 impl std::fmt::Debug for LspHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -206,6 +218,21 @@ impl LspHandle {
             Err(poisoned) => poisoned.into_inner().values().cloned().collect(),
         };
         LspStatus { servers }
+    }
+
+    /// The OS pids of every server that is up right now, one per language.
+    ///
+    /// Read from the shared snapshot with a single non-blocking lock, so it is
+    /// safe to call while the process is exiting and the tokio runtime is no
+    /// longer being polled — which is exactly where the app-exit handler calls
+    /// it, to tree-kill each language server (Roslyn and its `BuildHost`
+    /// children, node, …) that never registered in the running store. Empty
+    /// while nothing is up and immediately after teardown.
+    pub fn server_pids(&self) -> Vec<u32> {
+        match self.pids.lock() {
+            Ok(pids) => pids.values().copied().collect(),
+            Err(poisoned) => poisoned.into_inner().values().copied().collect(),
+        }
     }
 
     /// Ask for teardown and return immediately.
@@ -489,6 +516,7 @@ pub fn start_with_probe(
     probe: Arc<dyn Probe + Send + Sync>,
 ) -> LspHandle {
     let status: SharedStatus = Arc::new(Mutex::new(BTreeMap::new()));
+    let pids: SharedPids = Arc::new(Mutex::new(BTreeMap::new()));
     let (tx, rx) = mpsc::unbounded_channel();
 
     let mut session = Session {
@@ -496,6 +524,7 @@ pub fn start_with_probe(
         servers: BTreeMap::new(),
         documents: BTreeMap::new(),
         status: Arc::clone(&status),
+        pids: Arc::clone(&pids),
         // Weak, so the actor's own copy cannot keep the channel open: when every
         // `LspHandle` is dropped the receive loop has to end and tear down, and
         // a strong sender held here would mean it never did.
@@ -518,6 +547,7 @@ pub fn start_with_probe(
         generation,
         tx,
         status,
+        pids,
     }
 }
 
@@ -667,6 +697,9 @@ struct Session {
     /// record of who has what open permanently wrong.
     documents: BTreeMap<Language, Documents>,
     status: SharedStatus,
+    /// The live-pid mirror, updated in lock-step with `status` from
+    /// [`Session::refresh_status`] and read synchronously by the app-exit handler.
+    pids: SharedPids,
     tx: mpsc::WeakUnboundedSender<Message>,
     probe: Arc<dyn Probe + Send + Sync>,
 }
@@ -1741,6 +1774,30 @@ impl Session {
                 status.remove(&language);
             }
         }
+
+        // Mirror the live pid in lock-step, so the app-exit handler can read it
+        // without the actor. Only a server that is `Up` and reports a pid is
+        // tracked — everything else (starting, failed, torn down) contributes
+        // nothing, so a pid never lingers past the process it names.
+        let pid = self
+            .servers
+            .get(&language)
+            .and_then(|server| match &server.state {
+                State::Up(client) => client.pid(),
+                _ => None,
+            });
+        let mut pids = match self.pids.lock() {
+            Ok(pids) => pids,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match pid {
+            Some(pid) => {
+                pids.insert(language, pid);
+            }
+            None => {
+                pids.remove(&language);
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1766,6 +1823,12 @@ impl Session {
         // `Ready` would be read as a session that can answer.
         if let Ok(mut status) = self.status.lock() {
             status.clear();
+        }
+        // The pid mirror empties with it: the processes are being shut down (the
+        // spawned tasks hold the last `Arc` and drop it), so a pid left here would
+        // name a process this session no longer owns.
+        if let Ok(mut pids) = self.pids.lock() {
+            pids.clear();
         }
     }
 }

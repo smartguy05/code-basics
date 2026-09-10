@@ -685,6 +685,16 @@ impl AppState {
         self.slot(&canonical).and_then(|slot| slot.lsp())
     }
 
+    /// A clone of every open workspace's language-server handle.
+    ///
+    /// For the app-exit sweep: language servers are the one spawn path that never
+    /// registers in the running store, so the exit handler reaches them here and
+    /// tree-kills their pids synchronously. Leaves each handle in place (a clone),
+    /// so this is safe to call while the process is shutting down.
+    pub fn all_lsp_handles(&self) -> Vec<LspHandle> {
+        self.map().values().filter_map(|slot| slot.lsp()).collect()
+    }
+
     /// The active workspace's root, or `None` when nothing is open.
     ///
     /// A thin clone of the active pointer, exposed for the browser host's

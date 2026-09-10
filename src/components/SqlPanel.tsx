@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { SqlView } from "../views/SqlView";
 import { useDockEntry } from "./DockContext";
 import { dockId } from "./dockLogic";
+import { useFocusEntry, useFocusOffset } from "./focusOrderContext";
 import type { Workspace } from "../ipc/types";
 import {
   clampPanelPosition,
@@ -62,7 +63,21 @@ export function SqlPanel({
 
   useEffect(() => setMinimized(false), [restoreRequest]);
 
+  // Join the app-wide focus order like every other floating panel: clicking it
+  // (or restoring it) brings it to the front over terminals, Notes and the
+  // browser, and clicking one of those drops it behind again. `useFocusEntry`
+  // raises it on mount and releases it on unmount; `focusKey` is its stable
+  // per-codebase id, matching the dock entry below.
+  const focusKey = dockId(workspace.root, "sql");
+  const raiseSql = useFocusEntry(focusKey);
+  const sqlOffset = useFocusOffset(focusKey);
+
   const restore = useCallback(() => setMinimized(false), []);
+  // Restoring (un-minimizing) is a click's worth of intent, so bring the console
+  // forward — it stays mounted while minimized, so the mount-raise misses this.
+  useEffect(() => {
+    if (!minimized) raiseSql();
+  }, [minimized, raiseSql]);
   useDockEntry(
     minimized
       ? {
@@ -165,10 +180,14 @@ export function SqlPanel({
         className="review-panel sql-panel"
         hidden={minimized}
         ref={panelRef}
-        style={{
-          ...(pos ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" } : {}),
-          ...(size ? { width: size.width, height: size.height } : {}),
-        }}
+        onPointerDownCapture={raiseSql}
+        style={
+          {
+            ...(pos ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" } : {}),
+            ...(size ? { width: size.width, height: size.height } : {}),
+            "--cb-stack": sqlOffset,
+          } as React.CSSProperties
+        }
       >
         <div className="review-header" onPointerDown={onHeaderPointerDown}>
           <strong>SQL</strong>

@@ -1012,6 +1012,31 @@ async fn teardown_is_safe_twice_and_a_superseded_session_serves_nothing() {
 }
 
 #[tokio::test]
+async fn a_live_server_pid_is_readable_synchronously_and_gone_after_teardown() {
+    // The app-exit handler kills the LSP process trees synchronously, from a
+    // runtime that is being abandoned — so it cannot `.await` the actor. It reads
+    // the pids off the shared snapshot the same way `status()` does. A pid that
+    // stayed in that snapshot after teardown would make the exit handler kill a
+    // pid it no longer owns (and a reused one is a stranger's process); a pid that
+    // never appeared would leak the server the handler exists to reap.
+    bounded!(async {
+        let harness = harness(json!({ "capabilities": capabilities(&[]) }));
+        assert!(
+            harness.handle.server_pids().is_empty(),
+            "nothing is started until the first request"
+        );
+
+        started(&harness).await;
+        let pids = harness.handle.server_pids();
+        assert_eq!(pids.len(), 1, "one server is up: {pids:?}");
+        assert!(pids[0] > 0, "a real OS pid: {pids:?}");
+
+        harness.handle.request_teardown();
+        until(|| harness.handle.server_pids().is_empty()).await;
+    });
+}
+
+#[tokio::test]
 async fn a_handle_reports_the_root_and_generation_it_was_started_for() {
     // The generation is how `AppState` tells a live session from one that was
     // superseded while a request was in flight.

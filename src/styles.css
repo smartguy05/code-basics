@@ -5383,14 +5383,16 @@ button.danger:hover:not(:disabled) {
 /* SQL console — the floating window (Task A)                               */
 /* ======================================================================== */
 
-/* Reuses the .review-panel base (float, drag, resize, minimize). Deliberately
-   writes NO z-index: the panel stays in the base panel band that
-   `.review-panel` already sets, beside Review/Behavioral/Apps. It has no raise
-   trigger of its own, and a band above the terminals would pin it permanently
-   over a terminal the user just clicked. Wider and taller than the agent panel
-   by default — it holds an editor, a results grid and an object explorer side
-   by side, and the tab it replaces had the whole window. */
+/* Reuses the .review-panel base (float, drag, resize, minimize). Joins the
+   shared floating-panel band like `.terminal-panel`/`.notes-panel`/`.browser-panel`:
+   `--cb-stack` is written by `SqlPanel` from the app-wide focus order, so clicking
+   the console raises it over the terminals/Notes/browser and clicking one of those
+   drops it behind again. Without this it sat one step below the band floor (61) and
+   could never come forward. Wider and taller than the agent panel by default — it
+   holds an editor, a results grid and an object explorer side by side, and the tab
+   it replaces had the whole window. */
 .sql-panel {
+  z-index: calc(var(--z-panel) + 1 + var(--cb-stack, 0));
   width: min(1100px, 86vw);
   height: min(720px, 82vh);
 }
