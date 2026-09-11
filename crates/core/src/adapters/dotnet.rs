@@ -523,6 +523,11 @@ impl LaunchProfile {
 /// Every profile is returned, including the hosting models this app cannot
 /// launch; [`LaunchProfile::launchable`] separates them.
 pub fn parse_launch_settings(json: &str) -> Vec<LaunchProfile> {
+    // Visual Studio commonly writes JSON files with a UTF-8 BOM. Reading one
+    // as a Rust string preserves that marker as U+FEFF, which serde_json does
+    // not accept before the opening `{`. Remove it only at the stream boundary:
+    // the same character inside a profile value is ordinary user data.
+    let json = json.strip_prefix('\u{feff}').unwrap_or(json);
     let Ok(root) = serde_json::from_str::<serde_json::Value>(json) else {
         return Vec::new();
     };

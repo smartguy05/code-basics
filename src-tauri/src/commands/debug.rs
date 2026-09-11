@@ -983,4 +983,30 @@ mod tests {
         assert_eq!(launch["args"], json!(["--stream", "debug"]));
         assert_eq!(launch["env"]["REDIS_STREAM"], "debug");
     }
+
+    #[test]
+    fn dotnet_launch_applies_a_bom_prefixed_launch_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("src").join("Api");
+        std::fs::create_dir_all(project_dir.join("Properties")).unwrap();
+        std::fs::write(project_dir.join("Api.csproj"), "<Project />").unwrap();
+        std::fs::write(
+            project_dir.join("Properties").join("launchSettings.json"),
+            "\u{feff}{\"profiles\":{\"https\":{\"commandName\":\"Project\",\"applicationUrl\":\"https://localhost:7003;http://localhost:5149\",\"environmentVariables\":{\"ASPNETCORE_ENVIRONMENT\":\"Development\"}}}}",
+        )
+        .unwrap();
+
+        let mut workspace = workspace();
+        workspace.root = dir.path().to_path_buf();
+        let mut config =
+            RunConfig::new("api", "Api", RunKind::App, "dotnet", ConfigSource::UserFile);
+        config.project = Some(PathBuf::from("src").join("Api").join("Api.csproj"));
+
+        let launch = dotnet_launch(&workspace, &config, Path::new("Api.dll"));
+        assert_eq!(launch["env"]["ASPNETCORE_ENVIRONMENT"], "Development");
+        assert_eq!(
+            launch["env"]["ASPNETCORE_URLS"],
+            "https://localhost:7003;http://localhost:5149"
+        );
+    }
 }

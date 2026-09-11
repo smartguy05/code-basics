@@ -1039,6 +1039,21 @@ fn reads_project_launch_profiles() {
 }
 
 #[test]
+fn reads_launch_profiles_after_a_utf8_bom() {
+    let profiles = parse_launch_settings(&format!("\u{feff}{LAUNCH_SETTINGS}"));
+    let https = profiles.iter().find(|p| p.name == "https").unwrap();
+
+    assert_eq!(
+        https.env.get("ASPNETCORE_ENVIRONMENT").map(String::as_str),
+        Some("Development")
+    );
+    assert_eq!(
+        https.application_url.as_deref(),
+        Some("https://localhost:7051;http://localhost:5051")
+    );
+}
+
+#[test]
 fn hosting_profiles_this_app_cannot_launch_are_reported_not_dropped() {
     // Dropping them made a project whose only profile is IIS Express look like
     // it had no profiles at all, with nothing to explain why.
