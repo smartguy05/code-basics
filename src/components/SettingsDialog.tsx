@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { applyAppearance, loadAppearance, validThemeColors } from "../appearance";
 import {
-  activeTheme, allThemes, BUILTIN_THEMES, clampWindowOpacity, COLOR_KEYS, DEFAULT_APPEARANCE,
+  activeTheme, allThemes, BUILTIN_THEMES, clampUnfocusedOpacity, clampWindowOpacity, COLOR_KEYS, DEFAULT_APPEARANCE,
   parseThemeFile,
   type AppearanceSettings, type ThemeDefinition,
 } from "../appearanceLogic";
@@ -18,7 +18,9 @@ import {
 import * as api from "../ipc/api";
 import type { DetectedShells } from "../ipc/types";
 
-type Page = "appearance" | "terminal" | "keyboard" | "reference";
+import { McpToolsPage } from "./McpToolsPage";
+
+type Page = "appearance" | "terminal" | "mcp" | "keyboard" | "reference";
 const cloneAppearance = (value: AppearanceSettings): AppearanceSettings => JSON.parse(JSON.stringify(value)) as AppearanceSettings;
 
 function downloadTheme(theme: ThemeDefinition) {
@@ -142,6 +144,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         <nav>
           <button className={page === "appearance" ? "active" : ""} onClick={() => setPage("appearance")}>Appearance</button>
           <button className={page === "terminal" ? "active" : ""} onClick={() => setPage("terminal")}>Terminal</button>
+          <button className={page === "mcp" ? "active" : ""} onClick={() => setPage("mcp")}>MCP tools</button>
           <button className={page === "keyboard" ? "active" : ""} onClick={() => setPage("keyboard")}>Keyboard</button>
           <button className={page === "reference" ? "active" : ""} onClick={() => setPage("reference")}>Native keys</button>
         </nav>
@@ -179,6 +182,23 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </div>
             {transparency.reason !== null && <div className="warning">{transparency.reason}</div>}
             <p>Applies only while no file or diff is open. Terminals, Notes and the other floating panels stay opaque.</p>
+            {/* A separate control from the window opacity above: this fades an
+                individual editor or terminal while it is not focused, so the one
+                being typed in stands out. Not runtime-gated, so it previews and
+                applies through `applyAppearance` like the fonts. */}
+            <div className="settings-row">
+              <label>Unfocused editor/terminal opacity</label>
+              <input
+                type="range"
+                min={30}
+                max={100}
+                step={5}
+                value={appearance.unfocusedOpacity}
+                onChange={(event) => preview({ ...appearance, unfocusedOpacity: clampUnfocusedOpacity(Number(event.target.value)) })}
+              />
+              <span className="muted">{appearance.unfocusedOpacity}%</span>
+            </div>
+            <p>Fades a file editor or terminal while it does not have focus. The focused one is always fully opaque; 100% turns the effect off.</p>
             <h3>Colors</h3>
             <div className="settings-grid colors">{COLOR_KEYS.map((key) => <label key={key}>{key}<span><input type="color" disabled={selectedBuiltin} value={selected.colors[key].startsWith("#") && selected.colors[key].length === 7 ? selected.colors[key] : "#000000"} onChange={(event) => updateTheme((theme) => ({ ...theme, colors: { ...theme.colors, [key]: event.target.value } }))} /><input disabled={selectedBuiltin} value={selected.colors[key]} onChange={(event) => updateTheme((theme) => ({ ...theme, colors: { ...theme.colors, [key]: event.target.value } }))} /></span></label>)}</div>
           </>}
@@ -207,6 +227,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {shellMissing && <div className="warning">{shellMissing}</div>}
             <p>Applies to terminals opened from now on. A terminal already open keeps the shell it started with.</p>
           </>}
+          {page === "mcp" && <McpToolsPage />}
           {page === "keyboard" && <>
             <input className="settings-search" placeholder="Search commands" value={query} onChange={(event) => setQuery(event.target.value)} />
             <div className="shortcut-list">{sections.map((section) => <div key={section.title}>

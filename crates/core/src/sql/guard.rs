@@ -294,6 +294,20 @@ fn classify_statement(statement: &Statement) -> Verdict {
         },
         Statement::ExplainTable { .. } => return Verdict::ReadOnly,
 
+        // Transaction control performs no data modification of its own: the
+        // statements *inside* the transaction determine whether the batch is a
+        // read or a write. Classified as a read so it is neutral to `stricter`
+        // (ReadOnly is its identity) — a `BEGIN; UPDATE …; COMMIT;` batch is then
+        // as strict as its `UPDATE`, a write the writes-allowed setting can lift.
+        // Without this these fell to the `other` arm below as `Unrecognised`,
+        // which outranks a write and is never lifted, so any transaction-wrapped
+        // write was refused even with writes enabled.
+        Statement::StartTransaction { .. }
+        | Statement::Commit { .. }
+        | Statement::Rollback { .. }
+        | Statement::Savepoint { .. }
+        | Statement::ReleaseSavepoint { .. } => return Verdict::ReadOnly,
+
         // A `PRAGMA` with a value sets it; without one it reads it.
         Statement::Pragma { value: Some(_), .. } => "PRAGMA",
         Statement::Pragma { value: None, .. } => return Verdict::ReadOnly,

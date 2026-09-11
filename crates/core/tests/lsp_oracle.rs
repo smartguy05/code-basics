@@ -282,7 +282,7 @@ async fn run(oracle: &Oracle) {
         LspConfig { servers }
     });
 
-    let handle = session::start(dir.path().to_path_buf(), config, 1);
+    let handle = session::start(dir.path().to_path_buf(), config, 1, &[]);
     let workspace = Workspace { handle, dir };
 
     // `resolve_all` runs synchronously inside `session::start`, so this is

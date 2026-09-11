@@ -434,6 +434,7 @@ fn session_for(state: &AppState, root: &str) -> LspHandle {
         PathBuf::from(root),
         None,
         state.begin_lsp_session(),
+        &[],
         Arc::new(NothingInstalled),
     )
 }
@@ -604,48 +605,170 @@ fn with_no_workspace_open_there_is_no_active_slot() {
     assert!(state.lsp().is_none());
 }
 
+// -- Browser: per-workspace, active-resolved -------------------------------
+
 #[test]
-fn the_browser_panel_survives_every_workspace_lifecycle_event() {
-    // Global and *not* per-workspace, like `pty`: there is one browser panel for
-    // the whole application, so opening a codebase, switching to another and
-    // closing one must not disturb the page. A per-slot browser would also mean
-    // a *visible* OS webview left painting over a codebase the user had switched
-    // away from, since a background `WorkspaceTab` is only `hidden`.
+fn browser_shared_is_get_or_create_and_stable_across_calls() {
+    // One data slot per root, created on first ask and the *same* slot every
+    // time after — so the panel's poll and a navigation act on one state.
     let state = AppState::default();
-    state.browser_data_mut(|data| {
-        crate::browser::shared::note_load_finished(data, "https://x.example/a")
-    });
-    state
-        .browser_data_mut(|data| crate::browser::shared::grant_consent(data, true, false))
-        .unwrap();
-
-    state.set_workspace(workspace_at("/a")).unwrap();
-    state.set_workspace(workspace_at("/b")).unwrap();
-    state.set_active(Path::new("/a")).unwrap();
-    state.close(Path::new("/a"));
-    state.close(Path::new("/b"));
-
-    let snapshot = state.browser_data(crate::browser::shared::snapshot);
-    assert_eq!(snapshot.url.as_deref(), Some("https://x.example/a"));
+    let first = state.browser_shared(Path::new("/a"));
+    let again = state.browser_shared(Path::new("/a"));
     assert!(
-        snapshot.consent.reads(),
-        "consent is scoped to the *page*, not to a codebase: closing a workspace \
-         the user was not even browsing must not revoke it"
+        Arc::ptr_eq(&first, &again),
+        "a second ask minted a different slot for the same root"
+    );
+    let other = state.browser_shared(Path::new("/b"));
+    assert!(
+        !Arc::ptr_eq(&first, &other),
+        "two roots must not share one browser slot"
     );
 }
 
 #[test]
-fn with_no_workspace_open_the_browser_state_is_still_readable() {
-    // Every other cache answers `None` with nothing open. This one must not:
-    // the panel is app-level and openable on the welcome screen, so a read that
-    // depended on an active slot would make the first plugin with
-    // `needsWorkspace: false` unusable exactly where it is meant to work.
+fn active_browser_shared_resolves_to_the_active_root() {
+    // The security choke point: the agent handle is minted from the ACTIVE
+    // root's slot, so open A, grant in A, switch to B, and the resolved slot is
+    // B's — carrying none of A's grant.
     let state = AppState::default();
-    assert!(state.active_slot().is_err());
-    let snapshot = state.browser_data(crate::browser::shared::snapshot);
+    state.set_workspace(workspace_at("/a")).unwrap();
+    state.set_workspace(workspace_at("/b")).unwrap();
+
+    // A had a browser open with a granted read.
+    state.set_active(Path::new("/a")).unwrap();
+    state.browser_data_mut(Path::new("/a"), |data| {
+        crate::browser::shared::note_load_finished(data, "https://a.example/x")
+    });
+    state
+        .browser_data_mut(Path::new("/a"), |data| {
+            crate::browser::shared::grant_consent(data, true, false)
+        })
+        .unwrap();
+
+    // B is active and had a browser open too, but never granted.
+    state.set_active(Path::new("/b")).unwrap();
+    state.browser_data_mut(Path::new("/b"), |data| {
+        crate::browser::shared::note_load_finished(data, "https://b.example/y")
+    });
+
+    let (root, shared) = state.active_browser_shared();
+    assert_eq!(root, PathBuf::from("/b"), "resolved a non-active root");
+    let snapshot = {
+        let guard = shared.lock().unwrap();
+        crate::browser::shared::snapshot(&guard)
+    };
+    assert_eq!(snapshot.url.as_deref(), Some("https://b.example/y"));
+    assert!(
+        !snapshot.consent.reads(),
+        "B's active slot carried A's grant"
+    );
+}
+
+#[test]
+fn a_grant_in_one_workspace_is_never_visible_from_another() {
+    // Named for the bug it forbids. A read grant made in A's panel lives in A's
+    // slot and is unreachable while B is active, because consent is a field of
+    // per-root BrowserShared and the agent resolves the active root's slot.
+    let state = AppState::default();
+    state.set_workspace(workspace_at("/a")).unwrap();
+    state.browser_data_mut(Path::new("/a"), |data| {
+        crate::browser::shared::note_load_finished(data, "https://a.example/x")
+    });
+    state
+        .browser_data_mut(Path::new("/a"), |data| {
+            crate::browser::shared::grant_consent(data, true, true)
+        })
+        .unwrap();
+
+    state.set_workspace(workspace_at("/b")).unwrap(); // B now active
+
+    let (_root, shared) = state.active_browser_shared();
+    let reads = {
+        let guard = shared.lock().unwrap();
+        guard.consent.reads()
+    };
+    assert!(!reads, "an agent on B could see A's authenticated grant");
+}
+
+#[test]
+fn active_browser_shared_with_no_workspace_open_is_panel_closed() {
+    // No workspace at all → a transient PanelClosed placeholder, so the agent
+    // gate refuses with "open the panel" guidance rather than routing anywhere.
+    let state = AppState::default();
+    let (_root, shared) = state.active_browser_shared();
+    let snapshot = {
+        let guard = shared.lock().unwrap();
+        crate::browser::shared::snapshot(&guard)
+    };
     assert_eq!(
         snapshot.availability,
         cb_core::browser::model::BrowserAvailability::PanelClosed
     );
-    assert!(!snapshot.consent.reads());
+}
+
+#[test]
+fn active_browser_shared_for_a_workspace_that_never_opened_a_browser_is_panel_closed() {
+    // Active workspace, but its browser was never opened → PanelClosed, and
+    // crucially NOT another root's data.
+    let state = AppState::default();
+    state.set_workspace(workspace_at("/a")).unwrap();
+    state.browser_data_mut(Path::new("/a"), |data| {
+        crate::browser::shared::note_load_finished(data, "https://a.example/x")
+    });
+    state.set_workspace(workspace_at("/b")).unwrap(); // B active, never opened a browser
+
+    let (root, shared) = state.active_browser_shared();
+    assert_eq!(root, PathBuf::from("/b"));
+    let snapshot = {
+        let guard = shared.lock().unwrap();
+        crate::browser::shared::snapshot(&guard)
+    };
+    assert_eq!(
+        snapshot.availability,
+        cb_core::browser::model::BrowserAvailability::PanelClosed,
+        "B fell back to A's page"
+    );
+    assert!(snapshot.url.is_none(), "B adopted A's url");
+}
+
+#[test]
+fn closing_a_workspace_drops_its_browser_data() {
+    // The whole point of per-workspace: a closed codebase's page state does not
+    // linger, and reopening that root starts clean.
+    let state = AppState::default();
+    state.set_workspace(workspace_at("/a")).unwrap();
+    state.browser_data_mut(Path::new("/a"), |data| {
+        crate::browser::shared::note_load_finished(data, "https://a.example/x")
+    });
+    // Sanity: the slot holds the page.
+    assert_eq!(
+        state
+            .browser_data(Path::new("/a"), crate::browser::shared::snapshot)
+            .url
+            .as_deref(),
+        Some("https://a.example/x")
+    );
+
+    state.close(Path::new("/a"));
+
+    // A fresh get-or-create after close is empty — the old data is gone.
+    let snapshot = state.browser_data(Path::new("/a"), crate::browser::shared::snapshot);
+    assert!(snapshot.url.is_none(), "browser data survived a close");
+    assert_eq!(
+        snapshot.availability,
+        cb_core::browser::model::BrowserAvailability::PanelClosed
+    );
+}
+
+#[test]
+fn active_root_pathbuf_tracks_the_foreground_workspace() {
+    // The host's `set_visible` gate reads this to refuse a non-active root.
+    let state = AppState::default();
+    assert!(state.active_root_pathbuf().is_none());
+    state.set_workspace(workspace_at("/a")).unwrap();
+    assert_eq!(state.active_root_pathbuf(), Some(PathBuf::from("/a")));
+    state.set_workspace(workspace_at("/b")).unwrap();
+    assert_eq!(state.active_root_pathbuf(), Some(PathBuf::from("/b")));
+    state.set_active(Path::new("/a")).unwrap();
+    assert_eq!(state.active_root_pathbuf(), Some(PathBuf::from("/a")));
 }

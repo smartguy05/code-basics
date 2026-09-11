@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { OctagonX } from "lucide-react";
 import type { RunningReport } from "../ipc/types";
 import {
   clampPanelPosition,
@@ -180,8 +181,13 @@ export function RunningPanel({
                         View
                       </button>
                     )}
-                    <button className="running-kill" onClick={() => onKill(killRequest(r, false))}>
-                      Kill
+                    <button
+                      className="running-kill icon-label-button"
+                      title="Stop Process"
+                      aria-label="Stop Process"
+                      onClick={() => onKill(killRequest(r, false))}
+                    >
+                      <OctagonX />
                     </button>
                   </div>
                 ))}
@@ -205,7 +211,9 @@ export function RunningPanel({
                     <span className="running-meta">{rootBasename(r.root)}</span>
                     <span className="running-meta">pid {r.pid}</span>
                     <button
-                      className="running-kill"
+                      className="running-kill icon-label-button"
+                      title="Stop Process"
+                      aria-label="Stop Process"
                       onClick={() => {
                         if (
                           window.confirm(
@@ -216,7 +224,7 @@ export function RunningPanel({
                         }
                       }}
                     >
-                      Kill
+                      <OctagonX />
                     </button>
                   </div>
                 ))}

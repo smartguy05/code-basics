@@ -65,6 +65,7 @@ pub mod argv;
 pub mod execute;
 pub mod expose;
 pub mod install;
+pub mod liveness;
 pub mod ndjson;
 pub mod render;
 pub mod serve;

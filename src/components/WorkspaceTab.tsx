@@ -1,30 +1,50 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArchitectureView } from "../views/ArchitectureView";
 import { AskPanel } from "./AskPanel";
 import { BehavioralPanel } from "./BehavioralPanel";
+import { BrowserPanel } from "./BrowserPanel";
+import {
+  CLOSED_BROWSER_PANEL,
+  browserPanelAfterFeatureChange,
+  browserPanelMounted,
+  closeBrowserPanel,
+  openBrowserPanel,
+} from "./browserPanelLogic";
 import { HistoryView } from "../views/HistoryView";
 import { InspectView } from "../views/InspectView";
 import { RunView } from "../views/RunView";
 import { ReviewPanel } from "./ReviewPanel";
+import { RegionHost } from "./RegionHost";
+import { RegionProvider } from "./RegionContext";
+import { DockableTerminal } from "./DockableTerminal";
 import { SearchEverywhere } from "./SearchEverywhere";
+import { Occluder } from "./occlusionContext";
 import { SetupPrompt } from "./SetupPrompt";
 import { McpServerPanel } from "./McpServerPanel";
+import { RoslynMcpPanel } from "./RoslynMcpPanel";
 import { SqlPanel } from "./SqlPanel";
+import { RedisPanel } from "./RedisPanel";
+import {
+  CLOSED_REDIS_PANEL,
+  closeRedisPanel,
+  openRedisPanel,
+  redisPanelMounted,
+} from "./redisPanelLogic";
+import { TasksPanel } from "./TasksPanel";
 import { shouldPrompt, setDismissed } from "./setupPromptLogic";
-import { TerminalPanel } from "./TerminalPanel";
 import { TestsView } from "../views/TestsView";
 import { terminalTitle } from "./askLogic";
 import {
   makeAgentTerminal,
   makeTerminal,
   nextTerminalNumber,
-  raiseTerminal,
   recolorTerminal,
   renameTerminal,
-  stackOffset,
-  syncStackOrder,
   type TerminalDescriptor,
 } from "./terminalLogic";
+import { focusOffset } from "./focusOrderLogic";
+import { useFocusOrder } from "./focusOrderContext";
+import { dockId } from "./dockLogic";
 import { loadTerminalShell, resolvePreferredShell } from "./terminalShellLogic";
 import { sendToAgentTitle } from "./notesLogic";
 import {
@@ -34,6 +54,14 @@ import {
   sqlPanelAfterFeatureChange,
   sqlPanelMounted,
 } from "./sqlPanelLogic";
+import {
+  CLOSED_TASKS_PANEL,
+  closeTasksPanel,
+  openTasksPanel,
+  tasksPanelAfterFeatureChange,
+  tasksPanelMounted,
+} from "./tasksPanelLogic";
+import { loadAgentPrefs, preferredAgentId, preferredModel } from "./reviewLogic";
 import type { TabSignal } from "./workspaceTabsLogic";
 import * as api from "../ipc/api";
 import type { AgentMode } from "../ipc/api";
@@ -120,6 +148,43 @@ export interface WorkspaceTabHandle {
    * nothing.
    */
   openMcp(): void;
+  /**
+   * Open the embedded browser for this codebase, or restore it when it is
+   * already open and minimized.
+   *
+   * Part of the handle for the same reason `openSql` is: the Plugins menu is
+   * global titlebar chrome and the browser is per-codebase now — each open
+   * codebase keeps its own live page and only the active one is visible. The
+   * feature gate is inside the tab, so calling this while `webBrowser` is off
+   * does nothing.
+   */
+  openBrowser(): void;
+  /**
+   * Open the per-codebase Tasks panel, or restore it when it is already open and
+   * minimized.
+   *
+   * Part of the handle for the same reason `openSql` is: the Plugins menu is
+   * global titlebar chrome and the task list is per-codebase (its store lives
+   * under the workspace's `.code-basics/`). The feature gate is inside the tab,
+   * so calling this while `tasks` is off does nothing.
+   */
+  openTasks(): void;
+  /**
+   * Open the Roslyn / LSP MCP server's installer for this codebase.
+   *
+   * Part of the handle for the same reason `openMcp` is: the Plugins menu is
+   * global titlebar chrome and this acts on the foreground codebase (a
+   * project-scope install writes `.mcp.json` at its root). Unlike `openMcp`
+   * there is no feature gate — the language server is always-on.
+   */
+  openRoslynMcp(): void;
+  /**
+   * Open the Redis panel for this codebase, or restore it when minimized.
+   *
+   * Part of the handle for the same reason `openSql` is. Unlike `openSql` there
+   * is no feature gate — the Redis plugin is always-on, like the Roslyn server.
+   */
+  openRedis(): void;
 }
 
 /**
@@ -248,12 +313,46 @@ export function WorkspaceTab({
   const [sqlPanel, setSqlPanel] = useState(CLOSED_SQL_PANEL);
   const sqlEnabled = featureEnabled(features, "sqlConsole");
   const openSql = () => setSqlPanel(openSqlPanel);
+
+  // The Redis panel: a floating window like the SQL console, but always-on (no
+  // feature gate), so there is no unmount-on-feature-change to handle.
+  const [redisPanel, setRedisPanel] = useState(CLOSED_REDIS_PANEL);
+  const openRedis = () => setRedisPanel(openRedisPanel);
   // Switching the feature off unmounts the console rather than hiding it — see
   // `sqlPanelAfterFeatureChange` for why the two are different. The decision
   // returns the same object when nothing changes, so this cannot loop.
   useEffect(() => {
     setSqlPanel((state) => sqlPanelAfterFeatureChange(state, sqlEnabled));
   }, [sqlEnabled]);
+
+  /**
+   * The embedded browser: a floating window per codebase, mirroring the SQL
+   * console. Each open codebase keeps its own live page; only the active one is
+   * visible (the `active` gate inside `BrowserPanel`).
+   */
+  const [browserPanel, setBrowserPanel] = useState(CLOSED_BROWSER_PANEL);
+  const browserEnabled = featureEnabled(features, "webBrowser");
+  const openBrowser = () => setBrowserPanel(openBrowserPanel);
+  // Switching the feature off unmounts the browser rather than hiding it — a
+  // hidden webview keeps a WebView2 process, its cookie jar and whatever the
+  // page polls alive. The decision returns the same object when nothing changes,
+  // so this cannot loop.
+  useEffect(() => {
+    setBrowserPanel((state) => browserPanelAfterFeatureChange(state, browserEnabled));
+  }, [browserEnabled]);
+
+  /**
+   * The Tasks panel: a floating window per codebase, mirroring the SQL console.
+   * Its store is per-repository and gitignored (`cb_core::tasks`).
+   */
+  const [tasksPanel, setTasksPanel] = useState(CLOSED_TASKS_PANEL);
+  const tasksEnabled = featureEnabled(features, "tasks");
+  const openTasks = () => setTasksPanel(openTasksPanel);
+  // Switching the feature off unmounts the panel rather than hiding it. The
+  // decision returns the same object when nothing changes, so this cannot loop.
+  useEffect(() => {
+    setTasksPanel((state) => tasksPanelAfterFeatureChange(state, tasksEnabled));
+  }, [tasksEnabled]);
 
   /**
    * The SQL MCP server installer: a transient modal, so a plain boolean is
@@ -268,6 +367,13 @@ export function WorkspaceTab({
   useEffect(() => {
     if (!mcpEnabled) setMcpPanelOpen(false);
   }, [mcpEnabled]);
+
+  // The Roslyn / LSP MCP server's installer. Unlike the SQL one there is no
+  // feature gate: the language server is always-on, so the panel is
+  // unconditional. A transient modal, so closing it is an unmount and nothing is
+  // lost by that.
+  const [roslynMcpPanelOpen, setRoslynMcpPanelOpen] = useState(false);
+  const openRoslynMcp = () => setRoslynMcpPanelOpen(true);
 
   /**
    * Keep the selected tab on something that still exists. Turning off the
@@ -311,9 +417,13 @@ export function WorkspaceTab({
     // command advertised in Settings must have a handler, and a command whose
     // feature is off must not act.
     if (mcpEnabled) registrations.push(registerCommand("plugin.mcp", openMcp));
+    // Registered only while its feature is on, exactly as `plugin.mcp` is.
+    if (tasksEnabled) registrations.push(registerCommand("plugin.tasks", openTasks));
+    // Always registered — the Redis plugin is always-on (like the Roslyn server).
+    registrations.push(registerCommand("view.redis", openRedis));
     return () => registrations.forEach((unregister) => unregister());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, shownTabs, sqlEnabled, mcpEnabled]);
+  }, [active, shownTabs, sqlEnabled, mcpEnabled, tasksEnabled]);
   const [showSetup, setShowSetup] = useState(false);
   const [inspectRequest, setInspectRequest] = useState<InspectRequest | null>(null);
   const [openRequest, setOpenRequest] = useState<OpenFileRequest | null>(null);
@@ -363,21 +473,44 @@ export function WorkspaceTab({
 
   const [terminals, setTerminals] = useState<TerminalDescriptor[]>([]);
   const terminalSeq = useRef(0);
+  // The floating-terminal portal layer. A DOM node inside `.workspace-tab` (so it
+  // inherits the codebase's `hidden`), the portal target for terminals that are
+  // not docked into a region — see `DockableTerminal`.
+  const [floatLayer, setFloatLayer] = useState<HTMLDivElement | null>(null);
 
-  // Which terminal is in front, bottom-most key first. Kept *beside* `terminals`
-  // rather than by reordering it: the array index places each pill and cascade
-  // offset, so raising by reordering would teleport pills and shift un-dragged
-  // panels. One reconciling effect keeps this in step with what is open, so it
-  // cannot drift the way separate edits in `openTerminal`/`closeTerminal` could.
-  const [stackOrder, setStackOrder] = useState<string[]>([]);
+  // Which panel is in front is now one app-wide focus order (`focusOrderContext`)
+  // spanning this codebase's terminals and browser plus the global Notes, so "last
+  // clicked is on top" holds across all of them. The order is kept *beside*
+  // `terminals` rather than by reordering the array: the array index places each
+  // pill and cascade offset, so raising by reordering would teleport pills.
+  const { order: focusOrder, raise: raiseFocus, release: releaseFocus } = useFocusOrder();
+  // A terminal's focus id is namespaced by codebase (two codebases each host a
+  // `term-1`), and keyed by the stable `number` — like its dock id — so it does
+  // not change when an earlier terminal closes.
+  const termFocusId = useCallback(
+    (number: number) => dockId(workspace.root, `term-${number}`),
+    [workspace.root],
+  );
+  const browserFocusId = dockId(workspace.root, "browser");
+
+  // Keep the focus order in step with what is open: raise a newly opened terminal
+  // (so it starts on top) and release a closed one (so it stops consuming raise
+  // budget). Only this codebase's terminal ids are touched — the browser and Notes
+  // manage their own presence — so a prune here never drops another panel.
+  const knownTermIds = useRef<Set<string>>(new Set());
   useEffect(() => {
-    setStackOrder((order) =>
-      syncStackOrder(
-        order,
-        terminals.map((t) => t.key),
-      ),
-    );
-  }, [terminals]);
+    const current = new Set(terminals.map((t) => termFocusId(t.number)));
+    for (const id of current) if (!knownTermIds.current.has(id)) raiseFocus(id);
+    for (const id of knownTermIds.current) if (!current.has(id)) releaseFocus(id);
+    knownTermIds.current = current;
+  }, [terminals, termFocusId, raiseFocus, releaseFocus]);
+  // Release every terminal when the whole codebase tab unmounts (codebase closed).
+  useEffect(
+    () => () => {
+      for (const id of knownTermIds.current) releaseFocus(id);
+    },
+    [releaseFocus],
+  );
 
   // Which of this codebase's terminals currently want attention (bell while
   // minimized). Aggregated so `App` flashes the tab while any of them does.
@@ -536,6 +669,31 @@ export function WorkspaceTab({
       .catch((e) => setAskError(String(e)));
   };
 
+  /**
+   * Launch the agent for a task assigned to the AI, in an interactive terminal.
+   *
+   * Reuses the shared review agent picker's *preference* logic — the same
+   * `agentId`/`model` the Ask box and Review panel remember — rather than
+   * putting a second chooser in the Tasks panel. Delegates the actual spawn to
+   * `openAskTerminal`, so the command line is built by the backend and the same
+   * argv-safety guarantees apply. An agent that has vanished from PATH surfaces
+   * through `openAskTerminal`'s own error toast.
+   */
+  const launchTaskAgent = (prompt: string) => {
+    void api
+      .reviewAgents()
+      .then((list) => {
+        const prefs = loadAgentPrefs(localStorage);
+        const chosen = preferredAgentId(prefs, list);
+        if (chosen === undefined) {
+          setAskError("No coding agent (claude/codex) is installed to run this task.");
+          return;
+        }
+        openAskTerminal(prompt, chosen, preferredModel(prefs, list, chosen));
+      })
+      .catch((e) => setAskError(String(e)));
+  };
+
   const closeTerminal = (key: string) =>
     setTerminals((open) => open.filter((t) => t.key !== key));
   const renameTerminalTo = (key: string, title: string) =>
@@ -604,6 +762,10 @@ export function WorkspaceTab({
     openSql,
     openAsk,
     openMcp,
+    openBrowser,
+    openTasks,
+    openRoslynMcp,
+    openRedis,
   });
   handleRef.current = {
     openTerminal,
@@ -615,6 +777,10 @@ export function WorkspaceTab({
     openSql,
     openAsk,
     openMcp,
+    openBrowser,
+    openTasks,
+    openRoslynMcp,
+    openRedis,
   };
   useEffect(() => {
     const stable: WorkspaceTabHandle = {
@@ -628,6 +794,10 @@ export function WorkspaceTab({
       openSql: () => handleRef.current.openSql(),
       openAsk: () => handleRef.current.openAsk(),
       openMcp: () => handleRef.current.openMcp(),
+      openBrowser: () => handleRef.current.openBrowser(),
+      openTasks: () => handleRef.current.openTasks(),
+      openRoslynMcp: () => handleRef.current.openRoslynMcp(),
+      openRedis: () => handleRef.current.openRedis(),
     };
     onRegister(workspace.root, stable);
     return () => onRegister(workspace.root, null);
@@ -650,6 +820,14 @@ export function WorkspaceTab({
   }, [workspace.root]);
 
   return (
+    <RegionProvider
+      root={workspace.root}
+      terminalIds={terminals.map((t) => t.key)}
+      panelIds={[
+        ...(sqlPanelMounted(sqlPanel, sqlEnabled) ? ["sql"] : []),
+        ...(browserPanelMounted(browserPanel, browserEnabled) ? ["browser"] : []),
+      ]}
+    >
     <div className="workspace-tab" hidden={!active}>
       <div className="tabs tabs-row">
         {shownTabs.map(({ id, label }) => (
@@ -659,6 +837,11 @@ export function WorkspaceTab({
         ))}
       </div>
 
+      {/* The inner tab bodies are the *center*; `RegionHost` surrounds them with
+          any docked editor/diff/terminal regions. When nothing is docked it is a
+          transparent pass-through. Editors and diffs are portaled in by RunView,
+          terminals by `DockableTerminal` below. */}
+      <RegionHost>
       {/* Run, Tests and Objects stay mounted while hidden (they own processes and
           consoles); Changes, History and Architecture mount only while this is
           the foreground tab and their inner tab is chosen, so a background
@@ -714,6 +897,7 @@ export function WorkspaceTab({
           <ArchitectureView workspace={workspace} onOpenFile={requestOpenFile} />
         </div>
       )}
+      </RegionHost>
 
       <SearchEverywhere
         workspace={workspace}
@@ -739,19 +923,23 @@ export function WorkspaceTab({
       )}
 
       {showSetup && (
-        <SetupPrompt
-          onDismiss={() => setShowSetup(false)}
-          onDontAskAgain={() => {
-            setDismissed(localStorage, workspace.root);
-            setShowSetup(false);
-          }}
-          onInstalled={() => setShowSetup(false)}
-        />
+        <>
+          <Occluder />
+          <SetupPrompt
+            onDismiss={() => setShowSetup(false)}
+            onDontAskAgain={() => {
+              setDismissed(localStorage, workspace.root);
+              setShowSetup(false);
+            }}
+            onInstalled={() => setShowSetup(false)}
+          />
+        </>
       )}
 
       {agentPanel && (
         <ReviewPanel
           key={`${agentPanel.title}:${agentPanel.initialPromptId ?? ""}:${agentPanel.token}`}
+          root={workspace.root}
           onClose={() => setAgentPanel(null)}
           initialPromptId={agentPanel.initialPromptId}
           initialPromptBody={agentPanel.initialPromptBody}
@@ -764,6 +952,7 @@ export function WorkspaceTab({
       {behavioralPanel && (
         <BehavioralPanel
           key={behavioralPanel.token}
+          root={workspace.root}
           configId={behavioralPanel.configId}
           httpFiles={behavioralPanel.httpFiles}
           verify={behavioralPanel.verify}
@@ -804,25 +993,85 @@ export function WorkspaceTab({
         />
       )}
 
+      {/* The Redis panel — always-on, so mounted whenever the user has it open. */}
+      {redisPanelMounted(redisPanel) && (
+        <RedisPanel
+          root={workspace.root}
+          workspaceName={workspace.name}
+          restoreRequest={redisPanel.restoreToken}
+          onClose={() => setRedisPanel(closeRedisPanel)}
+        />
+      )}
+
+      {/* The per-codebase Tasks panel — same mount rules as the SQL console:
+          mounted while the user has it open *and* the feature is on, staying
+          mounted (hidden) when minimized so an in-progress edit survives, and
+          unmounted when the feature is switched off. */}
+      {tasksPanelMounted(tasksPanel, tasksEnabled) && (
+        <TasksPanel
+          workspace={workspace}
+          restoreRequest={tasksPanel.restoreToken}
+          onLaunchAgent={launchTaskAgent}
+          onClose={() => setTasksPanel(closeTasksPanel)}
+        />
+      )}
+
       {/* Mounted only while open *and* the feature is on — a modal, so closing
           it is an unmount and nothing is lost by that. The feature gate is here
           rather than at the call site so no caller has to re-derive it. */}
       {mcpPanelOpen && mcpEnabled && (
-        <McpServerPanel onClose={() => setMcpPanelOpen(false)} />
+        <>
+          <Occluder />
+          <McpServerPanel onClose={() => setMcpPanelOpen(false)} />
+        </>
       )}
 
+      {/* The Roslyn / LSP MCP installer. No feature gate — the language server is
+          always-on, so the panel is unconditional. A modal, so closing it is an
+          unmount. */}
+      {roslynMcpPanelOpen && (
+        <>
+          <Occluder />
+          <RoslynMcpPanel onClose={() => setRoslynMcpPanelOpen(false)} />
+        </>
+      )}
+
+      {/* The embedded browser — per codebase, mirroring the SQL console.
+          Mounted while the user has it open *and* the feature is on (the two are
+          different facts). It stays mounted while this codebase is backgrounded
+          (`hidden={!active}` on the wrapper) so the page, its session and any
+          running SPA survive a tab switch; the OS webview is hidden through the
+          host by the `active`-gated `sync`, so a background codebase's page
+          cannot paint over the foreground one. Switching the feature off
+          unmounts it, which drops the WebView2 process tree. */}
+      {browserPanelMounted(browserPanel, browserEnabled) && (
+        <BrowserPanel
+          key={workspace.root}
+          root={workspace.root}
+          focusId={browserFocusId}
+          active={active}
+          restoreRequest={browserPanel.restoreToken}
+          enabled={browserEnabled}
+          onClose={() => setBrowserPanel(closeBrowserPanel)}
+        />
+      )}
+
+      {/* The floating-terminal portal layer — a zero-size, non-transformed node
+          so fixed-positioned terminals still resolve against the viewport, but
+          inside `.workspace-tab` so a backgrounded codebase's terminals stay
+          hidden with it. */}
+      <div className="terminal-float-layer" ref={setFloatLayer} />
+
       {terminals.map((t, index) => (
-        <TerminalPanel
+        <DockableTerminal
           key={t.key}
-          title={t.title}
-          cwd={t.cwd}
-          command={t.command}
+          descriptor={t}
           index={index}
-          stackOffset={stackOffset(stackOrder, t.key)}
-          color={t.color}
+          stackOffset={focusOffset(focusOrder, termFocusId(t.number))}
           workspaceActive={active}
+          floatLayer={floatLayer}
           onClose={() => closeTerminal(t.key)}
-          onRaise={() => setStackOrder((order) => raiseTerminal(order, t.key))}
+          onRaise={() => raiseFocus(termFocusId(t.number))}
           onAttentionChange={(wants) => setTerminalAttention(t.key, wants)}
           onCompleted={(success) => onSignal(workspace.root, success ? "done" : "error")}
           onRename={(title) => renameTerminalTo(t.key, title)}
@@ -830,5 +1079,6 @@ export function WorkspaceTab({
         />
       ))}
     </div>
+    </RegionProvider>
   );
 }

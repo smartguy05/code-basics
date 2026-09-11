@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as api from "../ipc/api";
 import { BrowserMcpPanel } from "./BrowserMcpPanel";
+import { slotKey, useRegions } from "./RegionContext";
+import type { Dockable } from "./regionLayoutLogic";
 import type { BrowserSnapshot } from "../ipc/types";
 import {
   clampPanelPosition,
@@ -16,14 +19,22 @@ import {
   consentBanner,
   READ_CONSENT_ACTION,
   WRITE_CONSENT_ACTION,
-  BROWSER_LAYOUT_KEY,
+  browserLayoutKey,
+  clampBrowserTop,
   hiddenPageReason,
+  occludedByAbovePanels,
+  occludedByPanels,
   pageRect,
   pageVisible,
   pillLabel,
   urlBarValue,
   type PanelGeometry,
 } from "./browserPanelLogic";
+import { resizeFromHandle, type ResizeEdge } from "./reviewLayoutLogic";
+import { useDockEntry } from "./DockContext";
+import { dockId } from "./dockLogic";
+import { useOcclusionCount } from "./occlusionContext";
+import { useFocusEntry, useFocusOffset, useFocusOrder } from "./focusOrderContext";
 
 /**
  * The embedded browser as a floating window.
@@ -40,16 +51,17 @@ import {
  * Rust host (`src-tauri/src/browser/mod.rs`), and it composites **above** the
  * DOM: it ignores `--z-panel`, `--z-notes` and `--z-overlay`, and `hidden` on a
  * React div does not hide it. So `.browser-page` below is a *placeholder* whose
- * only job is to be measured; the host is told its rect and paints there. That
- * also means a terminal, Notes or Search Everywhere dragged over this panel is
- * covered by the page — **accepted**, not a bug to work around here.
+ * only job is to be measured; the host is told its rect and paints there.
  *
- * Three things do hide it, and all three go through the host:
- *
- *  1. minimized → `browser_set_visible(false)`, the panel staying mounted so the
- *     page, its session and its running SPA survive (the `SqlPanel` rule),
- *  2. unmounted → `browser_close`, which **drops** the webview,
- *  3. an unusable rect → left hidden with `hiddenPageReason` shown in its place.
+ * Because it composites above the DOM, anything DOM that must appear over it is
+ * made visible by *hiding the page* — the six cases in `pageVisible`, all routed
+ * through the host: minimized, feature-off (→ `browser_close`, dropping the
+ * webview), an unusable rect (left hidden with `hiddenPageReason` in its place),
+ * a backgrounded codebase, the panel's own setup modal (bug 2), and an occluding
+ * surface over its rect (bug 3) — an open menu/modal (counted via
+ * `occlusionContext`) or a peer floating panel that is stacked *above* this one in
+ * the shared focus order and overlaps the page (`occludedByAbovePanels`, measured
+ * in `sync`). A peer the browser was raised over no longer hides the page.
  *
  * # Two CLAUDE.md gotchas that apply directly, and did cost a feature once
  *
@@ -67,10 +79,31 @@ import {
  * **after** the handler runs, so a synchronous `focus()` is silently undone.
  */
 export function BrowserPanel({
+  root,
+  focusId,
+  active,
   restoreRequest,
   enabled,
   onClose,
 }: {
+  /**
+   * The codebase this page belongs to. Every host call is scoped by it, so a
+   * page never reaches into another codebase's webview, and the layout is
+   * remembered per codebase (`browserLayoutKey`).
+   */
+  root: string;
+  /**
+   * This panel's id in the app-wide focus order (`focusOrderContext`), namespaced
+   * by codebase. Clicking the panel raises it over terminals and Notes; the same
+   * order drives both its chrome z-index and which peers may occlude its page.
+   */
+  focusId: string;
+  /**
+   * Whether this codebase is the foreground tab. Drives the OS webview's
+   * visibility through `pageVisible`/`sync`: a backgrounded codebase's page is
+   * hidden, so it cannot composite over the codebase the user switched to.
+   */
+  active: boolean;
   /**
    * Changes on every request to open the browser. A minimized panel restores
    * itself when it changes — a boolean could not say "open it again" about a
@@ -111,18 +144,55 @@ export function BrowserPanel({
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
 
+  // Docking. Unlike the DOM panels the page is an OS surface that lives in the
+  // Rust host keyed by root, so docking never moves the page itself — it moves
+  // only the stateless chrome (header, URL bar, consent, the `.browser-page`
+  // placeholder) into the region slot, and the host repaints the page at the
+  // placeholder's new rect via the ordinary `sync`. The page-lifecycle effects
+  // stay at this component's top level, so docking never remounts them.
+  const regions = useRegions();
+  const dockable: Dockable = { kind: "browser", id: "browser" };
+  const regionKey = slotKey(dockable);
+  const wantsDock = regions?.dockedPanels.has("browser") ?? false;
+  const slotNode = wantsDock ? (regions?.slot(regionKey) ?? null) : null;
+  const isDocked = wantsDock && slotNode !== null;
+
   useEffect(() => setMinimized(false), [restoreRequest]);
 
+  // While docked, the region tab strip is the panel's header.
+  useEffect(() => {
+    if (!regions || !isDocked) return;
+    regions.registerMeta(regionKey, { label: "Web", onClose });
+    return () => regions.registerMeta(regionKey, null);
+  }, [regions, isDocked, regionKey, onClose]);
+
   const [pos, setPos] = useState<PanelLayout | undefined>(() => {
-    const saved = loadPanelLayout(localStorage, BROWSER_LAYOUT_KEY);
+    const saved = loadPanelLayout(localStorage, browserLayoutKey(root));
     return saved.left !== undefined && saved.top !== undefined ? saved : undefined;
   });
-  const [size] = useState<PanelSize | undefined>(() => {
-    const saved = loadPanelLayout(localStorage, BROWSER_LAYOUT_KEY);
+  const [size, setSize] = useState<PanelSize | undefined>(() => {
+    const saved = loadPanelLayout(localStorage, browserLayoutKey(root));
     return saved.width !== undefined && saved.height !== undefined
       ? { width: saved.width, height: saved.height }
       : undefined;
   });
+
+  // How many DOM overlays (menus, modals, Search Everywhere) are open. Each would
+  // otherwise be painted over by the page (bug 3); the page hides while any is up.
+  // Peer floating panels are handled geometrically in `sync`, not counted here.
+  const occludedByOverlay = useOcclusionCount() > 0;
+
+  // This panel's place in the app-wide focus order. `useFocusEntry` raises it on
+  // mount and releases it on unmount; `raiseBrowser` (on pointerdown) and the
+  // restore effect below bring it forward on click/restore. `myOffset` is both its
+  // chrome `--cb-stack` and the threshold peers must beat to occlude its page.
+  const raiseBrowser = useFocusEntry(focusId);
+  const myOffset = useFocusOffset(focusId);
+  const { order: focusOrder } = useFocusOrder();
+  // Restoring a minimized panel is a click's worth of intent — bring it forward.
+  useEffect(() => {
+    if (!minimized) raiseBrowser();
+  }, [minimized, raiseBrowser]);
 
   /**
    * Measure the placeholder and decide, through the pure `pageRect`, whether
@@ -139,13 +209,18 @@ export function BrowserPanel({
     if (!element) return { ok: false, reason: "the panel is not on screen" };
     const box = element.getBoundingClientRect();
     const scaleFactor = await getCurrentWindow().scaleFactor();
+    // Never let the page rect rise above the app's own title/tab chrome: a panel
+    // dragged to the very top would otherwise push the page under the titlebar,
+    // where a titlebar menu drops *into* it (bug 3). The height shrinks so the
+    // bottom edge stays put.
+    const clamped = clampBrowserTop(
+      { left: box.left, top: box.top, width: box.width, height: box.height },
+      measureChromeBottom(),
+    );
     // Viewport coordinates are relative to the main webview's client area, and
     // the host's bounds are relative to the window's — the same rectangle,
     // because the main webview fills it.
-    return pageRect(
-      { left: box.left, top: box.top, width: box.width, height: box.height },
-      { devicePixelRatio: window.devicePixelRatio, scaleFactor },
-    );
+    return pageRect(clamped, { devicePixelRatio: window.devicePixelRatio, scaleFactor });
   }, []);
 
   /**
@@ -176,31 +251,72 @@ export function BrowserPanel({
 
     const decision = await measure();
     if (superseded()) return;
-    const visible = pageVisible({
+    // Occluded if an overlay/menu/modal is open (counted, always on top) or a peer
+    // floating panel that is stacked *above* this one in the focus order overlaps
+    // the page's rect. Raise-aware: a terminal/Notes the browser was raised over no
+    // longer blanks the page — clicking the browser really does bring it forward.
+    // Docked: the page sits at the workspace layer, below every floating panel,
+    // so *any* overlapping floating peer occludes it (raise-unaware). Floating:
+    // only a peer stacked above it in the focus order does (raise-aware), which
+    // is what lets a click bring it forward.
+    const peers = peerPanelRects(panelRef.current);
+    const occluded =
+      occludedByOverlay ||
+      (decision.ok &&
+        (isDocked
+          ? occludedByPanels(decision.rect, peers.map((p) => p.rect))
+          : occludedByAbovePanels(decision.rect, myOffset, peers)));
+    const input = {
       state: { open: true, restoreToken: 0 },
       enabled: true,
-      minimized,
+      // A docked panel is never minimized — the region tab strip replaces the
+      // minimize control — so a non-active region tab hides the page through its
+      // 0×0 slot rect (a refused rect) rather than through `minimized`.
+      minimized: isDocked ? false : minimized,
+      active,
+      setupOpen,
+      occluded,
       rect: decision,
-    });
-    setHidden(
-      hiddenPageReason({
-        state: { open: true, restoreToken: 0 },
-        enabled: true,
-        minimized,
-        rect: decision,
-      }),
-    );
+    };
+    const visible = pageVisible(input);
+    setHidden(hiddenPageReason(input));
     try {
       if (decision.ok) {
-        await api.browserSetBounds(decision.rect);
+        await api.browserSetBounds(root, decision.rect);
         if (superseded()) return;
       }
-      await api.browserSetVisible(visible);
+      await api.browserSetVisible(root, visible);
     } catch (e) {
       if (superseded()) return;
       setError(String(e));
     }
-  }, [measure, minimized]);
+  }, [measure, minimized, active, root, setupOpen, occludedByOverlay, myOffset, isDocked]);
+
+  // Re-place the page the instant it docks or undocks, or when the region slot
+  // node changes. `sync` is generation-stamped, so a fast dock→undock abandons
+  // the superseded write rather than leaving the page at a stale rect.
+  useEffect(() => {
+    void sync();
+  }, [isDocked, slotNode, sync]);
+
+  // Re-run `sync` when this codebase moves between foreground and background.
+  // A switch-away must call `set_visible(false)` deterministically, and a
+  // switch-back must place and show the page again. `sync`'s generation stamp
+  // abandons any superseded write, which is what stops a stale run re-showing
+  // the page over the codebase the user switched to.
+  useEffect(() => {
+    void sync();
+  }, [active, sync]);
+
+  // Re-check occlusion whenever the shared focus order changes. A peer raised
+  // *above* this panel must blank the page, and a peer this panel was raised over
+  // must reveal it — but a raise that leaves this panel's own offset unchanged (it
+  // was already at the band floor and a terminal appeared above it) would not move
+  // `sync`'s deps, so trigger explicitly. The generation stamp abandons stale runs.
+  useEffect(() => {
+    void sync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusOrder]);
 
   // Create the page on mount, and drop it on unmount. `browser_close` really
   // does take the WebView2 process tree with it (verified in the Phase 4
@@ -221,11 +337,12 @@ export function BrowserPanel({
       }
       try {
         const state = await api.browserOpen(
+          root,
           decision.ok ? decision.rect : { left: 0, top: 0, width: 1, height: 1 },
           null,
         );
         if (live) setSnapshot(state);
-        if (live && !decision.ok) await api.browserSetVisible(false);
+        if (live && !decision.ok) await api.browserSetVisible(root, false);
       } catch (e) {
         if (live) setError(String(e));
       }
@@ -234,7 +351,7 @@ export function BrowserPanel({
       live = false;
       // `enabledRef` and not `enabled`: the caller flips the feature off and
       // then unmounts, so the value at unmount is the one that says why.
-      void api.browserClose(!enabledRef.current).catch(() => {
+      void api.browserClose(root, !enabledRef.current).catch(() => {
         // Nothing to report to — the panel is gone. The host has already
         // recorded the state change.
       });
@@ -250,7 +367,7 @@ export function BrowserPanel({
     let live = true;
     const read = async () => {
       try {
-        const state = await api.browserState();
+        const state = await api.browserState(root);
         if (live) setSnapshot(state);
       } catch {
         // A failed poll is not worth a message: the next one is 700ms away and
@@ -289,6 +406,10 @@ export function BrowserPanel({
 
     schedule();
     window.addEventListener("resize", schedule);
+    // A peer floating panel dragged over the page changes no React state here, so
+    // re-check occlusion when any drag ends. Cheap: `schedule` is debounced and a
+    // superseded `sync` abandons its writes.
+    window.addEventListener("pointerup", schedule);
     const observer =
       typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
     if (observer && pageRef.current) observer.observe(pageRef.current);
@@ -300,6 +421,7 @@ export function BrowserPanel({
     return () => {
       if (timer) clearTimeout(timer);
       window.removeEventListener("resize", schedule);
+      window.removeEventListener("pointerup", schedule);
       observer?.disconnect();
       void unlisten.then((off) => off()).catch(() => {});
     };
@@ -323,8 +445,8 @@ export function BrowserPanel({
           { width, height },
           { width: window.innerWidth, height: window.innerHeight },
         );
-        const saved = loadPanelLayout(localStorage, BROWSER_LAYOUT_KEY);
-        savePanelLayout(localStorage, { ...saved, ...clamped }, BROWSER_LAYOUT_KEY);
+        const saved = loadPanelLayout(localStorage, browserLayoutKey(root));
+        savePanelLayout(localStorage, { ...saved, ...clamped }, browserLayoutKey(root));
       }, 200);
     });
     observer.observe(panel);
@@ -382,11 +504,54 @@ export function BrowserPanel({
       header.releasePointerCapture(e.pointerId);
       header.removeEventListener("pointermove", onMove);
       header.removeEventListener("pointerup", onUp);
-      if (moved) savePanelLayout(localStorage, latest, BROWSER_LAYOUT_KEY);
+      if (moved) savePanelLayout(localStorage, latest, browserLayoutKey(root));
       void sync();
     };
     header.addEventListener("pointermove", onMove);
     header.addEventListener("pointerup", onUp);
+  };
+
+  // Resize by an explicit handle rather than the native `resize: both` grip: that
+  // grip sits in the bottom-right corner *inside* `.browser-page`, which the OS
+  // webview composites over and so swallows the press — the page could not be
+  // resized at all (bug 1). The handles live in a gutter the webview's rect never
+  // covers. Same pointer plumbing as the header drag: capture, `sync` on every
+  // move so the page tracks the frame live, persist on release. The arithmetic is
+  // the pure, tested `resizeFromHandle`.
+  const onResizePointerDown = (edge: ResizeEdge) => (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const panel = panelRef.current;
+    if (!panel) return;
+    const start = { width: panel.offsetWidth, height: panel.offsetHeight };
+    const originX = e.clientX;
+    const originY = e.clientY;
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+
+    let latest: PanelSize = start;
+    const onMove = (ev: PointerEvent) => {
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      latest = resizeFromHandle(
+        edge,
+        start,
+        { dx: ev.clientX - originX, dy: ev.clientY - originY },
+        viewport,
+      );
+      setSize(latest);
+      void sync();
+    };
+    const onUp = () => {
+      handle.releasePointerCapture(e.pointerId);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      const saved = loadPanelLayout(localStorage, browserLayoutKey(root));
+      savePanelLayout(localStorage, { ...saved, ...latest }, browserLayoutKey(root));
+      void sync();
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
   };
 
   const submit = async () => {
@@ -394,7 +559,7 @@ export function BrowserPanel({
     if (typed === null) return;
     setError(null);
     try {
-      const state = await api.browserNavigate(typed);
+      const state = await api.browserNavigate(root, typed);
       setSnapshot(state);
       // Only now: while a draft exists the field shows it, and clearing it
       // before the navigation lands would flick the user's text away and then
@@ -416,7 +581,7 @@ export function BrowserPanel({
   const grant = async (reads: boolean, writes: boolean) => {
     setError(null);
     try {
-      setSnapshot(await api.browserSetAutomationConsent(reads, writes));
+      setSnapshot(await api.browserSetAutomationConsent(root, reads, writes));
     } catch (e) {
       setError(String(e));
     }
@@ -438,44 +603,60 @@ export function BrowserPanel({
   // would be a button that always errors.
   const banner = consentBanner(snapshot);
 
-  return (
-    <>
-      {minimized && (
-        <button
-          className="review-pill browser-pill"
-          onClick={() => setMinimized(false)}
-          title="Restore the browser (the page keeps running)"
-        >
-          <span>{pillLabel(title, url)}</span>
-        </button>
-      )}
+  const restore = useCallback(() => setMinimized(false), []);
+  useDockEntry(
+    // A docked browser has no minimize pill — the region tab strip replaces it.
+    minimized && !isDocked
+      ? {
+          id: dockId(root, "browser"),
+          scope: root,
+          label: pillLabel(title, url),
+          order: 0,
+          onRestore: restore,
+        }
+      : null,
+  );
 
+  const shell = (
       <div
-        className="review-panel browser-panel"
-        hidden={minimized}
+        className={`review-panel browser-panel${isDocked ? " browser-docked" : ""}`}
+        hidden={minimized && !isDocked}
         ref={panelRef}
-        style={{
-          ...(pos ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" } : {}),
-          ...(size ? { width: size.width, height: size.height } : {}),
-        }}
+        // Capture phase on the root so clicking anywhere in the panel raises it,
+        // before the header drag and without preventing the default (drag/URL-bar
+        // focus intact). This is the click that finally brings the page forward.
+        onPointerDownCapture={raiseBrowser}
+        style={
+          isDocked
+            ? undefined
+            : {
+                ...({ "--cb-stack": myOffset } as React.CSSProperties),
+                ...(pos ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" } : {}),
+                ...(size ? { width: size.width, height: size.height } : {}),
+              }
+        }
       >
         <div className="review-header browser-header" onPointerDown={onHeaderPointerDown}>
           <strong>Web</strong>
           <button
-            onClick={() => void act(api.browserBack)}
+            onClick={() => void act(() => api.browserBack(root))}
             title="Back (the page's own history)"
             aria-label="Back"
           >
             ←
           </button>
           <button
-            onClick={() => void act(api.browserForward)}
+            onClick={() => void act(() => api.browserForward(root))}
             title="Forward (the page's own history)"
             aria-label="Forward"
           >
             →
           </button>
-          <button onClick={() => void act(api.browserReload)} title="Reload" aria-label="Reload">
+          <button
+            onClick={() => void act(() => api.browserReload(root))}
+            title="Reload"
+            aria-label="Reload"
+          >
             ⟳
           </button>
           <input
@@ -510,6 +691,11 @@ export function BrowserPanel({
           >
             Agents
           </button>
+          {regions && !isDocked && (
+            <button onClick={() => regions.dock(dockable, "right")} title="Dock to the side">
+              ⊟
+            </button>
+          )}
           <button onClick={() => setMinimized(true)} title="Minimize (the page keeps running)">
             —
           </button>
@@ -570,9 +756,77 @@ export function BrowserPanel({
         <div className="browser-page" ref={pageRef}>
           {hidden && <div className="browser-page-note">{hidden}</div>}
         </div>
-      </div>
 
+        {/* Explicit resize handles in the gutter around `.browser-page`, since the
+            OS webview covers the native corner grip. E/S/SE only. Docked, the
+            region splitter resizes instead, so these are dropped. */}
+        {!isDocked && (
+          <>
+            <div
+              className="browser-resize browser-resize-e"
+              onPointerDown={onResizePointerDown("e")}
+              aria-hidden
+            />
+            <div
+              className="browser-resize browser-resize-s"
+              onPointerDown={onResizePointerDown("s")}
+              aria-hidden
+            />
+            <div
+              className="browser-resize browser-resize-se"
+              onPointerDown={onResizePointerDown("se")}
+              aria-hidden
+            />
+          </>
+        )}
+      </div>
+  );
+
+  return (
+    <>
+      {/* Docked, the stateless shell is portaled into the region slot; the OS
+          page follows the placeholder's rect through `sync`. Floating, it renders
+          in place. The page-lifecycle effects live above and never remount. */}
+      {isDocked && slotNode ? createPortal(shell, slotNode) : shell}
       {setupOpen && <BrowserMcpPanel onClose={() => setSetupOpen(false)} />}
     </>
   );
+}
+
+// --- Occlusion measurement (impure; the decisions are in browserPanelLogic) ---
+
+/**
+ * The bottom edge (in CSS px) of the app's own title/tab chrome, so the page rect
+ * can be kept below it. Prefers the tab strip, falls back to the titlebar, and to
+ * 0 when neither is found (no clamp) — a missing bar must not push the page down.
+ */
+function measureChromeBottom(): number {
+  const tabs = document.querySelector(".ws-tabs") ?? document.querySelector(".titlebar");
+  return tabs ? tabs.getBoundingClientRect().bottom : 0;
+}
+
+/**
+ * The on-screen rects of the floating panels that could cover the page, each with
+ * its focus-order offset, excluding the browser panel itself (`self`). Every
+ * floating panel shares the `.review-panel` base and writes its focus ordinal into
+ * the `--cb-stack` CSS variable (the dock is `.dock`, which sits in its own higher
+ * band and carries no `--cb-stack`, so it reads 0 — harmless, since a peer must be
+ * strictly *above* the browser to occlude and the dock never overlaps the page).
+ * A hidden (minimized) panel measures 0×0 and so overlaps nothing. Returned to
+ * `occludedByAbovePanels`, which decides — this only gathers.
+ */
+function peerPanelRects(self: HTMLElement | null): { rect: PanelGeometry; offset: number }[] {
+  const nodes = document.querySelectorAll<HTMLElement>(".review-panel, .dock");
+  const peers: { rect: PanelGeometry; offset: number }[] = [];
+  nodes.forEach((node) => {
+    if (node === self) return;
+    const box = node.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) return;
+    const offset = Number.parseInt(node.style.getPropertyValue("--cb-stack"), 10) || 0;
+    peers.push({
+      rect: { left: box.left, top: box.top, width: box.width, height: box.height },
+      offset,
+    });
+  });
+  return peers;
 }

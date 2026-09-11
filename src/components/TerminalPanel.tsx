@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { TerminalView, type TerminalViewHandle } from "./TerminalView";
 import * as api from "../ipc/api";
 import type { TerminalEvent } from "../ipc/types";
@@ -15,9 +15,10 @@ import {
   acceptedTerminalTitle,
   cascadeShift,
   outputNeedsAttention,
-  pillBottom,
   terminalLayoutKey,
 } from "./terminalLogic";
+import { useDockEntry } from "./DockContext";
+import { dockId } from "./dockLogic";
 import { MAX_LABEL_LENGTH } from "./workspaceRenameLogic";
 import { ContextMenu } from "./ContextMenu";
 import { PillColorMenu } from "./PillColorMenu";
@@ -39,6 +40,7 @@ export function TerminalPanel({
   title,
   cwd,
   command,
+  number,
   index,
   stackOffset,
   color,
@@ -49,6 +51,8 @@ export function TerminalPanel({
   onCompleted,
   onRename,
   onRecolor,
+  docked = false,
+  onDock,
 }: {
   title: string;
   /**
@@ -81,6 +85,13 @@ export function TerminalPanel({
    * re-pointing an existing one.
    */
   command?: { program: string; args: string[] };
+  /**
+   * The terminal's reusable, workspace-local number. Used as the dock pill's
+   * stable order and local id — stable while the terminal is open (unlike
+   * `index`, which shifts when an earlier terminal closes), so a terminal's dock
+   * pill keeps its slot rather than reflowing.
+   */
+  number: number;
   /** Position among the currently open terminals, for the cascade offset. */
   index: number;
   /**
@@ -122,6 +133,16 @@ export function TerminalPanel({
   onRename?: (title: string) => void;
   /** Set/clear the minimized-pill colour. */
   onRecolor?: (color: string | undefined) => void;
+  /**
+   * When true this terminal is **docked** into a region: it fills its container
+   * (a `RegionHost` slot it is portaled into) instead of floating, hides its own
+   * header (the region's tab strip is the header), and drops the drag/resize/
+   * minimize chrome. The same component instance is used floating and docked so
+   * the xterm session survives the transition — only its container changes.
+   */
+  docked?: boolean;
+  /** Floating only: dock this terminal into a region (offered in the header). */
+  onDock?: () => void;
 }) {
   const viewRef = useRef<TerminalViewHandle>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -174,6 +195,14 @@ export function TerminalPanel({
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   minimizedRef.current = minimized;
+  // Read inside the mount-once ResizeObserver, and re-fit when the dock state
+  // flips (the container changes shape as it moves between float and slot).
+  const dockedRef = useRef(docked);
+  dockedRef.current = docked;
+  useEffect(() => {
+    const t = setTimeout(() => viewRef.current?.fit(), 0);
+    return () => clearTimeout(t);
+  }, [docked]);
   workspaceActiveRef.current = workspaceActive;
 
   // A workspace switch hides an otherwise-visible terminal. If its bell rang
@@ -291,6 +320,12 @@ export function TerminalPanel({
     const observer = new ResizeObserver(() => {
       const width = panel.offsetWidth;
       const height = panel.offsetHeight;
+      // Docked: the region's splitter drives the size, so re-fit xterm to it and
+      // never persist it as the floating size (that key is the floating layout).
+      if (dockedRef.current) {
+        viewRef.current?.fit();
+        return;
+      }
       if (!gate.persist({ width, height })) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
@@ -311,9 +346,15 @@ export function TerminalPanel({
 
   // Restoring the panel acknowledges the flash, and re-fits the terminal to the
   // size it now has.
-  const restore = () => {
-    // Restoring is an explicit "I want this one now". The pill is a sibling of
-    // the panel, so the panel's own pointer handler never sees this click.
+  //
+  // Stable across renders (`useCallback([])`) so the dock entry can exclude it
+  // from its effect deps. It only ever touches values that are themselves stable:
+  // refs, stable setters, and `onRaise` — whose own closure identity changes each
+  // render but whose behaviour (raise this terminal's key) does not, so capturing
+  // the first one is correct.
+  const restore = useCallback(() => {
+    // Restoring is an explicit "I want this one now". The pill lives in the dock,
+    // a sibling of the panel, so the panel's own pointer handler never sees it.
     onRaise?.();
     setMinimized(false);
     setAttention(false);
@@ -322,7 +363,8 @@ export function TerminalPanel({
       viewRef.current?.fit();
       viewRef.current?.focus();
     }, 0);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const close = () => {
     const id = sessionRef.current;
@@ -428,27 +470,29 @@ export function TerminalPanel({
   const shift = cascadeShift(index);
   const status = error ? "error" : exited ? "exited" : "running";
 
+  // The minimized pill lives in the shared dock now (scoped to this terminal's
+  // workspace by `cwd`), keyed by the stable terminal `number` so its slot does
+  // not reflow when an earlier terminal closes. Color and attention flash carry
+  // through unchanged.
+  useDockEntry(
+    minimized
+      ? {
+          id: dockId(cwd, `term-${number}`),
+          scope: cwd,
+          label: title,
+          order: number,
+          color,
+          status,
+          attention,
+          onRestore: restore,
+        }
+      : null,
+  );
+
   return (
     <>
-      {minimized && (
-        <button
-          className={`review-pill${attention ? " attention" : ""}`}
-          onClick={restore}
-          title={attention ? "The terminal needs your attention" : "Restore the terminal"}
-          // Stack pills upward, starting one slot above the base (which is
-          // reserved for the global Notes bar) so they never overlap it or each
-          // other. The custom colour tints the pill; while it flashes for
-          // attention the flash keyframes take over the background (transient).
-          style={{ bottom: pillBottom(index), ...(color && !attention ? { background: color } : {}) }}
-        >
-          <span>
-            {title} — {attention ? "needs attention" : status}
-          </span>
-        </button>
-      )}
-
       <div
-        className="review-panel terminal-panel"
+        className={`review-panel terminal-panel${docked ? " terminal-docked" : ""}`}
         hidden={minimized}
         ref={panelRef}
         // Capture phase, on the root rather than the header, so clicking into the
@@ -457,16 +501,23 @@ export function TerminalPanel({
         // preventDefaults nor stops propagation, which is what leaves xterm's
         // text selection, the drag, and the header buttons untouched.
         onPointerDownCapture={() => onRaise?.()}
-        style={{
-          ...({ "--cb-stack": stackOffset } as React.CSSProperties),
-          ...(pos
-            ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" }
-            : shift
-              ? { transform: `translate(${-shift}px, ${-shift}px)` }
-              : {}),
-          ...(size ? { width: size.width, height: size.height } : {}),
-        }}
+        // Docked: fill the slot (positioning/size come from the region), so the
+        // floating pos/size/stack are all dropped.
+        style={
+          docked
+            ? {}
+            : {
+                ...({ "--cb-stack": stackOffset } as React.CSSProperties),
+                ...(pos
+                  ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" }
+                  : shift
+                    ? { transform: `translate(${-shift}px, ${-shift}px)` }
+                    : {}),
+                ...(size ? { width: size.width, height: size.height } : {}),
+              }
+        }
       >
+        {!docked && (
         <div
           className={`review-header${attention ? " attention" : ""}`}
           onPointerDown={onHeaderPointerDown}
@@ -520,6 +571,11 @@ export function TerminalPanel({
           {onRecolor && (
             <PillColorMenu color={color} onPick={onRecolor} title="Set the minimized pill colour" />
           )}
+          {onDock && (
+            <button onClick={onDock} title="Dock this terminal to the side (drag its tab to move it)">
+              ⇥
+            </button>
+          )}
           <button onClick={() => setMinimized(true)} title="Minimize (keeps running)">
             —
           </button>
@@ -527,6 +583,7 @@ export function TerminalPanel({
             ✕
           </button>
         </div>
+        )}
 
         {error && <div className="warning">{error}</div>}
 

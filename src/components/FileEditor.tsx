@@ -8,7 +8,7 @@ import {
   indentWithTab,
   toggleComment,
 } from "@codemirror/commands";
-import { gotoLine, highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
+import { gotoLine, highlightSelectionMatches, openSearchPanel, search, searchKeymap } from "@codemirror/search";
 import { editorColors, languageFor } from "./language";
 import {
   EMPTY_SECRETS,
@@ -1106,8 +1106,12 @@ export function FileEditor({
         // text is dragged.
         drawSelection(),
         dropCursor(),
-        // Ctrl+F opens an in-file find panel at the top; the console's own
-        // Ctrl+F only fires while it is visible (offsetParent check), so the two
+        // Ctrl+F opens an in-file find panel at the top. The chord is claimed by
+        // the app-level `console.find` binding (window, capture phase) and
+        // `dispatchShortcut` `preventDefault`s it, so `searchKeymap` below never
+        // sees it directly — the `console.find` handler registered further down
+        // opens this panel programmatically when the caret is in this editor, and
+        // `OutputConsole` declines while a file editor is focused so the two
         // never contend. `highlightSelectionMatches` underlines other copies of
         // the current selection, the same affordance the console search gives.
         search({ top: true }),
@@ -1303,6 +1307,31 @@ export function FileEditor({
           active.closest('.xterm, input, textarea, select, [contenteditable="true"]') !== null;
         if (!shouldHandleRename({ rendered, focusElsewhere })) return false;
         lsp.current.startRename();
+        return true;
+      }),
+    [],
+  );
+
+  /**
+   * Ctrl+F → the in-file find panel.
+   *
+   * The chord is bound to `console.find` at the app level and `dispatchShortcut`
+   * `preventDefault`s it (the "a bound key never reaches the WebView" rule), so
+   * CodeMirror's own `searchKeymap` never sees it. This handler opens the panel
+   * programmatically instead, using the same multi-handler fall-through as
+   * `refactor.rename` and `SqlView`'s `run.run`: it acts only when the caret is
+   * inside *this* editor's frame and otherwise returns `false`, and
+   * `OutputConsole`'s `console.find` declines whenever any file editor is
+   * focused — so exactly one of them acts regardless of registration order.
+   */
+  useEffect(
+    () =>
+      registerCommand("console.find", () => {
+        const view = viewRef.current;
+        if (!view) return false;
+        const active = document.activeElement;
+        if (active === null || !(wrapRef.current?.contains(active) ?? false)) return false;
+        openSearchPanel(view);
         return true;
       }),
     [],

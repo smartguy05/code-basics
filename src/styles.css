@@ -54,15 +54,21 @@
 
   /* Stacking bands for the floating panels. Every panel shares the
      `.review-panel` base, so without bands their order is whatever the DOM
-     happens to be. A terminal raises within its own band on click; Notes sits
-     permanently above every terminal, and the launcher's backdrop above that.
-     `--z-panel-stack-span` is the number of raise steps the terminal band
-     holds — pinned by `TERMINAL_STACK_SPAN` in `components/terminalLogic.ts`,
-     the only other place the number appears. 60 + 1 + 99 < 200, so a terminal
-     can never climb into the Notes band. */
+     happens to be. Terminals, the embedded browser and Notes now share **one**
+     app-wide focus order (`components/focusOrderContext.tsx`): whichever was
+     clicked last raises within the panel band, so any of them can sit above the
+     others. `--z-panel-stack-span` is the number of raise steps that band holds —
+     pinned by `FOCUS_STACK_SPAN` in `components/focusOrderLogic.ts`, the only
+     other place the number appears. 60 + 1 + 99 = 160 < 250, so a raised panel
+     can never climb into the dock/overlay bands. `--z-notes` is retained for any
+     older reference but is no longer used: Notes sits in the shared band now. */
   --z-panel: 60;
   --z-panel-stack-span: 100;
   --z-notes: 200;
+  /* The shared minimized-window dock. Above Notes (200) so its pills are always
+     clickable over every floating panel, below overlays (300) so a modal or the
+     launcher backdrop still covers it. */
+  --z-dock: 250;
   --z-overlay: 300;
 
   /* The window background's opacity. Written by `windowTransparency.ts` and by
@@ -70,6 +76,10 @@
      is 100% — the window starts opaque and becomes translucent after React's
      first render, so there is no flash of desktop through an unpainted app. */
   --app-bg-opacity: 100%;
+
+  /* Opacity of a file editor / terminal while it is not focused. Written by
+     `applyAppearance` as a 0-1 fraction; 1 (this fallback) is "off". */
+  --unfocused-opacity: 1;
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
   --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
@@ -317,6 +327,14 @@ textarea:focus {
   border-bottom-color: var(--accent);
   background: var(--bg-raised);
 }
+/* Drag-to-reorder feedback: the dragged tab fades, and the tab the pointer is
+   over gets an accent edge showing where a drop would land. */
+.ws-tab.dragging {
+  opacity: 0.4;
+}
+.ws-tab.drag-over {
+  border-left: 2px solid var(--accent);
+}
 /* A background codebase with something to say: outline the tab in the colour of
    what happened and pulse it, so the user sees which project is asking and
    roughly why before switching to it. The active accent border is left intact
@@ -434,6 +452,9 @@ textarea:focus {
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
   flex-wrap: wrap;
+  /* --bg is opaque; without it a translucent window shows through the top
+     Run/Debug/Stop toolbar (and the diff/diagram toolbars, intentionally). */
+  background: var(--bg);
 }
 
 .split-button {
@@ -530,7 +551,7 @@ textarea:focus {
   padding: 8px 10px;
   border: 1px solid var(--skip);
   border-radius: 4px;
-  background: rgba(201, 162, 39, 0.12);
+  background: var(--bg-raised);
 }
 
 /* The counterpart to `.warning` and `.error`: something finished, and said so.
@@ -700,6 +721,16 @@ textarea:focus {
 
 .dropdown-item.selected {
   background: var(--accent-dim);
+}
+
+/* A destructive action (e.g. Revert file) — tinted so it does not read as an
+   ordinary menu entry. */
+.dropdown-item.danger {
+  color: var(--fail);
+}
+.dropdown-item.danger:hover {
+  background: var(--fail);
+  color: var(--bg);
 }
 
 /* A collapsible section header inside a dropdown (Local / Remote). */
@@ -1362,12 +1393,10 @@ textarea:focus {
   display: none;
 }
 
-/* The minimized restore pill. */
+/* The minimized restore pill. Positioning is owned by the shared dock (`.dock`
+   below): pills are static flex children of that one strip, so this class now
+   carries only the pill's *look*, not where it sits. */
 .review-pill {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  z-index: var(--z-panel);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1377,6 +1406,37 @@ textarea:focus {
   background: var(--bg-raised);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
   cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+/* The shared minimized-window dock: one fixed strip along the bottom-left that
+   holds every minimized panel's pill. `flex-wrap` lets a long row of pills wrap
+   upward rather than run off-screen. Replaces the old per-panel fixed corners
+   that collided (Notes over Review) or scattered (SQL/Browser bottom-left,
+   terminals cascading). */
+.dock {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: var(--z-dock);
+  display: flex;
+  flex-wrap: wrap-reverse;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+}
+
+/* A dock pill is a `.review-pill` laid out by the strip. A slightly tighter shape
+   than the old free-floating pills, since several now sit side by side. */
+.dock-pill {
+  max-width: 260px;
+}
+
+.dock-pill-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* A small indeterminate spinner shown while a review is running. */
@@ -1541,6 +1601,23 @@ textarea:focus {
   height: 100%;
   background: var(--bg-inset);
   padding: 4px 6px;
+  /* Fades to `--unfocused-opacity` when the terminal is not focused (see the
+     shared rule below). The transition applies in both directions. */
+  transition: opacity 0.15s ease;
+}
+/* A file editor or terminal that does not have focus fades to the user's
+   configured unfocused opacity, so the surface being typed in stands out. The
+   focused one is always fully opaque. `--unfocused-opacity` defaults to 1, so
+   this is inert until the user lowers it in Settings > Appearance.
+   `:focus-within` is used for the terminal because xterm's focus lands on a
+   hidden textarea inside `.terminal-host`; CodeMirror sets `.cm-focused` on its
+   own root. Scoped to `.editor-host` so diff panes are not faded. */
+.terminal-host:not(:focus-within),
+.editor-host .cm-editor:not(.cm-focused) {
+  opacity: var(--unfocused-opacity, 1);
+}
+.editor-host .cm-editor {
+  transition: opacity 0.15s ease;
 }
 
 /* Inline title edit in a terminal header (double-click the title). Sized to sit
@@ -1609,19 +1686,13 @@ textarea:focus {
 .notes-panel {
   width: min(560px, 48vw);
   height: min(520px, 66vh);
-  /* Above every terminal, always: a raised terminal must never cover Notes. */
-  z-index: var(--z-notes);
+  /* In the shared focus band: Notes raises on click like terminals and the
+     browser, so last-clicked is on top across all three. */
+  z-index: calc(var(--z-panel) + 1 + var(--cb-stack, 0));
 }
 
-/* Minimized: a thin labeled bar pinned to the right, not a rounded pill — the
-   requested "collapse to a thin bar with a label that expands back". */
-.notes-pill {
-  z-index: var(--z-notes);
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: calc(var(--ui-font-size) - 1px);
-  writing-mode: horizontal-tb;
-}
+/* Notes minimizes into the shared dock now (`.dock` / `.dock-pill`), like every
+   other panel — its own `.notes-pill` corner is gone. */
 
 .notes-tabs {
   display: flex;
@@ -5057,9 +5128,17 @@ button.danger:hover:not(:disabled) {
 .tree-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 2px;
   padding: 0 4px 2px;
+}
+
+/* The "Files" title shares the actions row and fills it, so the reveal and
+   collapse buttons sit at the right edge. Its own `.group-label` padding is
+   dropped here — the row owns the padding — leaving only the top gap that keeps
+   the header off the tab strip above it. */
+.tree-actions-title {
+  flex: 1;
+  padding: 6px 2px 0;
 }
 
 /* Undoes the base `button` chrome: a filled, bordered control at this size next
@@ -5304,14 +5383,16 @@ button.danger:hover:not(:disabled) {
 /* SQL console — the floating window (Task A)                               */
 /* ======================================================================== */
 
-/* Reuses the .review-panel base (float, drag, resize, minimize). Deliberately
-   writes NO z-index: the panel stays in the base panel band that
-   `.review-panel` already sets, beside Review/Behavioral/Apps. It has no raise
-   trigger of its own, and a band above the terminals would pin it permanently
-   over a terminal the user just clicked. Wider and taller than the agent panel
-   by default — it holds an editor, a results grid and an object explorer side
-   by side, and the tab it replaces had the whole window. */
+/* Reuses the .review-panel base (float, drag, resize, minimize). Joins the
+   shared floating-panel band like `.terminal-panel`/`.notes-panel`/`.browser-panel`:
+   `--cb-stack` is written by `SqlPanel` from the app-wide focus order, so clicking
+   the console raises it over the terminals/Notes/browser and clicking one of those
+   drops it behind again. Without this it sat one step below the band floor (61) and
+   could never come forward. Wider and taller than the agent panel by default — it
+   holds an editor, a results grid and an object explorer side by side, and the tab
+   it replaces had the whole window. */
 .sql-panel {
+  z-index: calc(var(--z-panel) + 1 + var(--cb-stack, 0));
   width: min(1100px, 86vw);
   height: min(720px, 82vh);
 }
@@ -5353,19 +5434,8 @@ button.danger:hover:not(:disabled) {
   max-height: calc(100% - 48px);
 }
 
-/* Minimized: a thin labelled bar like Notes', but pinned bottom-LEFT. The
-   bottom-right column is taken — `.review-pill` bases there and
-   `terminalLogic.pillBottom` reserves the base slot for the Notes bar and
-   stacks terminal pills upward from one step above it — so a right-hand SQL
-   pill would land on a terminal's. Nothing occupies the left corner. */
-.sql-pill {
-  right: auto;
-  left: 16px;
-  bottom: 16px;
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: calc(var(--ui-font-size) - 1px);
-}
+/* The SQL console minimizes into the shared dock now (`.dock`), so it no longer
+   needs a corner of its own. */
 
 /* ---------------------------------------------------------------------------
    The titlebar terminal split button's menu (`terminalMenuLogic.ts`).
@@ -5545,13 +5615,13 @@ button.danger:hover:not(:disabled) {
 /* The embedded browser panel                                               */
 /* ======================================================================== */
 
-/* Reuses the `.review-panel` base (float, drag, resize, minimize) and writes NO
-   z-index, so it stays in the base panel band beside Review/Behavioral/Apps/SQL.
-   The band is moot for the page itself and not for the panel: the WebView2 child
-   HWND composites above the *whole* DOM regardless of any band, which is the
-   accepted cost recorded in `browserPanelLogic.ts` and in the host's module doc.
-   What the band still decides is where the panel's own chrome — the header and
-   the URL bar — sits relative to the other panels.
+/* Reuses the `.review-panel` base (float, drag, resize, minimize) and joins the
+   shared focus band via `--cb-stack`, so clicking the panel raises its chrome over
+   terminals and Notes. The page itself is a WebView2 child HWND that composites
+   above the *whole* DOM regardless of any band (the accepted cost recorded in
+   `browserPanelLogic.ts`); it is brought forward instead by occlusion becoming
+   raise-aware (`occludedByAbovePanels`) — a peer below this one in the focus order
+   no longer hides the page. The two halves move together off the same `--cb-stack`.
 
    Sized generously by default — a page rendered at agent-panel width is a mobile
    layout, which is not what "check my deployment" means — but deliberately not
@@ -5561,6 +5631,41 @@ button.danger:hover:not(:disabled) {
 .browser-panel {
   width: min(1100px, 78vw);
   height: min(720px, 74vh);
+  z-index: calc(var(--z-panel) + 1 + var(--cb-stack, 0));
+  /* No native `resize` grip: it sits in the bottom-right corner *inside*
+     `.browser-page`, which the OS webview composites over and so swallows the
+     press. Explicit handles below live in a gutter the webview never covers. */
+  resize: none;
+}
+
+/* The resize handles, in the gutter around `.browser-page` (its right/bottom
+   margin) so the OS webview — which composites above the DOM — can never cover
+   them. 10px matches the gutter. E starts below the header so it never overlaps
+   the header controls. */
+.browser-resize {
+  position: absolute;
+  z-index: 1;
+}
+.browser-resize-e {
+  top: 44px;
+  right: 0;
+  bottom: 10px;
+  width: 10px;
+  cursor: ew-resize;
+}
+.browser-resize-s {
+  left: 0;
+  right: 10px;
+  bottom: 0;
+  height: 10px;
+  cursor: ns-resize;
+}
+.browser-resize-se {
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nwse-resize;
 }
 
 /* The header holds the nav buttons and the URL bar, so it needs to lay them out
@@ -5603,6 +5708,10 @@ button.danger:hover:not(:disabled) {
   flex: 1;
   overflow: hidden;
   background: var(--bg);
+  /* A right/bottom gutter that the OS webview's rect (this element's box) stops
+     short of, so the resize handles above have somewhere to live that the webview
+     does not composite over. */
+  margin: 0 10px 10px 0;
 }
 
 /* Why the page is not on screen, in its place. Never an unexplained blank. */
@@ -5623,19 +5732,8 @@ button.danger:hover:not(:disabled) {
   white-space: pre-wrap;
 }
 
-/* Minimized: a pill, pinned bottom-left above the SQL bar's slot. The
-   bottom-right column is taken (`.review-pill` bases there and
-   `terminalLogic.pillBottom` stacks terminal pills upward from one step above
-   the Notes bar), and `.sql-pill` already owns the bottom-left corner — so this
-   sits one step above it rather than on top of it. */
-.browser-pill {
-  right: auto;
-  left: 16px;
-  bottom: 60px;
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: calc(var(--ui-font-size) - 1px);
-}
+/* The browser minimizes into the shared dock now (`.dock`), so it no longer
+   picks a corner of its own. */
 
 /* The browser panel's automation consent banner.
    Four kinds, and only one of them draws the eye: `asked` is a request waiting
@@ -5688,3 +5786,302 @@ button.danger:hover:not(:disabled) {
 .browser-consent button {
   white-space: nowrap;
 }
+
+/* --------------------------------------------------------------------- */
+/* Split docking (regions) — see `regionLayoutLogic` / `RegionHost`.      */
+/* --------------------------------------------------------------------- */
+
+/* The floating-terminal portal layer: takes no layout space and sets no
+   transform, so the fixed-positioned terminals inside still resolve against the
+   viewport, but it lives inside `.workspace-tab` so a backgrounded codebase's
+   terminals hide with it. */
+.terminal-float-layer {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+/* Fills the space below the inner tab strip; a flex column like the workspace
+   tab it sits in, so the center bodies fill exactly as they did before. */
+.region-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.region-middle {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+.region-center {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* One docked region. Sized by an inline flex-basis fraction; the border faces
+   the center. */
+.region {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+.region-left {
+  border-right: 1px solid var(--border-strong);
+}
+.region-right {
+  border-left: 1px solid var(--border-strong);
+}
+.region-top {
+  border-bottom: 1px solid var(--border-strong);
+}
+.region-bottom {
+  border-top: 1px solid var(--border-strong);
+}
+
+/* The region's own tab strip — its header, since a docked item's own header is
+   hidden. */
+.region-tabs {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px 4px;
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border);
+}
+.region-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  font-size: calc(var(--ui-font-size) - 2px);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+.region-tab:hover {
+  background: var(--border);
+  color: var(--text);
+}
+.region-tab.active {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+.region-tab-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0 2px;
+  cursor: pointer;
+  line-height: 1;
+}
+.region-tab-close:hover {
+  color: var(--fail);
+}
+
+/* The region body stacks its item slots; only the active one is shown (the
+   others carry `hidden`). Absolute fill so the portaled editor/terminal takes
+   the whole area. */
+.region-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.region-slot {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* A terminal docked into a region fills its slot rather than floating: none of
+   the floating chrome (fixed position, shadow, resize grip, rounded corners, the
+   raise band) applies. */
+.terminal-panel.terminal-docked {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  resize: none;
+  z-index: auto;
+}
+
+/* The splitters between the center and each region. */
+.region-splitter-v {
+  flex: 0 0 4px;
+  cursor: col-resize;
+  background: transparent;
+}
+.region-splitter-h {
+  flex: 0 0 4px;
+  cursor: row-resize;
+  background: transparent;
+}
+.region-splitter-v:hover,
+.region-splitter-h:hover {
+  background: var(--accent);
+}
+
+/* The drag drop-zone highlight. Above the center content but below the floating
+   panels; purely visual, so it never eats pointer events. */
+.region-drop {
+  position: absolute;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  border: 1px solid var(--accent);
+  pointer-events: none;
+  z-index: calc(var(--z-panel) - 1);
+}
+.region-drop-center {
+  inset: 0;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-style: dashed;
+}
+
+/* MCP tools settings page */
+.mcp-tools-page .mcp-server {
+  margin-bottom: 1.25rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+.mcp-server-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.mcp-server-head h3 {
+  margin: 0;
+}
+.mcp-server-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85em;
+}
+.mcp-server-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.4rem 0;
+}
+.mcp-tool-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.mcp-tool-row {
+  padding: 0.25rem 0;
+}
+.mcp-tool-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-code, monospace);
+}
+.mcp-tool-desc {
+  display: block;
+  margin-left: 1.6rem;
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
+/* SQL console docking. The console body fills the floating panel; when docked,
+   SqlView is portaled into the region slot instead and the two fixed overlays it
+   renders (connection picker, writes confirmation) are scoped to the region so
+   they no longer cover the whole app. */
+.sql-panel .sql-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.sql-embed {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  min-height: 0;
+}
+.sql-docked {
+  position: absolute;
+  inset: 0;
+}
+.sql-docked .modal-backdrop,
+.sql-docked .sql-conn-overlay {
+  position: absolute;
+}
+
+/* Browser docked into a region: fill the slot, drop the floating chrome. The OS
+   page follows the `.browser-page` placeholder's rect, so only the DOM frame
+   needs restyling here. */
+.browser-panel.browser-docked {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+/* Redis plugin panel */
+.redis-panel { width: 720px; height: 520px; }
+.redis-body { display: flex; flex: 1; min-height: 0; }
+.redis-connections {
+  width: 280px;
+  border-right: 1px solid var(--border);
+  overflow: auto;
+  padding: 0.5rem;
+}
+.redis-value { flex: 1; overflow: auto; padding: 0.5rem 0.75rem; min-width: 0; }
+.redis-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin: 0.25rem 0;
+}
+.redis-conn-list, .redis-key-list { list-style: none; margin: 0; padding: 0; }
+.redis-conn-list li, .redis-key-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.3rem;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+.redis-conn-list li.active, .redis-key-list li.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.redis-conn-name, .redis-key-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.redis-conn-list label { display: inline-flex; align-items: center; gap: 0.15rem; font-size: 0.8em; }
+.redis-scan { display: flex; gap: 0.3rem; margin: 0.4rem 0; }
+.redis-scan input { flex: 1; }
+.redis-type {
+  font-size: 0.7em;
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  background: var(--bg-alt, rgba(127,127,127,0.2));
+  text-transform: uppercase;
+}
+.redis-value-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+.redis-elems { margin: 0.3rem 0; padding-left: 1.2rem; }
+.redis-elems li { display: flex; gap: 0.4rem; align-items: center; }
+.redis-add { display: flex; gap: 0.3rem; margin-top: 0.5rem; flex-wrap: wrap; }
+.redis-string-edit textarea { width: 100%; font-family: var(--font-code, monospace); }

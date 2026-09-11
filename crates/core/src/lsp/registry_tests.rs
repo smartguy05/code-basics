@@ -1268,3 +1268,58 @@ fn the_real_probe_resolves_whatever_of_the_four_is_installed_on_this_machine() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Ecosystem → language, for warming a server on workspace open
+// ---------------------------------------------------------------------------
+
+fn project(ecosystem: &str) -> crate::model::Project {
+    crate::model::Project {
+        id: ecosystem.into(),
+        name: ecosystem.into(),
+        manifest_path: std::path::PathBuf::from("m"),
+        dir: std::path::PathBuf::from("d"),
+        ecosystem: ecosystem.into(),
+        kind: crate::model::ProjectKind::Unknown,
+        frameworks: Vec::new(),
+        configurations: Vec::new(),
+        is_test_project: false,
+        test_runner: None,
+        unreadable: None,
+    }
+}
+
+#[test]
+fn from_ecosystem_maps_only_the_built_in_ecosystems() {
+    assert_eq!(Language::from_ecosystem("dotnet"), Some(Language::CSharp));
+    assert_eq!(Language::from_ecosystem("node"), Some(Language::TypeScript));
+    assert_eq!(Language::from_ecosystem("cargo"), Some(Language::Rust));
+    // A manifest adapter's ecosystem is arbitrary user text, so it is not guessed
+    // at — Python keeps starting lazily, which is a no-op rather than a wrong
+    // eager spawn.
+    assert_eq!(Language::from_ecosystem("pytest"), None);
+    assert_eq!(Language::from_ecosystem("python"), None);
+    assert_eq!(Language::from_ecosystem(""), None);
+}
+
+#[test]
+fn languages_present_dedupes_and_ignores_unmapped() {
+    let projects = vec![
+        project("dotnet"),
+        project("node"),
+        project("dotnet"), // a second C# project must not warm the server twice
+        project("pytest"), // unmapped → dropped
+    ];
+    assert_eq!(
+        languages_present(&projects),
+        vec![Language::CSharp, Language::TypeScript]
+    );
+    // Stable in `Language`'s own order (CSharp < TypeScript < Rust < Python),
+    // not input order.
+    assert_eq!(
+        languages_present(&[project("cargo"), project("dotnet")]),
+        vec![Language::CSharp, Language::Rust]
+    );
+    assert!(languages_present(&[]).is_empty());
+    assert!(languages_present(&[project("pytest")]).is_empty());
+}

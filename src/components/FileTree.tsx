@@ -357,10 +357,12 @@ export function FileTree({
       onContextMenu={(e) => openMenu(e, null)}
     >
       {/* Above the rows rather than below them: the tree is as long as the
-          repository, and a bar under it would scroll out of reach. Both are
-          glyph-only, so both carry an `aria-label` as well as the sentence in
-          the tooltip. */}
+          repository, and a bar under it would scroll out of reach. The "Files"
+          title shares this row (it used to sit on a line of its own above the
+          tree), pushing the two glyph-only actions to the right — both carry an
+          `aria-label` as well as the sentence in the tooltip. */}
       <div className="tree-actions">
+        <span className="group-label tree-actions-title">Files</span>
         <button
           data-command="tree.reveal"
           className="tree-action"

@@ -37,6 +37,10 @@ export function applyAppearance(settings: AppearanceSettings, persist = false): 
   root.style.setProperty("--mono", theme.fonts.code);
   root.style.setProperty("--ui-font-size", `${settings.uiFontSize}px`);
   root.style.setProperty("--editor-font-size", `${settings.codeFontSize}px`);
+  // A fraction for CSS `opacity` on unfocused editors/terminals. Unlike
+  // `--app-bg-opacity` this is not gated on what is open, so it is written here
+  // rather than by `windowTransparencyLogic`.
+  root.style.setProperty("--unfocused-opacity", String(settings.unfocusedOpacity / 100));
   root.dataset.theme = theme.mode;
   root.style.colorScheme = theme.mode;
   if (persist) localStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(settings));

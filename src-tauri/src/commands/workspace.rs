@@ -57,6 +57,9 @@ pub async fn open_workspace(
     // abandoned, so neither sits between choosing a folder and seeing it.
     crate::commands::lsp::spawn_session(app.clone());
     spawn_build(app, workspace.clone(), Rebuild::Cached);
+    // The set of open workspaces changed, so the roslyn instance registry's
+    // `workspaces` list — what an `mcp-roslyn` client narrows on — is now stale.
+    crate::roslyn::registry::republish(state.inner());
     Ok(workspace)
 }
 
@@ -80,7 +83,12 @@ pub async fn list_open_workspaces(state: State<'_, AppState>) -> Result<Vec<Work
 #[tauri::command]
 pub async fn set_active_workspace(state: State<'_, AppState>, root: String) -> Result<(), String> {
     let root = dunce::canonicalize(&root).unwrap_or_else(|_| PathBuf::from(&root));
-    state.set_active(&root)
+    state.set_active(&root)?;
+    // Republished on activation too: the `workspaces` list does not change, but a
+    // window that opened its first workspace by activating a pre-loaded slot must
+    // still appear, and republishing is idempotent.
+    crate::roslyn::registry::republish(state.inner());
+    Ok(())
 }
 
 /// Close an open workspace: remove its slot, tear down its language server, and
@@ -107,6 +115,8 @@ pub async fn close_workspace(
         }
     }
 
+    // A workspace closed, so the roslyn registry's `workspaces` list is stale.
+    crate::roslyn::registry::republish(state.inner());
     Ok(new_active.map(|p| p.display().to_string()))
 }
 

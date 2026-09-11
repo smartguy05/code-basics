@@ -53,6 +53,7 @@ use cb_core::browser::wire::{self, PipeFailure, ToolAnswer};
 use cb_core::browser::{argv, liveness, serve, tools};
 use cb_core::lsp::jsonrpc::{self, Incoming, RequestId};
 use cb_core::mcp::{ndjson, serve as mcp_serve};
+use cb_core::tool_gate;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
 
@@ -62,6 +63,11 @@ use tokio::io::AsyncReadExt;
 /// slow and an agent waiting is better than an agent told the wrong thing —
 /// the `STATEMENT_TIMEOUT` reasoning from [`crate::mcp_sql`].
 const TOOL_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The per-tool gate, re-read on every use. See [`cb_core::tool_gate`].
+fn load_gate() -> tool_gate::ToolGateFile {
+    tool_gate::load(&tool_gate::mcp_tools_path())
+}
 
 /// Did the command line ask for the browser MCP server rather than the
 /// application?
@@ -176,7 +182,9 @@ async fn answer_request(
                 ),
             }
         }
-        mcp_serve::Route::ToolsList => mcp_serve::success(id, serve::tools_list_result()),
+        mcp_serve::Route::ToolsList => {
+            mcp_serve::success(id, serve::tools_list_result(&load_gate()))
+        }
         mcp_serve::Route::Ping => mcp_serve::success(id, Value::Object(Default::default())),
         mcp_serve::Route::ToolsCall { name, arguments } => {
             // The arguments are **not** parsed here. The application parses
@@ -209,6 +217,12 @@ async fn call_tool(tool: &str, arguments: Value, hint: Option<&str>) -> ToolAnsw
     // owns the tool table and parses the arguments.
     if !tools::is_known(tool) {
         return serve::unknown_tool_answer(tool);
+    }
+
+    // A disabled-but-known tool is refused before the pipe is opened, re-reading
+    // the gate every call. See `cb_core::tool_gate`.
+    if !load_gate().is_enabled(tool_gate::ServerId::Browser, tool) {
+        return serve::disabled_tool_answer(tool);
     }
 
     let path = instances::instances_path();

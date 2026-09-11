@@ -14,6 +14,7 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 - [The core crate (`cb-core`)](architecture/core-crate.md) — workspace scanning, adapters, test parsing, git, process supervision
 - [The Tauri shell (`src-tauri`)](architecture/tauri-shell.md) — state, adapter dispatch, and the command surface
 - [The frontend (`src/`)](architecture/frontend.md) — views, components, and IPC wrappers
+- [Split docking (regions)](architecture/split-docking.md) — dragging editors and terminals to the edges for side-by-side work
 - [The IPC type contract](architecture/ipc-contract.md) — how Rust and TypeScript types stay in sync
 - [The browser panel](architecture/browser-panel.md) — why it is raw `wry`, and the z-order cost that comes with it
 - [Live inspection](architecture/live-inspection.md) — the object-inspector sidecar, why it is one-shot, and why it is bundled
@@ -26,6 +27,8 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 - [Agent intent capture](guides/agent-intent-capture.md) — grouping a diff into the decisions behind it, with Claude Code or Codex
 - [Instruction enhancements](guides/instruction-enhancements.md) — adding reusable instruction sections to CLAUDE.md / AGENTS.md from a menu of `.md` templates
 - [The SQL MCP server](guides/sql-mcp-server.md) - letting an agent read the databases you are already connected to, read-only and by explicit per-connection consent
+- [The Tasks plugin](guides/tasks-plugin.md) — a per-codebase task list, "assign to AI" that launches the agent in a terminal, and a write-capable MCP server
+- [The Roslyn MCP server](guides/roslyn-mcp-server.md) — exposing the app's warm per-workspace language-server session to a coding agent over MCP, read-only and scoped to one repository
 - [Inspecting objects](guides/inspecting-objects.md) — reading the real heap of a crash dump, and what crash dump capture costs
 - [Language servers](guides/language-servers.md) — which server per language, how to install each, and how to point config at one
 

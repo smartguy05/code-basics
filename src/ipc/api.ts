@@ -28,6 +28,7 @@ import type {
   EnhancementInfo,
   ErosionReport,
   FeatureInfo,
+  McpServerToolsInfo,
   FileContents,
   FileDiff,
   InspectGraph,
@@ -67,6 +68,12 @@ import type {
   SearchScope,
   SqlConnectionProfile,
   SqlConnectionView,
+  RedisConnectionView,
+  RedisDiscovery,
+  RedisScanPage,
+  RedisValue,
+  RedisKeyInfo,
+  RedisStatusKind,
   SqlColumnView,
   SqlObjectView,
   SqlDiscovery,
@@ -76,6 +83,9 @@ import type {
   SqlTestOutcome,
   StashEntry,
   SymbolIndexStatus,
+  TaskOwner,
+  TaskStatus,
+  TasksFile,
   TerminalEvent,
   TestRunOutcome,
   UsageResult,
@@ -237,12 +247,59 @@ export const listFeatures = () => invoke<FeatureInfo[]>("list_features");
 export const setFeature = (id: string, enabled: boolean) =>
   invoke<FeatureInfo[]>("set_feature", { id, enabled });
 
+/** Every MCP server with its tools and their enabled state. */
+export const listMcpTools = () =>
+  invoke<McpServerToolsInfo[]>("list_mcp_tools");
+
+/**
+ * Switch one MCP tool on or off. Returns the whole list as persisted, so the
+ * caller re-renders from what was actually written, not what it hoped to write.
+ */
+export const setMcpTool = (server: string, tool: string, enabled: boolean) =>
+  invoke<McpServerToolsInfo[]>("set_mcp_tool", { server, tool, enabled });
+
 /** Read the global notes file. Missing/unreadable yields an empty set. */
 export const readNotes = () => invoke<NotesFile>("read_notes");
 
 /** Write the global notes file, creating its directory if absent. */
 export const writeNotes = (file: NotesFile) =>
   invoke<void>("write_notes", { file });
+
+// ---------------------------------------------------------------------------
+// Tasks (`cb_core::tasks`) — the per-workspace, gitignored task list. Every
+// command takes an explicit `root`: tasks are per-repository and several
+// codebases can be open at once, so the panel names its own workspace rather
+// than reading the active one. Each mutation returns the whole updated
+// `TasksFile`, so the panel re-renders from the persisted truth.
+// ---------------------------------------------------------------------------
+
+/** Read this workspace's tasks. A missing or unreadable file is an empty list. */
+export const readTasks = (root: string) =>
+  invoke<TasksFile>("read_tasks", { root });
+
+/** Create a new open task owned by the user; returns the updated list. */
+export const createTask = (root: string, title: string, body: string) =>
+  invoke<TasksFile>("create_task", { root, title, body });
+
+/** Overwrite a task's title and body; returns the updated list. */
+export const updateTask = (root: string, id: string, title: string, body: string) =>
+  invoke<TasksFile>("update_task", { root, id, title, body });
+
+/**
+ * Assign a task to the user or the agent; returns the updated list. Launching
+ * the agent when the owner becomes the AI is the frontend's job — this only
+ * records the owner.
+ */
+export const assignTask = (root: string, id: string, owner: TaskOwner) =>
+  invoke<TasksFile>("assign_task", { root, id, owner });
+
+/** Set a task's status (done, or back to open); returns the updated list. */
+export const completeTask = (root: string, id: string, status: TaskStatus) =>
+  invoke<TasksFile>("complete_task", { root, id, status });
+
+/** Remove a task; returns the updated list. */
+export const deleteTask = (root: string, id: string) =>
+  invoke<TasksFile>("delete_task", { root, id });
 
 // ---------------------------------------------------------------------------
 // About (Help -> About)
@@ -623,6 +680,14 @@ export const gitCreateBranch = (name: string, checkout: boolean, from?: string) 
 export const gitCheckoutBranch = (name: string) =>
   invoke<void>("git_checkout_branch", { name });
 
+/**
+ * Create a worktree on a new branch and return its directory, to open in a new
+ * project tab. `base` is the start point (a branch or revision; absent = HEAD);
+ * `dir` overrides the default sibling location.
+ */
+export const gitAddWorktree = (name: string, base?: string, dir?: string) =>
+  invoke<string>("git_add_worktree", { name, base, dir });
+
 /** Check out `origin/x` like `git switch x`: local tracking branch + switch. */
 export const gitCheckoutRemoteBranch = (name: string) =>
   invoke<void>("git_checkout_remote_branch", { name });
@@ -898,6 +963,36 @@ export const mcpServerUninstallPlan = (provider: ProviderId, scope: InstallScope
 /** Perform a removal the user has confirmed; returns the new status. */
 export const uninstallMcpServer = (provider: ProviderId, scope: InstallScope) =>
   invoke<InstallScope | null>("uninstall_mcp_server", { provider, scope });
+
+// ---------------------------------------------------------------------------
+// The Tasks MCP server (`tasks/mcp/install`) — the same preview-then-apply shape
+// as the SQL MCP server, over the same four IPC types. Unlike the SQL server it
+// takes a `root`: the store is per-workspace, and a project-scope install bakes
+// `--workspace <root>` in as the consent boundary.
+// ---------------------------------------------------------------------------
+
+/** Where the Tasks MCP server is installed for this workspace and provider, if anywhere. */
+export const tasksMcpStatus = (root: string, provider: ProviderId) =>
+  invoke<InstallScope | null>("tasks_mcp_status", { root, provider });
+
+/** Exactly what installing the Tasks MCP server would write. Touches nothing. */
+export const tasksMcpInstallPlan = (root: string, provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("tasks_mcp_install_plan", { root, provider, scope });
+
+/** Perform an install the user has confirmed; returns the new status. */
+export const installTasksMcpServer = (root: string, provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("install_tasks_mcp_server", { root, provider, scope });
+
+/**
+ * Exactly what removing the Tasks MCP server would rewrite. Touches nothing. An
+ * empty `writes` means that configuration holds no entry of ours.
+ */
+export const tasksMcpUninstallPlan = (root: string, provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("tasks_mcp_uninstall_plan", { root, provider, scope });
+
+/** Perform a removal the user has confirmed; returns the new status. */
+export const uninstallTasksMcpServer = (root: string, provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("uninstall_tasks_mcp_server", { root, provider, scope });
 
 /** First-open setup: exactly what installing every hook at `scope` would write. */
 export const setupInstallPlan = (scope: InstallScope) =>
@@ -1326,6 +1421,85 @@ export const sqlSetAllowWrites = (id: string, allowWrites: boolean) =>
 export const sqlSetExposeToAgents = (id: string, exposeToAgents: boolean) =>
   invoke<SqlConnectionView[]>("sql_set_expose_to_agents", { id, exposeToAgents });
 
+// --- Redis plugin -----------------------------------------------------------
+
+export const redisListConnections = () =>
+  invoke<RedisConnectionView[]>("redis_list_connections");
+
+export const redisDiscover = (root: string) =>
+  invoke<RedisDiscovery>("redis_discover", { root });
+
+export const redisSaveConnection = (connection: unknown) =>
+  invoke<RedisConnectionView[]>("redis_save_connection", { connection });
+
+export const redisDeleteConnection = (id: string) =>
+  invoke<RedisConnectionView[]>("redis_delete_connection", { id });
+
+export const redisRenameConnection = (id: string, name: string) =>
+  invoke<RedisConnectionView[]>("redis_rename_connection", { id, name });
+
+export const redisSetAllowWrites = (id: string, allowWrites: boolean) =>
+  invoke<RedisConnectionView[]>("redis_set_allow_writes", { id, allowWrites });
+
+export const redisSetExposeToAgents = (id: string, exposeToAgents: boolean) =>
+  invoke<RedisConnectionView[]>("redis_set_expose_to_agents", { id, exposeToAgents });
+
+export const redisTestConnection = (id: string) =>
+  invoke<RedisStatusKind>("redis_test_connection", { id });
+
+export const redisScanKeys = (
+  id: string,
+  match: string | null,
+  cursor: string | null,
+  count: number | null,
+) => invoke<RedisScanPage>("redis_scan_keys", { id, match, cursor, count });
+
+export const redisGetKey = (id: string, key: string) =>
+  invoke<RedisValue>("redis_get_key", { id, key });
+
+export const redisKeyInfo = (id: string, key: string) =>
+  invoke<RedisKeyInfo>("redis_key_info", { id, key });
+
+export const redisSetString = (id: string, key: string, value: string, ttlMs: number | null) =>
+  invoke<void>("redis_set_string", { id, key, value, ttlMs });
+
+export const redisHashSet = (id: string, key: string, field: string, value: string) =>
+  invoke<void>("redis_hash_set", { id, key, field, value });
+
+export const redisHashDelete = (id: string, key: string, field: string) =>
+  invoke<void>("redis_hash_delete", { id, key, field });
+
+export const redisListPush = (id: string, key: string, value: string, front: boolean) =>
+  invoke<void>("redis_list_push", { id, key, value, front });
+
+export const redisListRemove = (id: string, key: string, value: string, count: number) =>
+  invoke<void>("redis_list_remove", { id, key, value, count });
+
+export const redisSetAdd = (id: string, key: string, member: string) =>
+  invoke<void>("redis_set_add", { id, key, member });
+
+export const redisSetRemove = (id: string, key: string, member: string) =>
+  invoke<void>("redis_set_remove", { id, key, member });
+
+export const redisZsetAdd = (id: string, key: string, member: string, score: number) =>
+  invoke<void>("redis_zset_add", { id, key, member, score });
+
+export const redisZsetRemove = (id: string, key: string, member: string) =>
+  invoke<void>("redis_zset_remove", { id, key, member });
+
+export const redisStreamAdd = (
+  id: string,
+  key: string,
+  entryId: string | null,
+  fields: [string, string][],
+) => invoke<void>("redis_stream_add", { id, key, entryId, fields });
+
+export const redisDeleteKey = (id: string, key: string) =>
+  invoke<void>("redis_delete_key", { id, key });
+
+export const redisExpire = (id: string, key: string, ttlMs: number | null) =>
+  invoke<void>("redis_expire", { id, key, ttlMs });
+
 /**
  * Open the connection, prove a database is behind it, ask its version, and
  * close it.
@@ -1415,60 +1589,65 @@ export function errorMessage(error: unknown): string {
 // reaches a main-thread-affine wry `WebView` through `run_on_main_thread`, and
 // Tauri warns that webview creation deadlocks from a synchronous command on
 // Windows. See `src-tauri/src/browser/mod.rs`.
+//
+// Every call is scoped by `root` — the workspace the page belongs to. The
+// browser is per-codebase now (each open codebase keeps its own live page, only
+// the active one visible), so the caller names which codebase's page it means.
 
 /**
  * Open the page at `rect`, optionally navigating straight to `url` (raw user
  * input — the backend normalises and may refuse it). Creates the webview, or
  * re-places and re-shows one that was only minimized.
  */
-export const browserOpen = (rect: BrowserRect, url: string | null) =>
-  invoke<BrowserSnapshot>("browser_open", { rect, url });
+export const browserOpen = (root: string, rect: BrowserRect, url: string | null) =>
+  invoke<BrowserSnapshot>("browser_open", { root, rect, url });
 
 /**
  * Close the panel, **dropping** the webview and its WebView2 process tree.
  * `pluginDisabled` says why: "the user switched the browser off" and "the panel
  * is closed" are one click apart and an agent acts on the difference.
  */
-export const browserClose = (pluginDisabled: boolean) =>
-  invoke<BrowserSnapshot>("browser_close", { pluginDisabled });
+export const browserClose = (root: string, pluginDisabled: boolean) =>
+  invoke<BrowserSnapshot>("browser_close", { root, pluginDisabled });
 
 /** Move and resize the page to follow the panel. Logical pixels. */
-export const browserSetBounds = (rect: BrowserRect) =>
-  invoke<void>("browser_set_bounds", { rect });
+export const browserSetBounds = (root: string, rect: BrowserRect) =>
+  invoke<void>("browser_set_bounds", { root, rect });
 
 /**
  * Show or hide the OS surface — the only mechanism that works. The page is a
  * child HWND compositing above the DOM, so a React `hidden` cannot hide it.
  */
-export const browserSetVisible = (visible: boolean) =>
-  invoke<void>("browser_set_visible", { visible });
+export const browserSetVisible = (root: string, visible: boolean) =>
+  invoke<void>("browser_set_visible", { root, visible });
 
 /** Navigate to whatever the user typed. A search phrase is refused, not searched. */
-export const browserNavigate = (input: string) =>
-  invoke<BrowserSnapshot>("browser_navigate", { input });
+export const browserNavigate = (root: string, input: string) =>
+  invoke<BrowserSnapshot>("browser_navigate", { root, input });
 
-export const browserBack = () => invoke<void>("browser_back");
-export const browserForward = () => invoke<void>("browser_forward");
-export const browserReload = () => invoke<void>("browser_reload");
+export const browserBack = (root: string) => invoke<void>("browser_back", { root });
+export const browserForward = (root: string) => invoke<void>("browser_forward", { root });
+export const browserReload = (root: string) => invoke<void>("browser_reload", { root });
 
 /** The whole readable state. A pure data read — no main thread, cheap to poll. */
-export const browserState = () => invoke<BrowserSnapshot>("browser_state");
+export const browserState = (root: string) =>
+  invoke<BrowserSnapshot>("browser_state", { root });
 
 /** Console rows after `cursor`, with what the cursor missed. */
-export const browserConsole = (cursor: number) =>
-  invoke<BrowserConsoleBatch>("browser_console", { cursor });
+export const browserConsole = (root: string, cursor: number) =>
+  invoke<BrowserConsoleBatch>("browser_console", { root, cursor });
 
 /** Network rows after `cursor`, with the coverage note. */
-export const browserNetwork = (cursor: number) =>
-  invoke<BrowserNetworkBatch>("browser_network", { cursor });
+export const browserNetwork = (root: string, cursor: number) =>
+  invoke<BrowserNetworkBatch>("browser_network", { root, cursor });
 
 /** The page's rendered text. Refused unless the page is `ready`. */
-export const browserPageText = () =>
-  invoke<BrowserPageText>("browser_page_text");
+export const browserPageText = (root: string) =>
+  invoke<BrowserPageText>("browser_page_text", { root });
 
 /** Record consent the user gave or withdrew. The only thing that moves it. */
-export const browserSetAutomationConsent = (reads: boolean, writes: boolean) =>
-  invoke<BrowserSnapshot>("browser_set_automation_consent", { reads, writes });
+export const browserSetAutomationConsent = (root: string, reads: boolean, writes: boolean) =>
+  invoke<BrowserSnapshot>("browser_set_automation_consent", { root, reads, writes });
 
 // --- The browser MCP server's installer ------------------------------------
 //
@@ -1499,3 +1678,32 @@ export const browserMcpUninstallPlan = (provider: ProviderId, scope: InstallScop
 /** Perform a removal the user has confirmed; returns the new status. */
 export const uninstallBrowserMcp = (provider: ProviderId, scope: InstallScope) =>
   invoke<InstallScope | null>("uninstall_browser_mcp", { provider, scope });
+
+// --- The Roslyn / LSP MCP server's installer -------------------------------
+//
+// The same five-call shape as the SQL and browser servers because it is the
+// same machinery: `cb_core::roslyn::install` reuses `mcp::install`'s merge
+// rather than growing a second one. Separate calls rather than a `kind`
+// parameter, because the three servers carry different caveats and the failure
+// mode of one shared call is showing somebody the wrong warning before install.
+
+/** Where the Roslyn MCP server is installed for `provider`, if anywhere. */
+export const roslynMcpStatus = (provider: ProviderId) =>
+  invoke<InstallScope | null>("roslyn_mcp_server_status", { provider });
+
+/** Exactly what installing it would write. Touches nothing. */
+export const roslynMcpInstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("roslyn_mcp_server_install_plan", { provider, scope });
+
+/** Perform an install the user has confirmed; returns the new status. */
+export const installRoslynMcp = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("install_roslyn_mcp_server", { provider, scope });
+
+/** Exactly what removing it would rewrite. A zero-write plan means nothing of
+ * ours was there. */
+export const roslynMcpUninstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("roslyn_mcp_server_uninstall_plan", { provider, scope });
+
+/** Perform a removal the user has confirmed; returns the new status. */
+export const uninstallRoslynMcp = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("uninstall_roslyn_mcp_server", { provider, scope });

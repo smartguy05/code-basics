@@ -39,6 +39,14 @@ export const PLUGIN_LABELS: Record<string, string> = {
   askCodebase: "Ask the codebase",
   mcpSqlServer: "SQL MCP server",
   webBrowser: "Web browser",
+  tasks: "Tasks",
+  // Not a `FeatureKey`: the Roslyn/LSP server is always-on, so it is keyed by
+  // its own string. It still lives here so the Plugins menu and Settings name it
+  // from one place, like every other plugin.
+  mcpRoslyn: "Roslyn MCP server",
+  // Also not a `FeatureKey`: the Redis panel is always-on, like the Roslyn
+  // server, so it is keyed by its own string.
+  redisConsole: "Redis",
 };
 
 const chord = (key: string, over: Partial<Omit<ShortcutChord, "key">> = {}): ShortcutChord => ({
@@ -78,10 +86,20 @@ export const COMMANDS: CommandDefinition[] = [
   // Settings and `pluginMenuRows` names it from `PLUGIN_LABELS`. Without the
   // tag the row would be filed nowhere.
   { id: "plugin.browser", label: "Web browser", category: "Agent", context: "global", defaultBinding: null, plugin: "webBrowser" },
-  { id: "search.all", label: "Search All", category: "Search", context: "workspace", defaultBinding: chord("n", { ctrl: true }) },
-  { id: "search.symbols", label: "Search Symbols", category: "Search", context: "workspace", defaultBinding: null },
-  { id: "search.files", label: "Search Files", category: "Search", context: "workspace", defaultBinding: chord("n", { ctrl: true, shift: true }) },
-  { id: "search.actions", label: "Search Actions", category: "Search", context: "workspace", defaultBinding: chord("a", { ctrl: true, shift: true }) },
+  // The per-codebase Tasks panel. Tagged `plugin` so `commandSections` files it
+  // under its own heading in Settings and `pluginMenuRows` names it from
+  // `PLUGIN_LABELS`. Registered as a handler by `WorkspaceTab` only while the
+  // feature is on, exactly as `plugin.mcp` is, so the advertised command always
+  // has a handler and a switched-off feature never acts.
+  { id: "plugin.tasks", label: "Tasks", category: "Panels", context: "workspace", defaultBinding: null, plugin: "tasks" },
+  // `allowInText` on the search overlays: the caret is almost always inside a
+  // `.cm-editor` when the user reaches for Search All, so without it
+  // `eventIsTyping` filters the command out of `dispatchShortcut` and Ctrl+N
+  // falls through to the WebView instead of opening the palette.
+  { id: "search.all", label: "Search All", category: "Search", context: "workspace", defaultBinding: chord("n", { ctrl: true }), allowInText: true },
+  { id: "search.symbols", label: "Search Symbols", category: "Search", context: "workspace", defaultBinding: null, allowInText: true },
+  { id: "search.files", label: "Search Files", category: "Search", context: "workspace", defaultBinding: chord("n", { ctrl: true, shift: true }), allowInText: true },
+  { id: "search.actions", label: "Search Actions", category: "Search", context: "workspace", defaultBinding: chord("a", { ctrl: true, shift: true }), allowInText: true },
   { id: "tree.reveal", label: "Select opened file", category: "Navigation", context: "view", defaultBinding: chord("F1", { alt: true }) },
   { id: "tree.collapse", label: "Collapse file tree", category: "Navigation", context: "view", defaultBinding: null },
   { id: "console.find", label: "Find in console", category: "Console", context: "view", defaultBinding: chord("f", { ctrl: true }), allowInText: true },

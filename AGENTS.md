@@ -64,9 +64,48 @@ runtime decision (`src/windowTransparencyLogic.ts`), because that decision spans
 open codebases. Its rule is that a codebase which has not reported whether its
 editor area is empty has not reported it empty: an unknown root resolves to
 fully opaque, which is what stops the window flashing translucent during
-startup. Only the active codebase is consulted. `applyAppearance` must never
+startup. The **welcome screen** (no codebase open, `activeRoot === null`) is also
+fully opaque; translucency begins only once an open codebase reports an empty
+editor. Only the active codebase is consulted. `applyAppearance` must never
 write `--app-bg-opacity` — it cannot know the editor state, and a second writer
-would race the one in `App`.
+would race the one in `App`. Floating chrome paints its own opaque surface so it
+stays readable over a translucent window; the top Run/Debug/Stop `.toolbar` does
+the same (`background: var(--bg)`).
+
+The Tasks plugin panel is **per-workspace**, unlike the global Notes panel: every
+tasks command takes the panel's own `root` explicitly rather than reading the
+active workspace, since several codebases can be open at once. Its store is
+gitignored (private to the machine). **Assign to AI** persists `owner = ai` then
+launches the agent in an interactive terminal with the task as the prompt;
+**Assign to me** only persists `owner = me`.
+
+The Roslyn MCP server (`mcp-roslyn`, opened as a Plugins-menu panel) exposes four
+**read-only** code-intelligence tools — `find_references`, `get_type_hierarchy`,
+`resolve_overloads`, `get_diagnostics` — to a coding agent by forwarding each call over a
+per-pid named pipe to the running app's already-warm language-server session, rather than
+starting its own. It is scoped by `--workspace` (the consent boundary) and installs into
+the same agent configs as the SQL and Tasks servers with a preview-then-apply flow. Every
+tool is capability-gated and **abstains** (`Unsupported`) for a language whose server does
+not support it; a symbol whose position is ambiguous is refused and listed, never guessed;
+and no internal error text crosses to the agent.
+
+The Redis plugin (`redis/`, opened from the Plugins menu; always-on, no `FeatureId`) is a
+RedisInsight-style panel plus a **write-capable** `mcp-redis` server, modelled on the SQL
+console. It discovers connections from appsettings/user-secrets/`.env` (filesystem only,
+values dropped; it **shares `sql::store::SecretSource`**), browses the keyspace, and views
+and edits string/hash/list/set/zset/stream values. Two separate per-connection consents,
+both off by default: `expose_to_agents` (reads) and `allow_writes` (writes). Redis has no
+server-side read-only mode, so the write gate is structural — a `WriteOp` runs only once
+`redis::ops::plan_write(allow_writes, op)` mints a `WritePlan`, unreachable from any read
+path. The panel itself may always write; `allow_writes` gates only the agent. No connection
+string, path or driver message ever reaches an agent.
+
+Per-**tool** MCP gating lives in `tool_gate/` (user-global `mcp-tools.json`): each of the
+four built-in servers filters its `tools/list` through `tool_gate::filter_descriptors` and
+refuses a disabled-but-known tool at dispatch (re-read per call). It is a **preference, not
+a security boundary** — a missing/corrupt store means every tool on, the opposite of the
+consent stores. Surfaced in Settings → **MCP tools**. Redis is not one of the gated
+`ServerId`s and advertises all its tools.
 
 App-owned shortcuts are declared in `src/shortcutLogic.ts` and dispatched by
 `src/shortcuts.ts`. A command shown in Settings must have a registered handler
@@ -222,10 +261,24 @@ working tree; conflicted files are never offered.
   must therefore be granted by `webviews` and appear in no capability naming its
   window — which is why `capabilities/default.json` says `"webviews": ["main"]`.
 - The browser page is an **OS surface**, not a DOM layer: it composites above
-  everything, ignores the `--z-panel`/`--z-notes`/`--z-overlay` bands, and
-  `hidden` on a React div does not hide it. Painting over the other panels while
-  open is an accepted trade-off; being visible when **minimized, feature-off, or
-  at a degenerate rect** is a bug.
+  everything, ignores the `--z-panel`/`--z-notes`/`--z-dock`/`--z-overlay` bands, and
+  `hidden` on a React div does not hide it — so anything that must appear over it hides
+  the page (`pageVisible`/`occlusionContext`, overlap-scoped, not blanket). Occlusion is
+  **raise-aware** (`occludedByAbovePanels`): the panel joins the app-wide focus order
+  (`focusOrderContext`) with terminals and Notes, so only a peer *stacked above* the
+  browser blanks the page — clicking the browser brings it to the front. It is a bug for
+  it to be visible when **minimized, feature-off, at a degenerate rect, its workspace not
+  foreground, its setup modal open, or a menu/modal/above-it panel covering it**.
+- **Split docking never remounts a moved editor/terminal.** `DockableTerminal`/
+  `DockableEditorSlot` portal through `components/StablePortal.tsx` — one stable host node
+  moved between the float layer and a region slot with `appendChild`. Swapping
+  `createPortal`'s container instead *does* remount in React, which closed a docked
+  terminal's PTY and discarded a docked editor's CodeMirror/LSP state (the bug this fixes).
+  The **SQL console and browser dock too** (`DockableKind` gained `"sql"`/`"browser"`,
+  `pruneLayout` takes a per-kind `valid` map): SQL rides `StablePortal` like an editor; the
+  browser keeps its page-lifecycle effects top-level (never remount) and moves only its
+  stateless chrome via `createPortal`, the OS page following the placeholder rect through
+  `browser_set_bounds` — so docking it needs **no Rust change**.
 - Anything that shows or positions that surface must be **generation-stamped and
   abandon its writes when superseded**, checked before *each* write rather than
   once. `sync()` awaits a scale factor and two IPC calls having captured

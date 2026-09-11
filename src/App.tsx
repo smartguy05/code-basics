@@ -3,16 +3,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { AboutDialog } from "./components/AboutDialog";
 import { AppOutputPanel } from "./components/AppOutputPanel";
 import { BranchMenu } from "./components/BranchMenu";
-import { BrowserPanel } from "./components/BrowserPanel";
-import {
-  browserPanelAfterFeatureChange,
-  browserPanelMounted,
-  closeBrowserPanel,
-  openBrowserPanel,
-  CLOSED_BROWSER_PANEL,
-  type BrowserPanelState,
-} from "./components/browserPanelLogic";
-import { featureEnabled } from "./components/featuresLogic";
 import { LauncherPicker } from "./components/LauncherPicker";
 import { FeaturesPicker } from "./components/FeaturesPicker";
 import { ContextMenu } from "./components/ContextMenu";
@@ -22,6 +12,11 @@ import { MenuBar } from "./components/MenuBar";
 import { isInside } from "./components/launcherLogic";
 import { NotesPanel } from "./components/NotesPanel";
 import { NotificationHost } from "./components/NotificationHost";
+import { Dock } from "./components/Dock";
+import { DockProvider, type LiveDockEntry, type SetDockEntry } from "./components/DockContext";
+import { removeEntry, upsertEntry } from "./components/dockLogic";
+import { OcclusionProvider, Occluder } from "./components/occlusionContext";
+import { FocusOrderProvider } from "./components/focusOrderContext";
 import { pluginMenuAvailable, pluginMenuRows } from "./components/pluginMenuLogic";
 import {
   describeUnexpectedStop,
@@ -57,9 +52,15 @@ import type { ConsoleHandle } from "./components/OutputConsole";
 import { WorkspaceTab, type WorkspaceTabHandle } from "./components/WorkspaceTab";
 import { SettingsDialog } from "./components/SettingsDialog";
 import {
+  acknowledgeAttention,
   addOpenWorkspace,
+  attentionActive,
+  type AttentionPulses,
   closeOpenWorkspace,
   mergeSignal,
+  nextPulseExpiry,
+  pulseAttention,
+  reorderWorkspaces,
   tabLabels,
   tabSignalClass,
 } from "./components/workspaceTabsLogic";
@@ -147,6 +148,10 @@ const inTauri = "__TAURI_INTERNALS__" in window;
 export function App() {
   // Every open codebase, and which one is in the foreground. Identity is `root`.
   const [openWorkspaces, setOpenWorkspaces] = useState<Workspace[]>([]);
+  // Drag-to-reorder of the codebase tabs: the index being dragged and the tab it
+  // is currently hovering, so the drop target can be outlined. Cleared on drop or
+  // drag-end. Reordering never changes which root is active (identity is `root`).
+  const [tabDrag, setTabDrag] = useState<{ from: number; over: number } | null>(null);
   const [activeRoot, setActiveRoot] = useState<string | null>(null);
   const activeRootRef = useRef<string | null>(null);
   activeRootRef.current = activeRoot;
@@ -168,30 +173,11 @@ export function App() {
    */
   const [features, setFeatures] = useState<FeatureInfo[] | null>(null);
   const [featuresOpen, setFeaturesOpen] = useState(false);
-  /**
-   * The embedded browser panel — app-level, one instance, **not** per codebase.
-   *
-   * "Does my deployment work" is not a question about a repository; a background
-   * `WorkspaceTab` is only `hidden`, so a workspace-scoped browser would leave a
-   * *visible* OS webview painting over a codebase the user had switched away
-   * from; and the MCP surface that comes next needs one unambiguous target.
-   *
-   * Held as the `{ open, restoreToken }` pair rather than a boolean because
-   * "open the browser" has two meanings once the panel can be minimized — mount
-   * it, or bring the minimized one back — and re-opening an open panel changes
-   * no field a child could compare.
-   */
-  const [browserPanel, setBrowserPanel] = useState<BrowserPanelState>(CLOSED_BROWSER_PANEL);
-  const showBrowser = () => setBrowserPanel(openBrowserPanel);
-  const browserEnabled = featureEnabled(features, "webBrowser");
-  // Switching the feature off must *close* the panel and not merely stop
-  // rendering it: leaving `open: true` behind would silently bring the page back
-  // the moment the feature was switched on again, which is not what the user
-  // asked for either time. `browserPanelAfterFeatureChange` returns the same
-  // object when nothing changes, so this effect cannot loop.
-  useEffect(() => {
-    setBrowserPanel((state) => browserPanelAfterFeatureChange(state, browserEnabled));
-  }, [browserEnabled]);
+  // The embedded browser is per-codebase now (bugs 6+7): each open codebase
+  // keeps its own live page and only the active one is visible, so its state
+  // and its panel live inside `WorkspaceTab`, not here. The Plugins menu and the
+  // `plugin.browser` command open it on the foreground tab through
+  // `activeHandle()?.openBrowser()`, like `openSql`.
   /** Help → About. App-level like the other dialogs: it describes the build, not a codebase. */
   const [aboutOpen, setAboutOpen] = useState(false);
   // The Running panel and the report it renders. The report is polled here (not
@@ -241,6 +227,43 @@ export function App() {
   // down on its own and is never latched.
   const [attentionByRoot, setAttentionByRoot] = useState<Record<string, boolean>>({});
 
+  // The attention flag above is *sticky* (it clears only on focus) and an agent
+  // TUI like Codex rings the bell on nearly every redraw, so flashing straight
+  // off it blinks a background tab forever. `attentionPulses` turns each rising
+  // edge into one bounded flash (see `workspaceTabsLogic`): a `now` clock, bumped
+  // by a timer scheduled to the soonest pulse expiry, drives the re-render that
+  // ends the flash.
+  const [attentionPulses, setAttentionPulses] = useState<AttentionPulses>({});
+  const [pulseNow, setPulseNow] = useState(() => Date.now());
+
+  // Arm a flash for every root now asking for attention, and clear the ones that
+  // have gone quiet so a later bell can flash again. `pulseAttention` is a no-op
+  // while a root is already flashing or has settled, so the constant bells that
+  // keep `attentionByRoot` true cannot restart the flash.
+  useEffect(() => {
+    const now = Date.now();
+    setAttentionPulses((prev) => {
+      let next = prev;
+      for (const root of new Set([...Object.keys(prev), ...Object.keys(attentionByRoot)])) {
+        next = attentionByRoot[root]
+          ? pulseAttention(next, root, now)
+          : acknowledgeAttention(next, root);
+      }
+      return next;
+    });
+    setPulseNow(now);
+  }, [attentionByRoot]);
+
+  // One timer, aimed at the soonest in-flight pulse: firing it bumps the clock,
+  // which re-renders the tab (ending its flash) and re-runs this effect to arm
+  // the next expiry, or nothing once every pulse has settled.
+  useEffect(() => {
+    const remaining = nextPulseExpiry(attentionPulses, Date.now());
+    if (remaining === null) return;
+    const timer = window.setTimeout(() => setPulseNow(Date.now()), remaining + 1);
+    return () => window.clearTimeout(timer);
+  }, [attentionPulses, pulseNow]);
+
   /**
    * Each open codebase's open-file set, as its Run view reports it.
    *
@@ -279,6 +302,15 @@ export function App() {
   }, []);
   const dismissNote = useCallback((id: string) => {
     setNotifications((list) => dismissNotification(list, id));
+  }, []);
+
+  // The shared minimized-window dock. Every floating panel registers here while
+  // minimized (via `useDockEntry`); `Dock` lays them out in one strip, scoped to
+  // the active codebase. The setter is stable so registering does not re-render
+  // the other panels — only this component and `Dock` update.
+  const [dockEntries, setDockEntries] = useState<LiveDockEntry[]>([]);
+  const setDockEntry = useCallback<SetDockEntry>((id, entry) => {
+    setDockEntries((list) => (entry ? upsertEntry(list, entry) : removeEntry(list, id)));
   }, []);
 
   /**
@@ -843,7 +875,7 @@ export function App() {
       registerCommand("file.rescan", () => void rescan()),
       registerCommand("file.settings", () => setSettingsOpen(true)),
       registerCommand("panel.notes", showNotes),
-      registerCommand("plugin.browser", showBrowser),
+      registerCommand("plugin.browser", () => activeHandle()?.openBrowser()),
       registerCommand("panel.launch", () => setLauncherOpen(true)),
       registerCommand("panel.apps", () => setAppOutputOpen(true)),
       registerCommand("panel.running", () => setRunningOpen(true)),
@@ -910,8 +942,10 @@ export function App() {
   async function activateWorkspace(root: string) {
     if (root === activeRoot) return;
     // Looking at the codebase is the acknowledgement: this is the "until
-    // clicked" in the signal's promise.
+    // clicked" in the signal's promise, and it also frees the attention pulse so
+    // a later background bell can flash the tab afresh.
     clearSignal(root);
+    setAttentionPulses((prev) => acknowledgeAttention(prev, root));
     try {
       await api.setActiveWorkspace(root);
       setActiveRoot(root);
@@ -943,6 +977,7 @@ export function App() {
     setOpenWorkspaces(next.list);
     setActiveRoot(next.activeRoot);
     setAttentionByRoot(({ [root]: _closed, ...rest }) => rest);
+    setAttentionPulses((prev) => acknowledgeAttention(prev, root));
     clearSignal(root);
   }
 
@@ -1006,6 +1041,9 @@ export function App() {
   const labels = tabLabels(openWorkspaces, wsLabels);
 
   return (
+    <OcclusionProvider>
+    <FocusOrderProvider>
+    <DockProvider setDockEntry={setDockEntry}>
     <div className="app">
       {/* Three zones, not a flex row with a spacer: the branch widget is meant to
           sit in the *window's* centre, and a spacer can only centre it when the
@@ -1032,7 +1070,7 @@ export function App() {
         <div className="titlebar-center">
           {activeWorkspace && (
             /* Keyed by the active root, so switching codebases re-reads branches. */
-            <BranchMenu key={activeRoot ?? ""} />
+            <BranchMenu key={activeRoot ?? ""} onOpenWorktree={(path) => void openPath(path)} />
           )}
         </div>
 
@@ -1101,15 +1139,40 @@ export function App() {
         {openWorkspaces.map((w, i) => (
           <div
             key={w.root}
-            className={`ws-tab ${w.root === activeRoot ? "active" : ""}${tabSignalClass(
+            className={`ws-tab ${w.root === activeRoot ? "active" : ""}${
+              tabDrag?.from === i ? " dragging" : ""
+            }${tabDrag && tabDrag.from !== i && tabDrag.over === i ? " drag-over" : ""}${tabSignalClass(
               w.root,
               activeRoot,
               // A ringing bell is live state and outranks nothing it is folded
-              // into; a latched signal keeps showing once it stops ringing.
-              attentionByRoot[w.root]
+              // into; a latched signal keeps showing once it stops ringing. The
+              // attention half is a bounded pulse, not the raw sticky flag, so a
+              // background tab flashes once and settles rather than blinking for
+              // as long as the terminal keeps ringing.
+              attentionActive(attentionPulses, w.root, pulseNow)
                 ? mergeSignal(signalByRoot[w.root], "attention")
                 : (signalByRoot[w.root] ?? null),
             )}`}
+            // The tab is a drag handle for reordering, except while its rename
+            // box is open — a draggable container would swallow the text
+            // selection the input needs.
+            draggable={renamingRoot !== w.root}
+            onDragStart={(e) => {
+              setTabDrag({ from: i, over: i });
+              e.dataTransfer.effectAllowed = "move";
+            }}
+            onDragOver={(e) => {
+              if (!tabDrag) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (tabDrag.over !== i) setTabDrag({ ...tabDrag, over: i });
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (tabDrag) setOpenWorkspaces((list) => reorderWorkspaces(list, tabDrag.from, i));
+              setTabDrag(null);
+            }}
+            onDragEnd={() => setTabDrag(null)}
             onContextMenu={(e) => {
               e.preventDefault();
               setTabMenu({ root: w.root, x: e.clientX, y: e.clientY });
@@ -1216,9 +1279,10 @@ export function App() {
                 if (row.action.kind === "sql") activeHandle()?.openSql();
                 if (row.action.kind === "ask") activeHandle()?.openAsk();
                 if (row.action.kind === "mcp") activeHandle()?.openMcp();
-                // The one plugin that acts on no codebase, so it is opened here
-                // rather than through the foreground tab's handle.
-                if (row.action.kind === "browser") showBrowser();
+                if (row.action.kind === "browser") activeHandle()?.openBrowser();
+                if (row.action.kind === "tasks") activeHandle()?.openTasks();
+                if (row.action.kind === "roslynMcp") activeHandle()?.openRoslynMcp();
+                if (row.action.kind === "redis") activeHandle()?.openRedis();
               }}
             >
               {row.label}
@@ -1298,31 +1362,28 @@ export function App() {
       {/* The global Notes / scratchpad panel — one instance, not per-workspace.
           Its "send to agent" runs in the foreground tab. */}
       {featuresOpen && (
-        <FeaturesPicker
-          features={features}
-          onChange={setFeatures}
-          onClose={() => setFeaturesOpen(false)}
-        />
+        <>
+          <Occluder />
+          <FeaturesPicker
+            features={features}
+            onChange={setFeatures}
+            onClose={() => setFeaturesOpen(false)}
+          />
+        </>
       )}
 
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <>
+          <Occluder />
+          <SettingsDialog onClose={() => setSettingsOpen(false)} />
+        </>
+      )}
 
-      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
-
-      {/* The embedded browser. One instance for the whole application, for the
-          reasons on `browserPanel` above.
-
-          Switching the plugin off **unmounts** it, which is what makes the host
-          drop the webview: a hidden browser would keep a WebView2 process, its
-          cookie jar and whatever endpoint the page polls alive, with no URL bar
-          and no route to Stop. `enabled` is passed down only so the close can
-          say *which* of the two reasons it was. */}
-      {browserPanelMounted(browserPanel, browserEnabled) && (
-        <BrowserPanel
-          restoreRequest={browserPanel.restoreToken}
-          enabled={browserEnabled}
-          onClose={() => setBrowserPanel(closeBrowserPanel)}
-        />
+      {aboutOpen && (
+        <>
+          <Occluder />
+          <AboutDialog onClose={() => setAboutOpen(false)} />
+        </>
       )}
 
       {notesOpen && (
@@ -1347,11 +1408,14 @@ export function App() {
 
       {/* The app launcher's picker: an overlay, closed as soon as it launches. */}
       {launcherOpen && (
-        <LauncherPicker
-          root={activeRoot}
-          onLaunch={launchApp}
-          onClose={() => setLauncherOpen(false)}
-        />
+        <>
+          <Occluder />
+          <LauncherPicker
+            root={activeRoot}
+            onLaunch={launchApp}
+            onClose={() => setLauncherOpen(false)}
+          />
+        </>
       )}
 
       {/* The launched apps' output. Mounted while any tab exists - hidden, never
@@ -1378,6 +1442,10 @@ export function App() {
           service dying is often nobody's tab to outline. */}
       <NotificationHost notifications={notifications} onDismiss={dismissNote} />
 
+      {/* The shared minimized-window dock: every minimized floating panel's pill,
+          scoped to the active codebase, in one collision-free strip. */}
+      <Dock entries={dockEntries} activeRoot={activeRoot} />
+
       {/* Bottom status bar: the active codebase's folder name and full path,
           moved here from the titlebar. */}
       <div className="statusbar">
@@ -1401,5 +1469,8 @@ export function App() {
         />
       </div>
     </div>
+    </DockProvider>
+    </FocusOrderProvider>
+    </OcclusionProvider>
   );
 }

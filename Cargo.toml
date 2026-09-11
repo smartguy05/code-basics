@@ -3,7 +3,7 @@ members = ["crates/core", "src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "1.4.0"
+version = "1.6.3"
 edition = "2021"
 # Measured, not guessed, on 2026-08-30 — and this line replaces a false one.
 #
@@ -125,6 +125,15 @@ sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio
 # the SQL Browser's UDP port, which is the ordinary shape of a local developer
 # install; without it only a host:port connection can be opened.
 tiberius = { version = "0.12.3", default-features = false, features = ["tds73", "rustls", "sql-browser-tokio"] }
+
+# The Redis plugin's client. Like tiberius above, `default-features = false` drops
+# the crate's native-tls default and takes the rustls variant instead, so the
+# Redis plugin reuses the rustls stack already in this tree (reqwest, sqlx,
+# tiberius) rather than adding an OpenSSL build on Windows. `tokio-rustls-comp` is
+# the async-runtime + rustls glue (it pulls in `tokio-comp` and the tokio-rustls
+# connector); `tls-rustls-webpki-roots` speaks `rediss://` without a system trust
+# store. `streams` adds the XADD/XRANGE command helpers the stream editor needs.
+redis = { version = "0.27", default-features = false, features = ["tokio-rustls-comp", "tls-rustls-webpki-roots", "streams"] }
 
 # tiberius is futures-io based and takes an `AsyncRead + AsyncWrite` from the
 # `futures` traits, while everything else here is tokio. `compat` is the adapter

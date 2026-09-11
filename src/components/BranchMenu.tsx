@@ -12,7 +12,12 @@ import { ContextMenu } from "./ContextMenu";
  * switching (remote branches check out as local tracking branches), and
  * deletion. Available from every tab.
  */
-export function BranchMenu() {
+export function BranchMenu({
+  onOpenWorktree,
+}: {
+  /** Open a freshly created worktree directory in a new project tab. */
+  onOpenWorktree: (path: string) => void;
+}) {
   const [status, setStatus] = useState<WorkingStatus | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [open, setOpen] = useState(false);
@@ -150,6 +155,25 @@ export function BranchMenu() {
     setCreateFrom(null);
     if (!trimmed) return;
     void act("Creating", () => api.gitCreateBranch(trimmed, true, from));
+  }
+
+  /**
+   * Create a worktree on a new branch of the typed name (based on `createFrom`
+   * or HEAD) and open it in a new project tab. Unlike `create`, this does not
+   * touch the current working tree — it checks the new branch out in a separate
+   * directory the app then opens as its own codebase.
+   */
+  function createWorktree(name: string) {
+    const trimmed = name.trim();
+    const from = createFrom?.name;
+    if (!trimmed) return;
+    setDraft("");
+    setCreateFrom(null);
+    void act("Creating worktree", async () => {
+      const path = await api.gitAddWorktree(trimmed, from);
+      closeMenu();
+      onOpenWorktree(path);
+    });
   }
 
   function toggle(id: string) {
@@ -346,6 +370,20 @@ export function BranchMenu() {
               }}
               style={{ width: "100%", marginBottom: 4 }}
             />
+
+            {/* Enter in the box above creates a branch in place; this creates the
+                same new branch in a separate worktree and opens it in a new tab,
+                so the current working tree is left alone. Both use the typed name
+                and the `createFrom` base. */}
+            <button
+              className="branch-worktree"
+              disabled={!draft.trim() || busy !== null}
+              onClick={() => createWorktree(draft)}
+              title={`Create a worktree on a new branch from ${createFrom?.name ?? "HEAD"} and open it in a new tab`}
+              style={{ width: "100%", marginBottom: 4 }}
+            >
+              New worktree from {createFrom?.name ?? "HEAD"}…
+            </button>
 
             {/* A filter that matched nothing says so. An empty list under the
                 section headers would read as "this repository has no

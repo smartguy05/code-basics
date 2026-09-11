@@ -22,6 +22,7 @@ pub mod grouping;
 pub mod patch;
 pub mod repo;
 pub mod why;
+pub mod worktree;
 
 pub use attribution::{AttributedSpan, Confidence, FileAttribution, HunkAttribution};
 pub use coverage::{IntentReview, Scorecard, UnfulfilledClaim};

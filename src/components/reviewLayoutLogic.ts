@@ -75,6 +75,31 @@ function clampExtent(desired: number, min: number, max: number): number {
   return Math.max(min, Math.min(desired, max));
 }
 
+/** Which edge/corner of a panel a resize drag is pulling. */
+export type ResizeEdge = "e" | "s" | "se";
+
+/**
+ * The new panel size after a resize-handle drag, clamped to the stylesheet's
+ * floor and ceiling ({@link clampPanelSize}).
+ *
+ * `start` is the panel's size when the drag began; `delta` is how far the pointer
+ * has moved since. `"e"` changes width only, `"s"` height only, `"se"` both. This
+ * exists because the browser panel cannot use the native `resize: both` grip — an
+ * OS webview composites over that bottom-right corner and swallows the press — so
+ * it drives explicit handles through this instead. Pure arithmetic; the caller
+ * supplies the measured start size, the pointer delta and the viewport.
+ */
+export function resizeFromHandle(
+  edge: ResizeEdge,
+  start: PanelSize,
+  delta: { dx: number; dy: number },
+  viewport: PanelViewport,
+): PanelSize {
+  const width = edge === "s" ? start.width : start.width + delta.dx;
+  const height = edge === "e" ? start.height : start.height + delta.dy;
+  return clampPanelSize({ width, height }, viewport);
+}
+
 // --- Remembering the panel's position --------------------------------------
 
 /** The persisted panel layout: its dragged position and its resized size. */

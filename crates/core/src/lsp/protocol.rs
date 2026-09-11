@@ -69,6 +69,19 @@ pub mod method {
     pub const IMPLEMENTATION: &str = "textDocument/implementation";
     pub const TYPE_DEFINITION: &str = "textDocument/typeDefinition";
     pub const DOCUMENT_SYMBOL: &str = "textDocument/documentSymbol";
+    /// Resolve the caret onto a type, so its supertypes and subtypes can be
+    /// asked for. Gated on `typeHierarchyProvider`.
+    pub const PREPARE_TYPE_HIERARCHY: &str = "textDocument/prepareTypeHierarchy";
+    /// The types one hierarchy item derives from. Takes the item
+    /// [`PREPARE_TYPE_HIERARCHY`] returned, not a position.
+    pub const TYPE_HIERARCHY_SUPERTYPES: &str = "typeHierarchy/supertypes";
+    /// The types that derive from one hierarchy item.
+    pub const TYPE_HIERARCHY_SUBTYPES: &str = "typeHierarchy/subtypes";
+    /// The overloads visible at a call site. Gated on `signatureHelpProvider`.
+    pub const SIGNATURE_HELP: &str = "textDocument/signatureHelp";
+    /// *Pull* diagnostics for one document — a request with a reply, not the
+    /// [`PUBLISH_DIAGNOSTICS`] push. Gated on `diagnosticProvider`.
+    pub const DIAGNOSTIC: &str = "textDocument/diagnostic";
     /// Ask what the identifier under the caret is, and whether it can be
     /// renamed at all. Gated on `renameProvider.prepareProvider`, separately
     /// from [`RENAME`]: a server may offer one and not the other.
@@ -674,6 +687,318 @@ pub fn symbol_kind(number: u32) -> SymbolKind {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Type hierarchy
+// ---------------------------------------------------------------------------
+
+/// One node of a type hierarchy, as the server describes it.
+///
+/// `data` and `tags` are the reason this is not decoded straight into the model
+/// type: `data` is opaque server state that **must be echoed back verbatim** on
+/// the `typeHierarchy/supertypes` / `subtypes` request that follows, so a
+/// prepared item is re-serialised rather than reconstructed. Everything else the
+/// server sent that is not modelled here is dropped, as everywhere in this module.
+///
+/// No `Eq`: `data` is an arbitrary [`Value`], which is not `Eq` (a float is not).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeHierarchyItem {
+    pub name: String,
+    #[serde(default)]
+    pub kind: u32,
+    #[serde(default)]
+    pub detail: Option<String>,
+    pub uri: String,
+    pub range: Range,
+    pub selection_range: Range,
+    /// Echoed back untouched on the follow-up request; the server round-trips its
+    /// own resolution state through it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Value>,
+}
+
+/// The params of `typeHierarchy/supertypes` and `typeHierarchy/subtypes`.
+///
+/// Both take the *item*, not a position — so the item resolved by
+/// [`decode_type_hierarchy`] is handed straight back, `data` and all.
+#[derive(Debug, Clone, Serialize)]
+pub struct TypeHierarchyItemParams {
+    pub item: TypeHierarchyItem,
+}
+
+impl TypeHierarchyItemParams {
+    pub fn new(item: TypeHierarchyItem) -> Self {
+        Self { item }
+    }
+}
+
+/// Read a `prepareTypeHierarchy` / `typeHierarchy/supertypes` / `subtypes`
+/// answer, all of which are `TypeHierarchyItem[] | null`.
+///
+/// `null` is a **real answer** — the caret is not on a type, or the type has no
+/// supers/subs — and decodes to an empty vector exactly as [`decode_goto`]'s
+/// `null` does. A shape that is neither `null` nor a decodable array is a
+/// [`DecodeError`]; one unreadable element fails the whole array, for the same
+/// reason a short usages list is a wrong count.
+///
+/// One decoder serves all three requests because their shapes are identical; the
+/// caller rewrites the error to name the request actually asked, as it does for
+/// [`decode_goto`].
+pub fn decode_type_hierarchy(value: Value) -> Result<Vec<TypeHierarchyItem>, DecodeError> {
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_value::<Vec<TypeHierarchyItem>>(value.clone())
+        .map_err(|_| DecodeError::shape(method::PREPARE_TYPE_HIERARCHY, &value))
+}
+
+// ---------------------------------------------------------------------------
+// Signature help (overloads)
+// ---------------------------------------------------------------------------
+
+/// The overloads at a call site, resolved for display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureHelp {
+    pub signatures: Vec<SignatureInformation>,
+    /// The server's choice of active signature, **0-based**, or `None` — never
+    /// defaulted to 0, because "did not say" and "chose the first" are different.
+    pub active_signature: Option<u32>,
+    /// The server's choice of active parameter, **0-based**, or `None`.
+    pub active_parameter: Option<u32>,
+}
+
+/// One signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureInformation {
+    pub label: String,
+    pub documentation: Option<String>,
+    pub parameters: Vec<ParameterInformation>,
+}
+
+/// One parameter, its label already resolved to text.
+///
+/// The wire form is `string | [u32, u32]`: a substring, or a pair of **UTF-16
+/// code-unit** offsets into the enclosing signature's label. Both are resolved to
+/// the substring here, so a caller never has to know which shape arrived or redo
+/// the offset arithmetic in the wrong units.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParameterInformation {
+    pub label: String,
+    pub documentation: Option<String>,
+}
+
+/// Read a `textDocument/signatureHelp` answer.
+///
+/// `null` is a **real answer** — the caret is not inside a call — and comes back
+/// as `Ok(None)`, not as an empty `SignatureHelp` and not as an error, so a
+/// caller can tell "no help here" from "a call with no overloads". A non-object,
+/// non-null value is a [`DecodeError`].
+pub fn decode_signature_help(value: Value) -> Result<Option<SignatureHelp>, DecodeError> {
+    let refuse = || DecodeError::shape(method::SIGNATURE_HELP, &value);
+    if value.is_null() {
+        return Ok(None);
+    }
+    let map = value.as_object().ok_or_else(refuse)?;
+
+    let signatures = match map.get("signatures") {
+        // Absent or null is an empty overload set, not an error: the object is a
+        // legal `SignatureHelp` with nothing in it.
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => items.iter().map(decode_signature).collect(),
+        // A `signatures` that is neither absent nor an array is a shape we did
+        // not understand.
+        Some(_) => return Err(refuse()),
+    };
+
+    Ok(Some(SignatureHelp {
+        signatures,
+        active_signature: map
+            .get("activeSignature")
+            .and_then(Value::as_u64)
+            .map(|n| n as u32),
+        active_parameter: map
+            .get("activeParameter")
+            .and_then(Value::as_u64)
+            .map(|n| n as u32),
+    }))
+}
+
+fn decode_signature(value: &Value) -> SignatureInformation {
+    let label = value
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let parameters = value
+        .get("parameters")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|param| decode_parameter(&label, param))
+                .collect()
+        })
+        .unwrap_or_default();
+    SignatureInformation {
+        documentation: documentation_string(value.get("documentation")),
+        label,
+        parameters,
+    }
+}
+
+fn decode_parameter(signature_label: &str, value: &Value) -> ParameterInformation {
+    let label = match value.get("label") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(pair)) if pair.len() == 2 => {
+            match (pair[0].as_u64(), pair[1].as_u64()) {
+                (Some(start), Some(end)) => {
+                    utf16_slice(signature_label, start as usize, end as usize)
+                }
+                // A malformed offset pair yields no label rather than a guessed
+                // one — the substring cannot be named, so it is empty.
+                _ => String::new(),
+            }
+        }
+        _ => String::new(),
+    };
+    ParameterInformation {
+        label,
+        documentation: documentation_string(value.get("documentation")),
+    }
+}
+
+/// A `string | MarkupContent` field as plain text.
+///
+/// A `MarkupContent`'s `value` is taken verbatim — this app does not render
+/// Markdown here — and anything else (absent, a number) is `None` rather than a
+/// stringified guess.
+fn documentation_string(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(Value::Object(map)) => map.get("value").and_then(Value::as_str).map(str::to_string),
+        _ => None,
+    }
+}
+
+/// The substring of `text` between two **UTF-16 code-unit** offsets.
+///
+/// Clamped rather than panicking: a server's offsets are trusted only as far as
+/// the label they index, so an out-of-range pair yields the part that is in range
+/// rather than crashing a reader task. `from_utf16_lossy` because a pair that
+/// split a surrogate would otherwise be unrepresentable, and a replacement
+/// character is a better answer than none.
+fn utf16_slice(text: &str, start: usize, end: usize) -> String {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let start = start.min(units.len());
+    let end = end.clamp(start, units.len());
+    String::from_utf16_lossy(&units[start..end])
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics (pull)
+// ---------------------------------------------------------------------------
+
+/// One diagnostic, as the server reported it.
+///
+/// `severity` stays the raw optional number — the model layer decides what an
+/// absent one renders as, so this layer invents nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub range: Range,
+    pub severity: Option<u32>,
+    pub message: String,
+    pub source: Option<String>,
+    /// The rule/error code as text, even when the server sent a number.
+    pub code: Option<String>,
+}
+
+/// The params of `textDocument/diagnostic`.
+///
+/// No `previousResultId` is ever sent, so the server always answers a *full*
+/// report rather than an `unchanged` one — which is what lets an empty item list
+/// mean "clean" unambiguously.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentDiagnosticParams {
+    pub text_document: TextDocumentIdentifier,
+}
+
+impl DocumentDiagnosticParams {
+    pub fn new(uri: &str) -> Self {
+        Self {
+            text_document: TextDocumentIdentifier {
+                uri: uri.to_string(),
+            },
+        }
+    }
+}
+
+/// Read a `textDocument/diagnostic` (pull) answer into its diagnostics.
+///
+/// The response is a `DocumentDiagnosticReport`. An `unchanged` report carries no
+/// items and decodes to an empty vector (it cannot occur here — no
+/// `previousResultId` is sent — but is handled rather than mistaken for a full
+/// report with no items). A `full` report's `items` are decoded; an absent
+/// `items` on a full report is an empty, clean file. A bare array is accepted
+/// too, for a server that answers the items directly. **`null` and any other
+/// scalar are a [`DecodeError`]**, not an empty list: pull diagnostics never
+/// legally answer `null`, and collapsing it into "clean" is the empty-versus-
+/// unreadable confusion this module refuses. One unreadable item fails the whole
+/// array.
+pub fn decode_diagnostics(value: Value) -> Result<Vec<Diagnostic>, DecodeError> {
+    let refuse = || DecodeError::shape(method::DIAGNOSTIC, &value);
+    match &value {
+        Value::Array(items) => decode_diagnostic_items(items).ok_or_else(refuse),
+        Value::Object(map) => {
+            if map.get("kind").and_then(Value::as_str) == Some("unchanged") {
+                return Ok(Vec::new());
+            }
+            match map.get("items") {
+                None => Ok(Vec::new()),
+                Some(Value::Array(items)) => decode_diagnostic_items(items).ok_or_else(refuse),
+                Some(_) => Err(refuse()),
+            }
+        }
+        _ => Err(refuse()),
+    }
+}
+
+/// Decode a list of diagnostics, or `None` if any one of them is unreadable.
+fn decode_diagnostic_items(items: &[Value]) -> Option<Vec<Diagnostic>> {
+    items.iter().map(decode_one_diagnostic).collect()
+}
+
+fn decode_one_diagnostic(value: &Value) -> Option<Diagnostic> {
+    let map = value.as_object()?;
+    let range = serde_json::from_value::<Range>(map.get("range")?.clone()).ok()?;
+    // A diagnostic with no message is not a diagnostic we can show; refusing the
+    // element (rather than substituting "") keeps the "one bad item fails the
+    // array" rule honest.
+    let message = map.get("message")?.as_str()?.to_string();
+    let severity = map
+        .get("severity")
+        .and_then(Value::as_u64)
+        .map(|n| n as u32);
+    let source = map
+        .get("source")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let code = match map.get("code") {
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(Value::Number(number)) => Some(number.to_string()),
+        _ => None,
+    };
+    Some(Diagnostic {
+        range,
+        severity,
+        message,
+        source,
+        code,
+    })
+}
+
 /// How much of a document the server wants to be told about on every edit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncKind {
@@ -704,6 +1029,15 @@ pub struct ServerCapabilities {
     pub implementation: bool,
     pub type_definition: bool,
     pub document_symbol: bool,
+    /// Whether `textDocument/prepareTypeHierarchy` and the two
+    /// `typeHierarchy/*` follow-ups may be sent.
+    pub type_hierarchy: bool,
+    /// Whether `textDocument/signatureHelp` may be sent.
+    pub signature_help: bool,
+    /// Whether *pull* diagnostics (`textDocument/diagnostic`) may be sent. This
+    /// is a separate fact from the server *pushing* `publishDiagnostics`, which
+    /// this app reads only for its arrival as a readiness signal.
+    pub diagnostic: bool,
     /// Whether `textDocument/rename` may be sent.
     pub rename: bool,
     /// Whether `textDocument/prepareRename` may be sent — **a separate fact**,
@@ -742,6 +1076,9 @@ impl ServerCapabilities {
             implementation: provides(capabilities.get("implementationProvider")),
             type_definition: provides(capabilities.get("typeDefinitionProvider")),
             document_symbol: provides(capabilities.get("documentSymbolProvider")),
+            type_hierarchy: provides(capabilities.get("typeHierarchyProvider")),
+            signature_help: provides(capabilities.get("signatureHelpProvider")),
+            diagnostic: provides(capabilities.get("diagnosticProvider")),
             rename: provides(capabilities.get("renameProvider")),
             prepare_rename: prepare_provider(capabilities.get("renameProvider")),
             sync: sync_kind(capabilities.get("textDocumentSync")),
@@ -866,7 +1203,16 @@ pub fn initialize_params(process_id: Option<u32>, root_uri: &str, root_name: &st
                 // `prepareRename` *we* send may carry a placeholder. Declaring
                 // rename invites no new server-originated message at all: a
                 // rename is a pull.
-                "rename": { "dynamicRegistration": false, "prepareSupport": true }
+                "rename": { "dynamicRegistration": false, "prepareSupport": true },
+                // Three pulls, and each is a pull: this client asks and the
+                // server answers, so none of them invites a server-originated
+                // message. `diagnostic` in particular declares **no**
+                // `relatedDocumentSupport` and no `refreshSupport`, so the
+                // server never sends `workspace/diagnostic/refresh` — the one
+                // diagnostic message that would be server→client.
+                "signatureHelp": { "dynamicRegistration": false },
+                "typeHierarchy": { "dynamicRegistration": false },
+                "diagnostic": { "dynamicRegistration": false }
             },
             "workspace": {
                 // Roslyn *blocks* on `workspace/configuration` during start-up,

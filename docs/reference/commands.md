@@ -65,6 +65,29 @@ Types referenced below are documented in [the IPC contract](../architecture/ipc-
 | `read_notes` | — | `NotesFile` | The global notes; a missing or unreadable file is an empty set, not an error |
 | `write_notes` | `file: NotesFile` | `()` | Overwrite the global notes file, creating its directory if absent |
 
+## Tasks (plugin)
+
+`src-tauri/src/commands/tasks.rs` — the per-codebase task list behind the optional **Tasks** plugin, plus the install bridge for its write-capable MCP server. Unlike notes the store is **per-workspace**, `<root>/.code-basics/tasks.json` (gitignored, like `runs.json`), so every command takes an explicit `root` — several codebases can be open at once, and the panel names its own. The wall clock is stamped at the command edge (never in `cb-core`) so the pure store helpers stay testable with a fixed time. A write that names no task is **refused** (`no task with that id`) rather than saving an unchanged file and reporting success. See [the Tasks plugin guide](../guides/tasks-plugin.md).
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `read_tasks` | `root: PathBuf` | `TasksFile` | This workspace's task list; a missing or unreadable file is an empty list, not an error (`cb_core::tasks::load` tolerates both) |
+| `create_task` | `root: PathBuf`, `title: String`, `body: String` | `TasksFile` | Append a new open task owned by the user (`owner: me`), returning the updated list. The id is a fresh uuid so the panel and an agent creating in the same millisecond cannot collide |
+| `update_task` | `root: PathBuf`, `id: String`, `title: String`, `body: String` | `TasksFile` | Overwrite a task's title and body, stamping `updatedAtMs` and preserving `createdAtMs` |
+| `assign_task` | `root: PathBuf`, `id: String`, `owner: TaskOwner` | `TasksFile` | Record the task's owner (`me`/`ai`). Launching the agent when the owner becomes the AI is the frontend's job; this only persists the owner |
+| `complete_task` | `root: PathBuf`, `id: String`, `status: TaskStatus` | `TasksFile` | Set a task's status (`done` or back to `open`) |
+| `delete_task` | `root: PathBuf`, `id: String` | `TasksFile` | Remove one task |
+
+The MCP install bridge is the same five-command shape as the SQL and browser servers, over `cb_core::tasks::mcp::install` (which reuses `mcp::install`'s merge wholesale). The server name is `code-basics-tasks` and the entry is this executable + `args` = `["mcp-tasks", "--workspace", <root>]` — the `--workspace` boundary **is** the consent boundary, so an agent configured for one repository cannot reach another's tasks. Writes go through `providers::apply_writes_atomically`.
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `tasks_mcp_status` | `root: PathBuf`, `provider: ProviderId` | `InstallScope \| null` | Where the Tasks server is installed for this workspace and provider (project wins over user), or `null` |
+| `tasks_mcp_install_plan` | `root: PathBuf`, `provider: ProviderId`, `scope: InstallScope` | `InstallPlan` | Exactly what installing would write — Claude Code `<root>/.mcp.json` (project) or `~/.claude.json` (user), Codex `$CODEX_HOME/config.toml` (user only). **Touches nothing** — what the preview renders, write-capable caveats included |
+| `install_tasks_mcp_server` | `root: PathBuf`, `provider: ProviderId`, `scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install, then re-read the status from disk |
+| `tasks_mcp_uninstall_plan` | `root: PathBuf`, `provider: ProviderId`, `scope: InstallScope` | `InstallPlan` | The exact change removing the server would make. **Touches nothing.** An empty `writes` means that configuration holds no entry of ours |
+| `uninstall_tasks_mcp_server` | `root: PathBuf`, `provider: ProviderId`, `scope: InstallScope` | `InstallScope \| null` | Perform a confirmed removal, backing the file up first, then re-read the status |
+
 ## About
 
 `src-tauri/src/commands/about.rs` — what build is running, behind **Help → About**. Takes no `AppState` (process metadata belongs to the process, not a workspace), and its `AboutInfo` struct is **local to the command module** rather than in `cb-core`, because it carries no decision the core crate needs to make; the camelCase keys are pinned by `about_info_serialises_with_the_keys_the_ui_reads` in the same file.
@@ -85,6 +108,29 @@ One binary ships every feature, so these decide only what is *shown*. An install
 |---------|-----------|---------|-------|
 | `list_features` | — | `FeatureInfo[]` | Every known feature with its resolved state. Also the first-run seed point; a missing or corrupt store yields the defaults rather than an error |
 | `set_feature` | `id: string`, `enabled: bool` | `FeatureInfo[]` | Switch one feature. Returns the whole list as persisted, so the caller renders what was written. An unknown id is an error naming it |
+
+## MCP tool gating
+
+Per-*tool* enable/disable for the four MCP servers (`tool_gate`), a finer grain than the per-server feature flags above. The store is user-global (`code-basics/mcp-tools.json`); each MCP server process reads it directly to filter its `tools/list` and refuse a disabled-but-known tool. An absent choice, and a missing or corrupt store, mean **enabled** — this is a preference, not a security boundary.
+
+| Command | Parameters | Returns | Notes |
+| --- | --- | --- | --- |
+| `list_mcp_tools` | — | `McpServerToolsInfo[]` | Every MCP server with its tools and their resolved enabled state |
+| `set_mcp_tool` | `server: string`, `tool: string`, `enabled: bool` | `McpServerToolsInfo[]` | Switch one tool. Returns the whole list as persisted. An unknown server id is an error naming it |
+
+## Redis plugin
+
+Browse/edit a Redis server ([guide](../guides/redis-plugin.md)). Connection
+strings never cross toward the frontend; each agent-consent flag has its own verb.
+Profiles: `redis_list_connections`, `redis_discover(root)`,
+`redis_save_connection` (consent flags ignored), `redis_delete_connection`,
+`redis_rename_connection`, `redis_set_allow_writes`, `redis_set_expose_to_agents`.
+Browse/edit: `redis_test_connection` → `RedisStatusKind` (category only),
+`redis_scan_keys` → `RedisScanPage`, `redis_get_key`/`redis_key_info`, and the
+write verbs `redis_set_string`/`redis_hash_set`/`redis_hash_delete`/
+`redis_list_push`/`redis_list_remove`/`redis_set_add`/`redis_set_remove`/
+`redis_zset_add`/`redis_zset_remove`/`redis_stream_add`/`redis_delete_key`/
+`redis_expire` (UI edits are always allowed; `allow_writes` gates only agents).
 
 ## .NET user secrets
 
@@ -212,6 +258,7 @@ The Running panel: what the app has running now (across every open codebase) plu
 | `git_commit` | `message: String`, `amend: bool` | `String` | Returns the new commit id. Also persists the change's content-keyed intent into a git note (`refs/notes/code-basics-intents`), best-effort — a note failure never fails the commit |
 | `git_branches` | – | `Branch[]` | |
 | `git_create_branch` | `name: String`, `checkout: bool`, `from: String?` | `()` | `from` is the revision to branch from; absent means HEAD |
+| `git_add_worktree` | `name: String`, `base: String?`, `dir: String?` | `String` | Creates a worktree on a new branch and returns its directory (to open in a new tab); `base` absent means HEAD, `dir` absent uses a sibling `<repo>.worktrees/<name>` |
 | `git_checkout_branch` | `name: String` | `()` | |
 | `git_checkout_remote_branch` | `name: String` | `()` | Like `git switch`: creates the local tracking branch (or reuses it), then switches |
 | `git_delete_branch` | `name: String` | `()` | |
@@ -290,6 +337,20 @@ Nothing new crosses IPC: a status is exactly `InstallScope | null`, and the plan
 | `uninstall_browser_mcp` | `provider`, `scope` | `InstallScope \| null` | Applies a confirmed removal, then re-reads the status |
 
 Codex has no project scope: `mcp_server_install_plan(codex, project)` is an error naming `$CODEX_HOME/config.toml`, rather than inventing a `<root>/.codex/config.toml` that would look installed and never be read.
+
+## Roslyn MCP server
+
+`src-tauri/src/commands/roslyn_mcp.rs` — installing the **Roslyn / LSP** MCP server (which exposes the app's warm per-workspace language-server session to an agent) into an agent's configuration, previewed exactly as the SQL and browser servers are. Decisions live in `cb_core::roslyn::install`, which reuses `mcp::install`'s merge wholesale. The server name is `code-basics-roslyn`.
+
+Nothing new crosses IPC: a status is exactly `InstallScope | null`, and the plan is the same `InstallPlan`/`PlannedWrite`. Writes go through `providers::apply_writes_atomically`. The entry is `command` = this executable + `args` = `["mcp-roslyn"]` (plus `--workspace <root>` at project scope) — `--workspace` **is** the consent boundary, so an agent configured for one repository cannot reach another's semantic model. See [the Roslyn MCP server guide](../guides/roslyn-mcp-server.md).
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `roslyn_mcp_server_status` | `provider: ProviderId` | `InstallScope \| null` | Where the Roslyn server is installed for this workspace and provider (project wins over user), or `null` |
+| `roslyn_mcp_server_install_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact final contents of the write — Claude Code `<root>/.mcp.json` (project) or `~/.claude.json` (user), Codex `$CODEX_HOME/config.toml` (user only). **Touches nothing** — what the preview renders, read-only caveats included |
+| `install_roslyn_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install, then re-read the status from disk. A user-scope entry names no workspace, so it answers `noWorkspace` until scoped to a repository |
+| `roslyn_mcp_server_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change removing the server would make. **Touches nothing.** An empty `writes` means that configuration holds no entry of ours. Every other configured server survives |
+| `uninstall_roslyn_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed removal, backing the file up first, then re-read the status |
 
 ## First-open setup
 

@@ -97,6 +97,38 @@ export function stashMenuLabel(count: number): string {
 }
 
 /**
+ * The subset of a selection whose working-tree changes can be reverted to HEAD.
+ *
+ * A conflicted file has no single HEAD content to restore cleanly, so it is
+ * dropped rather than sent to the backend to fail — the same rule
+ * `stashablePaths` applies. Untracked files are included: reverting one restores
+ * it from HEAD, which removes it (it has no HEAD version), and the confirm
+ * wording makes that explicit.
+ */
+export function revertablePaths(
+  selected: ReadonlySet<string>,
+  files: readonly FileChange[],
+): string[] {
+  const eligible = new Set(
+    files
+      .filter(
+        (file) =>
+          (file.staged != null || file.unstaged != null) &&
+          file.staged !== "conflicted" &&
+          file.unstaged !== "conflicted",
+      )
+      .map((file) => file.path),
+  );
+  return [...selected].filter((path) => eligible.has(path)).sort();
+}
+
+/** The right-click menu's wording for the files it would revert. */
+export function revertMenuLabel(count: number): string {
+  if (count <= 0) return "";
+  return count === 1 ? "Revert file…" : `Revert ${count} files…`;
+}
+
+/**
  * What the stash-message prompt starts with.
  *
  * The file's own name is a better starting point than a generic label, because

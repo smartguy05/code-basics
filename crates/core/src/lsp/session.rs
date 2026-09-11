@@ -95,8 +95,8 @@ use tokio::sync::{mpsc, oneshot};
 use super::client::{Client, ReadyState, RequestError, StartFailure};
 use super::documents::{Documents, ServerId, SyncAction};
 use super::model::{
-    AnchorResult, Availability, DefinitionResult, LspStatus, PrepareRenameResult, RenameResult,
-    ServerStatus, UsageResult,
+    AnchorResult, Availability, DefinitionResult, DiagnosticsResult, LspStatus, OverloadResult,
+    PrepareRenameResult, RenameResult, ServerStatus, TypeHierarchyResult, UsageResult,
 };
 use super::positions::{to_editor_line, to_lsp_line};
 use super::protocol::{Location, Position, PrepareRenameResponse};
@@ -159,6 +159,7 @@ pub struct LspHandle {
     generation: u64,
     tx: mpsc::UnboundedSender<Message>,
     status: SharedStatus,
+    pids: SharedPids,
 }
 
 /// The status snapshot, written only by the actor and read by every handle.
@@ -166,6 +167,17 @@ pub struct LspHandle {
 /// A `std::sync::Mutex` on purpose, and never held across an `.await`:
 /// [`LspHandle::status`] has to be callable from inside `AppState`'s own guard.
 type SharedStatus = Arc<Mutex<BTreeMap<Language, ServerStatus>>>;
+
+/// The live server pids, one per language, written only by the actor and read by
+/// every handle.
+///
+/// A `std::sync::Mutex` for the same reason as [`SharedStatus`], but its one
+/// caller is sharper: the app-exit handler reads it to tree-kill every language
+/// server on the way down, from a runtime it is abandoning — so it must be a
+/// synchronous, lock-only read that never touches the actor. It mirrors the
+/// state transitions through [`Session::refresh_status`], the single choke point
+/// every server's lifecycle already funnels through.
+type SharedPids = Arc<Mutex<BTreeMap<Language, u32>>>;
 
 impl std::fmt::Debug for LspHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -206,6 +218,21 @@ impl LspHandle {
             Err(poisoned) => poisoned.into_inner().values().cloned().collect(),
         };
         LspStatus { servers }
+    }
+
+    /// The OS pids of every server that is up right now, one per language.
+    ///
+    /// Read from the shared snapshot with a single non-blocking lock, so it is
+    /// safe to call while the process is exiting and the tokio runtime is no
+    /// longer being polled — which is exactly where the app-exit handler calls
+    /// it, to tree-kill each language server (Roslyn and its `BuildHost`
+    /// children, node, …) that never registered in the running store. Empty
+    /// while nothing is up and immediately after teardown.
+    pub fn server_pids(&self) -> Vec<u32> {
+        match self.pids.lock() {
+            Ok(pids) => pids.values().copied().collect(),
+            Err(poisoned) => poisoned.into_inner().values().copied().collect(),
+        }
     }
 
     /// Ask for teardown and return immediately.
@@ -351,6 +378,77 @@ impl LspHandle {
         .await
     }
 
+    /// Every use site of the symbol at `line`/`character`, **including its
+    /// declaration**.
+    ///
+    /// The sibling of [`Self::find_usages`]: that one drops the declaration
+    /// because the row it draws *is* the declaration, so counting it would report
+    /// "1 usage" for a symbol nothing uses. This one keeps it, because an agent
+    /// asking "where is this referenced" wants the whole set. `line` is **1-based**
+    /// and `character` is **0-based UTF-16 code units**, as everywhere here.
+    pub async fn find_references(&self, path: &Path, line: u32, character: u32) -> UsageResult {
+        self.ask(
+            |reply| Message::References {
+                path: path.to_path_buf(),
+                line,
+                character,
+                reply,
+            },
+            || UsageResult::unavailable(Availability::Failed, TORN_DOWN),
+        )
+        .await
+    }
+
+    /// The supertypes and subtypes of the type at `line`/`character`.
+    pub async fn get_type_hierarchy(
+        &self,
+        path: &Path,
+        line: u32,
+        character: u32,
+    ) -> TypeHierarchyResult {
+        self.ask(
+            |reply| Message::TypeHierarchy {
+                path: path.to_path_buf(),
+                line,
+                character,
+                reply,
+            },
+            || TypeHierarchyResult::unavailable(Availability::Failed, TORN_DOWN),
+        )
+        .await
+    }
+
+    /// The overloads visible at the call site at `line`/`character`.
+    pub async fn resolve_overloads(
+        &self,
+        path: &Path,
+        line: u32,
+        character: u32,
+    ) -> OverloadResult {
+        self.ask(
+            |reply| Message::Overloads {
+                path: path.to_path_buf(),
+                line,
+                character,
+                reply,
+            },
+            || OverloadResult::unavailable(Availability::Failed, TORN_DOWN),
+        )
+        .await
+    }
+
+    /// The pull diagnostics for one file.
+    pub async fn get_diagnostics(&self, path: &Path) -> DiagnosticsResult {
+        self.ask(
+            |reply| Message::Diagnostics {
+                path: path.to_path_buf(),
+                reply,
+            },
+            || DiagnosticsResult::unavailable(Availability::Failed, TORN_DOWN),
+        )
+        .await
+    }
+
     /// Enqueue a notification, or drop it because there is nobody left to tell.
     fn tell(&self, message: Message) {
         let _ = self.tx.send(message);
@@ -385,14 +483,24 @@ impl LspHandle {
     }
 }
 
-/// Start a session for `root`, resolving every language but starting none.
+/// Start a session for `root`, resolving every language and eagerly starting the
+/// servers for the languages in `warm`.
 ///
 /// Must be called from inside a Tokio runtime: the actor is a spawned task.
 /// Resolution happens **here**, synchronously, so the status surface is complete
 /// the moment the caller has a handle — a handful of directory reads against a
-/// question the user will ask as soon as the window is up.
-pub fn start(root: PathBuf, config: Option<LspConfig>, generation: u64) -> LspHandle {
-    start_with_probe(root, config, generation, Arc::new(RealProbe))
+/// question the user will ask as soon as the window is up. `warm` is normally
+/// [`registry::languages_present`] of the workspace, so a C#/TS project's server
+/// is coming up before the user opens the first file (Roslyn's project load is
+/// slow, and warming it is what hides that latency); an empty slice preserves the
+/// old lazy behaviour for every other caller.
+pub fn start(
+    root: PathBuf,
+    config: Option<LspConfig>,
+    generation: u64,
+    warm: &[Language],
+) -> LspHandle {
+    start_with_probe(root, config, generation, warm, Arc::new(RealProbe))
 }
 
 /// [`start`] with the machine injected.
@@ -404,9 +512,11 @@ pub fn start_with_probe(
     root: PathBuf,
     config: Option<LspConfig>,
     generation: u64,
+    warm: &[Language],
     probe: Arc<dyn Probe + Send + Sync>,
 ) -> LspHandle {
     let status: SharedStatus = Arc::new(Mutex::new(BTreeMap::new()));
+    let pids: SharedPids = Arc::new(Mutex::new(BTreeMap::new()));
     let (tx, rx) = mpsc::unbounded_channel();
 
     let mut session = Session {
@@ -414,6 +524,7 @@ pub fn start_with_probe(
         servers: BTreeMap::new(),
         documents: BTreeMap::new(),
         status: Arc::clone(&status),
+        pids: Arc::clone(&pids),
         // Weak, so the actor's own copy cannot keep the channel open: when every
         // `LspHandle` is dropped the receive loop has to end and tear down, and
         // a strong sender held here would mean it never did.
@@ -421,6 +532,14 @@ pub fn start_with_probe(
         probe,
     };
     session.resolve_all(config.as_ref());
+    // Start the resolved servers for the present languages before the actor is
+    // running: `ensure_started` spawns a task whose `Started` message queues on
+    // the unbounded channel until `run` drains it. A language that did not
+    // resolve (`Unavailable`/`Disabled`) is a no-op here — `ensure_started` only
+    // acts on an `Idle` server with a spec.
+    for &language in warm {
+        session.ensure_started(language);
+    }
     tokio::spawn(session.run(rx));
 
     LspHandle {
@@ -428,6 +547,7 @@ pub fn start_with_probe(
         generation,
         tx,
         status,
+        pids,
     }
 }
 
@@ -477,6 +597,30 @@ enum Message {
         old_name: String,
         new_name: String,
         reply: oneshot::Sender<RenameResult>,
+    },
+    /// Find references, threading `include_declaration: true` — the sibling of
+    /// [`Message::Usages`], which threads `false`.
+    References {
+        path: PathBuf,
+        line: u32,
+        character: u32,
+        reply: oneshot::Sender<UsageResult>,
+    },
+    TypeHierarchy {
+        path: PathBuf,
+        line: u32,
+        character: u32,
+        reply: oneshot::Sender<TypeHierarchyResult>,
+    },
+    Overloads {
+        path: PathBuf,
+        line: u32,
+        character: u32,
+        reply: oneshot::Sender<OverloadResult>,
+    },
+    Diagnostics {
+        path: PathBuf,
+        reply: oneshot::Sender<DiagnosticsResult>,
     },
     /// A start attempt finished. Boxed because a [`Client`] is far larger than
     /// every other variant here.
@@ -553,6 +697,9 @@ struct Session {
     /// record of who has what open permanently wrong.
     documents: BTreeMap<Language, Documents>,
     status: SharedStatus,
+    /// The live-pid mirror, updated in lock-step with `status` from
+    /// [`Session::refresh_status`] and read synchronously by the app-exit handler.
+    pids: SharedPids,
     tx: mpsc::WeakUnboundedSender<Message>,
     probe: Arc<dyn Probe + Send + Sync>,
 }
@@ -591,6 +738,25 @@ impl Session {
                     new_name,
                     reply,
                 } => self.on_rename(path, line, character, old_name, new_name, reply),
+                Message::References {
+                    path,
+                    line,
+                    character,
+                    reply,
+                } => self.on_references(path, line, character, reply),
+                Message::TypeHierarchy {
+                    path,
+                    line,
+                    character,
+                    reply,
+                } => self.on_type_hierarchy(path, line, character, reply),
+                Message::Overloads {
+                    path,
+                    line,
+                    character,
+                    reply,
+                } => self.on_overloads(path, line, character, reply),
+                Message::Diagnostics { path, reply } => self.on_diagnostics(path, reply),
                 Message::Started {
                     language,
                     epoch,
@@ -873,11 +1039,42 @@ impl Session {
     // Requests
     // -----------------------------------------------------------------------
 
+    /// The inline "N usages" count, which **excludes** the declaration: the row
+    /// this number is drawn on *is* the declaration, so counting it would report
+    /// "1 usage" for a symbol nothing uses — the one number a reader acts on.
     fn on_usages(
         &mut self,
         path: PathBuf,
         line: u32,
         character: u32,
+        reply: oneshot::Sender<UsageResult>,
+    ) {
+        self.run_references(path, line, character, false, reply);
+    }
+
+    /// Find references, **including** the declaration: an agent asking "where is
+    /// this referenced" wants the whole set, not the set minus one.
+    fn on_references(
+        &mut self,
+        path: PathBuf,
+        line: u32,
+        character: u32,
+        reply: oneshot::Sender<UsageResult>,
+    ) {
+        self.run_references(path, line, character, true, reply);
+    }
+
+    /// The shared body of [`Self::on_usages`] and [`Self::on_references`]: one
+    /// `references` request, differing only in whether the declaration is counted.
+    /// Sharing it is the [`crate::lsp::results::usages`] rule applied to the actor
+    /// — one acceptance, two callers — so the two answers can never disagree about
+    /// anything but the bool they were asked for.
+    fn run_references(
+        &mut self,
+        path: PathBuf,
+        line: u32,
+        character: u32,
+        include_declaration: bool,
         reply: oneshot::Sender<UsageResult>,
     ) {
         let prepared = match self.prepare(&path, Needs::Position) {
@@ -898,10 +1095,9 @@ impl Session {
         let position = request_position(line, character);
 
         tokio::spawn(async move {
-            // `include_declaration: false`. The row this count is drawn on *is*
-            // the declaration, so counting it would report "1 usage" for a symbol
-            // nothing uses — which is the one number a reader would act on.
-            let answer = client.references(&path, position, false).await;
+            let answer = client
+                .references(&path, position, include_declaration)
+                .await;
             let result = match answer {
                 Ok(locations) => {
                     let mut result = results::usages(&root, &locations, &mut text, USAGE_CAP)
@@ -1133,6 +1329,169 @@ impl Session {
                 }
                 Err(error) => {
                     RenameResult::unavailable(availability_for(&error), error.to_string())
+                        .with_server(server)
+                }
+            };
+            let _ = reply.send(result);
+        });
+    }
+
+    /// The supertypes and subtypes of the type at a position.
+    ///
+    /// `Needs::Position`, like the goto questions: `prepareTypeHierarchy` resolves
+    /// a position against the project the server already loaded, so a file the
+    /// server knows only from the project can still answer. An empty prepare — the
+    /// caret was not on a type — is a **real answer** (`Ready`, `item: None`), not
+    /// a failure; and a supers-refused / subs-answered split keeps `Ready` and
+    /// names the refused direction, never a false empty. Only a refusal of *both*
+    /// directions changes the outcome, to the **most severe** reason (see
+    /// [`worst`]), for the same reason [`Session::on_definition`] does.
+    fn on_type_hierarchy(
+        &mut self,
+        path: PathBuf,
+        line: u32,
+        character: u32,
+        reply: oneshot::Sender<TypeHierarchyResult>,
+    ) {
+        let prepared = match self.prepare(&path, Needs::Position) {
+            Ok(prepared) => prepared,
+            Err(unready) => {
+                let _ = reply.send(unready.type_hierarchy());
+                return;
+            }
+        };
+        let Prepared {
+            client,
+            server,
+            root,
+            path,
+            caveat,
+            ..
+        } = prepared;
+        let position = request_position(line, character);
+
+        tokio::spawn(async move {
+            let result = match client.prepare_type_hierarchy(&path, position).await {
+                Ok(items) => match items.into_iter().next() {
+                    // Not on a type: a real, empty answer.
+                    None => {
+                        let mut result =
+                            results::type_hierarchy(&root, None, &[], &[]).with_server(server);
+                        result.message = with_caveat(None, caveat.as_deref());
+                        result
+                    }
+                    Some(item) => {
+                        // Concurrently: two independent questions to one server.
+                        let (supers, subs) = tokio::join!(
+                            client.type_supertypes(item.clone()),
+                            client.type_subtypes(item.clone()),
+                        );
+                        let mut notes = Vec::new();
+                        let mut refusals = Vec::new();
+                        let supertypes = refused(supers, "supertypes", &mut notes, &mut refusals);
+                        let subtypes = refused(subs, "subtypes", &mut notes, &mut refusals);
+
+                        let mut result =
+                            results::type_hierarchy(&root, Some(&item), &supertypes, &subtypes)
+                                .with_server(server);
+                        // Only when *both* directions were refused: one refused
+                        // and one answered stays `Ready`, with the note carrying
+                        // which direction could not be asked, because there is one
+                        // outcome for two lists.
+                        if refusals.len() == 2 {
+                            result.outcome = worst(&refusals);
+                        }
+                        result.message = with_caveat(
+                            (!notes.is_empty()).then(|| notes.join(" ")),
+                            caveat.as_deref(),
+                        );
+                        result
+                    }
+                },
+                Err(error) => {
+                    TypeHierarchyResult::unavailable(availability_for(&error), error.to_string())
+                        .with_server(server)
+                }
+            };
+            let _ = reply.send(result);
+        });
+    }
+
+    /// The overloads visible at a call site.
+    ///
+    /// `Needs::OpenDocument`: signature help is answered against the buffer's
+    /// exact text, so a server that was never sent `didOpen` would answer about
+    /// the file on disk — a different call site if there are unsaved edits.
+    fn on_overloads(
+        &mut self,
+        path: PathBuf,
+        line: u32,
+        character: u32,
+        reply: oneshot::Sender<OverloadResult>,
+    ) {
+        let prepared = match self.prepare(&path, Needs::OpenDocument) {
+            Ok(prepared) => prepared,
+            Err(unready) => {
+                let _ = reply.send(unready.overloads());
+                return;
+            }
+        };
+        let Prepared {
+            client,
+            server,
+            path,
+            caveat,
+            ..
+        } = prepared;
+        let position = request_position(line, character);
+
+        tokio::spawn(async move {
+            let result = match client.signature_help(&path, position).await {
+                Ok(help) => {
+                    let mut result = results::overloads(help).with_server(server);
+                    result.message = with_caveat(result.message.take(), caveat.as_deref());
+                    result
+                }
+                Err(error) => {
+                    OverloadResult::unavailable(availability_for(&error), error.to_string())
+                        .with_server(server)
+                }
+            };
+            let _ = reply.send(result);
+        });
+    }
+
+    /// The pull diagnostics for one file.
+    ///
+    /// `Needs::OpenDocument`: a `textDocument/diagnostic` reply is about the open
+    /// buffer, and asking it about a file the server was never told about would
+    /// diagnose the version on disk. An empty list on a `Ready` outcome is a clean
+    /// file — a real answer, because this is a pull and not the asynchronous push.
+    fn on_diagnostics(&mut self, path: PathBuf, reply: oneshot::Sender<DiagnosticsResult>) {
+        let prepared = match self.prepare(&path, Needs::OpenDocument) {
+            Ok(prepared) => prepared,
+            Err(unready) => {
+                let _ = reply.send(unready.diagnostics());
+                return;
+            }
+        };
+        let Prepared {
+            client,
+            server,
+            path,
+            caveat,
+            ..
+        } = prepared;
+
+        tokio::spawn(async move {
+            let result = match client.diagnostics(&path).await {
+                Ok(items) => {
+                    let mut result = results::diagnostics(&items).with_server(server);
+                    result.message = with_caveat(result.message.take(), caveat.as_deref());
+                    result
+                }
+                Err(error) => {
+                    DiagnosticsResult::unavailable(availability_for(&error), error.to_string())
                         .with_server(server)
                 }
             };
@@ -1415,6 +1774,30 @@ impl Session {
                 status.remove(&language);
             }
         }
+
+        // Mirror the live pid in lock-step, so the app-exit handler can read it
+        // without the actor. Only a server that is `Up` and reports a pid is
+        // tracked — everything else (starting, failed, torn down) contributes
+        // nothing, so a pid never lingers past the process it names.
+        let pid = self
+            .servers
+            .get(&language)
+            .and_then(|server| match &server.state {
+                State::Up(client) => client.pid(),
+                _ => None,
+            });
+        let mut pids = match self.pids.lock() {
+            Ok(pids) => pids,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match pid {
+            Some(pid) => {
+                pids.insert(language, pid);
+            }
+            None => {
+                pids.remove(&language);
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1440,6 +1823,12 @@ impl Session {
         // `Ready` would be read as a session that can answer.
         if let Ok(mut status) = self.status.lock() {
             status.clear();
+        }
+        // The pid mirror empties with it: the processes are being shut down (the
+        // spawned tasks hold the last `Arc` and drop it), so a pid left here would
+        // name a process this session no longer owns.
+        if let Ok(mut pids) = self.pids.lock() {
+            pids.clear();
         }
     }
 }
@@ -1569,6 +1958,30 @@ impl Unready {
             None => result,
         }
     }
+
+    fn type_hierarchy(self) -> TypeHierarchyResult {
+        let result = TypeHierarchyResult::unavailable(self.outcome, self.message);
+        match self.server {
+            Some(server) => result.with_server(server),
+            None => result,
+        }
+    }
+
+    fn overloads(self) -> OverloadResult {
+        let result = OverloadResult::unavailable(self.outcome, self.message);
+        match self.server {
+            Some(server) => result.with_server(server),
+            None => result,
+        }
+    }
+
+    fn diagnostics(self) -> DiagnosticsResult {
+        let result = DiagnosticsResult::unavailable(self.outcome, self.message);
+        match self.server {
+            Some(server) => result.with_server(server),
+            None => result,
+        }
+    }
 }
 
 /// One goto group's locations, or nothing plus a note saying why nothing.
@@ -1582,8 +1995,25 @@ fn group(
     notes: &mut Vec<String>,
     refusals: &mut Vec<Availability>,
 ) -> Vec<Location> {
+    refused(answer, what, notes, refusals)
+}
+
+/// The generic core of [`group`]: a group's payload, or nothing plus a note
+/// saying why nothing.
+///
+/// One function so the goto groups ([`Location`]) and the type-hierarchy
+/// directions ([`super::protocol::TypeHierarchyItem`]) share the exact rule — a
+/// refusal is a *note about the conversation*, never an empty list read as "there
+/// are none". `group` stays a named `Location`-typed wrapper so its call sites
+/// (and their tests) keep inferring the element type.
+fn refused<T>(
+    answer: Result<Vec<T>, RequestError>,
+    what: &str,
+    notes: &mut Vec<String>,
+    refusals: &mut Vec<Availability>,
+) -> Vec<T> {
     match answer {
-        Ok(locations) => locations,
+        Ok(items) => items,
         Err(error) => {
             notes.push(format!("No {what}: {error}"));
             refusals.push(availability_for(&error));

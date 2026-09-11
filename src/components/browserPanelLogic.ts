@@ -13,40 +13,52 @@
 // ignores `--z-panel`, `--z-notes` and `--z-overlay` in `styles.css` entirely,
 // and `hidden` on a React div does not hide it — confirmed by image in the
 // Phase 4 spike, where both Notes and Search Everywhere were clipped by the
-// page. **That is accepted.** `pageVisible` is deliberately *not* an occlusion
-// mechanism: it does not consult which other panels are open, and adding that
-// would be a redesign rather than a fix.
+// page. So the only way to make DOM chrome appear *over* the page is to **hide
+// the page**, which is what `pageVisible` decides.
 //
-// It is false for exactly three things, and each is a real absence of a place to
-// paint rather than something being in front:
+// It is false for six things, and each is a real "there is nowhere, or nothing,
+// to show right now" rather than a z-order tweak:
 //
 //   1. the panel is minimized,
 //   2. the plugin was switched off (and the host then *drops* the webview, so a
 //      disabled browser keeps no WebView2 process, no cookie jar and no
 //      connection),
 //   3. the measured rect is unusable — the `createResizeGate` 0×0 lesson,
-//      extended to the DPI case below.
+//      extended to the DPI case below,
+//   4. the codebase this page belongs to is **backgrounded** — bugs 6+7. The
+//      browser is per-codebase now; only the active codebase's page may show, or
+//      a background one paints over the foreground codebase the user switched to.
+//   5. the panel's own agent-setup modal is open (bug 2) — it is DOM, so the page
+//      would otherwise open in front of it,
+//   6. an on-screen surface actually covers the page's rect (bug 3): an app-level
+//      menu/modal that overlaps it, or a peer floating panel dragged over it. The
+//      caller scopes this to a real overlap, so a panel *beside* the page does
+//      not blank it — `active` is which codebase is foreground, `occluded` is
+//      what is on top within it.
 
 // --- Where the layout lives -------------------------------------------------
 
-/**
- * The localStorage key the browser panel persists its position and size under.
- *
- * Follows the `cb.<thing>.layout` convention shared with the agent panel
- * (`cb.agentPanel.layout`), Notes (`cb.notes.layout`), SQL (`cb.sql.layout`),
- * Running (`cb.running.layout`), the launcher (`cb.launcher.layout`) and the
- * terminals (`cb.terminal.layout:<root>`).
- *
- * Unscoped by workspace, like SQL's and unlike the terminals': there is one
- * browser panel for the whole application — "verify my deployment" is not
- * repo-specific — so there is nothing to scope it to.
- */
 // Type-only, so it is erased at compile time and this module still imports
 // nothing at runtime — which is what keeps it runnable under vitest's node
 // environment with no DOM.
 import type { BrowserAgentRequest, BrowserSnapshot } from "../ipc/types";
 
-export const BROWSER_LAYOUT_KEY = "cb.browser.layout";
+/**
+ * The localStorage key one codebase's browser panel persists its position and
+ * size under.
+ *
+ * Follows the `cb.<thing>.layout` convention shared with the agent panel
+ * (`cb.agentPanel.layout`), Notes (`cb.notes.layout`), SQL (`cb.sql.layout`),
+ * Running (`cb.running.layout`) and the launcher (`cb.launcher.layout`).
+ *
+ * **Scoped per codebase**, like the terminals' `cb.terminal.layout:<root>` and
+ * unlike SQL's: the browser is per-codebase now (each open codebase keeps its
+ * own live page), so each codebase remembers its own geometry — a fresh browser
+ * in one codebase must not adopt another's position.
+ */
+export function browserLayoutKey(root: string): string {
+  return `cb.browser.layout:${root}`;
+}
 
 // --- Open / restore ---------------------------------------------------------
 
@@ -236,35 +248,135 @@ export interface PageVisibilityInput {
   state: BrowserPanelState;
   enabled: boolean;
   minimized: boolean;
+  /**
+   * Whether the codebase this page belongs to is the foreground tab. The
+   * stacking fix (bugs 6+7): only the active codebase's page may show, or a
+   * background one composites over the foreground codebase.
+   */
+  active: boolean;
+  /**
+   * Whether the panel's own agent-setup modal (`BrowserMcpPanel`) is open. That
+   * modal is DOM and the OS webview composites above it, so the page must hide
+   * while it is up or the modal opens *behind* the page (bug 2). A deliberate
+   * user action with its own surface on screen — like `minimized`, not a reason
+   * to explain.
+   */
+  setupOpen: boolean;
+  /**
+   * Whether some other on-screen surface actually covers the page's rect: an
+   * app-level menu/modal that overlaps it, or a peer floating panel dragged over
+   * it (bug 3). The page hides so that DOM chrome the user summoned is not
+   * painted over by the OS webview. Overlap-scoped by the caller (only a surface
+   * that really overlaps sets this), so a side-by-side panel does not blank the
+   * page.
+   */
+  occluded: boolean;
   rect: PageRectDecision;
 }
 
 /**
  * Whether the OS webview should be visible right now.
  *
- * **Not an occlusion mechanism** — see the module header. It consults no other
- * panel, and the page painting over Notes, a terminal or Search Everywhere is
- * an accepted cost of the engine rather than a bug for this function to work
- * around.
+ * The page is a WebView2 child HWND that composites above the DOM and ignores
+ * every z-band, so anything DOM that must appear over it is made visible by
+ * *hiding the page*. It is hidden for six things, each a real "there is nowhere,
+ * or nothing, to show right now" rather than a z-order tweak: not mounted,
+ * minimized, backgrounded codebase, an unusable rect, the panel's own setup modal
+ * (bug 2), and an occluding surface over its rect (bug 3). `active` is which
+ * *codebase* is foreground; `occluded` is what is on top *within* it.
  */
 export function pageVisible(input: PageVisibilityInput): boolean {
-  const { state, enabled, minimized, rect } = input;
+  const { state, enabled, minimized, active, setupOpen, occluded, rect } = input;
   return (
-    browserPanelMounted(state, enabled) && !minimized && rect.ok
+    browserPanelMounted(state, enabled) &&
+    !minimized &&
+    active &&
+    !setupOpen &&
+    !occluded &&
+    rect.ok
   );
 }
 
 /**
  * Why the page is not on screen even though the panel is, or `null` when it is.
  *
- * Minimized is deliberately **not** a reason: the user did that, they know, and
- * the pill already says so. What needs explaining is the case where the panel is
- * open and expanded and the page still is not there.
+ * Not-mounted, minimized, backgrounded, the setup modal **and** an occluding
+ * surface are deliberately not reasons: each is something the user did or
+ * summoned, and the covering surface is itself the explanation — a scary note
+ * under it would flash on every menu open. What needs explaining is the case
+ * where the panel is the foreground codebase's, open, expanded, unobscured, and
+ * the page still is not there (a refused rect).
  */
 export function hiddenPageReason(input: PageVisibilityInput): string | null {
-  const { state, enabled, minimized, rect } = input;
-  if (!browserPanelMounted(state, enabled) || minimized) return null;
+  const { state, enabled, minimized, active, setupOpen, occluded, rect } = input;
+  if (!browserPanelMounted(state, enabled) || minimized || !active || setupOpen || occluded) {
+    return null;
+  }
   return rect.ok ? null : rect.reason;
+}
+
+/**
+ * Whether two rects overlap. Edge-touching is **not** an overlap: a panel whose
+ * left edge sits exactly on the page's right edge covers none of it, and treating
+ * that as occlusion would blank the page for a panel flush beside it.
+ */
+export function rectsOverlap(a: PanelGeometry, b: PanelGeometry): boolean {
+  return (
+    a.left < b.left + b.width &&
+    b.left < a.left + a.width &&
+    a.top < b.top + b.height &&
+    b.top < a.top + a.height
+  );
+}
+
+/**
+ * Whether any of `others` overlaps the page rect. The caller collects the peer
+ * floating panels' rects (a terminal, Notes, a review panel dragged over the
+ * page); an empty list is not occluded.
+ *
+ * Kept for reference and simpler callers; the browser now uses the raise-aware
+ * {@link occludedByAbovePanels} so a panel it was raised over does not blank it.
+ */
+export function occludedByPanels(page: PanelGeometry, others: PanelGeometry[]): boolean {
+  return others.some((other) => rectsOverlap(page, other));
+}
+
+/**
+ * Whether any peer that is stacked **strictly above** the page overlaps it.
+ *
+ * This is what makes "click the browser to bring it forward" real. The page is a
+ * WebView2 surface hidden only by occlusion; before this, *any* overlapping peer
+ * blanked it, so no click could win. Now a peer occludes only when its focus-order
+ * offset is greater than the browser's own — a terminal or Notes the browser was
+ * raised over sits below it and leaves the page visible, while one clicked *after*
+ * the browser rises above it and blanks the page again. Equal offset is not
+ * "above" (a tie cannot claim the front), so it does not occlude.
+ */
+export function occludedByAbovePanels(
+  page: PanelGeometry,
+  pageOffset: number,
+  peers: { rect: PanelGeometry; offset: number }[],
+): boolean {
+  return peers.some((p) => p.offset > pageOffset && rectsOverlap(page, p.rect));
+}
+
+/**
+ * Clamp a measured page rect so its top never rises above `chromeBottom` — the
+ * bottom edge of the app's own title/tab chrome. The page is below the panel
+ * header already, but a panel dragged to the top of the window can push that
+ * region up under the titlebar, where a titlebar menu then drops *into* the page.
+ * The height shrinks by whatever the top moved, so the bottom edge stays put.
+ * A rect already below the chrome is returned unchanged.
+ */
+export function clampBrowserTop(rect: PanelGeometry, chromeBottom: number): PanelGeometry {
+  if (rect.top >= chromeBottom) return rect;
+  const delta = chromeBottom - rect.top;
+  return {
+    left: rect.left,
+    top: chromeBottom,
+    width: rect.width,
+    height: Math.max(0, rect.height - delta),
+  };
 }
 
 // --- The URL bar ------------------------------------------------------------

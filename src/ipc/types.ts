@@ -556,6 +556,49 @@ export interface NotesFile {
 }
 
 /**
+ * Whether a task is still to do or finished (`tasks::TaskStatus`). The Rust enum
+ * derives `serde(rename_all = "camelCase")`, so each variant crosses as its own
+ * lowercased name.
+ */
+export type TaskStatus = "open" | "done";
+
+/**
+ * Who a task is assigned to (`tasks::TaskOwner`). `ai` is what "Assign to AI"
+ * records before launching the agent; `me` is the default and what "Assign to
+ * me" hands it back to.
+ */
+export type TaskOwner = "me" | "ai";
+
+/**
+ * One task in the per-workspace task list (`tasks::Task`). Unlike {@link Note}
+ * this store is **per-repository and gitignored**, not user-global. The key
+ * names are pinned by `serialisation_shape_pins_the_wire_keys` in
+ * `crates/core/src/tasks/tasks_tests.rs`.
+ */
+export interface Task {
+  /** Stable id; the React key and the target of every update/assign/delete. */
+  id: string;
+  /** The short one-line title. */
+  title: string;
+  /** The longer description, which also becomes the agent prompt. */
+  body: string;
+  status: TaskStatus;
+  owner: TaskOwner;
+  /** When the task was created, milliseconds since the Unix epoch. */
+  createdAtMs: number;
+  /** When the task was last changed, milliseconds since the Unix epoch. */
+  updatedAtMs: number;
+}
+
+/** The whole per-workspace tasks file (`tasks::TasksFile`). */
+export interface TasksFile {
+  /** Schema version (currently 1), so the format can migrate. */
+  version: number;
+  /** The tasks, in the order the panel shows them. */
+  tasks: Task[];
+}
+
+/**
  * One optional feature and whether it is switched on
  * (`features::FeatureInfo`). Keys pinned by
  * `serialisation_shape_pins_the_wire_keys` in
@@ -574,6 +617,136 @@ export interface FeatureInfo {
   description: string;
   enabled: boolean;
 }
+
+/**
+ * One MCP server's per-tool state for the settings page
+ * (`tool_gate::McpServerToolsInfo`). Keys pinned by
+ * `serialisation_shape_pins_the_wire_keys` in
+ * `crates/core/src/tool_gate/tool_gate_tests.rs`.
+ */
+export interface McpServerToolsInfo {
+  /** Stable server id: `sql`, `tasks`, `roslyn`, `browser`. */
+  id: string;
+  /** Human label for the section heading. */
+  label: string;
+  tools: McpToolInfo[];
+}
+
+/** One tool row on the MCP settings page (`tool_gate::McpToolInfo`). */
+export interface McpToolInfo {
+  /** The tool's wire name, e.g. `sql.query`. */
+  name: string;
+  /** The tool's description, as the server advertises it. */
+  description: string;
+  /** Already resolved: an absent choice is reported as enabled. */
+  enabled: boolean;
+}
+
+// --- Redis plugin (mirrors `cb_core::redis`) --------------------------------
+
+/** The Redis type of a key (`cb_core::redis::model::RedisType`). */
+export type RedisType = "string" | "list" | "set" | "zset" | "hash" | "stream" | "unknown";
+
+/** A redacted Redis connection view (`redis::dsn::RedisConnectionDisplay`). */
+export interface RedisConnectionDisplay {
+  host: string | null;
+  port: number | null;
+  db: number | null;
+  usesTls: boolean;
+  hasPassword: boolean;
+}
+
+/** Where a saved profile's connection string lives — never the string itself. */
+export type RedisSecretView =
+  | { kind: "literal"; display: RedisConnectionDisplay }
+  | { kind: "appSettings"; path: string; key: string }
+  | { kind: "userSecrets"; project: string; key: string }
+  | { kind: "dotEnv"; path: string; key: string };
+
+/** A saved Redis connection as the frontend sees it (`commands::redis`). */
+export interface RedisConnectionView {
+  id: string;
+  name: string;
+  secret: RedisSecretView;
+  holdsASecret: boolean;
+  workspaceRoot: string | null;
+  allowWrites: boolean;
+  exposeToAgents: boolean;
+  userNamed: boolean;
+  createdAtMs: number;
+  lastUsedMs: number | null;
+}
+
+/** Whether a discovered candidate is usable (`redis::discover::CandidateState`). */
+export type RedisCandidateState =
+  | { kind: "ready" }
+  | { kind: "unresolved"; reason: string };
+
+/** One discovered Redis connection (`redis::discover::RedisCandidate`). */
+export interface RedisCandidate {
+  id: string;
+  name: string;
+  origin: string;
+  project: string | null;
+  source: RedisSecretView;
+  display: RedisConnectionDisplay;
+  state: RedisCandidateState;
+}
+
+/** The result of a discovery scan (`redis::discover::Discovery`). */
+export interface RedisDiscovery {
+  candidates: RedisCandidate[];
+  warnings: string[];
+}
+
+/** One key's identity (`redis::model::RedisKeyInfo`). */
+export interface RedisKeyInfo {
+  key: string;
+  type: RedisType;
+  /** ms until expiry; `null` = no expiry. */
+  ttlMs: number | null;
+}
+
+export interface RedisZMember {
+  member: string;
+  score: string;
+}
+export interface RedisHashField {
+  field: string;
+  value: string;
+}
+export interface RedisStreamEntry {
+  id: string;
+  fields: RedisHashField[];
+}
+
+/** A key's value by type (`redis::model::RedisValue`). `truncated` = capped. */
+export type RedisValue =
+  | { kind: "string"; text: string; truncated: boolean }
+  | { kind: "list"; items: string[]; truncated: boolean }
+  | { kind: "set"; members: string[]; truncated: boolean }
+  | { kind: "zSet"; entries: RedisZMember[]; truncated: boolean }
+  | { kind: "hash"; fields: RedisHashField[]; truncated: boolean }
+  | { kind: "stream"; entries: RedisStreamEntry[]; truncated: boolean }
+  | { kind: "none" };
+
+/** One SCAN page (`redis::model::ScanPage`). */
+export interface RedisScanPage {
+  cursor: string;
+  keys: RedisKeyInfo[];
+  complete: boolean;
+}
+
+/** Whether a connection opens (`redis::model::RedisStatusKind`). */
+export type RedisStatusKind =
+  | "ok"
+  | "authFailed"
+  | "unreachable"
+  | "tlsFailed"
+  | "timeout"
+  | "secretUnresolved"
+  | "unparseable"
+  | "failed";
 
 /**
  * One remembered command line from the app launcher (`launcher::Launchable`).
@@ -2051,6 +2224,123 @@ export interface PrepareRenameResult {
   /** What to prefill with, when the server offered it — `null` for Roslyn. */
   placeholder: string | null;
   /** Why there is no answer, or the qualification a `"ready"` one needs. */
+  message: string | null;
+  server: string | null;
+}
+
+/**
+ * One type in an inheritance graph, and where it is declared.
+ *
+ * Mirrors `cb_core::lsp::model::TypeNode`; `path`/`detail` are `T | null` for the
+ * same reasons as {@link Target}, so branch on `=== null`, never on `?`.
+ */
+export interface TypeNode {
+  name: string;
+  kind: SymbolKind;
+  /** The server's one-line detail, or `null`. */
+  detail: string | null;
+  /** Workspace-relative, forward slashes. `null` when outside the workspace or a
+   * non-`file:` document — shown, not opened. */
+  path: string | null;
+  label: string;
+  /** **1-based**, matching the editor gutter. */
+  line: number;
+  /** **0-based UTF-16 code units**; see {@link Target.character}. */
+  character: number;
+}
+
+/**
+ * A type's place in the inheritance graph, or the reason there is none.
+ *
+ * `item` is `null` when the caret was not on a type — a **real** `"ready"` answer,
+ * not a failure. And there is one `outcome` for two lists: a refused *direction*
+ * keeps `"ready"` and names itself in `message`, so an empty `supertypes` or
+ * `subtypes` means "there are none" only when `message` is `null`.
+ */
+export interface TypeHierarchyResult {
+  outcome: Availability;
+  item: TypeNode | null;
+  supertypes: TypeNode[];
+  subtypes: TypeNode[];
+  message: string | null;
+  server: string | null;
+}
+
+/** One callable signature available at a call site. */
+export interface SignatureInfo {
+  /** The whole signature, exactly as the server rendered it. */
+  label: string;
+  /** Plain-text documentation (a `MarkupContent`'s value verbatim), or `null`. */
+  documentation: string | null;
+  parameters: ParameterInfo[];
+}
+
+/** One parameter of a signature. */
+export interface ParameterInfo {
+  /** The parameter's own text — the backend resolves both the substring and the
+   * `[start, end]` offset forms to this before it crosses. */
+  label: string;
+  documentation: string | null;
+}
+
+/**
+ * The overloads at a call site, or the reason there are none.
+ *
+ * `activeSignature`/`activeParameter` are `null` when the server did not say —
+ * never `0`, which is a different fact (it chose the first). An empty
+ * `signatures` on a `"ready"` outcome means the caret is not inside a call.
+ */
+export interface OverloadResult {
+  outcome: Availability;
+  signatures: SignatureInfo[];
+  /** **0-based** into `signatures`, or `null`. */
+  activeSignature: number | null;
+  /** **0-based**, or `null`. */
+  activeParameter: number | null;
+  message: string | null;
+  server: string | null;
+}
+
+/**
+ * How serious one diagnostic is.
+ *
+ * The four the protocol numbers 1..=4. A diagnostic that omits its severity is
+ * rendered `"warning"` by the backend — a deliberate middle, not a guess. Pinned
+ * against these spellings by `diagnostic_severity_serialises_to_its_exact_string`
+ * in `crates/core/src/lsp/model_tests.rs`.
+ */
+export type DiagnosticSeverity = "error" | "warning" | "information" | "hint";
+
+/**
+ * One diagnostic on the file that was asked about.
+ *
+ * No path: every row is on the requested file. The range is **1-based line,
+ * 0-based UTF-16 character**, half-open; see {@link RangeEdit}.
+ */
+export interface DiagnosticRow {
+  severity: DiagnosticSeverity;
+  line: number;
+  character: number;
+  endLine: number;
+  endCharacter: number;
+  message: string;
+  /** The tool that raised it (`rustc`, `roslyn`, `ts`), or `null`. */
+  source: string | null;
+  /** The rule/error code as a string even when the server sent a number, or
+   * `null`. */
+  code: string | null;
+}
+
+/**
+ * Every diagnostic on one file, or the reason there is no list.
+ *
+ * **Pull, not push.** These come from a request with a reply, so an empty
+ * `diagnostics` on a `"ready"` outcome means the file is clean — a real answer,
+ * distinct from "not arrived yet", which the push stream could not disambiguate.
+ */
+export interface DiagnosticsResult {
+  outcome: Availability;
+  diagnostics: DiagnosticRow[];
   message: string | null;
   server: string | null;
 }

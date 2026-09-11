@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { OutputConsole, type ConsoleHandle } from "./OutputConsole";
+import { useDockEntry } from "./DockContext";
+import { dockId } from "./dockLogic";
 import * as api from "../ipc/api";
 import type { AgentMode } from "../ipc/api";
 import type { ProcessEvent, PromptInfo, ReviewAgentInfo } from "../ipc/types";
@@ -52,6 +54,7 @@ const VERIFY_RULES_PROMPT_ID = "verify-rules";
  * starts — seeded once at mount, so a fresh context is a fresh panel.
  */
 export function ReviewPanel({
+  root,
   onClose,
   initialPromptId,
   initialPromptBody,
@@ -59,6 +62,9 @@ export function ReviewPanel({
   initialContext,
   title = "Adversarial review",
 }: {
+  /** The codebase this panel belongs to — scopes its minimized dock pill so a
+   * background codebase's pill does not show in the foreground dock. */
+  root: string;
   onClose: () => void;
   initialPromptId?: string;
   /**
@@ -285,10 +291,12 @@ export function ReviewPanel({
   const cancel = () => void api.cancelReview();
 
   // Restoring the panel is the acknowledgement, so it clears the flash.
-  const restore = () => {
+  // Stable (only touches stable setters) so the dock entry can exclude it from
+  // its effect deps — see `useDockEntry`.
+  const restore = useCallback(() => {
     setMinimized(false);
     setAttention(false);
-  };
+  }, []);
 
   // Closing stops a running review — its console is going away with it.
   const close = () => {
@@ -340,23 +348,25 @@ export function ReviewPanel({
 
   const status = reviewStatus(phase, last);
 
-  // Minimized: a compact restore pill. The console stays mounted (hidden) below
-  // so events keep flowing into it.
+  useDockEntry(
+    minimized
+      ? {
+          id: dockId(root, "review"),
+          scope: root,
+          label: title,
+          order: 1,
+          status,
+          attention,
+          spinner: running,
+          onRestore: restore,
+        }
+      : null,
+  );
+
+  // The console stays mounted (hidden) below so events keep flowing into it; the
+  // minimized pill lives in the shared dock now (see `useDockEntry` above).
   return (
     <>
-      {minimized && (
-        <button
-          className={`review-pill${attention ? " attention" : ""}`}
-          onClick={restore}
-          title={attention ? "The agent needs your attention" : "Restore the agent panel"}
-        >
-          {running && <span className="review-spinner" aria-hidden />}
-          <span>
-            {title} — {attention ? "needs attention" : status}
-          </span>
-        </button>
-      )}
-
       <div
         className="review-panel"
         hidden={minimized}

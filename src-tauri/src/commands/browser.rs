@@ -47,21 +47,23 @@ use crate::state::AppState;
 pub async fn browser_open(
     app: AppHandle,
     state: State<'_, AppState>,
+    root: String,
     rect: BrowserRect,
     url: Option<String>,
 ) -> Result<BrowserSnapshot, String> {
-    let handle = state.browser(app);
+    let handle = state.browser(app.clone(), std::path::Path::new(&root));
     let target = match url.as_deref().map(str::trim) {
         Some(input) if !input.is_empty() => Some(browser::normalize(input)?),
         _ => None,
     };
     handle.open(rect, target).await?;
-    // The control pipe is tied to the panel, not to the process: with no panel
-    // open there is no pipe on the machine, and *panel closed* is then an
-    // answer a client reads out of the registry without connecting. A failure
-    // to listen is **reported to stderr and not to the user** — the panel they
-    // just opened works, and agent access is the part that does not.
-    announce(&state, start_listener(&state, &handle));
+    // The control pipe is per-**process** and outlives every individual panel:
+    // it starts on the first open and is a no-op on every open after (another
+    // codebase may already have a browser up), and it stops only when the last
+    // panel closes. A failure to listen is **reported to stderr and not to the
+    // user** — the panel they just opened works, and agent access is the part
+    // that does not.
+    announce(&state, start_listener(&state, &app));
     Ok(handle.read(shared::snapshot))
 }
 
@@ -74,17 +76,26 @@ pub async fn browser_open(
 pub async fn browser_close(
     app: AppHandle,
     state: State<'_, AppState>,
+    root: String,
     plugin_disabled: bool,
 ) -> Result<BrowserSnapshot, String> {
-    let handle = state.browser(app);
-    handle.close(close_availability(plugin_disabled)).await?;
-    stop_listener(&state);
-    // Republished rather than withdrawn, and that is the point of the entry:
-    // an absent entry means *no application is running*, while an entry with
-    // `browserFeature: false` means *the user switched the browser off*. Those
-    // are one setting apart and a client must be able to tell them apart
-    // without connecting.
-    announce(&state, None);
+    let handle = state.browser(app, std::path::Path::new(&root));
+    let remaining = handle.close(close_availability(plugin_disabled)).await?;
+    // The pipe is per-process: stop it only when the last codebase's browser
+    // has closed. While any other panel is still open, keep the listener up and
+    // re-publish it — an agent connecting always reaches the process and then
+    // resolves the active codebase.
+    if should_stop_listener(remaining) {
+        stop_listener(&state);
+        // Republished rather than withdrawn, and that is the point of the entry:
+        // an absent entry means *no application is running*, while an entry with
+        // `browserFeature: false` means *the user switched the browser off*.
+        // Those are one setting apart and a client must be able to tell them
+        // apart without connecting.
+        announce(&state, None);
+    } else {
+        announce(&state, published_listener(&state));
+    }
     Ok(handle.read(shared::snapshot))
 }
 
@@ -93,9 +104,13 @@ pub async fn browser_close(
 pub async fn browser_set_bounds(
     app: AppHandle,
     state: State<'_, AppState>,
+    root: String,
     rect: BrowserRect,
 ) -> Result<(), String> {
-    state.browser(app).set_bounds(rect).await
+    state
+        .browser(app, std::path::Path::new(&root))
+        .set_bounds(rect)
+        .await
 }
 
 /// Show or hide the OS surface — the minimize mechanism.
@@ -103,9 +118,13 @@ pub async fn browser_set_bounds(
 pub async fn browser_set_visible(
     app: AppHandle,
     state: State<'_, AppState>,
+    root: String,
     visible: bool,
 ) -> Result<(), String> {
-    state.browser(app).set_visible(visible).await
+    state
+        .browser(app, std::path::Path::new(&root))
+        .set_visible(visible)
+        .await
 }
 
 /// Navigate to whatever the user typed in the URL bar.
@@ -113,9 +132,10 @@ pub async fn browser_set_visible(
 pub async fn browser_navigate(
     app: AppHandle,
     state: State<'_, AppState>,
+    root: String,
     input: String,
 ) -> Result<BrowserSnapshot, String> {
-    let handle = state.browser(app);
+    let handle = state.browser(app, std::path::Path::new(&root));
     let url = browser::normalize(&input)?;
     handle.navigate(url).await?;
     Ok(handle.read(shared::snapshot))
@@ -123,20 +143,35 @@ pub async fn browser_navigate(
 
 /// Back one step in the page's own history.
 #[tauri::command]
-pub async fn browser_back(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    state.browser(app).go(-1).await
+pub async fn browser_back(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    root: String,
+) -> Result<(), String> {
+    state.browser(app, std::path::Path::new(&root)).go(-1).await
 }
 
 /// Forward one step in the page's own history.
 #[tauri::command]
-pub async fn browser_forward(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    state.browser(app).go(1).await
+pub async fn browser_forward(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    root: String,
+) -> Result<(), String> {
+    state.browser(app, std::path::Path::new(&root)).go(1).await
 }
 
 /// Reload the current page.
 #[tauri::command]
-pub async fn browser_reload(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    state.browser(app).reload().await
+pub async fn browser_reload(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    root: String,
+) -> Result<(), String> {
+    state
+        .browser(app, std::path::Path::new(&root))
+        .reload()
+        .await
 }
 
 /// Everything the panel renders: availability, url, title, origin, consent and
@@ -145,17 +180,23 @@ pub async fn browser_reload(app: AppHandle, state: State<'_, AppState>) -> Resul
 /// Takes no `AppHandle` and never touches the main thread — a pure read of the
 /// data half, so polling it costs nothing and cannot deadlock.
 #[tauri::command]
-pub async fn browser_state(state: State<'_, AppState>) -> Result<BrowserSnapshot, String> {
-    Ok(state.browser_data(shared::snapshot))
+pub async fn browser_state(
+    state: State<'_, AppState>,
+    root: String,
+) -> Result<BrowserSnapshot, String> {
+    Ok(state.browser_data(std::path::Path::new(&root), shared::snapshot))
 }
 
 /// Captured console messages after `cursor`, and what the cursor missed.
 #[tauri::command]
 pub async fn browser_console(
     state: State<'_, AppState>,
+    root: String,
     cursor: u64,
 ) -> Result<ConsoleBatch, String> {
-    Ok(state.browser_data(|data| shared::console_batch(data, cursor)))
+    Ok(state.browser_data(std::path::Path::new(&root), |data| {
+        shared::console_batch(data, cursor)
+    }))
 }
 
 /// Observed network rows after `cursor`, what the cursor missed, and what the
@@ -163,9 +204,12 @@ pub async fn browser_console(
 #[tauri::command]
 pub async fn browser_network(
     state: State<'_, AppState>,
+    root: String,
     cursor: u64,
 ) -> Result<NetworkBatch, String> {
-    Ok(state.browser_data(|data| shared::network_batch(data, cursor)))
+    Ok(state.browser_data(std::path::Path::new(&root), |data| {
+        shared::network_batch(data, cursor)
+    }))
 }
 
 /// The page's rendered text, with the real total reported alongside.
@@ -173,10 +217,12 @@ pub async fn browser_network(
 pub async fn browser_page_text(
     app: AppHandle,
     state: State<'_, AppState>,
+    root: String,
 ) -> Result<PageText, String> {
-    state.browser_data(read_gate)?;
+    let root_path = std::path::Path::new(&root);
+    state.browser_data(root_path, read_gate)?;
     state
-        .browser(app)
+        .browser(app, root_path)
         .page_text(browser::PAGE_TEXT_LIMIT)
         .await
         .map(|read| read.text)
@@ -189,11 +235,13 @@ pub async fn browser_page_text(
 #[tauri::command]
 pub async fn browser_set_automation_consent(
     state: State<'_, AppState>,
+    root: String,
     reads: bool,
     writes: bool,
 ) -> Result<BrowserSnapshot, String> {
-    state.browser_data_mut(|data| shared::grant_consent(data, reads, writes))?;
-    Ok(state.browser_data(shared::snapshot))
+    let root_path = std::path::Path::new(&root);
+    state.browser_data_mut(root_path, |data| shared::grant_consent(data, reads, writes))?;
+    Ok(state.browser_data(root_path, shared::snapshot))
 }
 
 /// Publish this application's registry entry.
@@ -230,10 +278,19 @@ fn announce(state: &AppState, listener: Option<Listener>) {
     }
 }
 
-/// Start the control pipe, or report why there is none.
+/// Start the control pipe (once per process), or report why there is none.
+///
+/// Idempotent: the pipe is per-process and shared by every open panel, so if a
+/// listener is already published this returns it unchanged rather than binding a
+/// second name (which could never succeed anyway — the name carries the pid).
+/// The pipe captures the `AppHandle`, not a fixed browser handle: every tool
+/// call resolves the **active** codebase's page afresh (see `pipe::answer_line`).
 #[cfg(windows)]
-fn start_listener(state: &AppState, handle: &crate::browser::BrowserHandle) -> Option<Listener> {
-    match crate::browser::pipe::start(handle.clone(), registry::mint_token()) {
+fn start_listener(state: &AppState, app: &AppHandle) -> Option<Listener> {
+    if let Some(published) = state.browser_pipe_published() {
+        return Some(published);
+    }
+    match crate::browser::pipe::start(app.clone(), registry::mint_token()) {
         Ok(listener) => {
             let published = listener.published();
             state.set_browser_pipe(Some(listener));
@@ -247,7 +304,19 @@ fn start_listener(state: &AppState, handle: &crate::browser::BrowserHandle) -> O
 }
 
 #[cfg(not(windows))]
-fn start_listener(_state: &AppState, _handle: &crate::browser::BrowserHandle) -> Option<Listener> {
+fn start_listener(_state: &AppState, _app: &AppHandle) -> Option<Listener> {
+    None
+}
+
+/// The listener currently published, if any — for `browser_close` to re-announce
+/// while other panels keep the pipe alive.
+#[cfg(windows)]
+fn published_listener(state: &AppState) -> Option<Listener> {
+    state.browser_pipe_published()
+}
+
+#[cfg(not(windows))]
+fn published_listener(_state: &AppState) -> Option<Listener> {
     None
 }
 
@@ -258,6 +327,15 @@ fn stop_listener(state: &AppState) {
 
 #[cfg(not(windows))]
 fn stop_listener(_state: &AppState) {}
+
+/// Stop the per-process pipe only when the last browser panel has closed.
+///
+/// A closing panel hands back whether any *other* codebase's browser is still
+/// open; the pipe must outlive every one of them, so it is torn down only when
+/// none remain.
+pub fn should_stop_listener(hosts_remaining: bool) -> bool {
+    !hosts_remaining
+}
 
 /// Which of the six states a closed panel leaves behind.
 ///
@@ -346,6 +424,21 @@ mod tests {
         assert!(
             refused.contains("incomplete rather than missing"),
             "{refused}"
+        );
+    }
+
+    #[test]
+    fn should_stop_listener_only_when_no_browser_remains() {
+        // The pipe is per-process and must outlive every panel: it stops only
+        // when the last workspace's browser has closed, so an agent connecting
+        // while any panel is open still reaches the process.
+        assert!(
+            should_stop_listener(false),
+            "no hosts remain → the pipe must stop"
+        );
+        assert!(
+            !should_stop_listener(true),
+            "another workspace still has a browser → keep the pipe up"
         );
     }
 

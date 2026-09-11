@@ -30,14 +30,18 @@ pub mod notes;
 pub mod process;
 pub mod pty;
 pub mod qgate;
+pub mod redis;
 pub mod review;
+pub mod roslyn;
 pub mod rules;
 pub mod running;
 pub mod secrets;
 pub mod setup;
 pub mod sql;
 pub mod symbols;
+pub mod tasks;
 pub mod testing;
+pub mod tool_gate;
 pub mod workspace;
 
 #[cfg(test)]

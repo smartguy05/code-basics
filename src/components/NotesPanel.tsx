@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../ipc/api";
 import type { Note } from "../ipc/types";
+import { useDockEntry } from "./DockContext";
+import { dockId } from "./dockLogic";
+import { useFocusEntry, useFocusOffset } from "./focusOrderContext";
 import {
   clampPanelPosition,
   clampPanelSize,
@@ -197,6 +200,36 @@ export function NotesPanel({
 
   const active = notes.find((n) => n.id === activeId);
 
+  // Notes joins the app-wide focus order like every floating panel: clicking it
+  // (or restoring it) brings it to the front over terminals and the browser, and
+  // clicking one of those drops it behind again. `useFocusEntry` raises it on
+  // mount and releases it on unmount; `focusKey` is its stable global id.
+  const focusKey = dockId("global", "notes");
+  const raiseNotes = useFocusEntry(focusKey);
+  const notesOffset = useFocusOffset(focusKey);
+
+  // Notes is global (belongs to no codebase) and pinned to the dock's leading
+  // slot. Restoring is a stable setter, so the closure needs no memo beyond this.
+  const restore = useCallback(() => setMinimized(false), []);
+  // Restoring (un-minimizing) is a click's worth of intent, so bring Notes forward
+  // — it stays mounted while minimized, so the mount-raise does not cover this.
+  useEffect(() => {
+    if (!minimized) raiseNotes();
+  }, [minimized, raiseNotes]);
+  useDockEntry(
+    minimized
+      ? {
+          id: dockId("global", "notes"),
+          scope: "global",
+          label: "Notes",
+          order: 0,
+          pinned: true,
+          color: active?.color,
+          onRestore: restore,
+        }
+      : null,
+  );
+
   const onAdd = () => {
     const { notes: next, activeId: id } = addNote(notes, seqRef.current, Date.now());
     seqRef.current += 1;
@@ -267,22 +300,17 @@ export function NotesPanel({
 
   return (
     <>
-      {minimized && (
-        <button
-          className="review-pill notes-pill"
-          onClick={() => setMinimized(false)}
-          title="Restore notes"
-          style={active?.color ? { background: active.color } : undefined}
-        >
-          <span>Notes</span>
-        </button>
-      )}
-
+      {/* Minimized pill lives in the shared dock now (see `useDockEntry` above),
+          not a fixed corner of its own. */}
       <div
         className="review-panel notes-panel"
         hidden={minimized}
         ref={panelRef}
+        // Capture phase on the root so clicking anywhere in Notes raises it, before
+        // the header drag and without preventing the default (drag/selection intact).
+        onPointerDownCapture={raiseNotes}
         style={{
+          ...({ "--cb-stack": notesOffset } as React.CSSProperties),
           ...(pos ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" } : {}),
           ...(size ? { width: size.width, height: size.height } : {}),
         }}

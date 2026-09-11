@@ -4,6 +4,7 @@ import {
   clampPanelSize,
   createResizeGate,
   loadPanelLayout,
+  resizeFromHandle,
   savePanelLayout,
   type PanelLayout,
 } from "./reviewLayoutLogic";
@@ -170,5 +171,45 @@ describe("createResizeGate", () => {
     expect(gate.persist({ width: 700, height: 500 })).toBe(true); // genuine resize
     expect(gate.persist({ width: 0, height: 0 })).toBe(false); // minimized (hidden)
     expect(gate.persist({ width: 700, height: 500 })).toBe(false); // restored to resized size
+  });
+});
+
+describe("resizeFromHandle", () => {
+  // A viewport large enough that clamping never bites in the plain-growth cases.
+  const viewport = { width: 4000, height: 4000 };
+  const start = { width: 800, height: 600 };
+
+  it("grows width only on the east handle", () => {
+    expect(resizeFromHandle("e", start, { dx: 120, dy: 999 }, viewport)).toEqual({
+      width: 920,
+      height: 600,
+    });
+  });
+
+  it("grows height only on the south handle", () => {
+    expect(resizeFromHandle("s", start, { dx: 999, dy: 80 }, viewport)).toEqual({
+      width: 800,
+      height: 680,
+    });
+  });
+
+  it("grows both on the south-east corner", () => {
+    expect(resizeFromHandle("se", start, { dx: 120, dy: 80 }, viewport)).toEqual({
+      width: 920,
+      height: 680,
+    });
+  });
+
+  it("clamps to the CSS floor and never goes negative", () => {
+    // A large negative drag from the floor stays at the floor (min 360x280).
+    expect(resizeFromHandle("se", { width: 360, height: 280 }, { dx: -500, dy: -500 }, viewport))
+      .toEqual({ width: 360, height: 280 });
+  });
+
+  it("clamps to the viewport ceiling", () => {
+    const small = { width: 1000, height: 1000 };
+    const grown = resizeFromHandle("se", { width: 900, height: 900 }, { dx: 999, dy: 999 }, small);
+    expect(grown.width).toBe(Math.round(1000 * 0.96));
+    expect(grown.height).toBe(1000 * 0.92);
   });
 });

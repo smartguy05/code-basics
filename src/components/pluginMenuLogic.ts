@@ -20,7 +20,10 @@ export type PluginAction =
   | { kind: "sql" }
   | { kind: "ask" }
   | { kind: "mcp" }
-  | { kind: "browser" };
+  | { kind: "browser" }
+  | { kind: "tasks" }
+  | { kind: "roslynMcp" }
+  | { kind: "redis" };
 
 export interface PluginRow {
   /** The command id this row corresponds to, and the React key. */
@@ -41,7 +44,13 @@ export interface PluginRow {
  * hard-coded SQL button.
  */
 interface PluginEntry {
-  feature: FeatureKey;
+  /**
+   * The optional feature that gates the row, or `null` for an **always-on**
+   * plugin — one backed by something the app always runs, so there is no feature
+   * to switch off. The Roslyn/LSP server is the first of these: the language
+   * server is always warm, so its installer is unconditional.
+   */
+  feature: FeatureKey | null;
   /** The command that opens it; also the row's id, so Settings and this agree. */
   commandId: string;
   action: PluginAction;
@@ -51,6 +60,12 @@ interface PluginEntry {
   ready: string;
   /** Shown when it needs a codebase and there is none. */
   noWorkspace: string;
+  /**
+   * The key into `PLUGIN_LABELS` for the row's name. Defaults to `feature` (a
+   * `FeatureKey` is always a `PLUGIN_LABELS` key), but an always-on plugin has
+   * no feature, so it names its own key here.
+   */
+  labelKey?: string;
 }
 
 const PLUGINS: PluginEntry[] = [
@@ -87,21 +102,55 @@ const PLUGINS: PluginEntry[] = [
     noWorkspace: "Open a codebase to install the SQL MCP server for it",
   },
   {
-    // The first row with `needsWorkspace: false`, and the reason is the same one
-    // that makes the panel app-level rather than per-`WorkspaceTab`: "does my
-    // deployment work" is not a question about a repository, and there is one
-    // browser for the whole application. So this row is enabled on the welcome
-    // screen, which is a state no other plugin has ever been openable in —
-    // `a_plugin_that_needs_no_workspace_is_enabled_with_none_open` is the test.
+    // Needs a codebase because the browser is truly per-workspace now (bugs
+    // 6+7): each open codebase keeps its own live page and only the active one
+    // is visible, so there must be a codebase to open the page into. On the
+    // welcome screen it is therefore a disabled row with a reason, like every
+    // other plugin, rather than an opener that would act on nothing.
     feature: "webBrowser",
     commandId: "plugin.browser",
     action: { kind: "browser" },
-    needsWorkspace: false,
-    ready: "Open a web page inside the app",
-    // Unreachable while `needsWorkspace` is false, and kept rather than made
-    // optional: the field is what a future change to that flag would need, and
-    // an empty string would render as a row with no tooltip if it ever were.
-    noWorkspace: "Open a web page inside the app",
+    needsWorkspace: true,
+    ready: "Open a web page inside the active codebase",
+    noWorkspace: "Open a codebase to open a web page in it",
+  },
+  {
+    // Needs a codebase because the task list is per-repository: the file lives
+    // under the opened workspace's `.code-basics/` and is gitignored, so there
+    // must be a codebase for the panel to read and write.
+    feature: "tasks",
+    commandId: "plugin.tasks",
+    action: { kind: "tasks" },
+    needsWorkspace: true,
+    ready: "Open the task list for the active codebase",
+    noWorkspace: "Open a codebase to manage its tasks",
+  },
+  {
+    // Always-on like the Roslyn server below (no `FeatureId`): the Redis panel
+    // ships enabled and is not one of the four installer-selectable features.
+    // Needs a codebase because discovery scans the open workspace's
+    // appsettings/secrets for connections.
+    feature: null,
+    labelKey: "redisConsole",
+    commandId: "view.redis",
+    action: { kind: "redis" },
+    needsWorkspace: true,
+    ready: "Browse and edit Redis for the active codebase",
+    noWorkspace: "Open a codebase to browse its Redis",
+  },
+  {
+    // Always-on: the app keeps a warm per-workspace Roslyn/LSP session, so the
+    // installer that points an agent at it has no optional feature to gate on —
+    // it is present whatever the other plugins are set to. It still needs a
+    // codebase, because a project-scope install writes `.mcp.json` at a
+    // repository root and the status is read per repository.
+    feature: null,
+    labelKey: "mcpRoslyn",
+    commandId: "plugin.roslyn",
+    action: { kind: "roslynMcp" },
+    needsWorkspace: true,
+    ready: "Let a coding agent read this codebase's semantic model, over MCP",
+    noWorkspace: "Open a codebase to install the Roslyn MCP server for it",
   },
 ];
 
@@ -129,11 +178,14 @@ export function pluginMenuRows(state: PluginMenuState): PluginRow[] {
   if (state.features === null) return [];
   const rows: PluginRow[] = [];
   for (const plugin of PLUGINS) {
-    if (!featureEnabled(state.features, plugin.feature)) continue;
+    // A `null` feature is an always-on plugin: it has nothing to switch off, so
+    // it is never filtered out here.
+    if (plugin.feature !== null && !featureEnabled(state.features, plugin.feature)) continue;
+    const labelKey = plugin.labelKey ?? plugin.feature ?? plugin.commandId;
     const blocked = plugin.needsWorkspace && !state.workspaceOpen;
     rows.push({
       id: plugin.commandId,
-      label: PLUGIN_LABELS[plugin.feature] ?? plugin.feature,
+      label: PLUGIN_LABELS[labelKey] ?? labelKey,
       title: blocked ? plugin.noWorkspace : plugin.ready,
       disabled: blocked,
       action: blocked ? null : plugin.action,

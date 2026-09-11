@@ -8,3 +8,4 @@ agent-runs.json
 diagrams/derived/
 diagrams/.prompts/
 lsp-logs/
+tasks.json

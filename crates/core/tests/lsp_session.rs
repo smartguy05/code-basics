@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cb_core::lsp::model::{Availability, ServerStatus};
-use cb_core::lsp::registry::Probe;
+use cb_core::lsp::registry::{Language, Probe};
 use cb_core::lsp::session::{self, LspHandle};
 use cb_core::lsp::settings::{LspConfig, ServerOverride};
 use cb_core::lsp::uri::{to_file_uri, UriStyle};
@@ -200,8 +200,63 @@ fn built(program: &str, build: impl FnOnce(&Path) -> Value) -> Harness {
     let path = dir.path().join("script.json");
     std::fs::write(&path, serde_json::to_vec_pretty(&script).expect("a script")).expect("write");
 
-    let handle = session::start(dir.path().to_path_buf(), Some(config(&path, program)), 1);
+    let handle = session::start(
+        dir.path().to_path_buf(),
+        Some(config(&path, program)),
+        1,
+        &[],
+    );
     Harness { handle, dir }
+}
+
+/// A harness that eagerly warms `warm` at start, as `open_workspace` does for the
+/// languages a workspace contains.
+fn built_warming(script: Value, warm: &[cb_core::lsp::registry::Language]) -> Harness {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let mut script = script;
+    announce_readiness(&mut script);
+    let path = dir.path().join("script.json");
+    std::fs::write(&path, serde_json::to_vec_pretty(&script).expect("a script")).expect("write");
+    let handle = session::start(dir.path().to_path_buf(), Some(config(&path, FAKE)), 1, warm);
+    Harness { handle, dir }
+}
+
+#[tokio::test]
+async fn warming_a_present_language_starts_its_server_with_no_request() {
+    // `open_workspace` warms the languages a workspace contains; the server must
+    // come up on its own, before any usages or rename request. That is the whole
+    // point of warming on open — Roslyn's project load is what it hides.
+    bounded!(async {
+        let harness = built_warming(
+            json!({ "capabilities": capabilities(&[]) }),
+            &[Language::TypeScript],
+        );
+        until(|| harness.typescript_state() == Some(Availability::Ready)).await;
+    });
+}
+
+#[tokio::test]
+async fn warming_only_touches_the_named_languages() {
+    // Warm a *disabled* language (C#): `ensure_started` acts only on an `Idle`
+    // server with a spec, so a disabled one is a no-op. TypeScript is left
+    // unwarmed and stays unstarted — an `Idle` resolved server produces no status
+    // row — proving warming reached neither the disabled language nor an unnamed
+    // one.
+    bounded!(async {
+        let harness = built_warming(
+            json!({ "capabilities": capabilities(&[]) }),
+            &[Language::CSharp],
+        );
+        let started = until_or(Duration::from_millis(750), || {
+            harness.typescript_state().is_some()
+        })
+        .await;
+        assert!(
+            !started,
+            "an unwarmed language must not start: {:?}",
+            harness.typescript_state()
+        );
+    });
 }
 
 /// Make the fake say what the server it is standing in for says.
@@ -276,6 +331,7 @@ fn bare_workspace() -> Harness {
         dir.path().to_path_buf(),
         None,
         1,
+        &[],
         Arc::new(NothingInstalled),
     );
     Harness { handle, dir }
@@ -802,6 +858,7 @@ async fn the_version_on_the_wire_is_the_mirrors_and_never_restarts_after_a_reope
             dir.path().to_path_buf(),
             Some(config(&script_path, FAKE)),
             1,
+            &[],
         );
         let harness = Harness { handle, dir };
 
@@ -951,6 +1008,31 @@ async fn teardown_is_safe_twice_and_a_superseded_session_serves_nothing() {
             .await;
 
         until(|| harness.handle.status().servers.is_empty()).await;
+    });
+}
+
+#[tokio::test]
+async fn a_live_server_pid_is_readable_synchronously_and_gone_after_teardown() {
+    // The app-exit handler kills the LSP process trees synchronously, from a
+    // runtime that is being abandoned — so it cannot `.await` the actor. It reads
+    // the pids off the shared snapshot the same way `status()` does. A pid that
+    // stayed in that snapshot after teardown would make the exit handler kill a
+    // pid it no longer owns (and a reused one is a stranger's process); a pid that
+    // never appeared would leak the server the handler exists to reap.
+    bounded!(async {
+        let harness = harness(json!({ "capabilities": capabilities(&[]) }));
+        assert!(
+            harness.handle.server_pids().is_empty(),
+            "nothing is started until the first request"
+        );
+
+        started(&harness).await;
+        let pids = harness.handle.server_pids();
+        assert_eq!(pids.len(), 1, "one server is up: {pids:?}");
+        assert!(pids[0] > 0, "a real OS pid: {pids:?}");
+
+        harness.handle.request_teardown();
+        until(|| harness.handle.server_pids().is_empty()).await;
     });
 }
 

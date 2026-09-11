@@ -27,6 +27,8 @@ import {
   clickModifier,
   contextSelection,
   defaultStashMessage,
+  revertMenuLabel,
+  revertablePaths,
   stashMenuLabel,
   stashablePaths,
   toggleSelection,
@@ -494,6 +496,33 @@ export function ChangesView({
     requestAnimationFrame(() => promptAndStash(paths));
   }
 
+  /**
+   * Discard the working-tree changes to the selected files, restoring each from
+   * HEAD. Destructive and unrecoverable — an untracked file has no HEAD version
+   * and is removed — so it confirms first, on the next frame like the stash
+   * prompt so the menu is gone before the native dialog blocks rendering.
+   */
+  function revertSelected(paths: string[]) {
+    const head = paths[0];
+    if (head == null) return;
+    requestAnimationFrame(() => {
+      const first = head.split("/").pop() || head;
+      const what = paths.length === 1 ? `"${first}"` : `${paths.length} files`;
+      if (
+        !window.confirm(
+          `Revert ${what} to the last committed version? This discards the current changes and cannot be undone.`,
+        )
+      ) {
+        return;
+      }
+      void withBusy(async () => {
+        for (const path of paths) await api.gitDiscardFile(path);
+        setChecked(new Set());
+        await refreshAll();
+      });
+    });
+  }
+
   function promptAndStash(paths: string[]) {
     const note = window.prompt("Stash message", defaultStashMessage(paths));
     // Cancel is not the same as an empty message: an empty one is allowed, and
@@ -932,6 +961,7 @@ export function ChangesView({
             const currentGroup = groups.find((g) => g.paths.includes(change.path))?.name ?? null;
             const close = () => setContext(null);
             const stashable = stashablePaths(new Set(context.paths), files);
+            const revertable = revertablePaths(new Set(context.paths), files);
 
             return (
               <>
@@ -967,6 +997,18 @@ export function ChangesView({
                     }}
                   >
                     {stashMenuLabel(stashable.length)}
+                  </div>
+                )}
+
+                {revertable.length > 0 && (
+                  <div
+                    className="dropdown-item danger"
+                    onClick={() => {
+                      close();
+                      revertSelected(revertable);
+                    }}
+                  >
+                    {revertMenuLabel(revertable.length)}
                   </div>
                 )}
 

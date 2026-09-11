@@ -169,7 +169,12 @@ fn an_unclassifiable_statement_is_refused_rather_than_called_a_write() {
         matches!(refusal(&v), RefusalReason::Unrecognised { .. }),
         "got {v:?}"
     );
-    let v = verdict("COMMIT");
+    // A statement that parses but changes state the guard does not model — here
+    // switching databases — is Unrecognised, not called a write. (Transaction
+    // control is deliberately *not* an example any more: `BEGIN`/`COMMIT` modify
+    // no data and are now classified as neutral reads, so a transaction-wrapped
+    // write stays liftable — see `transaction_control_is_neutral_...`.)
+    let v = verdict("USE master");
     assert!(
         matches!(refusal(&v), RefusalReason::Unrecognised { .. }),
         "got {v:?}"
@@ -294,6 +299,42 @@ fn writes_allowed_lets_a_write_through_but_still_reports_it() {
 }
 
 #[test]
+fn transaction_control_is_neutral_so_a_wrapped_write_is_liftable() {
+    // `BEGIN`/`COMMIT` perform no data modification of their own, so a batch that
+    // wraps a write in a transaction is as strict as the write inside it — not
+    // refused outright. Before this, `BEGIN`/`COMMIT` were unclassified and fell
+    // to `Refused{Unrecognised}`, which outranks a write and is never lifted by
+    // the writes-allowed setting, so the whole batch was refused even with writes
+    // enabled.
+    let batch = "BEGIN; UPDATE orders SET n = 1; COMMIT;";
+
+    // A bare transaction start is a read (neutral).
+    assert_eq!(pg("BEGIN"), Verdict::ReadOnly);
+    assert_eq!(pg("COMMIT"), Verdict::ReadOnly);
+
+    // The batch is classified by its write, so it is lifted when writes are on.
+    let allowed = guard(batch, Engine::Postgres, true);
+    assert!(allowed.allowed, "got {allowed:?}");
+    assert_eq!(allowed.verdict, Verdict::Write { kind: "UPDATE" });
+
+    // ...and refused *as a write* (not "unrecognised") when writes are off, so the
+    // message tells the user to enable writes rather than that it could not tell.
+    let blocked = guard(batch, Engine::Postgres, false);
+    assert!(!blocked.allowed, "got {blocked:?}");
+    assert_eq!(blocked.verdict, Verdict::Write { kind: "UPDATE" });
+    let message = blocked
+        .message
+        .expect("a write-off refusal explains itself");
+    assert!(message.contains("write"), "{message}");
+
+    // A transaction wrapping only reads stays a read.
+    assert_eq!(
+        pg("BEGIN; SELECT * FROM orders; COMMIT;"),
+        Verdict::ReadOnly
+    );
+}
+
+#[test]
 fn a_refusal_says_it_is_a_text_heuristic_and_not_a_sandbox() {
     let d = guard("DELETE FROM t", Engine::SqlServer, false);
     let message = d.message.expect("a refusal explains itself");
@@ -317,8 +358,10 @@ fn a_refusal_says_it_is_a_text_heuristic_and_not_a_sandbox() {
     assert!(!lower.contains("is safe"), "{message}");
     assert!(!lower.contains("protected"), "{message}");
 
-    // Every refusal carries the note, whatever the reason.
-    for sql in ["SELECT FROM WHERE", "", "SELECT 1\nGO", "COMMIT"] {
+    // Every refusal carries the note, whatever the reason. (`COMMIT` is no longer
+    // a refusal — transaction control is a neutral read now — so an unclassified
+    // `USE` stands in for the "parsed but unrecognised" case here.)
+    for sql in ["SELECT FROM WHERE", "", "SELECT 1\nGO", "USE master"] {
         let d = guard(sql, Engine::SqlServer, false);
         let message = d.message.unwrap_or_default();
         assert!(

@@ -155,6 +155,7 @@ cargo test -p cb-core --test lsp_oracle -- --ignored --nocapture --test-threads=
 
 ## Related
 
+- [The Roslyn MCP server](roslyn-mcp-server.md) — exposing this same warm session to a coding agent over MCP (find-usages, type hierarchy, signature help, diagnostics)
 - [Using the app](../getting-started/using-the-app.md#finding-where-a-method-is-used) — what the inline row and middle-click do
 - [Configuration reference](../reference/configuration.md#lsp) — the `lsp` block, field by field
 - [The core crate](../architecture/core-crate.md) — how the client, the capability gates and the result mapping work

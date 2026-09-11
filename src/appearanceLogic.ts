@@ -39,6 +39,19 @@ export interface AppearanceSettings {
    * read. `applyAppearance` deliberately does not write it.
    */
   windowOpacity: number;
+  /**
+   * The opacity of a file editor or terminal **while it does not have focus**,
+   * as a percentage (30-100). 100 is "off" — the unfocused surface looks exactly
+   * as it does today. Lower values fade the editors and terminals the user is
+   * not typing in, so the active one stands out.
+   *
+   * A **separate** control from {@link windowOpacity}: that fades the whole
+   * window's background, this fades individual inactive surfaces. Unlike
+   * `windowOpacity` this is not runtime-gated on what is open, so it *is* written
+   * by `applyAppearance` (as the `--unfocused-opacity` fraction) rather than by
+   * `windowTransparencyLogic`.
+   */
+  unfocusedOpacity: number;
 }
 
 const darkColors: ThemeColors = {
@@ -88,6 +101,7 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   uiFontSize: 13,
   codeFontSize: 12.5,
   windowOpacity: 100,
+  unfocusedOpacity: 100,
 };
 
 export function clampUiFontSize(value: number): number {
@@ -111,6 +125,16 @@ export function clampCodeFontSize(value: number): number {
  * unreadable one is a dialog rendered on top of it.
  */
 export function clampWindowOpacity(value: number): number {
+  return Number.isFinite(value) ? Math.min(100, Math.max(30, value)) : 100;
+}
+
+/**
+ * The unfocused-surface opacity, as a percentage. Same shape and safe-default
+ * reasoning as {@link clampWindowOpacity}: a non-number resolves to 100 (off),
+ * the floor is 30 so a faded editor never becomes fully invisible, and focusing
+ * a surface always restores it to full opacity regardless of this value.
+ */
+export function clampUnfocusedOpacity(value: number): number {
   return Number.isFinite(value) ? Math.min(100, Math.max(30, value)) : 100;
 }
 
@@ -152,6 +176,10 @@ export function readAppearance(raw: string | null, legacyCodeSize?: string | nul
         // bump would have been destructive, since the gate above rejects a blob
         // of any other version and the fallback discards its custom themes.
         windowOpacity: clampWindowOpacity(Number(parsed.windowOpacity)),
+        // Absent in blobs written before this control existed: `undefined` ->
+        // `NaN` -> 100 (off), the same safe-absent path as `windowOpacity`, so
+        // adding it needs no version bump.
+        unfocusedOpacity: clampUnfocusedOpacity(Number(parsed.unfocusedOpacity)),
       };
     }
   } catch { /* malformed user storage falls back below */ }

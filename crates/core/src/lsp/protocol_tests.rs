@@ -147,6 +147,17 @@ fn every_method_constant_is_spelled_the_way_the_protocol_spells_it() {
     assert_eq!("textDocument/implementation", method::IMPLEMENTATION);
     assert_eq!("textDocument/typeDefinition", method::TYPE_DEFINITION);
     assert_eq!("textDocument/documentSymbol", method::DOCUMENT_SYMBOL);
+    assert_eq!(
+        "textDocument/prepareTypeHierarchy",
+        method::PREPARE_TYPE_HIERARCHY
+    );
+    assert_eq!(
+        "typeHierarchy/supertypes",
+        method::TYPE_HIERARCHY_SUPERTYPES
+    );
+    assert_eq!("typeHierarchy/subtypes", method::TYPE_HIERARCHY_SUBTYPES);
+    assert_eq!("textDocument/signatureHelp", method::SIGNATURE_HELP);
+    assert_eq!("textDocument/diagnostic", method::DIAGNOSTIC);
     assert_eq!("textDocument/rename", method::RENAME);
     assert_eq!("textDocument/prepareRename", method::PREPARE_RENAME);
     assert_eq!("$/cancelRequest", method::CANCEL_REQUEST);
@@ -600,6 +611,15 @@ fn the_captured_initialize_result_decodes_to_the_capabilities_that_gate_features
     assert!(capabilities.implementation);
     assert!(capabilities.type_definition);
     assert!(capabilities.document_symbol);
+    // Both are advertised by the captured server (a `typeHierarchyProvider: true`
+    // and a `signatureHelpProvider` options object), so these are read off the
+    // wire and not invented.
+    assert!(capabilities.type_hierarchy);
+    assert!(capabilities.signature_help);
+    // This 2.140.9 capture does **not** advertise pull diagnostics, so the honest
+    // pin is `false` — the feature abstains (`Unsupported`) for this server
+    // rather than sending a request it would reject.
+    assert!(!capabilities.diagnostic);
     assert_eq!(SyncKind::Incremental, capabilities.sync);
     assert_eq!(None, capabilities.position_encoding);
     assert!(capabilities.encoding_is_utf16());
@@ -790,7 +810,10 @@ fn initialize_params_offer_only_utf16_and_only_the_capabilities_we_implement() {
                 "typeDefinition": { "linkSupport": true },
                 "references": { "dynamicRegistration": false },
                 "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
-                "rename": { "dynamicRegistration": false, "prepareSupport": true }
+                "rename": { "dynamicRegistration": false, "prepareSupport": true },
+                "signatureHelp": { "dynamicRegistration": false },
+                "typeHierarchy": { "dynamicRegistration": false },
+                "diagnostic": { "dynamicRegistration": false }
             },
             "workspace": {
                 "configuration": true,
@@ -1737,4 +1760,276 @@ fn the_client_never_declares_that_it_will_do_file_operations() {
         "`applyEdit: false` is about a server *pushing* an edit and stays false; \
          rename is a pull, so the two are not in tension"
     );
+}
+
+// ---------------------------------------------------- new capability providers
+
+#[test]
+fn the_three_new_providers_read_true_from_an_options_object_and_a_bare_true() {
+    // Roslyn's `signatureHelpProvider` is an options object; its
+    // `typeHierarchyProvider` is a bare `true`. `provides()` reads both as yes,
+    // and a decoder that only handled one shape would disable a feature against
+    // the one server it was built for.
+    let object = json(
+        r#"{"capabilities":{
+             "signatureHelpProvider":{"triggerCharacters":["("]},
+             "typeHierarchyProvider":true,
+             "diagnosticProvider":{"interFileDependencies":true,"workspaceDiagnostics":false}}}"#,
+    );
+    let capabilities = ServerCapabilities::from_initialize_result(&object).expect("legal");
+    assert!(capabilities.signature_help);
+    assert!(capabilities.type_hierarchy);
+    assert!(capabilities.diagnostic);
+}
+
+#[test]
+fn a_new_provider_advertised_as_false_is_not_provided() {
+    let result = json(
+        r#"{"capabilities":{"signatureHelpProvider":false,
+             "typeHierarchyProvider":false,"diagnosticProvider":false}}"#,
+    );
+    let capabilities = ServerCapabilities::from_initialize_result(&result).expect("legal");
+    assert!(!capabilities.signature_help);
+    assert!(!capabilities.type_hierarchy);
+    assert!(!capabilities.diagnostic);
+}
+
+#[test]
+fn a_new_provider_the_server_never_mentioned_is_not_provided() {
+    // Absent means "does not provide", so the feature abstains (`Unsupported`)
+    // rather than sending a request the server rejects.
+    let capabilities =
+        ServerCapabilities::from_initialize_result(&json(r#"{"capabilities":{}}"#)).expect("legal");
+    assert!(!capabilities.signature_help);
+    assert!(!capabilities.type_hierarchy);
+    assert!(!capabilities.diagnostic);
+}
+
+#[test]
+fn a_new_provider_of_a_type_the_protocol_does_not_allow_is_not_provided() {
+    let result = json(r#"{"capabilities":{"diagnosticProvider":"yes","typeHierarchyProvider":7}}"#);
+    let capabilities = ServerCapabilities::from_initialize_result(&result).expect("legal");
+    assert!(!capabilities.diagnostic);
+    assert!(!capabilities.type_hierarchy);
+}
+
+// ------------------------------------------------------ decode_type_hierarchy
+
+#[test]
+fn a_null_type_hierarchy_answer_is_no_items_and_not_an_error() {
+    // The caret is not on a type, or the type has no supers/subs — a real answer.
+    assert_eq!(decode_type_hierarchy(Value::Null).unwrap(), Vec::new());
+}
+
+#[test]
+fn an_empty_type_hierarchy_array_is_no_items() {
+    assert_eq!(
+        decode_type_hierarchy(json("[]")).unwrap(),
+        Vec::<TypeHierarchyItem>::new()
+    );
+}
+
+#[test]
+fn a_type_hierarchy_item_decodes_with_its_ranges_and_opaque_data() {
+    let items = decode_type_hierarchy(json(
+        r#"[{
+            "name": "Order",
+            "kind": 5,
+            "detail": "Shop.Domain",
+            "uri": "file:///c:/w/Order.cs",
+            "range": { "start": {"line": 3, "character": 0}, "end": {"line": 40, "character": 1} },
+            "selectionRange": { "start": {"line": 3, "character": 13}, "end": {"line": 3, "character": 18} },
+            "data": { "index": 7, "opaque": "keep me" }
+        }]"#,
+    ))
+    .expect("legal");
+    assert_eq!(items.len(), 1);
+    let item = &items[0];
+    assert_eq!(item.name, "Order");
+    assert_eq!(item.kind, 5);
+    assert_eq!(item.detail.as_deref(), Some("Shop.Domain"));
+    assert_eq!(item.selection_range.start, position(3, 13));
+    // `data` must survive so the follow-up request can echo it.
+    assert_eq!(
+        item.data.as_ref().unwrap()["opaque"],
+        serde_json::json!("keep me")
+    );
+
+    // And it re-serialises the data back onto the wire for the supertypes call.
+    let params = TypeHierarchyItemParams::new(item.clone());
+    let value = serde_json::to_value(&params).unwrap();
+    assert_eq!(
+        value["item"]["data"]["opaque"],
+        serde_json::json!("keep me")
+    );
+    assert_eq!(value["item"]["name"], serde_json::json!("Order"));
+}
+
+#[test]
+fn a_type_hierarchy_answer_of_no_legal_shape_is_an_error_not_an_empty_list() {
+    assert!(decode_type_hierarchy(json("42")).is_err());
+    assert!(decode_type_hierarchy(json(r#""nope""#)).is_err());
+}
+
+#[test]
+fn a_type_hierarchy_array_with_one_unreadable_element_is_an_error() {
+    // A short list is a wrong picture of the graph, silently — same rule as goto.
+    assert!(decode_type_hierarchy(json(r#"[{"name":"Order"}]"#)).is_err());
+}
+
+// -------------------------------------------------------- decode_signature_help
+
+#[test]
+fn a_null_signature_help_answer_is_none_and_not_an_error() {
+    // The caret is not inside a call. `None` is distinct from an empty
+    // `SignatureHelp`, which would be a call with no overloads.
+    assert_eq!(decode_signature_help(Value::Null).unwrap(), None);
+}
+
+#[test]
+fn signature_help_decodes_its_signatures_and_active_indices() {
+    let help = decode_signature_help(json(
+        r#"{
+            "signatures": [
+                { "label": "Add(int a, int b)",
+                  "documentation": "adds",
+                  "parameters": [ {"label": "int a"}, {"label": "int b"} ] }
+            ],
+            "activeSignature": 0,
+            "activeParameter": 1
+        }"#,
+    ))
+    .expect("legal")
+    .expect("a call site");
+    assert_eq!(help.active_signature, Some(0));
+    assert_eq!(help.active_parameter, Some(1));
+    assert_eq!(help.signatures.len(), 1);
+    assert_eq!(help.signatures[0].label, "Add(int a, int b)");
+    assert_eq!(help.signatures[0].documentation.as_deref(), Some("adds"));
+    assert_eq!(help.signatures[0].parameters[0].label, "int a");
+    assert_eq!(help.signatures[0].parameters[1].label, "int b");
+}
+
+#[test]
+fn a_parameter_label_given_as_offsets_is_resolved_against_the_signature_label() {
+    // The `[start, end]` form indexes UTF-16 code units into the signature label.
+    // A non-ASCII character earlier in the label is why the units matter: read as
+    // bytes, the slice would drift.
+    let help = decode_signature_help(json(
+        r#"{
+            "signatures": [
+                { "label": "f(café: int, y: int)",
+                  "parameters": [ {"label": [2, 11]}, {"label": [13, 19]} ] }
+            ]
+        }"#,
+    ))
+    .expect("legal")
+    .expect("a call site");
+    // "f(café: int, y: int)" — UTF-16 units 2..11 span "café: int".
+    assert_eq!(help.signatures[0].parameters[0].label, "café: int");
+    assert_eq!(help.signatures[0].parameters[1].label, "y: int");
+}
+
+#[test]
+fn a_markup_content_documentation_takes_its_value_verbatim() {
+    let help = decode_signature_help(json(
+        r#"{ "signatures": [ { "label": "f()",
+             "documentation": { "kind": "markdown", "value": "**bold**" } } ] }"#,
+    ))
+    .expect("legal")
+    .expect("a call site");
+    assert_eq!(
+        help.signatures[0].documentation.as_deref(),
+        Some("**bold**")
+    );
+}
+
+#[test]
+fn a_signature_help_with_no_signatures_is_an_empty_overload_set_not_an_error() {
+    let help = decode_signature_help(json(r#"{"signatures": []}"#))
+        .expect("legal")
+        .expect("still an object");
+    assert!(help.signatures.is_empty());
+    assert_eq!(help.active_signature, None);
+    assert_eq!(help.active_parameter, None);
+}
+
+#[test]
+fn a_signature_help_that_is_a_bare_number_is_an_error() {
+    assert!(decode_signature_help(json("5")).is_err());
+}
+
+// ---------------------------------------------------------- decode_diagnostics
+
+#[test]
+fn a_full_diagnostic_report_decodes_its_items() {
+    let items = decode_diagnostics(json(
+        r#"{
+            "kind": "full",
+            "items": [
+                { "range": {"start": {"line": 11, "character": 4}, "end": {"line": 11, "character": 9}},
+                  "severity": 1, "message": "cannot find `Foo`", "source": "rustc", "code": "E0425" },
+                { "range": {"start": {"line": 2, "character": 0}, "end": {"line": 2, "character": 3}},
+                  "message": "unused", "code": 612 }
+            ]
+        }"#,
+    ))
+    .expect("legal");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].severity, Some(1));
+    assert_eq!(items[0].source.as_deref(), Some("rustc"));
+    assert_eq!(items[0].code.as_deref(), Some("E0425"));
+    assert_eq!(items[0].range.start, position(11, 4));
+    // A numeric code becomes a string; a diagnostic with no severity keeps None.
+    assert_eq!(items[1].severity, None);
+    assert_eq!(items[1].code.as_deref(), Some("612"));
+}
+
+#[test]
+fn a_full_report_with_no_items_is_a_clean_file() {
+    assert_eq!(
+        decode_diagnostics(json(r#"{"kind":"full","items":[]}"#)).unwrap(),
+        Vec::new()
+    );
+    // A full report may legally omit items entirely; that is clean, not broken.
+    assert_eq!(
+        decode_diagnostics(json(r#"{"kind":"full"}"#)).unwrap(),
+        Vec::new()
+    );
+}
+
+#[test]
+fn an_unchanged_report_is_empty_rather_than_mistaken_for_a_full_one() {
+    assert_eq!(
+        decode_diagnostics(json(r#"{"kind":"unchanged","resultId":"7"}"#)).unwrap(),
+        Vec::new()
+    );
+}
+
+#[test]
+fn a_bare_array_of_diagnostics_decodes_too() {
+    let items = decode_diagnostics(json(
+        r#"[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"message":"x"}]"#,
+    ))
+    .expect("legal");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].message, "x");
+}
+
+#[test]
+fn a_null_diagnostic_answer_is_an_error_and_not_a_clean_file() {
+    // Pull diagnostics never legally answer `null`; reading it as "clean" would
+    // be the empty-versus-unreadable confusion this module refuses.
+    assert!(decode_diagnostics(Value::Null).is_err());
+    assert!(decode_diagnostics(json("7")).is_err());
+}
+
+#[test]
+fn a_diagnostic_report_with_one_unreadable_item_is_an_error() {
+    // A missing `message` is unreadable; one bad item fails the whole array so a
+    // short list is never shown as the file's real diagnostics.
+    assert!(decode_diagnostics(json(
+        r#"{"kind":"full","items":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}]}"#
+    ))
+    .is_err());
 }

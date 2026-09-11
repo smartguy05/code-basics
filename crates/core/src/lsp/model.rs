@@ -503,6 +503,243 @@ impl PrepareRenameResult {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Type hierarchy
+// ---------------------------------------------------------------------------
+
+/// One type in an inheritance graph, and where it is declared.
+///
+/// The same abstain rules as [`Target`]: [`Self::path`] is `None` for a location
+/// outside the workspace or in a non-`file:` document (Roslyn answers
+/// `source-generated:` and metadata URIs), so the node is shown but not opened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeNode {
+    /// The type's name, as the server rendered it.
+    pub name: String,
+    pub kind: SymbolKind,
+    /// The server's own one-line detail (a namespace, a signature), when it sent
+    /// one. `None` rather than an invented value.
+    pub detail: Option<String>,
+    /// Workspace-relative, forward slashes. `None` for the same reasons as
+    /// [`Target::path`], with the same consequence: shown, not opened.
+    pub path: Option<PathBuf>,
+    /// The relative path, or the raw URI when there is no path.
+    pub label: String,
+    /// **1-based**, matching the editor gutter. See the module docs.
+    pub line: u32,
+    /// **0-based UTF-16 code units**, which is what CodeMirror wants. The
+    /// asymmetry with [`Self::line`] is deliberate; see the module docs.
+    pub character: u32,
+}
+
+/// A type's place in the inheritance graph, or the reason there is none.
+///
+/// [`Self::item`] is the type the caret landed on. **`None` is a real answer**:
+/// the caret was not on a type at all, so the outcome is [`Availability::Ready`]
+/// with an empty everything, exactly as [`UsageResult::total`] of `Some(0)` is a
+/// real "no usages" and not a failure. Reporting "not on a type" as
+/// [`Availability::Failed`] would tell the user their server is broken while it
+/// answered perfectly.
+///
+/// **One outcome for two lists.** A server that answers `supertypes` but refuses
+/// `subtypes` — or the reverse — keeps [`Availability::Ready`] and names the
+/// refused direction in [`Self::message`]; only a refusal of *both* changes the
+/// outcome. So an empty list licenses "there are none" only when `message` is
+/// `None`. The same rule as [`DefinitionResult`], for the same reason: there is
+/// no per-list [`Availability`] to spell a partial refusal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeHierarchyResult {
+    pub outcome: Availability,
+    /// The type the request resolved to, or `None` when the caret was not on one.
+    pub item: Option<TypeNode>,
+    /// Types this one derives from, base-most last is **not** promised — the
+    /// order is the server's.
+    pub supertypes: Vec<TypeNode>,
+    /// Types that derive from this one.
+    pub subtypes: Vec<TypeNode>,
+    /// Why a direction is empty, or the qualification a `Ready` answer needs. See
+    /// [`UsageResult::message`]; here it is also the only channel for a partially
+    /// refused answer.
+    pub message: Option<String>,
+    pub server: Option<String>,
+}
+
+impl TypeHierarchyResult {
+    /// The shape for every outcome that is not an answer.
+    pub fn unavailable(outcome: Availability, message: impl Into<String>) -> Self {
+        Self {
+            outcome,
+            item: None,
+            supertypes: Vec::new(),
+            subtypes: Vec::new(),
+            message: Some(message.into()),
+            server: None,
+        }
+    }
+
+    /// Name the server that produced (or failed to produce) this answer.
+    #[must_use]
+    pub fn with_server(mut self, server: impl Into<String>) -> Self {
+        self.server = Some(server.into());
+        self
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Overloads (signature help)
+// ---------------------------------------------------------------------------
+
+/// One callable signature available at a call site.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SignatureInfo {
+    /// The whole signature, exactly as the server rendered it.
+    pub label: String,
+    /// The server's documentation, plain-text — a `MarkupContent`'s value is
+    /// taken verbatim rather than rendered. `None` when it sent none.
+    pub documentation: Option<String>,
+    pub parameters: Vec<ParameterInfo>,
+}
+
+/// One parameter of a signature.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ParameterInfo {
+    /// The parameter's own text. The server may name it as a substring **or** as
+    /// a pair of UTF-16 offsets into the signature label; both are resolved to
+    /// the substring before they cross, so this is always the text itself.
+    pub label: String,
+    pub documentation: Option<String>,
+}
+
+/// The overloads at a call site, or the reason there are none.
+///
+/// An empty [`Self::signatures`] on a `Ready` outcome is a real answer — the
+/// caret is not inside a call — and not a failure, the same rule as everywhere
+/// else on this surface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OverloadResult {
+    pub outcome: Availability,
+    pub signatures: Vec<SignatureInfo>,
+    /// Which signature the server thinks is active, **0-based** into
+    /// [`Self::signatures`]. `None` when it did not say — never guessed at 0,
+    /// because the server not choosing is a different fact from it choosing the
+    /// first.
+    pub active_signature: Option<u32>,
+    /// Which parameter of the active signature is active, **0-based**. `None`
+    /// when the server did not say.
+    pub active_parameter: Option<u32>,
+    pub message: Option<String>,
+    pub server: Option<String>,
+}
+
+impl OverloadResult {
+    /// The shape for every outcome that is not an answer.
+    pub fn unavailable(outcome: Availability, message: impl Into<String>) -> Self {
+        Self {
+            outcome,
+            signatures: Vec::new(),
+            active_signature: None,
+            active_parameter: None,
+            message: Some(message.into()),
+            server: None,
+        }
+    }
+
+    /// Name the server that produced (or failed to produce) this answer.
+    #[must_use]
+    pub fn with_server(mut self, server: impl Into<String>) -> Self {
+        self.server = Some(server.into());
+        self
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics (pull)
+// ---------------------------------------------------------------------------
+
+/// How serious one diagnostic is.
+///
+/// The four the protocol numbers 1..=4. A diagnostic that omits its severity is
+/// rendered [`Self::Warning`] — a deliberate middle rather than a guess in either
+/// direction: `Error` over-alarms and `Hint` hides. Roslyn, rust-analyzer and the
+/// TypeScript server all send one, so the fallback is an edge, not the norm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum DiagnosticSeverity {
+    Error,
+    Warning,
+    Information,
+    Hint,
+}
+
+/// One diagnostic on the file that was asked about.
+///
+/// No path: every row is on the requested file, so joining one would be noise.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticRow {
+    pub severity: DiagnosticSeverity,
+    /// **1-based** start line, matching the editor gutter. See the module docs.
+    pub line: u32,
+    /// **0-based UTF-16 code units** start column. The asymmetry with
+    /// [`Self::line`] is deliberate; see the module docs.
+    pub character: u32,
+    /// **1-based** end line, half-open with the start (the range's `end` is
+    /// exclusive, as everywhere else here).
+    pub end_line: u32,
+    /// **0-based UTF-16 code units** end column.
+    pub end_character: u32,
+    pub message: String,
+    /// The tool that raised it (`roslyn`, `rustc`, `ts`), when it said. `None`
+    /// rather than a guessed one.
+    pub source: Option<String>,
+    /// The rule/error code, as a string even when the server sent a number.
+    /// `None` when it named none.
+    pub code: Option<String>,
+}
+
+/// Every diagnostic on one file, or the reason there is no list.
+///
+/// **Pull, not push.** These come from a `textDocument/diagnostic` request, so an
+/// empty [`Self::diagnostics`] on a `Ready` outcome means the file is clean — a
+/// real answer. The push `publishDiagnostics` stream is deliberately not the
+/// source: it arrives asynchronously after `didOpen`, so "empty because clean"
+/// and "empty because not yet arrived" would be the same shape, which is the one
+/// ambiguity this subsystem refuses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsResult {
+    pub outcome: Availability,
+    pub diagnostics: Vec<DiagnosticRow>,
+    /// Why there is no list, or the qualification a `Ready` answer needs. See
+    /// [`UsageResult::message`].
+    pub message: Option<String>,
+    pub server: Option<String>,
+}
+
+impl DiagnosticsResult {
+    /// The shape for every outcome that is not an answer.
+    pub fn unavailable(outcome: Availability, message: impl Into<String>) -> Self {
+        Self {
+            outcome,
+            diagnostics: Vec::new(),
+            message: Some(message.into()),
+            server: None,
+        }
+    }
+
+    /// Name the server that produced (or failed to produce) this answer.
+    #[must_use]
+    pub fn with_server(mut self, server: impl Into<String>) -> Self {
+        self.server = Some(server.into());
+        self
+    }
+}
+
 /// What every configured server is doing, for the status surface.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

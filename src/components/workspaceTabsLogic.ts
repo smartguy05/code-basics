@@ -55,6 +55,33 @@ export function closeOpenWorkspace(
 }
 
 /**
+ * Move an open workspace from one position in the strip to another, for
+ * drag-to-reorder. `from`/`to` are indices into `open`; the dragged tab is
+ * removed and re-inserted so the other tabs close the gap and shift by one.
+ *
+ * Out-of-range indices, or a no-op move (`from === to`), return the **same
+ * array reference** — the caller can skip the state update, and a stray drag
+ * event cannot churn the list. Identity is the `root`, so this never touches
+ * which root is active; the caller keeps `activeRoot` as it was.
+ */
+export function reorderWorkspaces(open: Workspace[], from: number, to: number): Workspace[] {
+  if (
+    from === to ||
+    from < 0 ||
+    to < 0 ||
+    from >= open.length ||
+    to >= open.length
+  ) {
+    return open;
+  }
+  const next = [...open];
+  const [moved] = next.splice(from, 1);
+  if (moved === undefined) return open;
+  next.splice(to, 0, moved);
+  return next;
+}
+
+/**
  * Whether a workspace tab should flash to signal that one of its terminals
  * wants attention.
  *
@@ -223,4 +250,72 @@ export function tabSignalClass(
   if (!signal) return "";
   if (!shouldFlashWorkspaceTab(root, activeRoot, true)) return "";
   return ` signal ${SIGNAL_CLASS[signal]}`;
+}
+
+/**
+ * How long a background tab flashes for one bell before it settles.
+ *
+ * The attention flag a terminal raises is *sticky* — it clears only when its
+ * workspace is focused — and an agent TUI such as Codex rings the bell on nearly
+ * every redraw, so a level-triggered flash blinks the tab forever. The pulse
+ * below is edge-triggered instead: a rising edge starts a single flash of this
+ * length, which then settles and does not re-arm until the tab is acknowledged
+ * (focused) or the attention clears entirely. Long enough to notice, short
+ * enough not to nag.
+ */
+export const ATTENTION_FLASH_MS = 4000;
+
+/**
+ * When each root's current attention pulse started, by root. A root's presence
+ * means it has flashed for the attention it is currently holding; its absence
+ * means a future rising edge is free to start a fresh flash. The value is the
+ * start timestamp so {@link attentionActive} can tell an in-flight pulse from a
+ * settled one without a second field.
+ */
+export type AttentionPulses = Record<string, number>;
+
+/**
+ * Arm a flash for `root` on the rising edge of its attention.
+ *
+ * Idempotent while a pulse is recorded — whether that pulse is still flashing or
+ * has already settled — so the constant bells that arm the flag in the first
+ * place cannot keep restarting it. Only {@link acknowledgeAttention} (on focus)
+ * or a fall to no-attention frees the root to flash again. Returns the **same
+ * reference** on a no-op so a caller driving React state does not re-render.
+ */
+export function pulseAttention(state: AttentionPulses, root: string, now: number): AttentionPulses {
+  if (root in state) return state;
+  return { ...state, [root]: now };
+}
+
+/** Whether `root`'s flash is still within its {@link ATTENTION_FLASH_MS} window. */
+export function attentionActive(state: AttentionPulses, root: string, now: number): boolean {
+  const started = state[root];
+  return started !== undefined && now - started < ATTENTION_FLASH_MS;
+}
+
+/**
+ * Clear `root`'s pulse so a later rising edge can flash again — on focus, or
+ * when the workspace stops holding any attention. Returns the same reference
+ * when there is nothing to clear.
+ */
+export function acknowledgeAttention(state: AttentionPulses, root: string): AttentionPulses {
+  if (!(root in state)) return state;
+  const next = { ...state };
+  delete next[root];
+  return next;
+}
+
+/**
+ * Milliseconds until the soonest in-flight pulse settles, or `null` when none is
+ * flashing. The caller uses it to schedule the single re-render that ends the
+ * flash — a settled pulse needs no timer, and an absent one needs nothing at all.
+ */
+export function nextPulseExpiry(state: AttentionPulses, now: number): number | null {
+  let soonest: number | null = null;
+  for (const started of Object.values(state)) {
+    const remaining = started + ATTENTION_FLASH_MS - now;
+    if (remaining > 0 && (soonest === null || remaining < soonest)) soonest = remaining;
+  }
+  return soonest;
 }

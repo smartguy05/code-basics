@@ -12,6 +12,7 @@
 // `cb_core::browser::consent::decide`) has no in-window caller by design: the
 // user driving their own panel needs no consent from themselves.
 pub mod browser;
+mod roslyn;
 mod state;
 
 mod commands {
@@ -32,9 +33,12 @@ mod commands {
     pub mod launcher;
     pub mod lsp;
     pub mod mcp;
+    pub mod mcp_tools;
     pub mod notes;
     pub mod qgate;
+    pub mod redis;
     pub mod review;
+    pub mod roslyn_mcp;
     pub mod rules;
     pub mod run;
     pub mod running;
@@ -42,12 +46,16 @@ mod commands {
     pub mod setup;
     pub mod sql;
     pub mod symbols;
+    pub mod tasks;
     pub mod terminal;
     pub mod workspace;
 }
 
 mod mcp_browser;
+mod mcp_redis;
+mod mcp_roslyn;
 mod mcp_sql;
+mod mcp_tasks;
 mod qgate_run;
 mod recorder;
 
@@ -106,6 +114,31 @@ pub fn run() {
         mcp_browser::run();
     }
 
+    // The fifth self-dispatch mode, and the third MCP server out of this one
+    // executable: the Tasks server. Unlike `mcp-sql` it is write-capable by
+    // design — creating and updating tasks is the point — and unlike the
+    // browser server it answers directly out of the per-workspace task store
+    // rather than forwarding to a window. Same two rules as the others: never a
+    // window, and never a byte on stdout that is not an MCP frame.
+    if mcp_tasks::is_mcp_tasks_invocation() {
+        mcp_tasks::run();
+    }
+
+    // The sixth self-dispatch mode, and the fourth MCP server out of this one
+    // executable: the Roslyn/LSP server. Like the browser server it answers
+    // nothing itself — the warm semantic model lives in a window in another
+    // process — so it forwards over a named pipe and hands back that
+    // application's own words. The one difference is the boundary: it resolves
+    // the `--workspace` it was installed for rather than the active window. Same
+    // two rules as the others: never a window, and never a byte on stdout that is
+    // not an MCP frame.
+    if mcp_roslyn::is_mcp_roslyn_invocation() {
+        mcp_roslyn::run();
+    }
+    if mcp_redis::is_mcp_redis_invocation() {
+        mcp_redis::run();
+    }
+
     let state = AppState::default();
     workspace_from_args(&state);
 
@@ -154,6 +187,19 @@ pub fn run() {
             // without connecting to anything - which it can only do if the
             // entry exists before any panel does.
             browser::registry::announce_startup();
+            // Open the process-global Roslyn control pipe and publish this
+            // application in the roslyn instance registry with the workspaces it
+            // already has open. Spawned rather than called: `pipe::start` uses
+            // `tokio::spawn` for its accept loop and so must run inside the async
+            // runtime, which `setup` is not. Unlike the browser pipe (tied to a
+            // panel), this one lives for the whole process.
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = handle.state::<AppState>();
+                    roslyn::start_listener(state.inner(), &handle);
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -184,8 +230,21 @@ pub fn run() {
             commands::launcher::delete_launchable,
             commands::features::list_features,
             commands::features::set_feature,
+            commands::mcp_tools::list_mcp_tools,
+            commands::mcp_tools::set_mcp_tool,
             commands::notes::read_notes,
             commands::notes::write_notes,
+            commands::tasks::read_tasks,
+            commands::tasks::create_task,
+            commands::tasks::update_task,
+            commands::tasks::assign_task,
+            commands::tasks::complete_task,
+            commands::tasks::delete_task,
+            commands::tasks::tasks_mcp_status,
+            commands::tasks::tasks_mcp_install_plan,
+            commands::tasks::install_tasks_mcp_server,
+            commands::tasks::tasks_mcp_uninstall_plan,
+            commands::tasks::uninstall_tasks_mcp_server,
             commands::about::about_info,
             commands::files::fs_list_dir,
             commands::files::fs_read_file,
@@ -223,6 +282,7 @@ pub fn run() {
             commands::git::git_commit,
             commands::git::git_branches,
             commands::git::git_create_branch,
+            commands::git::git_add_worktree,
             commands::git::git_checkout_branch,
             commands::git::git_checkout_remote_branch,
             commands::git::git_delete_branch,
@@ -271,6 +331,11 @@ pub fn run() {
             commands::browser_mcp::install_browser_mcp,
             commands::browser_mcp::browser_mcp_uninstall_plan,
             commands::browser_mcp::uninstall_browser_mcp,
+            commands::roslyn_mcp::roslyn_mcp_server_status,
+            commands::roslyn_mcp::roslyn_mcp_server_install_plan,
+            commands::roslyn_mcp::install_roslyn_mcp_server,
+            commands::roslyn_mcp::roslyn_mcp_server_uninstall_plan,
+            commands::roslyn_mcp::uninstall_roslyn_mcp_server,
             commands::qgate::quality_gate_status,
             commands::qgate::quality_gate_install_plan,
             commands::qgate::install_quality_gate,
@@ -344,6 +409,29 @@ pub fn run() {
             commands::sql::sql_list_columns,
             commands::sql::sql_execute,
             commands::sql::sql_cancel,
+            commands::redis::redis_list_connections,
+            commands::redis::redis_discover,
+            commands::redis::redis_save_connection,
+            commands::redis::redis_delete_connection,
+            commands::redis::redis_rename_connection,
+            commands::redis::redis_set_allow_writes,
+            commands::redis::redis_set_expose_to_agents,
+            commands::redis::redis_test_connection,
+            commands::redis::redis_scan_keys,
+            commands::redis::redis_get_key,
+            commands::redis::redis_key_info,
+            commands::redis::redis_set_string,
+            commands::redis::redis_hash_set,
+            commands::redis::redis_hash_delete,
+            commands::redis::redis_list_push,
+            commands::redis::redis_list_remove,
+            commands::redis::redis_set_add,
+            commands::redis::redis_set_remove,
+            commands::redis::redis_zset_add,
+            commands::redis::redis_zset_remove,
+            commands::redis::redis_stream_add,
+            commands::redis::redis_delete_key,
+            commands::redis::redis_expire,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start code-basics")
@@ -352,13 +440,26 @@ pub fn run() {
             // exit), tree-kill everything it started so nothing is orphaned.
             // Every spawning handle — per-workspace supervisors, the global
             // supervisor and the PTY manager — records into the one shared
-            // registry, so its live set is the complete set of live pids.
-            // A true crash (panic = abort) cannot run this; that case stays
-            // covered by the next-launch orphan detection in `.setup`.
+            // registry, so its live set is the complete set of live pids. The
+            // one exception is the language servers: they are spawned straight
+            // through `lsp::transport` and never touch the running store, so they
+            // are reaped separately just below. A true crash (panic = abort)
+            // cannot run any of this; that case stays covered by the next-launch
+            // orphan detection in `.setup`.
             if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
                 use tauri::Manager;
-                for record in app_handle.state::<AppState>().running.live() {
+                let state = app_handle.state::<AppState>();
+                for record in state.running.live() {
                     cb_core::process::kill_tree(record.pid);
+                }
+                // The LSP trees (Roslyn + its `BuildHost` children, node, …). The
+                // handle's own async teardown cannot run here — the runtime is
+                // being abandoned — so the pids are read synchronously off the
+                // shared snapshot and killed the same way the running set is.
+                for handle in state.all_lsp_handles() {
+                    for pid in handle.server_pids() {
+                        cb_core::process::kill_tree(pid);
+                    }
                 }
                 // And take this application out of the browser instance
                 // registry. Not load-bearing - liveness is re-probed, so a
@@ -367,6 +468,8 @@ pub fn run() {
                 // ambiguity, which is a refusal the user would have to resolve
                 // for no reason.
                 let _ = browser::registry::withdraw(std::process::id());
+                // And out of the roslyn instance registry, for the same reason.
+                let _ = roslyn::registry::withdraw(std::process::id());
             }
         });
 }
