@@ -551,7 +551,7 @@ textarea:focus {
   padding: 8px 10px;
   border: 1px solid var(--skip);
   border-radius: 4px;
-  background: rgba(201, 162, 39, 0.12);
+  background: var(--bg-raised);
 }
 
 /* The counterpart to `.warning` and `.error`: something finished, and said so.

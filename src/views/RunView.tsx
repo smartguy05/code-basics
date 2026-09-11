@@ -1763,26 +1763,6 @@ export function RunView({
       )}
 
       <div className="main">
-        {/* The tab strip lives at the top of `.main`, above both the run
-            toolbar and the diff pane, so an open diff still shows its tab (with
-            pin/close) — the strip used to sit inside the `hidden={isDiff}`
-            console area and vanished the moment a diff became the active tab.
-            Pinned tabs get their own band above the rest; with none pinned only
-            the normal strip renders. */}
-        {openFiles.length > 0 && (
-          <>
-            {pinnedTabs.length > 0 && (
-              <div className="console-tabs pinned-tabs">
-                {pinnedTabs.map(renderFileTab)}
-              </div>
-            )}
-            {unpinnedTabs.length > 0 && (
-              <div className="console-tabs">
-                {unpinnedTabs.map(renderFileTab)}
-              </div>
-            )}
-          </>
-        )}
         {/* The Run toolbar renders unconditionally, so its controls stay
             reachable even while a diff tab is active — the toolbar no longer
             "follows" the active tab. It uses only `run.*` commands and
@@ -1792,10 +1772,11 @@ export function RunView({
             view renders no `changes.*` toolbar at all, so `changes.stage` never
             gets an off-screen target.
 
-            Below the toolbar the order is still load-bearing. `DiffPane` renders
-            its own `.toolbar` and `.content`; the editor/console area is the
-            sibling below, kept mounted and `hidden` beside it so editors keep
-            their state, scroll and language-server documents. */}
+            Below the toolbar, the shared file/diff strip stays visible for
+            either kind of active tab. `DiffPane` then renders its own `.toolbar`
+            and `.content`; the editor/console area is kept mounted and `hidden`
+            beside it so editors keep their state, scroll and language-server
+            documents. */}
         <div className="toolbar">
             <button
               data-command="run.run"
@@ -2009,6 +1990,24 @@ export function RunView({
               </span>
             )}
           </div>
+
+        {/* The file/diff strip sits immediately below the Run toolbar. An open
+            diff still shows its tab while `DiffPane` replaces the editor area,
+            and pinned tabs retain their own first band. */}
+        {openFiles.length > 0 && (
+          <>
+            {pinnedTabs.length > 0 && (
+              <div className="console-tabs pinned-tabs">
+                {pinnedTabs.map(renderFileTab)}
+              </div>
+            )}
+            {unpinnedTabs.length > 0 && (
+              <div className="console-tabs">
+                {unpinnedTabs.map(renderFileTab)}
+              </div>
+            )}
+          </>
+        )}
 
         {isDiff ? (
           <DiffPane
