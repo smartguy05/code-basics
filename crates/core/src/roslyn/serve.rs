@@ -75,8 +75,23 @@ pub fn initialize_result(requested: Option<&str>) -> InitializeResult {
 /// The `tools/list` result. Advertises every tool whether or not an application
 /// is running: a tool that appears only sometimes is one a model will never learn
 /// to use.
-pub fn tools_list_result() -> Value {
-    json!({ "tools": tools::descriptors() })
+pub fn tools_list_result(gate: &crate::tool_gate::ToolGateFile) -> Value {
+    json!({
+        "tools": crate::tool_gate::filter_descriptors(
+            gate,
+            crate::tool_gate::ServerId::Roslyn,
+            tools::descriptors(),
+        )
+    })
+}
+
+/// A disabled-but-known tool, refused by the **shim** before it looks for a
+/// running application — the disabled-tool sibling of [`unknown_tool_answer`].
+pub fn disabled_tool_answer(tool: &str) -> ToolAnswer {
+    ToolAnswer::refused(
+        crate::tool_gate::DISABLED_CODE,
+        crate::tool_gate::disabled_tool_sentence(tool),
+    )
 }
 
 /// Turn the application's answer into an MCP result.

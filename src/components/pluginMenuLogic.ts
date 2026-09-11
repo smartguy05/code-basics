@@ -22,7 +22,8 @@ export type PluginAction =
   | { kind: "mcp" }
   | { kind: "browser" }
   | { kind: "tasks" }
-  | { kind: "roslynMcp" };
+  | { kind: "roslynMcp" }
+  | { kind: "redis" };
 
 export interface PluginRow {
   /** The command id this row corresponds to, and the React key. */
@@ -123,6 +124,19 @@ const PLUGINS: PluginEntry[] = [
     needsWorkspace: true,
     ready: "Open the task list for the active codebase",
     noWorkspace: "Open a codebase to manage its tasks",
+  },
+  {
+    // Always-on like the Roslyn server below (no `FeatureId`): the Redis panel
+    // ships enabled and is not one of the four installer-selectable features.
+    // Needs a codebase because discovery scans the open workspace's
+    // appsettings/secrets for connections.
+    feature: null,
+    labelKey: "redisConsole",
+    commandId: "view.redis",
+    action: { kind: "redis" },
+    needsWorkspace: true,
+    ready: "Browse and edit Redis for the active codebase",
+    noWorkspace: "Open a codebase to browse its Redis",
   },
   {
     // Always-on: the app keeps a warm per-workspace Roslyn/LSP session, so the

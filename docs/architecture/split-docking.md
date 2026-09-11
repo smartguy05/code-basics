@@ -12,6 +12,19 @@ called **regions** everywhere.
   be thrown away when they move — a `FileEditor`'s buffer is saved only on Ctrl+S,
   and an xterm holds scrollback no reload can recover — so moving one must not
   remount it.
+- **The SQL console** and **the embedded browser** dock too, as the singleton
+  dockables `{ kind: "sql", id: "sql" }` and `{ kind: "browser", id: "browser" }`.
+  The SQL console is ordinary DOM and rides the same `StablePortal` as editors, so
+  its connections, CodeMirror doc and streaming query survive the move; its two
+  fixed overlays are scoped to the region by a `.sql-docked` marker. The browser is
+  an OS surface that lives in the Rust host keyed by root — docking moves only its
+  stateless chrome (via `createPortal`) and the page follows the `.browser-page`
+  placeholder's rect through the ordinary `sync`, so the page-lifecycle effects
+  never remount. A docked panel has no minimize pill — the region tab strip is its
+  header — and a panel whose feature is switched off is pruned from its region
+  (the provider's `panelIds`). Docked browser occlusion is raise-*unaware*
+  (`occludedByPanels`): it sits at the workspace layer, so any overlapping floating
+  peer blanks the page.
 - **Diffs do not dock.** A docked diff would be a second `DiffPane`, and the view
   documents that exactly one may ever be mounted: two share one `ChangesModel` and
   both answer `changes.stage`/`change.next`, so `pickCommandTarget` would route a

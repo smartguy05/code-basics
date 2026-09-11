@@ -23,6 +23,13 @@ import { SetupPrompt } from "./SetupPrompt";
 import { McpServerPanel } from "./McpServerPanel";
 import { RoslynMcpPanel } from "./RoslynMcpPanel";
 import { SqlPanel } from "./SqlPanel";
+import { RedisPanel } from "./RedisPanel";
+import {
+  CLOSED_REDIS_PANEL,
+  closeRedisPanel,
+  openRedisPanel,
+  redisPanelMounted,
+} from "./redisPanelLogic";
 import { TasksPanel } from "./TasksPanel";
 import { shouldPrompt, setDismissed } from "./setupPromptLogic";
 import { TestsView } from "../views/TestsView";
@@ -171,6 +178,13 @@ export interface WorkspaceTabHandle {
    * there is no feature gate — the language server is always-on.
    */
   openRoslynMcp(): void;
+  /**
+   * Open the Redis panel for this codebase, or restore it when minimized.
+   *
+   * Part of the handle for the same reason `openSql` is. Unlike `openSql` there
+   * is no feature gate — the Redis plugin is always-on, like the Roslyn server.
+   */
+  openRedis(): void;
 }
 
 /**
@@ -299,6 +313,11 @@ export function WorkspaceTab({
   const [sqlPanel, setSqlPanel] = useState(CLOSED_SQL_PANEL);
   const sqlEnabled = featureEnabled(features, "sqlConsole");
   const openSql = () => setSqlPanel(openSqlPanel);
+
+  // The Redis panel: a floating window like the SQL console, but always-on (no
+  // feature gate), so there is no unmount-on-feature-change to handle.
+  const [redisPanel, setRedisPanel] = useState(CLOSED_REDIS_PANEL);
+  const openRedis = () => setRedisPanel(openRedisPanel);
   // Switching the feature off unmounts the console rather than hiding it — see
   // `sqlPanelAfterFeatureChange` for why the two are different. The decision
   // returns the same object when nothing changes, so this cannot loop.
@@ -400,6 +419,8 @@ export function WorkspaceTab({
     if (mcpEnabled) registrations.push(registerCommand("plugin.mcp", openMcp));
     // Registered only while its feature is on, exactly as `plugin.mcp` is.
     if (tasksEnabled) registrations.push(registerCommand("plugin.tasks", openTasks));
+    // Always registered — the Redis plugin is always-on (like the Roslyn server).
+    registrations.push(registerCommand("view.redis", openRedis));
     return () => registrations.forEach((unregister) => unregister());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, shownTabs, sqlEnabled, mcpEnabled, tasksEnabled]);
@@ -744,6 +765,7 @@ export function WorkspaceTab({
     openBrowser,
     openTasks,
     openRoslynMcp,
+    openRedis,
   });
   handleRef.current = {
     openTerminal,
@@ -758,6 +780,7 @@ export function WorkspaceTab({
     openBrowser,
     openTasks,
     openRoslynMcp,
+    openRedis,
   };
   useEffect(() => {
     const stable: WorkspaceTabHandle = {
@@ -774,6 +797,7 @@ export function WorkspaceTab({
       openBrowser: () => handleRef.current.openBrowser(),
       openTasks: () => handleRef.current.openTasks(),
       openRoslynMcp: () => handleRef.current.openRoslynMcp(),
+      openRedis: () => handleRef.current.openRedis(),
     };
     onRegister(workspace.root, stable);
     return () => onRegister(workspace.root, null);
@@ -796,7 +820,14 @@ export function WorkspaceTab({
   }, [workspace.root]);
 
   return (
-    <RegionProvider root={workspace.root} terminalIds={terminals.map((t) => t.key)}>
+    <RegionProvider
+      root={workspace.root}
+      terminalIds={terminals.map((t) => t.key)}
+      panelIds={[
+        ...(sqlPanelMounted(sqlPanel, sqlEnabled) ? ["sql"] : []),
+        ...(browserPanelMounted(browserPanel, browserEnabled) ? ["browser"] : []),
+      ]}
+    >
     <div className="workspace-tab" hidden={!active}>
       <div className="tabs tabs-row">
         {shownTabs.map(({ id, label }) => (
@@ -959,6 +990,16 @@ export function WorkspaceTab({
           workspace={workspace}
           restoreRequest={sqlPanel.restoreToken}
           onClose={() => setSqlPanel(closeSqlPanel)}
+        />
+      )}
+
+      {/* The Redis panel — always-on, so mounted whenever the user has it open. */}
+      {redisPanelMounted(redisPanel) && (
+        <RedisPanel
+          root={workspace.root}
+          workspaceName={workspace.name}
+          restoreRequest={redisPanel.restoreToken}
+          onClose={() => setRedisPanel(closeRedisPanel)}
         />
       )}
 

@@ -109,6 +109,29 @@ One binary ships every feature, so these decide only what is *shown*. An install
 | `list_features` | — | `FeatureInfo[]` | Every known feature with its resolved state. Also the first-run seed point; a missing or corrupt store yields the defaults rather than an error |
 | `set_feature` | `id: string`, `enabled: bool` | `FeatureInfo[]` | Switch one feature. Returns the whole list as persisted, so the caller renders what was written. An unknown id is an error naming it |
 
+## MCP tool gating
+
+Per-*tool* enable/disable for the four MCP servers (`tool_gate`), a finer grain than the per-server feature flags above. The store is user-global (`code-basics/mcp-tools.json`); each MCP server process reads it directly to filter its `tools/list` and refuse a disabled-but-known tool. An absent choice, and a missing or corrupt store, mean **enabled** — this is a preference, not a security boundary.
+
+| Command | Parameters | Returns | Notes |
+| --- | --- | --- | --- |
+| `list_mcp_tools` | — | `McpServerToolsInfo[]` | Every MCP server with its tools and their resolved enabled state |
+| `set_mcp_tool` | `server: string`, `tool: string`, `enabled: bool` | `McpServerToolsInfo[]` | Switch one tool. Returns the whole list as persisted. An unknown server id is an error naming it |
+
+## Redis plugin
+
+Browse/edit a Redis server ([guide](../guides/redis-plugin.md)). Connection
+strings never cross toward the frontend; each agent-consent flag has its own verb.
+Profiles: `redis_list_connections`, `redis_discover(root)`,
+`redis_save_connection` (consent flags ignored), `redis_delete_connection`,
+`redis_rename_connection`, `redis_set_allow_writes`, `redis_set_expose_to_agents`.
+Browse/edit: `redis_test_connection` → `RedisStatusKind` (category only),
+`redis_scan_keys` → `RedisScanPage`, `redis_get_key`/`redis_key_info`, and the
+write verbs `redis_set_string`/`redis_hash_set`/`redis_hash_delete`/
+`redis_list_push`/`redis_list_remove`/`redis_set_add`/`redis_set_remove`/
+`redis_zset_add`/`redis_zset_remove`/`redis_stream_add`/`redis_delete_key`/
+`redis_expire` (UI edits are always allowed; `allow_writes` gates only agents).
+
 ## .NET user secrets
 
 `src-tauri/src/commands/secrets.rs` — `project` is the workspace-relative `.csproj` path a .NET `RunConfig.project` holds. Secrets live in `secrets.json` under the user profile (`%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows, `~/.microsoft/usersecrets/<id>/` elsewhere), never in the repository.

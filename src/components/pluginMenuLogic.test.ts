@@ -16,12 +16,12 @@ const OFF = ALL_KEYS.map((f) => feature(f, false));
 /** Exactly one feature on, so a test can tell the rows apart. */
 const only = (id: string) => ALL_KEYS.map((f) => feature(f, f === id));
 /**
- * The row ids with the always-on Roslyn server dropped, so a test naming one
- * optional feature can assert exactly its rows. The Roslyn row's own behaviour
- * is covered by its dedicated block.
+ * The row ids with the always-on plugins (Roslyn server, Redis panel) dropped,
+ * so a test naming one optional feature can assert exactly its rows. Each
+ * always-on row's own behaviour is covered by its dedicated block.
  */
 const optionalIds = (rows: { id: string }[]) =>
-  rows.map((r) => r.id).filter((id) => id !== "plugin.roslyn");
+  rows.map((r) => r.id).filter((id) => id !== "plugin.roslyn" && id !== "view.redis");
 
 const SQL_ONLY = only("sqlConsole");
 const ASK_ONLY = only("askCodebase");
@@ -54,6 +54,7 @@ describe("pluginMenuRows", () => {
       "plugin.mcp",
       "plugin.browser",
       "plugin.tasks",
+      "view.redis",
       "plugin.roslyn",
     ]);
   });
@@ -114,9 +115,10 @@ describe("pluginMenuRows", () => {
 
   it("omits a switched-off plugin rather than disabling it", () => {
     // "You switched this off" is a decision the user already made and does not
-    // need arguing with. Only the always-on Roslyn server survives every
-    // optional feature being off.
+    // need arguing with. Only the always-on plugins (Redis panel, Roslyn server)
+    // survive every optional feature being off.
     expect(pluginMenuRows({ features: OFF, workspaceOpen: true }).map((r) => r.id)).toEqual([
+      "view.redis",
       "plugin.roslyn",
     ]);
   });
@@ -223,6 +225,24 @@ describe("Roslyn MCP server (always-on)", () => {
     // `null` is "not read yet", and short-circuits before any row — including
     // the always-on one — so the menu never flashes on startup.
     expect(pluginMenuRows({ features: null, workspaceOpen: true })).toEqual([]);
+  });
+});
+
+describe("Redis panel (always-on)", () => {
+  it("offers Redis even when every optional feature is off", () => {
+    const rows = pluginMenuRows({ features: OFF, workspaceOpen: true });
+    const redis = rows.find((r) => r.id === "view.redis");
+    expect(redis?.label).toBe("Redis");
+    expect(redis?.disabled).toBe(false);
+    expect(redis?.action).toEqual({ kind: "redis" });
+  });
+
+  it("disables Redis, with a reason, when no codebase is open", () => {
+    const rows = pluginMenuRows({ features: OFF, workspaceOpen: false });
+    const redis = rows.find((r) => r.id === "view.redis");
+    expect(redis?.disabled).toBe(true);
+    expect(redis?.action).toBe(null);
+    expect(redis?.title).toContain("Open a codebase");
   });
 });
 

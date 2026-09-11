@@ -18,7 +18,9 @@ import {
 import * as api from "../ipc/api";
 import type { DetectedShells } from "../ipc/types";
 
-type Page = "appearance" | "terminal" | "keyboard" | "reference";
+import { McpToolsPage } from "./McpToolsPage";
+
+type Page = "appearance" | "terminal" | "mcp" | "keyboard" | "reference";
 const cloneAppearance = (value: AppearanceSettings): AppearanceSettings => JSON.parse(JSON.stringify(value)) as AppearanceSettings;
 
 function downloadTheme(theme: ThemeDefinition) {
@@ -142,6 +144,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         <nav>
           <button className={page === "appearance" ? "active" : ""} onClick={() => setPage("appearance")}>Appearance</button>
           <button className={page === "terminal" ? "active" : ""} onClick={() => setPage("terminal")}>Terminal</button>
+          <button className={page === "mcp" ? "active" : ""} onClick={() => setPage("mcp")}>MCP tools</button>
           <button className={page === "keyboard" ? "active" : ""} onClick={() => setPage("keyboard")}>Keyboard</button>
           <button className={page === "reference" ? "active" : ""} onClick={() => setPage("reference")}>Native keys</button>
         </nav>
@@ -224,6 +227,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {shellMissing && <div className="warning">{shellMissing}</div>}
             <p>Applies to terminals opened from now on. A terminal already open keeps the shell it started with.</p>
           </>}
+          {page === "mcp" && <McpToolsPage />}
           {page === "keyboard" && <>
             <input className="settings-search" placeholder="Search commands" value={query} onChange={(event) => setQuery(event.target.value)} />
             <div className="shortcut-list">{sections.map((section) => <div key={section.title}>

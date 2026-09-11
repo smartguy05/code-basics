@@ -130,9 +130,26 @@ describe("pruneLayout", () => {
     let layout = dockInto({}, tab("gone"), "right");
     layout = dockInto(layout, tab("kept"), "right");
     layout = dockInto(layout, term("dead"), "top");
-    const pruned = pruneLayout(layout, new Set(["kept"]), new Set());
+    const pruned = pruneLayout(layout, { tab: new Set(["kept"]), terminal: new Set() });
     expect(pruned.right?.items).toEqual([tab("kept")]);
     expect(pruned.top).toBeUndefined();
+  });
+
+  it("keeps a docked panel while its kind is valid and drops it when not", () => {
+    const layout = dockInto({}, { kind: "sql", id: "sql" }, "right");
+    const kept = pruneLayout(layout, { sql: new Set(["sql"]) });
+    expect(kept.right?.items).toEqual([{ kind: "sql", id: "sql" }]);
+    // Feature switched off ⇒ "sql" not in the valid map ⇒ pruned.
+    const dropped = pruneLayout(layout, { tab: new Set(), terminal: new Set() });
+    expect(dropped.right).toBeUndefined();
+  });
+
+  it("treats browser like the other panels", () => {
+    const layout = dockInto({}, { kind: "browser", id: "browser" }, "bottom");
+    expect(pruneLayout(layout, { browser: new Set(["browser"]) }).bottom?.items).toEqual([
+      { kind: "browser", id: "browser" },
+    ]);
+    expect(pruneLayout(layout, {}).bottom).toBeUndefined();
   });
 });
 

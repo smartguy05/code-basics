@@ -3,6 +3,9 @@ import { SqlView } from "../views/SqlView";
 import { useDockEntry } from "./DockContext";
 import { dockId } from "./dockLogic";
 import { useFocusEntry, useFocusOffset } from "./focusOrderContext";
+import { slotKey, useRegions } from "./RegionContext";
+import { StablePortal } from "./StablePortal";
+import type { Dockable } from "./regionLayoutLogic";
 import type { Workspace } from "../ipc/types";
 import {
   clampPanelPosition,
@@ -61,7 +64,29 @@ export function SqlPanel({
   const panelRef = useRef<HTMLDivElement>(null);
   const [minimized, setMinimized] = useState(false);
 
+  // Docking. The console is a `Dockable` referenced by the constant id "sql";
+  // `SqlView` is portaled (via `StablePortal`) into the region slot when docked
+  // and into the floating body otherwise, so its connections, CodeMirror doc and
+  // streaming query survive the move — the same no-remount rule terminals use.
+  const regions = useRegions();
+  const dockable: Dockable = { kind: "sql", id: "sql" };
+  const regionKey = slotKey(dockable);
+  const wantsDock = regions?.dockedPanels.has("sql") ?? false;
+  const slotNode = wantsDock ? (regions?.slot(regionKey) ?? null) : null;
+  const showDocked = wantsDock && slotNode !== null;
+  // The floating body node the portal targets when not docked. A state node (not
+  // a ref) so setting it re-renders and the portal picks it up.
+  const [floatBody, setFloatBody] = useState<HTMLDivElement | null>(null);
+
   useEffect(() => setMinimized(false), [restoreRequest]);
+
+  // While docked, the region tab strip is the console's header — feed it the
+  // label and close action.
+  useEffect(() => {
+    if (!regions || !showDocked) return;
+    regions.registerMeta(regionKey, { label: "SQL", onClose });
+    return () => regions.registerMeta(regionKey, null);
+  }, [regions, showDocked, regionKey, onClose]);
 
   // Join the app-wide focus order like every other floating panel: clicking it
   // (or restoring it) brings it to the front over terminals, Notes and the
@@ -79,7 +104,8 @@ export function SqlPanel({
     if (!minimized) raiseSql();
   }, [minimized, raiseSql]);
   useDockEntry(
-    minimized
+    // A docked console has no minimize pill — the region tab strip replaces it.
+    minimized && !showDocked
       ? {
           id: dockId(workspace.root, "sql"),
           scope: workspace.root,
@@ -178,7 +204,7 @@ export function SqlPanel({
           they would cover the whole app from a band above every terminal. */}
       <div
         className="review-panel sql-panel"
-        hidden={minimized}
+        hidden={minimized || showDocked}
         ref={panelRef}
         onPointerDownCapture={raiseSql}
         style={
@@ -195,6 +221,14 @@ export function SqlPanel({
             {workspace.name}
           </span>
           <span style={{ flex: 1 }} />
+          {regions && (
+            <button
+              onClick={() => regions.dock(dockable, "right")}
+              title="Dock to the side"
+            >
+              ⊟
+            </button>
+          )}
           <button onClick={() => setMinimized(true)} title="Minimize (keeps the connection)">
             —
           </button>
@@ -203,8 +237,19 @@ export function SqlPanel({
           </button>
         </div>
 
-        <SqlView workspace={workspace} />
+        {/* The floating body: empty while docked, since `SqlView` is portaled
+            into the region slot instead. */}
+        <div className="sql-panel-body" ref={setFloatBody} />
       </div>
+
+      {/* `SqlView` lives here for the component's whole life and is moved between
+          the floating body and the region slot without remounting. The
+          `sql-docked` marker scopes its two fixed overlays to the region. */}
+      <StablePortal target={showDocked ? slotNode : floatBody}>
+        <div className={showDocked ? "sql-embed sql-docked" : "sql-embed"}>
+          <SqlView workspace={workspace} />
+        </div>
+      </StablePortal>
     </>
   );
 }

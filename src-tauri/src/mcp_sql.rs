@@ -52,6 +52,7 @@ use cb_core::sql::catalog;
 use cb_core::sql::driver::{SqlConnection as LiveConnection, SqlDriver};
 use cb_core::sql::model::SqlResultSet;
 use cb_core::sql::store::{self, SqlConnection as StoredConnection};
+use cb_core::tool_gate;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
@@ -68,6 +69,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// schema is legitimately slow, and an agent waiting is better than an agent
 /// told the wrong thing.
 const STATEMENT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The per-tool gate, re-read on every use so a tool switched off in the app
+/// bites on the next request. See [`cb_core::tool_gate`].
+fn load_gate() -> tool_gate::ToolGateFile {
+    tool_gate::load(&tool_gate::mcp_tools_path())
+}
 
 /// Did the command line ask for the MCP server rather than the application?
 pub fn is_mcp_sql_invocation() -> bool {
@@ -194,13 +201,20 @@ async fn answer_request(
                 ),
             }
         }
-        serve::Route::ToolsList => serve::success(id, serve::tools_list_result()),
+        serve::Route::ToolsList => serve::success(id, serve::tools_list_result(&load_gate())),
         serve::Route::Ping => serve::success(id, Value::Object(Default::default())),
         serve::Route::ToolsCall { name, arguments } => {
             match tools::parse_call(&name, arguments.as_ref()) {
                 Err(error) => serve::failure(id, &error),
                 Ok(call) => {
-                    let result = call_tool(call, workspace).await;
+                    // A disabled-but-known tool is refused here, re-reading the
+                    // gate every call so a tool switched off in the app bites on
+                    // the next request. See `cb_core::tool_gate`.
+                    let result = if load_gate().is_enabled(tool_gate::ServerId::Sql, &name) {
+                        call_tool(call, workspace).await
+                    } else {
+                        tool_gate::disabled_tool_result(&name)
+                    };
                     match serde_json::to_value(result) {
                         Ok(value) => serve::success(id, value),
                         Err(error) => serve::failure(

@@ -44,6 +44,9 @@ export const PLUGIN_LABELS: Record<string, string> = {
   // its own string. It still lives here so the Plugins menu and Settings name it
   // from one place, like every other plugin.
   mcpRoslyn: "Roslyn MCP server",
+  // Also not a `FeatureKey`: the Redis panel is always-on, like the Roslyn
+  // server, so it is keyed by its own string.
+  redisConsole: "Redis",
 };
 
 const chord = (key: string, over: Partial<Omit<ShortcutChord, "key">> = {}): ShortcutChord => ({

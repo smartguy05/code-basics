@@ -15,7 +15,7 @@ fn the_handshake_consults_no_registry_and_lists_every_tool_regardless() {
     let result = initialize_result(None);
     assert_eq!(result.server_info.name, SERVER_NAME);
     assert!(result.capabilities.tools.is_some());
-    let listed = tools_list_result();
+    let listed = tools_list_result(&crate::tool_gate::ToolGateFile::default());
     assert_eq!(
         listed["tools"].as_array().unwrap().len(),
         crate::browser::tools::ALL.len()
@@ -38,6 +38,32 @@ fn the_server_names_itself_apart_from_the_sql_server() {
 fn the_version_comes_from_the_crate_rather_than_a_literal() {
     assert_eq!(SERVER_VERSION, env!("CARGO_PKG_VERSION"));
     assert!(!SERVER_VERSION.is_empty());
+}
+
+#[test]
+fn a_disabled_tool_is_dropped_from_the_listing() {
+    let mut gate = crate::tool_gate::ToolGateFile::default();
+    let first = crate::browser::tools::ALL[0];
+    gate.set(crate::tool_gate::ServerId::Browser, first, false);
+    let listed = tools_list_result(&gate);
+    let names: Vec<&str> = listed["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(!names.contains(&first));
+    assert_eq!(names.len(), crate::browser::tools::ALL.len() - 1);
+}
+
+#[test]
+fn a_disabled_tool_answer_is_a_refusal_with_the_shared_code() {
+    let answer = disabled_tool_answer(crate::browser::tools::ALL[0]);
+    assert!(!answer.ok);
+    assert_eq!(
+        answer.code.as_deref(),
+        Some(crate::tool_gate::DISABLED_CODE)
+    );
 }
 
 #[test]

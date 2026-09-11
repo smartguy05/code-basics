@@ -26,6 +26,7 @@ rmcp.workspace = true
 futures-core.workspace = true
 sqlx.workspace = true
 tiberius.workspace = true
+redis.workspace = true
 tokio-util.workspace = true
 specta.workspace = true
 uuid.workspace = true

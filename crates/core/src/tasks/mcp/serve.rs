@@ -79,8 +79,14 @@ pub fn initialize_result(requested: Option<&str>) -> InitializeResult {
 }
 
 /// The `tools/list` result.
-pub fn tools_list_result() -> Value {
-    json!({ "tools": tools::descriptors() })
+pub fn tools_list_result(gate: &crate::tool_gate::ToolGateFile) -> Value {
+    json!({
+        "tools": crate::tool_gate::filter_descriptors(
+            gate,
+            crate::tool_gate::ServerId::Tasks,
+            tools::descriptors(),
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------

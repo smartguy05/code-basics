@@ -33,8 +33,10 @@ mod commands {
     pub mod launcher;
     pub mod lsp;
     pub mod mcp;
+    pub mod mcp_tools;
     pub mod notes;
     pub mod qgate;
+    pub mod redis;
     pub mod review;
     pub mod roslyn_mcp;
     pub mod rules;
@@ -50,6 +52,7 @@ mod commands {
 }
 
 mod mcp_browser;
+mod mcp_redis;
 mod mcp_roslyn;
 mod mcp_sql;
 mod mcp_tasks;
@@ -131,6 +134,9 @@ pub fn run() {
     // not an MCP frame.
     if mcp_roslyn::is_mcp_roslyn_invocation() {
         mcp_roslyn::run();
+    }
+    if mcp_redis::is_mcp_redis_invocation() {
+        mcp_redis::run();
     }
 
     let state = AppState::default();
@@ -224,6 +230,8 @@ pub fn run() {
             commands::launcher::delete_launchable,
             commands::features::list_features,
             commands::features::set_feature,
+            commands::mcp_tools::list_mcp_tools,
+            commands::mcp_tools::set_mcp_tool,
             commands::notes::read_notes,
             commands::notes::write_notes,
             commands::tasks::read_tasks,
@@ -401,6 +409,29 @@ pub fn run() {
             commands::sql::sql_list_columns,
             commands::sql::sql_execute,
             commands::sql::sql_cancel,
+            commands::redis::redis_list_connections,
+            commands::redis::redis_discover,
+            commands::redis::redis_save_connection,
+            commands::redis::redis_delete_connection,
+            commands::redis::redis_rename_connection,
+            commands::redis::redis_set_allow_writes,
+            commands::redis::redis_set_expose_to_agents,
+            commands::redis::redis_test_connection,
+            commands::redis::redis_scan_keys,
+            commands::redis::redis_get_key,
+            commands::redis::redis_key_info,
+            commands::redis::redis_set_string,
+            commands::redis::redis_hash_set,
+            commands::redis::redis_hash_delete,
+            commands::redis::redis_list_push,
+            commands::redis::redis_list_remove,
+            commands::redis::redis_set_add,
+            commands::redis::redis_set_remove,
+            commands::redis::redis_zset_add,
+            commands::redis::redis_zset_remove,
+            commands::redis::redis_stream_add,
+            commands::redis::redis_delete_key,
+            commands::redis::redis_expire,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start code-basics")

@@ -26,13 +26,23 @@ export type DropZone = Edge | "center";
 
 export const EDGES: readonly Edge[] = ["left", "right", "top", "bottom"];
 
-export type DockableKind = "tab" | "terminal";
+// `"sql"` and `"browser"` are the two singleton floating panels that can dock.
+// Unlike tabs and terminals there is only ever one of each per workspace, so a
+// docked panel's id is the constant `"sql"` / `"browser"` — the reference still
+// names an instance the host renders elsewhere, exactly like a tab id.
+export type DockableKind = "tab" | "terminal" | "sql" | "browser";
 
 export interface Dockable {
   kind: DockableKind;
-  /** An `openFiles` tab id for `"tab"`, a terminal key for `"terminal"`. */
+  /**
+   * An `openFiles` tab id for `"tab"`, a terminal key for `"terminal"`, and the
+   * constant `"sql"` / `"browser"` for the two singleton panels.
+   */
   id: string;
 }
+
+/** Every dockable kind, for iterating a per-kind validity map. */
+export const DOCKABLE_KINDS: readonly DockableKind[] = ["tab", "terminal", "sql", "browser"];
 
 export interface Region {
   items: Dockable[];
@@ -167,26 +177,30 @@ export function centerTabIds(openTabIds: readonly string[], layout: RegionLayout
   return openTabIds.filter((id) => !docked.has(id));
 }
 
-/** The terminal keys that are docked (so the floating layer skips them). */
-export function dockedTerminalIds(layout: RegionLayout): Set<string> {
+/** The ids of a given kind that are currently docked in any region. */
+export function dockedIdsOfKind(layout: RegionLayout, kind: DockableKind): Set<string> {
   const ids = new Set<string>();
   for (const edge of EDGES) {
     for (const item of layout[edge]?.items ?? []) {
-      if (item.kind === "terminal") ids.add(item.id);
+      if (item.kind === kind) ids.add(item.id);
     }
   }
   return ids;
 }
 
+/** The terminal keys that are docked (so the floating layer skips them). */
+export function dockedTerminalIds(layout: RegionLayout): Set<string> {
+  return dockedIdsOfKind(layout, "terminal");
+}
+
+/** Whether the singleton panel of `kind` (`"sql"` / `"browser"`) is docked. */
+export function isPanelDocked(layout: RegionLayout, kind: DockableKind): boolean {
+  return dockedIdsOfKind(layout, kind).size > 0;
+}
+
 /** The editor/diff tab ids that are docked (so the center strip skips them). */
 export function dockedTabIds(layout: RegionLayout): Set<string> {
-  const ids = new Set<string>();
-  for (const edge of EDGES) {
-    for (const item of layout[edge]?.items ?? []) {
-      if (item.kind === "tab") ids.add(item.id);
-    }
-  }
-  return ids;
+  return dockedIdsOfKind(layout, "tab");
 }
 
 /**
@@ -197,16 +211,15 @@ export function dockedTabIds(layout: RegionLayout): Set<string> {
  */
 export function pruneLayout(
   layout: RegionLayout,
-  validTabIds: ReadonlySet<string>,
-  validTerminalIds: ReadonlySet<string>,
+  valid: Partial<Record<DockableKind, ReadonlySet<string>>>,
 ): RegionLayout {
   const next: RegionLayout = {};
   for (const edge of EDGES) {
     const region = layout[edge];
     if (!region) continue;
-    const items = region.items.filter((item) =>
-      item.kind === "tab" ? validTabIds.has(item.id) : validTerminalIds.has(item.id),
-    );
+    // An absent kind in `valid` means "none valid", so a closed tab, an exited
+    // terminal, or a panel whose feature is off is dropped.
+    const items = region.items.filter((item) => valid[item.kind]?.has(item.id) ?? false);
     if (items.length === 0) continue;
     next[edge] = {
       items,
@@ -242,7 +255,7 @@ function isRegion(value: unknown): value is Region {
       (i) =>
         i &&
         typeof i === "object" &&
-        (i.kind === "tab" || i.kind === "terminal") &&
+        DOCKABLE_KINDS.includes((i as Dockable).kind) &&
         typeof i.id === "string",
     ) &&
     typeof r.active === "number" &&

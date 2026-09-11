@@ -44,6 +44,7 @@ use cb_core::roslyn::answer::RoslynRefusal;
 use cb_core::roslyn::instances::{self, InstanceError};
 use cb_core::roslyn::wire::{self, PipeFailure, ToolAnswer};
 use cb_core::roslyn::{argv, liveness, serve, tools};
+use cb_core::tool_gate;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
 
@@ -53,6 +54,11 @@ use tokio::io::AsyncReadExt;
 /// legitimately slow, and an agent waiting is better than an agent told the wrong
 /// thing.
 const TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The per-tool gate, re-read on every use. See [`cb_core::tool_gate`].
+fn load_gate() -> tool_gate::ToolGateFile {
+    tool_gate::load(&tool_gate::mcp_tools_path())
+}
 
 /// Did the command line ask for the Roslyn MCP server rather than the application?
 pub fn is_mcp_roslyn_invocation() -> bool {
@@ -168,7 +174,9 @@ async fn answer_request(
                 ),
             }
         }
-        mcp_serve::Route::ToolsList => mcp_serve::success(id, serve::tools_list_result()),
+        mcp_serve::Route::ToolsList => {
+            mcp_serve::success(id, serve::tools_list_result(&load_gate()))
+        }
         mcp_serve::Route::Ping => mcp_serve::success(id, Value::Object(Default::default())),
         mcp_serve::Route::ToolsCall { name, arguments } => {
             // The arguments are **not** parsed here. The application parses them,
@@ -203,6 +211,12 @@ async fn call_tool(
     // never exist. Only the name: the application still owns the tool table.
     if !tools::is_known(tool) {
         return serve::unknown_tool_answer(tool);
+    }
+
+    // A disabled-but-known tool is refused before a registry is read, re-reading
+    // the gate every call. See `cb_core::tool_gate`.
+    if !load_gate().is_enabled(tool_gate::ServerId::Roslyn, tool) {
+        return serve::disabled_tool_answer(tool);
     }
 
     // The `--workspace` scope *is* the boundary. An unscoped install reaches no

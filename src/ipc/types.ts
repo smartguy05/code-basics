@@ -619,6 +619,136 @@ export interface FeatureInfo {
 }
 
 /**
+ * One MCP server's per-tool state for the settings page
+ * (`tool_gate::McpServerToolsInfo`). Keys pinned by
+ * `serialisation_shape_pins_the_wire_keys` in
+ * `crates/core/src/tool_gate/tool_gate_tests.rs`.
+ */
+export interface McpServerToolsInfo {
+  /** Stable server id: `sql`, `tasks`, `roslyn`, `browser`. */
+  id: string;
+  /** Human label for the section heading. */
+  label: string;
+  tools: McpToolInfo[];
+}
+
+/** One tool row on the MCP settings page (`tool_gate::McpToolInfo`). */
+export interface McpToolInfo {
+  /** The tool's wire name, e.g. `sql.query`. */
+  name: string;
+  /** The tool's description, as the server advertises it. */
+  description: string;
+  /** Already resolved: an absent choice is reported as enabled. */
+  enabled: boolean;
+}
+
+// --- Redis plugin (mirrors `cb_core::redis`) --------------------------------
+
+/** The Redis type of a key (`cb_core::redis::model::RedisType`). */
+export type RedisType = "string" | "list" | "set" | "zset" | "hash" | "stream" | "unknown";
+
+/** A redacted Redis connection view (`redis::dsn::RedisConnectionDisplay`). */
+export interface RedisConnectionDisplay {
+  host: string | null;
+  port: number | null;
+  db: number | null;
+  usesTls: boolean;
+  hasPassword: boolean;
+}
+
+/** Where a saved profile's connection string lives — never the string itself. */
+export type RedisSecretView =
+  | { kind: "literal"; display: RedisConnectionDisplay }
+  | { kind: "appSettings"; path: string; key: string }
+  | { kind: "userSecrets"; project: string; key: string }
+  | { kind: "dotEnv"; path: string; key: string };
+
+/** A saved Redis connection as the frontend sees it (`commands::redis`). */
+export interface RedisConnectionView {
+  id: string;
+  name: string;
+  secret: RedisSecretView;
+  holdsASecret: boolean;
+  workspaceRoot: string | null;
+  allowWrites: boolean;
+  exposeToAgents: boolean;
+  userNamed: boolean;
+  createdAtMs: number;
+  lastUsedMs: number | null;
+}
+
+/** Whether a discovered candidate is usable (`redis::discover::CandidateState`). */
+export type RedisCandidateState =
+  | { kind: "ready" }
+  | { kind: "unresolved"; reason: string };
+
+/** One discovered Redis connection (`redis::discover::RedisCandidate`). */
+export interface RedisCandidate {
+  id: string;
+  name: string;
+  origin: string;
+  project: string | null;
+  source: RedisSecretView;
+  display: RedisConnectionDisplay;
+  state: RedisCandidateState;
+}
+
+/** The result of a discovery scan (`redis::discover::Discovery`). */
+export interface RedisDiscovery {
+  candidates: RedisCandidate[];
+  warnings: string[];
+}
+
+/** One key's identity (`redis::model::RedisKeyInfo`). */
+export interface RedisKeyInfo {
+  key: string;
+  type: RedisType;
+  /** ms until expiry; `null` = no expiry. */
+  ttlMs: number | null;
+}
+
+export interface RedisZMember {
+  member: string;
+  score: string;
+}
+export interface RedisHashField {
+  field: string;
+  value: string;
+}
+export interface RedisStreamEntry {
+  id: string;
+  fields: RedisHashField[];
+}
+
+/** A key's value by type (`redis::model::RedisValue`). `truncated` = capped. */
+export type RedisValue =
+  | { kind: "string"; text: string; truncated: boolean }
+  | { kind: "list"; items: string[]; truncated: boolean }
+  | { kind: "set"; members: string[]; truncated: boolean }
+  | { kind: "zSet"; entries: RedisZMember[]; truncated: boolean }
+  | { kind: "hash"; fields: RedisHashField[]; truncated: boolean }
+  | { kind: "stream"; entries: RedisStreamEntry[]; truncated: boolean }
+  | { kind: "none" };
+
+/** One SCAN page (`redis::model::ScanPage`). */
+export interface RedisScanPage {
+  cursor: string;
+  keys: RedisKeyInfo[];
+  complete: boolean;
+}
+
+/** Whether a connection opens (`redis::model::RedisStatusKind`). */
+export type RedisStatusKind =
+  | "ok"
+  | "authFailed"
+  | "unreachable"
+  | "tlsFailed"
+  | "timeout"
+  | "secretUnresolved"
+  | "unparseable"
+  | "failed";
+
+/**
  * One remembered command line from the app launcher (`launcher::Launchable`).
  * Keys pinned by `launchable_serialises_with_camel_case_keys` in
  * `crates/core/src/launcher/model_tests.rs`. `label` is deliberately nullable

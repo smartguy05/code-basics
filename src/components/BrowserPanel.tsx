@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as api from "../ipc/api";
 import { BrowserMcpPanel } from "./BrowserMcpPanel";
+import { slotKey, useRegions } from "./RegionContext";
+import type { Dockable } from "./regionLayoutLogic";
 import type { BrowserSnapshot } from "../ipc/types";
 import {
   clampPanelPosition,
@@ -20,6 +23,7 @@ import {
   clampBrowserTop,
   hiddenPageReason,
   occludedByAbovePanels,
+  occludedByPanels,
   pageRect,
   pageVisible,
   pillLabel,
@@ -140,7 +144,27 @@ export function BrowserPanel({
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
 
+  // Docking. Unlike the DOM panels the page is an OS surface that lives in the
+  // Rust host keyed by root, so docking never moves the page itself — it moves
+  // only the stateless chrome (header, URL bar, consent, the `.browser-page`
+  // placeholder) into the region slot, and the host repaints the page at the
+  // placeholder's new rect via the ordinary `sync`. The page-lifecycle effects
+  // stay at this component's top level, so docking never remounts them.
+  const regions = useRegions();
+  const dockable: Dockable = { kind: "browser", id: "browser" };
+  const regionKey = slotKey(dockable);
+  const wantsDock = regions?.dockedPanels.has("browser") ?? false;
+  const slotNode = wantsDock ? (regions?.slot(regionKey) ?? null) : null;
+  const isDocked = wantsDock && slotNode !== null;
+
   useEffect(() => setMinimized(false), [restoreRequest]);
+
+  // While docked, the region tab strip is the panel's header.
+  useEffect(() => {
+    if (!regions || !isDocked) return;
+    regions.registerMeta(regionKey, { label: "Web", onClose });
+    return () => regions.registerMeta(regionKey, null);
+  }, [regions, isDocked, regionKey, onClose]);
 
   const [pos, setPos] = useState<PanelLayout | undefined>(() => {
     const saved = loadPanelLayout(localStorage, browserLayoutKey(root));
@@ -231,13 +255,24 @@ export function BrowserPanel({
     // floating panel that is stacked *above* this one in the focus order overlaps
     // the page's rect. Raise-aware: a terminal/Notes the browser was raised over no
     // longer blanks the page — clicking the browser really does bring it forward.
+    // Docked: the page sits at the workspace layer, below every floating panel,
+    // so *any* overlapping floating peer occludes it (raise-unaware). Floating:
+    // only a peer stacked above it in the focus order does (raise-aware), which
+    // is what lets a click bring it forward.
+    const peers = peerPanelRects(panelRef.current);
     const occluded =
       occludedByOverlay ||
-      (decision.ok && occludedByAbovePanels(decision.rect, myOffset, peerPanelRects(panelRef.current)));
+      (decision.ok &&
+        (isDocked
+          ? occludedByPanels(decision.rect, peers.map((p) => p.rect))
+          : occludedByAbovePanels(decision.rect, myOffset, peers)));
     const input = {
       state: { open: true, restoreToken: 0 },
       enabled: true,
-      minimized,
+      // A docked panel is never minimized — the region tab strip replaces the
+      // minimize control — so a non-active region tab hides the page through its
+      // 0×0 slot rect (a refused rect) rather than through `minimized`.
+      minimized: isDocked ? false : minimized,
       active,
       setupOpen,
       occluded,
@@ -255,7 +290,14 @@ export function BrowserPanel({
       if (superseded()) return;
       setError(String(e));
     }
-  }, [measure, minimized, active, root, setupOpen, occludedByOverlay, myOffset]);
+  }, [measure, minimized, active, root, setupOpen, occludedByOverlay, myOffset, isDocked]);
+
+  // Re-place the page the instant it docks or undocks, or when the region slot
+  // node changes. `sync` is generation-stamped, so a fast dock→undock abandons
+  // the superseded write rather than leaving the page at a stale rect.
+  useEffect(() => {
+    void sync();
+  }, [isDocked, slotNode, sync]);
 
   // Re-run `sync` when this codebase moves between foreground and background.
   // A switch-away must call `set_visible(false)` deterministically, and a
@@ -563,7 +605,8 @@ export function BrowserPanel({
 
   const restore = useCallback(() => setMinimized(false), []);
   useDockEntry(
-    minimized
+    // A docked browser has no minimize pill — the region tab strip replaces it.
+    minimized && !isDocked
       ? {
           id: dockId(root, "browser"),
           scope: root,
@@ -574,22 +617,24 @@ export function BrowserPanel({
       : null,
   );
 
-  return (
-    <>
-      {/* Minimized pill lives in the shared dock now (see `useDockEntry` above). */}
+  const shell = (
       <div
-        className="review-panel browser-panel"
-        hidden={minimized}
+        className={`review-panel browser-panel${isDocked ? " browser-docked" : ""}`}
+        hidden={minimized && !isDocked}
         ref={panelRef}
         // Capture phase on the root so clicking anywhere in the panel raises it,
         // before the header drag and without preventing the default (drag/URL-bar
         // focus intact). This is the click that finally brings the page forward.
         onPointerDownCapture={raiseBrowser}
-        style={{
-          ...({ "--cb-stack": myOffset } as React.CSSProperties),
-          ...(pos ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" } : {}),
-          ...(size ? { width: size.width, height: size.height } : {}),
-        }}
+        style={
+          isDocked
+            ? undefined
+            : {
+                ...({ "--cb-stack": myOffset } as React.CSSProperties),
+                ...(pos ? { left: pos.left, top: pos.top, right: "auto", bottom: "auto" } : {}),
+                ...(size ? { width: size.width, height: size.height } : {}),
+              }
+        }
       >
         <div className="review-header browser-header" onPointerDown={onHeaderPointerDown}>
           <strong>Web</strong>
@@ -646,6 +691,11 @@ export function BrowserPanel({
           >
             Agents
           </button>
+          {regions && !isDocked && (
+            <button onClick={() => regions.dock(dockable, "right")} title="Dock to the side">
+              ⊟
+            </button>
+          )}
           <button onClick={() => setMinimized(true)} title="Minimize (the page keeps running)">
             —
           </button>
@@ -708,24 +758,36 @@ export function BrowserPanel({
         </div>
 
         {/* Explicit resize handles in the gutter around `.browser-page`, since the
-            OS webview covers the native corner grip. E/S/SE only. */}
-        <div
-          className="browser-resize browser-resize-e"
-          onPointerDown={onResizePointerDown("e")}
-          aria-hidden
-        />
-        <div
-          className="browser-resize browser-resize-s"
-          onPointerDown={onResizePointerDown("s")}
-          aria-hidden
-        />
-        <div
-          className="browser-resize browser-resize-se"
-          onPointerDown={onResizePointerDown("se")}
-          aria-hidden
-        />
+            OS webview covers the native corner grip. E/S/SE only. Docked, the
+            region splitter resizes instead, so these are dropped. */}
+        {!isDocked && (
+          <>
+            <div
+              className="browser-resize browser-resize-e"
+              onPointerDown={onResizePointerDown("e")}
+              aria-hidden
+            />
+            <div
+              className="browser-resize browser-resize-s"
+              onPointerDown={onResizePointerDown("s")}
+              aria-hidden
+            />
+            <div
+              className="browser-resize browser-resize-se"
+              onPointerDown={onResizePointerDown("se")}
+              aria-hidden
+            />
+          </>
+        )}
       </div>
+  );
 
+  return (
+    <>
+      {/* Docked, the stateless shell is portaled into the region slot; the OS
+          page follows the placeholder's rect through `sync`. Floating, it renders
+          in place. The page-lifecycle effects live above and never remount. */}
+      {isDocked && slotNode ? createPortal(shell, slotNode) : shell}
       {setupOpen && <BrowserMcpPanel onClose={() => setSetupOpen(false)} />}
     </>
   );

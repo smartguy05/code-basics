@@ -89,6 +89,24 @@ tool is capability-gated and **abstains** (`Unsupported`) for a language whose s
 not support it; a symbol whose position is ambiguous is refused and listed, never guessed;
 and no internal error text crosses to the agent.
 
+The Redis plugin (`redis/`, opened from the Plugins menu; always-on, no `FeatureId`) is a
+RedisInsight-style panel plus a **write-capable** `mcp-redis` server, modelled on the SQL
+console. It discovers connections from appsettings/user-secrets/`.env` (filesystem only,
+values dropped; it **shares `sql::store::SecretSource`**), browses the keyspace, and views
+and edits string/hash/list/set/zset/stream values. Two separate per-connection consents,
+both off by default: `expose_to_agents` (reads) and `allow_writes` (writes). Redis has no
+server-side read-only mode, so the write gate is structural — a `WriteOp` runs only once
+`redis::ops::plan_write(allow_writes, op)` mints a `WritePlan`, unreachable from any read
+path. The panel itself may always write; `allow_writes` gates only the agent. No connection
+string, path or driver message ever reaches an agent.
+
+Per-**tool** MCP gating lives in `tool_gate/` (user-global `mcp-tools.json`): each of the
+four built-in servers filters its `tools/list` through `tool_gate::filter_descriptors` and
+refuses a disabled-but-known tool at dispatch (re-read per call). It is a **preference, not
+a security boundary** — a missing/corrupt store means every tool on, the opposite of the
+consent stores. Surfaced in Settings → **MCP tools**. Redis is not one of the gated
+`ServerId`s and advertises all its tools.
+
 App-owned shortcuts are declared in `src/shortcutLogic.ts` and dispatched by
 `src/shortcuts.ts`. A command shown in Settings must have a registered handler
 or a stable `data-command` target. Editor and terminal native shortcuts are
@@ -256,6 +274,11 @@ working tree; conflicted files are never offered.
   moved between the float layer and a region slot with `appendChild`. Swapping
   `createPortal`'s container instead *does* remount in React, which closed a docked
   terminal's PTY and discarded a docked editor's CodeMirror/LSP state (the bug this fixes).
+  The **SQL console and browser dock too** (`DockableKind` gained `"sql"`/`"browser"`,
+  `pruneLayout` takes a per-kind `valid` map): SQL rides `StablePortal` like an editor; the
+  browser keeps its page-lifecycle effects top-level (never remount) and moves only its
+  stateless chrome via `createPortal`, the OS page following the placeholder rect through
+  `browser_set_bounds` — so docking it needs **no Rust change**.
 - Anything that shows or positions that surface must be **generation-stamped and
   abandon its writes when superseded**, checked before *each* write rather than
   once. `sync()` awaits a scale factor and two IPC calls having captured

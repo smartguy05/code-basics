@@ -5954,3 +5954,134 @@ button.danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
   border-style: dashed;
 }
+
+/* MCP tools settings page */
+.mcp-tools-page .mcp-server {
+  margin-bottom: 1.25rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+.mcp-server-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.mcp-server-head h3 {
+  margin: 0;
+}
+.mcp-server-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85em;
+}
+.mcp-server-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.4rem 0;
+}
+.mcp-tool-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.mcp-tool-row {
+  padding: 0.25rem 0;
+}
+.mcp-tool-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-code, monospace);
+}
+.mcp-tool-desc {
+  display: block;
+  margin-left: 1.6rem;
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
+/* SQL console docking. The console body fills the floating panel; when docked,
+   SqlView is portaled into the region slot instead and the two fixed overlays it
+   renders (connection picker, writes confirmation) are scoped to the region so
+   they no longer cover the whole app. */
+.sql-panel .sql-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.sql-embed {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  min-height: 0;
+}
+.sql-docked {
+  position: absolute;
+  inset: 0;
+}
+.sql-docked .modal-backdrop,
+.sql-docked .sql-conn-overlay {
+  position: absolute;
+}
+
+/* Browser docked into a region: fill the slot, drop the floating chrome. The OS
+   page follows the `.browser-page` placeholder's rect, so only the DOM frame
+   needs restyling here. */
+.browser-panel.browser-docked {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+/* Redis plugin panel */
+.redis-panel { width: 720px; height: 520px; }
+.redis-body { display: flex; flex: 1; min-height: 0; }
+.redis-connections {
+  width: 280px;
+  border-right: 1px solid var(--border);
+  overflow: auto;
+  padding: 0.5rem;
+}
+.redis-value { flex: 1; overflow: auto; padding: 0.5rem 0.75rem; min-width: 0; }
+.redis-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin: 0.25rem 0;
+}
+.redis-conn-list, .redis-key-list { list-style: none; margin: 0; padding: 0; }
+.redis-conn-list li, .redis-key-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.3rem;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+.redis-conn-list li.active, .redis-key-list li.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.redis-conn-name, .redis-key-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.redis-conn-list label { display: inline-flex; align-items: center; gap: 0.15rem; font-size: 0.8em; }
+.redis-scan { display: flex; gap: 0.3rem; margin: 0.4rem 0; }
+.redis-scan input { flex: 1; }
+.redis-type {
+  font-size: 0.7em;
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  background: var(--bg-alt, rgba(127,127,127,0.2));
+  text-transform: uppercase;
+}
+.redis-value-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+.redis-elems { margin: 0.3rem 0; padding-left: 1.2rem; }
+.redis-elems li { display: flex; gap: 0.4rem; align-items: center; }
+.redis-add { display: flex; gap: 0.3rem; margin-top: 0.5rem; flex-wrap: wrap; }
+.redis-string-edit textarea { width: 100%; font-family: var(--font-code, monospace); }

@@ -28,6 +28,7 @@ import type {
   EnhancementInfo,
   ErosionReport,
   FeatureInfo,
+  McpServerToolsInfo,
   FileContents,
   FileDiff,
   InspectGraph,
@@ -67,6 +68,12 @@ import type {
   SearchScope,
   SqlConnectionProfile,
   SqlConnectionView,
+  RedisConnectionView,
+  RedisDiscovery,
+  RedisScanPage,
+  RedisValue,
+  RedisKeyInfo,
+  RedisStatusKind,
   SqlColumnView,
   SqlObjectView,
   SqlDiscovery,
@@ -239,6 +246,17 @@ export const listFeatures = () => invoke<FeatureInfo[]>("list_features");
  */
 export const setFeature = (id: string, enabled: boolean) =>
   invoke<FeatureInfo[]>("set_feature", { id, enabled });
+
+/** Every MCP server with its tools and their enabled state. */
+export const listMcpTools = () =>
+  invoke<McpServerToolsInfo[]>("list_mcp_tools");
+
+/**
+ * Switch one MCP tool on or off. Returns the whole list as persisted, so the
+ * caller re-renders from what was actually written, not what it hoped to write.
+ */
+export const setMcpTool = (server: string, tool: string, enabled: boolean) =>
+  invoke<McpServerToolsInfo[]>("set_mcp_tool", { server, tool, enabled });
 
 /** Read the global notes file. Missing/unreadable yields an empty set. */
 export const readNotes = () => invoke<NotesFile>("read_notes");
@@ -1402,6 +1420,85 @@ export const sqlSetAllowWrites = (id: string, allowWrites: boolean) =>
  */
 export const sqlSetExposeToAgents = (id: string, exposeToAgents: boolean) =>
   invoke<SqlConnectionView[]>("sql_set_expose_to_agents", { id, exposeToAgents });
+
+// --- Redis plugin -----------------------------------------------------------
+
+export const redisListConnections = () =>
+  invoke<RedisConnectionView[]>("redis_list_connections");
+
+export const redisDiscover = (root: string) =>
+  invoke<RedisDiscovery>("redis_discover", { root });
+
+export const redisSaveConnection = (connection: unknown) =>
+  invoke<RedisConnectionView[]>("redis_save_connection", { connection });
+
+export const redisDeleteConnection = (id: string) =>
+  invoke<RedisConnectionView[]>("redis_delete_connection", { id });
+
+export const redisRenameConnection = (id: string, name: string) =>
+  invoke<RedisConnectionView[]>("redis_rename_connection", { id, name });
+
+export const redisSetAllowWrites = (id: string, allowWrites: boolean) =>
+  invoke<RedisConnectionView[]>("redis_set_allow_writes", { id, allowWrites });
+
+export const redisSetExposeToAgents = (id: string, exposeToAgents: boolean) =>
+  invoke<RedisConnectionView[]>("redis_set_expose_to_agents", { id, exposeToAgents });
+
+export const redisTestConnection = (id: string) =>
+  invoke<RedisStatusKind>("redis_test_connection", { id });
+
+export const redisScanKeys = (
+  id: string,
+  match: string | null,
+  cursor: string | null,
+  count: number | null,
+) => invoke<RedisScanPage>("redis_scan_keys", { id, match, cursor, count });
+
+export const redisGetKey = (id: string, key: string) =>
+  invoke<RedisValue>("redis_get_key", { id, key });
+
+export const redisKeyInfo = (id: string, key: string) =>
+  invoke<RedisKeyInfo>("redis_key_info", { id, key });
+
+export const redisSetString = (id: string, key: string, value: string, ttlMs: number | null) =>
+  invoke<void>("redis_set_string", { id, key, value, ttlMs });
+
+export const redisHashSet = (id: string, key: string, field: string, value: string) =>
+  invoke<void>("redis_hash_set", { id, key, field, value });
+
+export const redisHashDelete = (id: string, key: string, field: string) =>
+  invoke<void>("redis_hash_delete", { id, key, field });
+
+export const redisListPush = (id: string, key: string, value: string, front: boolean) =>
+  invoke<void>("redis_list_push", { id, key, value, front });
+
+export const redisListRemove = (id: string, key: string, value: string, count: number) =>
+  invoke<void>("redis_list_remove", { id, key, value, count });
+
+export const redisSetAdd = (id: string, key: string, member: string) =>
+  invoke<void>("redis_set_add", { id, key, member });
+
+export const redisSetRemove = (id: string, key: string, member: string) =>
+  invoke<void>("redis_set_remove", { id, key, member });
+
+export const redisZsetAdd = (id: string, key: string, member: string, score: number) =>
+  invoke<void>("redis_zset_add", { id, key, member, score });
+
+export const redisZsetRemove = (id: string, key: string, member: string) =>
+  invoke<void>("redis_zset_remove", { id, key, member });
+
+export const redisStreamAdd = (
+  id: string,
+  key: string,
+  entryId: string | null,
+  fields: [string, string][],
+) => invoke<void>("redis_stream_add", { id, key, entryId, fields });
+
+export const redisDeleteKey = (id: string, key: string) =>
+  invoke<void>("redis_delete_key", { id, key });
+
+export const redisExpire = (id: string, key: string, ttlMs: number | null) =>
+  invoke<void>("redis_expire", { id, key, ttlMs });
 
 /**
  * Open the connection, prove a database is behind it, ask its version, and

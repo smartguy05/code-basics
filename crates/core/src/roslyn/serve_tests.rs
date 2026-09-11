@@ -5,11 +5,41 @@ fn the_handshake_lists_every_tool() {
     let result = initialize_result(None);
     assert_eq!(result.server_info.name, SERVER_NAME);
     assert!(result.capabilities.tools.is_some());
-    let listed = tools_list_result();
+    let listed = tools_list_result(&crate::tool_gate::ToolGateFile::default());
     assert_eq!(
         listed["tools"].as_array().unwrap().len(),
         crate::roslyn::tools::ALL.len()
     );
+}
+
+#[test]
+fn a_disabled_tool_is_dropped_from_the_listing() {
+    let mut gate = crate::tool_gate::ToolGateFile::default();
+    let first = crate::roslyn::tools::ALL[0];
+    gate.set(crate::tool_gate::ServerId::Roslyn, first, false);
+    let listed = tools_list_result(&gate);
+    let names: Vec<&str> = listed["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        !names.contains(&first),
+        "the disabled tool is not advertised"
+    );
+    assert_eq!(names.len(), crate::roslyn::tools::ALL.len() - 1);
+}
+
+#[test]
+fn a_disabled_tool_answer_is_a_refusal_with_the_shared_code() {
+    let answer = disabled_tool_answer("find_references");
+    assert!(!answer.ok);
+    assert_eq!(
+        answer.code.as_deref(),
+        Some(crate::tool_gate::DISABLED_CODE)
+    );
+    assert!(answer.text.contains("find_references"));
 }
 
 #[test]
