@@ -241,6 +241,19 @@ pub enum StageTarget {
     WorkingTree,
 }
 
+/// Files larger than this are treated as binary by every diff: their content is
+/// never read, so they come back with no hunks and `is_binary` set.
+///
+/// git only auto-flags a file binary when it *looks* binary or exceeds its
+/// 512&nbsp;MB `core.bigFileThreshold`; a large text file — a checked-in SQL dump,
+/// a log, a generated bundle — slips through and is expanded line by line. One
+/// 368&nbsp;MB untracked `backup.sql` in the working tree turned every 2&nbsp;s
+/// diff poll into a multi-gigabyte, minute-long stall, since `diff_all` reads
+/// untracked content and attribution, grouping, erosion, IPC and the editor each
+/// copy every line. 5&nbsp;MiB is far above any file a human reviews line by line
+/// and leaves ordinary generated sources (a 0.8&nbsp;MB migration) fully diffable.
+const MAX_DIFF_FILE_BYTES: i64 = 5 * 1024 * 1024;
+
 /// A git repository.
 pub struct Repo {
     inner: git2::Repository,
@@ -445,6 +458,9 @@ impl Repo {
             .include_untracked(true)
             .recurse_untracked_dirs(true)
             .show_untracked_content(true)
+            // A file past this is reported binary — never expanded to lines. See
+            // MAX_DIFF_FILE_BYTES for why.
+            .max_size(MAX_DIFF_FILE_BYTES)
             // Enough surrounding lines to orient a reviewer without turning
             // small edits into whole-file views.
             .context_lines(3);
@@ -469,6 +485,9 @@ impl Repo {
             .include_untracked(true)
             .recurse_untracked_dirs(true)
             .show_untracked_content(true)
+            // See MAX_DIFF_FILE_BYTES: one huge untracked file (a SQL dump, a
+            // log) would otherwise be read and expanded on every poll.
+            .max_size(MAX_DIFF_FILE_BYTES)
             .context_lines(3);
 
         let diff = self.build_diff(mode, &mut options)?;
@@ -967,6 +986,16 @@ impl Repo {
         Ok(out)
     }
 
+    /// Whether git ignores this workspace-relative path.
+    ///
+    /// Used to spot intent records for files that are not — and will never be —
+    /// in HEAD (a `.memories/` report regenerated every run), which the content
+    /// retirement rule can never absorb and which would otherwise grow the store
+    /// without bound. A path git cannot judge is treated as not ignored.
+    pub fn is_path_ignored(&self, relative: &str) -> bool {
+        self.inner.is_path_ignored(relative).unwrap_or(false)
+    }
+
     pub fn create_branch(&self, name: &str, checkout: bool) -> Result<()> {
         let head = self.inner.head().context("failed to resolve HEAD")?;
         let commit = head.peel_to_commit().context("HEAD is not a commit")?;
@@ -1179,7 +1208,7 @@ impl Repo {
         let parent = commit.parent(0).ok().and_then(|p| p.tree().ok());
 
         let mut options = git2::DiffOptions::new();
-        options.context_lines(3);
+        options.context_lines(3).max_size(MAX_DIFF_FILE_BYTES);
 
         let diff = self
             .inner

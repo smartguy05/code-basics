@@ -244,9 +244,36 @@ fn anchor_set(lines: &[String]) -> HashSet<String> {
     lines.iter().filter_map(|l| anchor_key(l)).collect()
 }
 
+/// The anchorable forms of a HEAD blob's lines, computed straight from the text.
+///
+/// Kept separate from [`anchor_set`] so it never materialises the intermediate
+/// `Vec<String>` copy of the whole file: this is built once per path in
+/// [`plan`], not once per record, and the file can be large.
+fn anchor_set_of_blob(blob: &str) -> HashSet<String> {
+    blob.lines().filter_map(anchor_key).collect()
+}
+
 /// Decide whether one record has been absorbed by HEAD. See the module docs for
 /// the rule and why both halves are required.
+///
+/// Convenience wrapper that derives the HEAD anchor set for this one record;
+/// [`plan`] uses [`verdict_with`] instead so the set is built once per path
+/// rather than once per record.
 pub fn verdict(record: &IntentRecord, snapshot: &FileSnapshot) -> Verdict {
+    let head_anchors = snapshot.head_blob.as_deref().map(anchor_set_of_blob);
+    verdict_with(record, snapshot, head_anchors.as_ref())
+}
+
+/// [`verdict`] with the HEAD anchor set supplied by the caller.
+///
+/// `head_anchors` is `Some` exactly when `snapshot.head_blob` is `Some`, and
+/// holds that blob's [`anchor_set_of_blob`]. Passing it in is what turns the
+/// per-record HEAD-blob reparse into a per-path one.
+fn verdict_with(
+    record: &IntentRecord,
+    snapshot: &FileSnapshot,
+    head_anchors: Option<&HashSet<String>>,
+) -> Verdict {
     if !snapshot.readable {
         return Verdict::Keep(KeepReason::Unreadable);
     }
@@ -269,7 +296,7 @@ pub fn verdict(record: &IntentRecord, snapshot: &FileSnapshot) -> Verdict {
         return Verdict::Keep(KeepReason::NoEvidence);
     }
 
-    let Some(blob) = snapshot.head_blob.as_deref() else {
+    let Some(in_head) = head_anchors else {
         // The file is not at HEAD at all. If it is not in the working tree
         // either it is simply gone, and there is nothing left for this record to
         // label; otherwise it is new and uncommitted, so the record is live.
@@ -279,8 +306,6 @@ pub fn verdict(record: &IntentRecord, snapshot: &FileSnapshot) -> Verdict {
             Verdict::Retire
         };
     };
-
-    let in_head = anchor_set(&blob.lines().map(str::to_string).collect::<Vec<_>>());
 
     // Full absorption: HEAD accounts for every line of the evidence. Judged
     // against HEAD alone — see the module docs for why the working diff must
@@ -311,8 +336,17 @@ pub fn verdict(record: &IntentRecord, snapshot: &FileSnapshot) -> Verdict {
 /// A record whose path has no snapshot is always kept — never decide about a
 /// path nobody looked at.
 pub fn plan(intents: &Intents, snapshots: &[FileSnapshot]) -> RetirePlan {
-    let by_path: HashMap<&str, &FileSnapshot> =
-        snapshots.iter().map(|s| (s.path.as_str(), s)).collect();
+    // Build each file's HEAD anchor set exactly once. Doing it inside `verdict`
+    // rebuilt the whole blob for every record on the path — O(records × filesize)
+    // where a single hot file carried hundreds of records — which is what made an
+    // Intent refresh over a large store balloon.
+    let by_path: HashMap<&str, (&FileSnapshot, Option<HashSet<String>>)> = snapshots
+        .iter()
+        .map(|s| {
+            let anchors = s.head_blob.as_deref().map(anchor_set_of_blob);
+            (s.path.as_str(), (s, anchors))
+        })
+        .collect();
 
     let mut records = Vec::new();
     let mut surviving_turns: HashSet<&str> = HashSet::new();
@@ -320,7 +354,7 @@ pub fn plan(intents: &Intents, snapshots: &[FileSnapshot]) -> RetirePlan {
     for (index, record) in intents.records.iter().enumerate() {
         let retire = by_path
             .get(record.path.as_str())
-            .map(|s| verdict(record, s) == Verdict::Retire)
+            .map(|(s, anchors)| verdict_with(record, s, anchors.as_ref()) == Verdict::Retire)
             .unwrap_or(false);
 
         if retire {
@@ -563,10 +597,30 @@ pub fn run_if_head_moved(repo: &Repo, root: &Path) -> Result<RetireSummary> {
         return Ok(RetireSummary::default());
     };
 
-    // Run the conservative content verdict on every Intent load. This also
-    // catches stale records imported after the HEAD baseline was established;
-    // an unchanged ref alone cannot prove the live store is unchanged.
+    // The Intent view polls this every couple of seconds. Running the full
+    // content verdict — a whole-store load, a HEAD-blob read per path, and the
+    // plan — on every one of those ticks is what made the tab balloon; on an
+    // unchanged HEAD it can absorb nothing new, so it is exactly the no-op the
+    // caller's comment always claimed it was. The first look (`last_head` unset)
+    // still runs, so a backlog left by an older app version is cleaned once.
+    let last_head = load_state(root).last_head;
+    if !should_run_content_check(last_head.as_deref(), &head) {
+        return Ok(RetireSummary {
+            head: Some(head),
+            ..Default::default()
+        });
+    }
+
     execute(repo, root, Some(head))
+}
+
+/// Whether the conservative content verdict should run for this HEAD.
+///
+/// It can absorb records only when HEAD has moved since the last prune, so an
+/// unchanged ref is a no-op. `None` — never pruned — always runs, so the first
+/// look cleans any backlog an older version left behind.
+fn should_run_content_check(last_head: Option<&str>, head: &str) -> bool {
+    last_head != Some(head)
 }
 
 /// Preview the backlog prune: the same decision, run without requiring HEAD to
@@ -597,6 +651,174 @@ pub fn run_now(repo: &Repo, root: &Path) -> Result<RetireSummary> {
     execute(repo, root, repo.head_oid().ok())
 }
 
+// ---------------------------------------------------------------------------
+// Bounding the store by branch
+// ---------------------------------------------------------------------------
+
+/// Which records to archive when bounding the store, split by how permanent the
+/// removal is.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ArchiveStalePlan {
+    /// Indices of records whose branch no longer exists. Archived but *not*
+    /// tombstoned: the branch may be recreated, and re-mining the agent's own
+    /// session files legitimately restores them.
+    pub branch_stale: Vec<usize>,
+    /// Indices of whole-file records for git-ignored paths (a `.memories/`
+    /// report regenerated every run). Content retirement can never absorb these
+    /// — the file is never in HEAD — so they grow the store without bound.
+    /// Archived *and* tombstoned, so a re-mine does not simply re-add them.
+    pub ignored_whole_file: Vec<usize>,
+}
+
+impl ArchiveStalePlan {
+    fn is_empty(&self) -> bool {
+        self.branch_stale.is_empty() && self.ignored_whole_file.is_empty()
+    }
+
+    /// Every index this plan removes, ascending.
+    fn all(&self) -> Vec<usize> {
+        let mut out: Vec<usize> = self
+            .branch_stale
+            .iter()
+            .chain(&self.ignored_whole_file)
+            .copied()
+            .collect();
+        out.sort_unstable();
+        out
+    }
+}
+
+/// Decide which records to archive to bound the store.
+///
+/// A record is judged by two facts the store never bounds on its own: the branch
+/// it was recorded on, and whether its file is one git ignores. `is_ignored` is
+/// a closure so this stays pure and the caller can memoise the per-path git
+/// query. A record with no recorded branch is kept — its origin is unknown, and
+/// a wrong removal is worse than a large store.
+pub fn plan_archive_stale(
+    records: &[IntentRecord],
+    live_branches: &BTreeSet<String>,
+    mut is_ignored: impl FnMut(&str) -> bool,
+) -> ArchiveStalePlan {
+    let mut plan = ArchiveStalePlan::default();
+
+    for (index, record) in records.iter().enumerate() {
+        // The permanent case wins: a git-ignored whole-file write is unretireable
+        // regardless of which branch it sits on.
+        if record.edit.whole_file && is_ignored(&normalise_path(&record.path)) {
+            plan.ignored_whole_file.push(index);
+            continue;
+        }
+
+        let stale = record
+            .branch
+            .as_deref()
+            .is_some_and(|b| !live_branches.contains(b));
+        if stale {
+            plan.branch_stale.push(index);
+        }
+    }
+
+    plan
+}
+
+/// The set of branches whose records are worth keeping hot: every local branch,
+/// plus the current one. Remote-tracking branches are excluded — a record's
+/// `branch` field is a local checkout name.
+pub fn live_branches(repo: &Repo) -> BTreeSet<String> {
+    let mut live: BTreeSet<String> = repo
+        .branches()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|b| !b.is_remote)
+        .map(|b| b.name)
+        .collect();
+    if let Some(current) = repo.status().ok().and_then(|s| s.branch) {
+        live.insert(current);
+    }
+    live
+}
+
+/// Archive records whose branch is gone and whole-file records for ignored
+/// paths, shrinking `edits.jsonl` so the Intent view is not walking every branch
+/// ever worked. Recoverable branch records are archived only; unretireable
+/// ignored ones are tombstoned too. A no-op when nothing is stale.
+pub fn archive_stale(repo: &Repo, root: &Path) -> Result<usize> {
+    let Some(_lock) = PruneLock::acquire(root) else {
+        return Ok(0);
+    };
+
+    let intents_all = intents::load(root, &LoadOptions::default())?;
+    let live = live_branches(repo);
+
+    // One git-ignore query per distinct path, not per record.
+    let mut ignored: HashMap<String, bool> = HashMap::new();
+    let plan = plan_archive_stale(&intents_all.records, &live, |path| {
+        *ignored
+            .entry(path.to_string())
+            .or_insert_with(|| repo.is_path_ignored(path))
+    });
+
+    if plan.is_empty() {
+        return Ok(0);
+    }
+
+    let head = repo.head_oid().ok();
+    let removed_indices = plan.all();
+    let removing: Vec<&IntentRecord> = removed_indices
+        .iter()
+        .map(|i| &intents_all.records[*i])
+        .collect();
+    let tombstoning: Vec<&IntentRecord> = plan
+        .ignored_whole_file
+        .iter()
+        .map(|i| &intents_all.records[*i])
+        .collect();
+
+    // Labels whose turn no longer survives on any kept record.
+    let removed_ids: HashSet<&str> = removing.iter().map(|r| r.tool_use_id.as_str()).collect();
+    let surviving_turns: HashSet<&str> = intents_all
+        .records
+        .iter()
+        .filter(|r| !removed_ids.contains(r.tool_use_id.as_str()))
+        .map(|r| r.turn_id.as_str())
+        .collect();
+    let orphan_labels: Vec<&IntentLabel> = intents_all
+        .labels
+        .iter()
+        .filter(|l| !surviving_turns.contains(l.turn_id.as_str()))
+        .collect();
+
+    // Archive first, then tombstone, then rewrite — the same crash-safe order
+    // `execute` uses: a crash leaves a superset archived and the log intact.
+    let archived: Vec<ArchivedRecord> = removing
+        .iter()
+        .map(|r| ArchivedRecord {
+            record: (*r).clone(),
+            retired_at_head: head.clone(),
+        })
+        .collect();
+    append_lines(&archive_path(root), &archived)?;
+    append_lines(&label_archive_path(root), &orphan_labels)?;
+    append_lines(&tombstone_path(root), &tombstones_for(&tombstoning))?;
+
+    // Preserve the high-water mark before the records that carry it leave.
+    let file_high = intents_all.records.iter().map(|r| r.seq).max().unwrap_or(0);
+    let mut state = load_state(root);
+    state.high_seq = state.high_seq.max(file_high);
+
+    let orphan_turns: HashSet<&str> = orphan_labels.iter().map(|l| l.turn_id.as_str()).collect();
+    rewrite_jsonl(&intents::edits_path(root), |line: &IntentRecord| {
+        !removed_ids.contains(line.tool_use_id.as_str())
+    })?;
+    rewrite_jsonl(&intents::labels_path(root), |line: &IntentLabel| {
+        !orphan_turns.contains(line.turn_id.as_str())
+    })?;
+    save_state(root, &state)?;
+
+    Ok(removing.len())
+}
+
 fn execute(repo: &Repo, root: &Path, head: Option<String>) -> Result<RetireSummary> {
     let Some(_lock) = PruneLock::acquire(root) else {
         // Another prune is mid-rewrite. Skipping is always safe: the same
@@ -617,15 +839,17 @@ fn execute(repo: &Repo, root: &Path, head: Option<String>) -> Result<RetireSumma
         .iter()
         .map(|r| normalise_path(&r.path))
         .collect();
+    // The records we just loaded are the same lines `next_seq` would re-parse the
+    // file to find; take the high-water mark from them rather than reading the
+    // 10&nbsp;MB log a second (and third) time on every prune.
+    let file_high = intents_all.records.iter().map(|r| r.seq).max().unwrap_or(0);
     let snapshots = snapshot(repo, root, &paths)?;
     let outcome = plan(&intents_all, &snapshots);
 
     if outcome.records.is_empty() && outcome.labels.is_empty() {
         let mut state = load_state(root);
         state.last_head = head.clone();
-        state.high_seq = state
-            .high_seq
-            .max(intents::next_seq(root).saturating_sub(1));
+        state.high_seq = state.high_seq.max(file_high);
         save_state(root, &state)?;
         return Ok(RetireSummary {
             kept_records: outcome.kept,
@@ -664,9 +888,7 @@ fn execute(repo: &Repo, root: &Path, head: Option<String>) -> Result<RetireSumma
     // file, so a prune that lowered the max would hand out colliding sequence
     // numbers and break "later edits win".
     let mut state = load_state(root);
-    state.high_seq = state
-        .high_seq
-        .max(intents::next_seq(root).saturating_sub(1));
+    state.high_seq = state.high_seq.max(file_high);
 
     let retired_ids: HashSet<&str> = retiring.iter().map(|r| r.tool_use_id.as_str()).collect();
     let retired_turns: HashSet<&str> = retiring_labels.iter().map(|l| l.turn_id.as_str()).collect();

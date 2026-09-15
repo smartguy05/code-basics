@@ -235,6 +235,99 @@ fn a_tombstone_does_not_reject_the_same_call_editing_a_different_file() {
     assert_eq!(reject_tombstoned(&mut mined, &tombs), 0);
 }
 
+// --- bounding the store by branch ------------------------------------------
+
+fn rec_on(tool: &str, path: &str, branch: Option<&str>, whole_file: bool) -> IntentRecord {
+    IntentRecord {
+        branch: branch.map(str::to_string),
+        edit: IntentEdit {
+            old_lines: Vec::new(),
+            new_lines: vec![A.into()],
+            whole_file,
+        },
+        ..rec(tool, path, &[A], &[])
+    }
+}
+
+fn live(names: &[&str]) -> BTreeSet<String> {
+    names.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn records_on_a_dead_branch_are_archived_recoverably() {
+    let records = vec![
+        rec_on("t:0", "a.rs", Some("feature-gone"), false),
+        rec_on("t:1", "b.rs", Some("main"), false),
+    ];
+    let plan = plan_archive_stale(&records, &live(&["main"]), |_| false);
+    assert_eq!(plan.branch_stale, vec![0]);
+    assert!(plan.ignored_whole_file.is_empty());
+}
+
+#[test]
+fn a_record_with_no_branch_is_never_archived() {
+    // Origin unknown: a wrong removal is worse than a large store.
+    let records = vec![rec_on("t:0", "a.rs", None, false)];
+    let plan = plan_archive_stale(&records, &live(&["main"]), |_| false);
+    assert!(plan.branch_stale.is_empty() && plan.ignored_whole_file.is_empty());
+}
+
+#[test]
+fn a_whole_file_write_to_an_ignored_path_is_tombstoned_even_on_a_live_branch() {
+    // The `.memories/*.html` case: never in HEAD, so never retired on content,
+    // and re-mined every run — the permanent-removal path wins over the branch.
+    let records = vec![rec_on("t:0", ".memories/r.html", Some("main"), true)];
+    let plan = plan_archive_stale(&records, &live(&["main"]), |p| p.starts_with(".memories"));
+    assert_eq!(plan.ignored_whole_file, vec![0]);
+    assert!(plan.branch_stale.is_empty());
+}
+
+#[test]
+fn a_tracked_whole_file_write_is_left_alone() {
+    let records = vec![rec_on("t:0", "src/app.rs", Some("main"), true)];
+    let plan = plan_archive_stale(&records, &live(&["main"]), |_| false);
+    assert!(plan.branch_stale.is_empty() && plan.ignored_whole_file.is_empty());
+}
+
+// --- the HEAD-move gate ----------------------------------------------------
+
+#[test]
+fn the_content_check_is_skipped_when_head_has_not_moved() {
+    // The Intent poll fires every couple of seconds; on an unchanged HEAD the
+    // verdict can absorb nothing, so it must be a no-op rather than a whole-store
+    // scan.
+    assert!(!should_run_content_check(Some("abc123"), "abc123"));
+}
+
+#[test]
+fn the_content_check_runs_when_head_moves_or_was_never_seen() {
+    assert!(should_run_content_check(Some("abc123"), "def456"));
+    // Never pruned: run once so an older version's backlog is cleaned.
+    assert!(should_run_content_check(None, "abc123"));
+}
+
+// --- the per-path anchor set (hoisted out of the per-record loop) -----------
+
+#[test]
+fn many_records_on_one_path_are_judged_against_the_same_head_blob() {
+    // `plan` builds each file's HEAD anchor set once and shares it across every
+    // record on that path; the verdicts must match the per-record `verdict`.
+    let head = format!("fn main() {{\n{A}\n{B}\n}}\n");
+    let intents = Intents {
+        records: vec![
+            rec("t:0", "a.rs", &[A], &[]),            // absorbed
+            rec("t:1", "a.rs", &[B], &[]),            // absorbed
+            rec("t:2", "a.rs", &["let z = 1;"], &[]), // not in head
+        ],
+        labels: Vec::new(),
+    };
+    let snapshots = vec![snap("a.rs", Some(&head), &[], &[])];
+    let outcome = plan(&intents, &snapshots);
+    // First two retire, the third is kept.
+    assert_eq!(outcome.records, vec![0, 1]);
+    assert_eq!(outcome.kept, 1);
+}
+
 #[test]
 fn serialisation_shape_pins_the_wire_keys() {
     // `RetireSummary` crosses IPC; these are the exact keys `types.ts` mirrors.

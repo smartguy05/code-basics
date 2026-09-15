@@ -216,12 +216,22 @@ deliberately — the symptom being fixed is committed text reappearing as an
 addition, so a "still in the diff" test would keep precisely the records that
 need retiring.
 
-The conservative content verdict runs whenever the Intent view loads, including
-the first look at a workspace and refreshes where HEAD itself did not move. That
-covers a commit typed in a floating terminal, an amend, a rebase, and stale
-records imported after the baseline was established. **Archive absorbed
-intents…** remains available for an explicit preview and confirmation; both its
-preview and archive phases show progress, and the result reports what was moved.
+The conservative content verdict runs on the first look at a workspace and
+whenever `HEAD` moves — a commit typed in a floating terminal, an amend, a
+rebase. The Intent view polls every couple of seconds, so on an unchanged `HEAD`,
+where the verdict could absorb nothing anyway, it is a cheap no-op rather than a
+whole-store scan; running it on every tick was what made the tab slow and
+memory-hungry on a large history. **Archive absorbed intents…** remains
+available for an explicit preview and confirmation; both its preview and archive
+phases show progress, and the result reports what was moved.
+
+The store is also bounded by branch. When a workspace opens, records recorded on
+a branch that no longer exists locally are archived (recoverable — importing past
+sessions restores them), so the store does not carry a turn's worth of records
+for every branch you ever worked. Whole-file writes to git-ignored files — a
+`.memories/` report regenerated every run, which a commit can never absorb — are
+never recorded, and any already in the store are archived and tombstoned so a
+re-import does not bring them back.
 
 ## When it will not label something
 

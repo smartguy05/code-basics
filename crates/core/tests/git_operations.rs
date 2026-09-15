@@ -148,6 +148,32 @@ fn diffs_the_working_copy_against_head() {
 }
 
 #[test]
+fn an_oversized_text_file_is_reported_binary_and_never_expanded() {
+    // A large untracked text file (a SQL dump, a log) must not be read and
+    // expanded line by line — that turned every diff poll into a multi-GB stall.
+    // git only auto-flags a file binary when it looks binary or clears its
+    // 512 MB threshold, so the diff options cap it explicitly (MAX_DIFF_FILE_BYTES,
+    // 5 MiB). A small file next to it must still diff normally.
+    let dir = init_repo(&[("small.txt", NUMBERED)]);
+    let path = dir.path();
+
+    // ~6 MiB of plain ASCII, above the 5 MiB cap, left untracked.
+    let big = "SELECT 1;\n".repeat(700_000);
+    write(path, "dump.sql", &big);
+    write(path, "small.txt", "one\nTWO\nthree\nfour\nfive\n");
+
+    let repo = Repo::open(path).unwrap();
+    let diffs = repo.diff_all(ComparisonMode::WorkingToHead).unwrap();
+
+    let dump = diffs.iter().find(|d| d.path == "dump.sql").unwrap();
+    assert!(dump.is_binary, "the oversized file must be reported binary");
+    assert!(dump.hunks.is_empty(), "its content must never be expanded");
+
+    let small = diffs.iter().find(|d| d.path == "small.txt").unwrap();
+    assert!(!small.is_binary && !small.hunks.is_empty());
+}
+
+#[test]
 fn the_three_comparison_modes_see_different_things() {
     let dir = init_repo(&[("f.txt", NUMBERED)]);
     let path = dir.path();

@@ -212,6 +212,11 @@ export function useChangesModel({
   const busyRef = useRef(false);
   const statusSignature = useRef<string | null>(null);
   const intentSignature = useRef<string | null>(null);
+  // The intent recompute can take longer than the 2s poll on a large store; a
+  // tick that fires while the previous one is still running must be dropped, or
+  // the heavy backend work stacks up and its transient allocations pile on top of
+  // each other.
+  const intentInFlight = useRef(false);
   const erosionSignature = useRef<string | null>(null);
   const coverageSignature = useRef<string | null>(null);
   busyRef.current = busy;
@@ -263,12 +268,16 @@ export function useChangesModel({
    */
   const refreshIntent = useCallback(async () => {
     if (grouping !== "intent") return;
+    // Drop this tick if the previous recompute has not returned yet — see
+    // `intentInFlight`.
+    if (intentInFlight.current) return;
     // Show the "Loading intents" state only when there is nothing to show yet:
     // the very first load, or after a mode switch (which nulls the signature).
     // Every 2s poll tick calls this too, and toggling the flag on each one made
     // the indicator flash constantly even when the de-churn found no change.
     const firstLoad = intentSignature.current === null;
     if (firstLoad) setIntentLoading(true);
+    intentInFlight.current = true;
     try {
       const [review, captureStatus] = await Promise.all([
         api.intentGroups(mode),
@@ -289,6 +298,7 @@ export function useChangesModel({
     } catch (e) {
       setError(api.errorMessage(e));
     } finally {
+      intentInFlight.current = false;
       if (firstLoad) setIntentLoading(false);
     }
   }, [grouping, mode]);

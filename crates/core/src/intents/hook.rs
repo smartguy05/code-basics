@@ -304,7 +304,10 @@ fn ingest_edit(root: &Path, provider: ProviderId, payload: &Value) -> Result<usi
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let branch = current_branch(root);
+    // Opened once and reused for the branch and the ignore check below, rather
+    // than reopening per edit.
+    let repo = crate::git::Repo::open(root).ok();
+    let branch = repo.as_ref().and_then(|r| r.status().ok()?.branch);
     let mut seq = next_seq(root);
     let mut written = 0;
 
@@ -313,6 +316,18 @@ fn ingest_edit(root: &Path, provider: ProviderId, payload: &Value) -> Result<usi
             continue;
         };
         if edit.is_empty() {
+            continue;
+        }
+
+        // A whole-file write to a git-ignored path (a `.memories/` report
+        // regenerated every run) can never be absorbed by a commit, so it would
+        // sit in the store forever and re-title cards whenever its text
+        // reappears. Do not record it in the first place.
+        if edit.whole_file
+            && repo
+                .as_ref()
+                .is_some_and(|r| r.is_path_ignored(&super::normalise_path(&relative)))
+        {
             continue;
         }
 
@@ -772,15 +787,6 @@ fn first_sentence(message: &str) -> Option<String> {
     let cleaned = sentence.trim().trim_end_matches(':').trim();
 
     is_usable_inferred_label(cleaned).then(|| cleaned.to_string())
-}
-
-/// The branch a workspace is on, so records from elsewhere can be filtered.
-///
-/// Failure is normal — the hook may run outside a repository — and is not
-/// worth reporting.
-fn current_branch(root: &Path) -> Option<String> {
-    let repo = crate::git::Repo::open(root).ok()?;
-    repo.status().ok()?.branch
 }
 
 /// Should this invocation do anything at all?

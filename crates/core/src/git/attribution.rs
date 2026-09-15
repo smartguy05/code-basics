@@ -424,6 +424,66 @@ fn build_corpus(changed: &[(usize, u32, LineOrigin, Forms)]) -> Corpus {
     Corpus { diff_counts }
 }
 
+/// The match levels in probe order: an exact truth is never outranked by a
+/// skeleton coincidence.
+const LEVELS: [MatchLevel; 3] = [
+    MatchLevel::Exact,
+    MatchLevel::Whitespace,
+    MatchLevel::Skeleton,
+];
+
+/// A per-side, per-level lookup from a line's normalised form to the record
+/// lines that carry it, in ascending `(record, line)` order.
+///
+/// Built once per file. It is what turns matching from a scan over every record
+/// line for every changed line — `O(diff × records × record lines)`, which on a
+/// file with hundreds of records is what made an Intent refresh balloon — into a
+/// hash lookup per changed line. Both sides are indexed at all three levels; the
+/// insertion order (records ascending, then lines) reproduces exactly the order
+/// the former nested scan produced, so attributions are unchanged.
+struct CandidateIndex {
+    /// The deletion side (a record's `old`), indexed by [`LEVELS`].
+    old: [HashMap<String, Vec<Candidate>>; 3],
+    /// The addition side (a record's `new`), indexed by [`LEVELS`].
+    new: [HashMap<String, Vec<Candidate>>; 3],
+}
+
+fn index_side(maps: &mut [HashMap<String, Vec<Candidate>>; 3], record: usize, forms: &[Forms]) {
+    for (line, form) in forms.iter().enumerate() {
+        for (li, &level) in LEVELS.iter().enumerate() {
+            maps[li]
+                .entry(form.at(level).to_string())
+                .or_default()
+                .push(Candidate {
+                    record,
+                    record_line: line,
+                    level,
+                });
+        }
+    }
+}
+
+impl CandidateIndex {
+    fn build(prepared: &[Prepared]) -> Self {
+        let mut index = CandidateIndex {
+            old: Default::default(),
+            new: Default::default(),
+        };
+        for (record, p) in prepared.iter().enumerate() {
+            index_side(&mut index.old, record, &p.old);
+            index_side(&mut index.new, record, &p.new);
+        }
+        index
+    }
+
+    fn maps(&self, origin: LineOrigin) -> &[HashMap<String, Vec<Candidate>>; 3] {
+        match origin {
+            LineOrigin::Deletion => &self.old,
+            _ => &self.new,
+        }
+    }
+}
+
 /// For each changed line, every record line it could correspond to.
 ///
 /// Probing stops at the first level that produces any hit, so an exact truth
@@ -433,6 +493,8 @@ fn find_candidates(
     changed: &[(usize, u32, LineOrigin, Forms)],
     options: &Options,
 ) -> Vec<Vec<Candidate>> {
+    let index = CandidateIndex::build(prepared);
+
     changed
         .iter()
         .map(|(_, _, origin, forms)| {
@@ -440,28 +502,10 @@ fn find_candidates(
                 return Vec::new();
             }
 
-            for level in [
-                MatchLevel::Exact,
-                MatchLevel::Whitespace,
-                MatchLevel::Skeleton,
-            ] {
-                let key = forms.at(level);
-                let mut hits = Vec::new();
-
-                for (index, p) in prepared.iter().enumerate() {
-                    for (line, candidate) in p.side(*origin).iter().enumerate() {
-                        if candidate.at(level) == key {
-                            hits.push(Candidate {
-                                record: index,
-                                record_line: line,
-                                level,
-                            });
-                        }
-                    }
-                }
-
-                if !hits.is_empty() {
-                    return hits;
+            let maps = index.maps(*origin);
+            for (li, &level) in LEVELS.iter().enumerate() {
+                if let Some(hits) = maps[li].get(forms.at(level)) {
+                    return hits.clone();
                 }
             }
 

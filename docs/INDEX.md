@@ -150,7 +150,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/features/store.rs` | 198 | Reading and writing `code-basics/features.json`, and the installer seed. |
 | `crates/core/src/features/store_tests.rs` | 573 |  |
 | `crates/core/src/files.rs` | 432 | Workspace file access for the directory tree and file editor. |
-| `crates/core/src/git/attribution.rs` | 844 | Deciding which recorded edit produced which line of a diff. |
+| `crates/core/src/git/attribution.rs` | 888 | Deciding which recorded edit produced which line of a diff. |
 | `crates/core/src/git/attribution_tests.rs` | 1045 | Tests for attributing diff lines to recorded edits. |
 | `crates/core/src/git/coverage.rs` | 355 | Auditing the agent's own story about its work. |
 | `crates/core/src/git/coverage_tests.rs` | 962 | Tests for the intent-coverage reverse pass and scorecard. |
@@ -158,7 +158,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/git/grouping_tests.rs` | 1616 | Tests for collapsing hunks into cards. |
 | `crates/core/src/git/mod.rs` | 35 | Git operations. |
 | `crates/core/src/git/patch.rs` | 487 | Building unified diff patches restricted to a selection of lines. |
-| `crates/core/src/git/repo.rs` | 2285 | Repository reads and mutations. |
+| `crates/core/src/git/repo.rs` | 2314 | Repository reads and mutations. |
 | `crates/core/src/git/why.rs` | 260 | Intent that survives the commit. |
 | `crates/core/src/git/why_tests.rs` | 324 | Tests for the pure durable-why build and resolve logic. |
 | `crates/core/src/git/worktree.rs` | 165 | Creating a **user** git worktree on a new branch, to open in its own project |
@@ -182,7 +182,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/inspect/tree_tests.rs` | 247 |  |
 | `crates/core/src/intents/guard.rs` | 220 | The pre-commit guard that keeps rejection notes out of history. |
 | `crates/core/src/intents/guard_tests.rs` | 131 | Tests for the pre-commit guard that keeps rejection notes out of history. |
-| `crates/core/src/intents/hook.rs` | 872 | Turning a hook payload into a record. |
+| `crates/core/src/intents/hook.rs` | 878 | Turning a hook payload into a record. |
 | `crates/core/src/intents/hook_tests.rs` | 1441 | Tests for ingesting hook payloads. Included by `hook.rs` under `#[cfg(test)]`. |
 | `crates/core/src/intents/intents_tests.rs` | 1099 | Tests for recorded agent intent. Included by `mod.rs` under `#[cfg(test)]`. |
 | `crates/core/src/intents/mod.rs` | 804 | What a coding agent said it was doing, and where it wrote it down. |
@@ -200,8 +200,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/intents/providers/settings_merge.rs` | 158 | Generic marker-based merging of hook entries into a `settings.json`-shaped |
 | `crates/core/src/intents/reject.rs` | 572 | Rejecting a change: undoing it and leaving the reason where it was. |
 | `crates/core/src/intents/reject_tests.rs` | 483 | Tests for rejecting a change — the marker comment left where code was. |
-| `crates/core/src/intents/retire.rs` | 750 | Retiring the intents a commit has absorbed. |
-| `crates/core/src/intents/retire_tests.rs` | 262 | Tests for retiring intents a commit has absorbed. Included by `retire.rs` |
+| `crates/core/src/intents/retire.rs` | 972 | Retiring the intents a commit has absorbed. |
+| `crates/core/src/intents/retire_tests.rs` | 355 | Tests for retiring intents a commit has absorbed. Included by `retire.rs` |
 | `crates/core/src/intents/user.rs` | 401 | User-authored intents: a note the user writes on a card when no agent hook |
 | `crates/core/src/intents/user_tests.rs` | 497 |  |
 | `crates/core/src/intents/whyhook.rs` | 166 | The `post-commit` hook that persists durable intent for external commits. |
@@ -430,7 +430,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/workspace.rs` | 2088 | Scanning a workspace for projects and building the configurations that can |
 | `crates/core/tests/behavioral_replay.rs` | 104 | A real-network smoke test for [`cb_core::behavioral::replay`]. |
 | `crates/core/tests/durable_why.rs` | 202 | End-to-end tests for durable intent: writing a git note at commit and |
-| `crates/core/tests/git_operations.rs` | 1481 | End-to-end git tests against real repositories on disk. |
+| `crates/core/tests/git_operations.rs` | 1507 | End-to-end git tests against real repositories on disk. |
 | `crates/core/tests/intent_attribution.rs` | 282 | Attribution measured against a real repository, rather than a fixture. |
 | `crates/core/tests/intent_retirement.rs` | 358 | End-to-end tests for retiring intents a commit has absorbed. |
 | `crates/core/tests/lsp_client.rs` | 1664 | One language server, from handshake to shutdown, against `cb-fake-lsp`. |
@@ -683,7 +683,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/sqlViewLogic.ts` | 527 | The decisions `SqlView` would otherwise make inline. |
 | `src/views/testsLogic.test.ts` | 279 |  |
 | `src/views/testsLogic.ts` | 89 |  |
-| `src/views/useChangesModel.ts` | 557 | The working-tree model behind the Project tab's Changes rail. |
+| `src/views/useChangesModel.ts` | 567 | The working-tree model behind the Project tab's Changes rail. |
 | `src/vite-env.d.ts` | 7 | / <reference types="vite/client" /> |
 | `src/windowTransparency.ts` | 20 | The DOM half of window transparency — one custom property, written in one |
 | `src/windowTransparencyLogic.test.ts` | 121 |  |
@@ -731,7 +731,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/commands/symbols.rs` | 234 | The command palette's surface: searching the workspace, and asking after |
 | `src-tauri/src/commands/tasks.rs` | 349 | Commands behind the per-workspace Tasks panel and its installable MCP server. |
 | `src-tauri/src/commands/terminal.rs` | 277 | Interactive floating terminals. |
-| `src-tauri/src/commands/workspace.rs` | 273 | Workspace and configuration commands. |
+| `src-tauri/src/commands/workspace.rs` | 292 | Workspace and configuration commands. |
 | `src-tauri/src/editor_context/agent.rs` | 59 | Answering an agent's editor-context tool call: check the feature, resolve the |
 | `src-tauri/src/editor_context/agent_tests.rs` | 74 |  |
 | `src-tauri/src/editor_context/mod.rs` | 50 | The application's side of the editor-context MCP server: the process-global |
@@ -882,7 +882,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/git/coverage.rs`: `UnfulfilledClaim`, `Scorecard`, `IntentReview`, `review()`
 - `crates/core/src/git/grouping.rs`: `GroupKind`, `GroupFile`, `IntentGroup`, `hunk_count()`, `is_formatting_only()`, `enclosing_symbol()`, `changed_content()`, `group()`
 - `crates/core/src/git/patch.rs`: `LineOrigin`, `DiffLine`, `Hunk`, `FileDiff`, `changed_line_indices()`, `hunk_line_indices()`, `Direction`, `build_patch()`
-- `crates/core/src/git/repo.rs`: `clear_readonly_directories()`, `clear_readonly_directories()`, `ComparisonMode`, `ChangeKind`, `FileContents`, `FileChange`, `is_conflicted()`, `WorkingStatus`, `Branch`, `Commit`, `StashEntry`, `MergeOutcome`, `MergeReport`, `StageTarget`, `Repo`, `open()`, `workdir()`, `head_oid()`, `hooks_dir()`, `status()`, `file_diff()`, `diff_all()`, `baseline_content()`, `working_content()`, `write_working_file()`, `stage_file()`, `unstage_file()`, `stage_lines()`, `unstage_lines()`, `revert_lines()`, `discard_file()`, `commit()`, `merge_branch()`, `abort_merge()`, `branches()`, `create_branch()`, `checkout_branch()`, `create_branch_from()`, `checkout_remote_branch()`, `delete_branch()`, `history()`, `commit_diff()`, `commit_file_contents()`, `write_why_note()`, `read_why_note()`, `why_for_file()`, `stash_save()`, `stash_paths()`, `stash_list()`, `stash_pop()`, `stash_apply()`, `stash_drop()`, `stash_clear()`, `network_command()`, `NetworkOperation`, `NetworkKind`, `resolve_network()`
+- `crates/core/src/git/repo.rs`: `clear_readonly_directories()`, `clear_readonly_directories()`, `ComparisonMode`, `ChangeKind`, `FileContents`, `FileChange`, `is_conflicted()`, `WorkingStatus`, `Branch`, `Commit`, `StashEntry`, `MergeOutcome`, `MergeReport`, `StageTarget`, `Repo`, `open()`, `workdir()`, `head_oid()`, `hooks_dir()`, `status()`, `file_diff()`, `diff_all()`, `baseline_content()`, `working_content()`, `write_working_file()`, `stage_file()`, `unstage_file()`, `stage_lines()`, `unstage_lines()`, `revert_lines()`, `discard_file()`, `commit()`, `merge_branch()`, `abort_merge()`, `branches()`, `is_path_ignored()`, `create_branch()`, `checkout_branch()`, `create_branch_from()`, `checkout_remote_branch()`, `delete_branch()`, `history()`, `commit_diff()`, `commit_file_contents()`, `write_why_note()`, `read_why_note()`, `why_for_file()`, `stash_save()`, `stash_paths()`, `stash_list()`, `stash_pop()`, `stash_apply()`, `stash_drop()`, `stash_clear()`, `network_command()`, `NetworkOperation`, `NetworkKind`, `resolve_network()`
 - `crates/core/src/git/why.rs`: `WhyEntry`, `FileWhy`, `DurableWhy`, `is_empty()`, `LineIntent`, `content_hash()`, `build_for_commit()`, `resolve_lines()`, `file_in()`, `record_note()`
 - `crates/core/src/git/worktree.rs`: `validate_branch_name()`, `sanitize_dir_segment()`, `default_worktree_dir()`, `add_worktree()`
 - `crates/core/src/importers/rider.rs`: `RiderConfiguration`, `parse()`, `expand_macros()`, `convert()`, `resolve_compounds()`, `ImportResult`, `import()`
@@ -904,7 +904,7 @@ Registered in `src-tauri/src/lib.rs`; documented with parameters in [reference/c
 - `crates/core/src/intents/providers/mod.rs`: `InstallScope`, `ProviderStatus`, `absent()`, `PlannedWrite`, `InstallPlan`, `SessionFile`, `HistoryMined`, `apply_plan()`, `apply_writes()`, `apply_writes_atomically()`, `all()`, `statuses()`, `history()`, `uninstall_plan()`, `guard_write()`, `whyhook_write()`, `home_dir()`
 - `crates/core/src/intents/providers/settings_merge.rs`: `contains_marker()`, `is_installed()`, `merged_text()`, `merged_into_text()`, `plan_removal()`
 - `crates/core/src/intents/reject.rs`: `CommentSyntax`, `comment_syntax()`, `comment_prefix()`, `sanitise_reason()`, `marker_block_for()`, `is_marker_line()`, `anchors()`, `insert_markers()`, `iso_date()`, `FileRejection`, `RejectSummary`, `record()`, `reject_file()`
-- `crates/core/src/intents/retire.rs`: `archive_path()`, `label_archive_path()`, `tombstone_path()`, `state_path()`, `FileSnapshot`, `KeepReason`, `Verdict`, `RetirePlan`, `Tombstone`, `ArchivedRecord`, `PruneState`, `RetireSummary`, `content_key()`, `verdict()`, `plan()`, `tombstones_for()`, `reject_tombstoned()`, `load_state()`, `load_tombstones()`, `snapshot()`, `run_if_head_moved()`, `preview()`, `run_now()`, `clear()`
+- `crates/core/src/intents/retire.rs`: `archive_path()`, `label_archive_path()`, `tombstone_path()`, `state_path()`, `FileSnapshot`, `KeepReason`, `Verdict`, `RetirePlan`, `Tombstone`, `ArchivedRecord`, `PruneState`, `RetireSummary`, `content_key()`, `verdict()`, `plan()`, `tombstones_for()`, `reject_tombstoned()`, `load_state()`, `load_tombstones()`, `snapshot()`, `run_if_head_moved()`, `preview()`, `run_now()`, `ArchiveStalePlan`, `plan_archive_stale()`, `live_branches()`, `archive_stale()`, `clear()`
 - `crates/core/src/intents/user.rs`: `UserEdit`, `UserIntent`, `turn_id()`, `is_empty()`, `overlaps()`, `upsert()`, `remove_overlapping()`, `next_id()`, `MoveRequest`, `note_id_of_group()`, `move_edits()`, `to_intents()`, `merge_into()`, `user_intents_path()`, `load()`, `save()`
 - `crates/core/src/intents/whyhook.rs`: `block()`, `hook_path()`, `plan_for()`, `planned_write()`, `is_installed()`, `ensure_executable()`, `plan_removal()`
 - `crates/core/src/invocation.rs`: `build()`, `build_coverage()`, `rerun_filter()`, `plan_compound()`, `SolutionBuildStep`, `plan_solution_build()`

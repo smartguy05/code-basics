@@ -13,6 +13,24 @@ use tauri::State;
 use crate::commands::symbols::{spawn_build, Rebuild};
 use crate::state::AppState;
 
+/// Bound the intent store by branch, off the open path.
+///
+/// The store accumulates a turn's worth of records for every branch ever worked
+/// plus whole-file writes for git-ignored files that can never be absorbed; left
+/// unbounded, the Intent view ends up walking all of it on every refresh. Runs
+/// once per open/rescan on a spawned, abandoned thread — best-effort, like the
+/// symbol index — so it never sits between choosing a folder and seeing it.
+fn spawn_archive_stale(root: PathBuf) {
+    std::thread::spawn(move || {
+        let Ok(repo) = cb_core::git::Repo::open(&root) else {
+            return;
+        };
+        if let Err(e) = cb_core::intents::retire::archive_stale(&repo, &root) {
+            eprintln!("intent branch archive skipped: {e:#}");
+        }
+    });
+}
+
 /// Scan a workspace and layer saved configurations on top of detected ones.
 ///
 /// The saved file is read first because it carries the scan options — opting
@@ -57,6 +75,7 @@ pub async fn open_workspace(
     // abandoned, so neither sits between choosing a folder and seeing it.
     crate::commands::lsp::spawn_session(app.clone());
     spawn_build(app, workspace.clone(), Rebuild::Cached);
+    spawn_archive_stale(workspace.root.clone());
     // The set of open workspaces changed, so the roslyn and editor instance
     // registries' `workspaces` lists — what an `mcp-roslyn`/`mcp-editor` client
     // narrows on — are now stale.
