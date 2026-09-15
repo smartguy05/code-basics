@@ -928,7 +928,30 @@ pub enum BuildAction {
     Clean,
 }
 
+/// The MSBuild file-logger artifacts a build writes for one configuration.
+///
+/// Two files under `.code-basics/build/` — errors-only and warnings-only — named
+/// from the sanitised configuration id. Per-config names on purpose: a solution
+/// build runs one `dotnet build` per project (each with its own
+/// `solution-build:<name>` id), and a shared file name would make every project
+/// clobber the previous one's diagnostics before the app had parsed them. The
+/// app layer recomputes these same paths to read the artifacts back.
+pub fn build_log_paths(workspace_root: &Path, config_id: &str) -> (PathBuf, PathBuf) {
+    let dir = crate::config::build_dir(workspace_root);
+    let stem = sanitise(config_id);
+    (
+        dir.join(format!("{stem}.errors.log")),
+        dir.join(format!("{stem}.warnings.log")),
+    )
+}
+
 /// Build the `dotnet build` / `dotnet clean` command line for a configuration.
+///
+/// A build (or rebuild) additionally requests the MSBuild file loggers behind
+/// the build-diagnostics feature: an errors-only and a warnings-only artifact
+/// under `.code-basics/build/` (see [`build_log_paths`]), full source paths, and
+/// invariant (English) culture so the canonical `error CS####` shape the parser
+/// reads is not localized. A clean produces no diagnostics, so it attaches none.
 pub fn build_action_invocation(
     config: &RunConfig,
     action: BuildAction,
@@ -952,11 +975,29 @@ pub fn build_action_invocation(
         args.push(framework.clone());
     }
 
+    // Only a compile emits diagnostics worth capturing; a clean would write two
+    // empty artifacts and nothing else.
+    let mut env = config.env.clone();
+    if matches!(action, BuildAction::Build | BuildAction::Rebuild) {
+        let (errors, warnings) = build_log_paths(workspace_root, &config.id);
+        args.push("/p:GenerateFullPaths=true".into());
+        args.push(format!("-flp1:errorsOnly;logfile={}", errors.display()));
+        args.push(format!("-flp2:warningsOnly;logfile={}", warnings.display()));
+
+        // Force the invariant (English) culture so MSBuild's diagnostic keywords
+        // stay `error`/`warning` — the shape `build::parse` matches — on a
+        // localized machine. Layered *underneath* the configuration's own env
+        // (`entry`), so a user who set the UI language keeps it, the same
+        // precedence the crash-dump and colour defaults use.
+        env.entry("DOTNET_CLI_UI_LANGUAGE".to_string())
+            .or_insert_with(|| "en-US".to_string());
+    }
+
     Invocation {
         program: "dotnet".into(),
         args,
         cwd: resolve_cwd(config, workspace_root),
-        env: config.env.clone(),
+        env,
         report: None,
         coverage: None,
         warnings: Vec::new(),

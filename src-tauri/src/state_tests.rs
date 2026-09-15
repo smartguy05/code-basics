@@ -772,3 +772,110 @@ fn active_root_pathbuf_tracks_the_foreground_workspace() {
     state.set_active(Path::new("/a")).unwrap();
     assert_eq!(state.active_root_pathbuf(), Some(PathBuf::from("/a")));
 }
+
+// -- Build reports -----------------------------------------------------------
+
+use cb_core::build::{BuildDiagnostic, BuildSeverity};
+
+fn failed_report(file: &str) -> BuildReport {
+    BuildReport {
+        status: BuildStatus::Failed,
+        diagnostics: vec![BuildDiagnostic {
+            file: file.into(),
+            line: 1,
+            column: Some(1),
+            code: "CS0103".into(),
+            severity: BuildSeverity::Error,
+            message: "nope".into(),
+            project: None,
+        }],
+        warnings: Vec::new(),
+    }
+}
+
+#[test]
+fn a_build_report_round_trips_through_the_cache() {
+    let state = AppState::default();
+    state.set_workspace(workspace_at("/a")).unwrap();
+
+    assert!(
+        state.previous_build_for(Path::new("/a"), "cfg").is_none(),
+        "empty cache is None"
+    );
+    assert!(state.record_build(Path::new("/a"), "cfg", failed_report("/a/Bar.cs")));
+
+    let got = state
+        .previous_build_for(Path::new("/a"), "cfg")
+        .expect("a report was recorded");
+    assert_eq!(got.status, BuildStatus::Failed);
+    assert_eq!(got.diagnostics[0].file, "/a/Bar.cs");
+}
+
+#[test]
+fn a_build_report_lands_in_the_workspace_it_names() {
+    // A build started in A that finishes after the user switched to B must
+    // record into A, so `record_build` takes an explicit root and the pipe reads
+    // by explicit root (`previous_build_for`), not the active pointer.
+    let state = AppState::default();
+    state.set_workspace(workspace_at("/a")).unwrap();
+    state.set_workspace(workspace_at("/b")).unwrap(); // B active
+
+    assert!(state.record_build(Path::new("/a"), "cfg", failed_report("/a/Bar.cs")));
+
+    // Nothing leaked into the other workspace B.
+    assert!(state.previous_build_for(Path::new("/b"), "cfg").is_none());
+
+    assert_eq!(
+        state
+            .previous_build_for(Path::new("/a"), "cfg")
+            .unwrap()
+            .diagnostics[0]
+            .file,
+        "/a/Bar.cs"
+    );
+}
+
+#[test]
+fn recording_a_build_into_a_closed_workspace_is_refused() {
+    let state = AppState::default();
+    assert!(!state.record_build(Path::new("/gone"), "cfg", failed_report("/x")));
+}
+
+#[test]
+fn previous_build_for_reads_the_named_workspace_not_the_active_one() {
+    // The Build MCP pipe answers by `--workspace`, so reading a specific root's
+    // cache must not depend on which tab is in front.
+    let state = AppState::default();
+    state.set_workspace(workspace_at("/a")).unwrap();
+    state.set_workspace(workspace_at("/b")).unwrap(); // B active
+    assert!(state.record_build(Path::new("/a"), "cfg", failed_report("/a/Bar.cs")));
+
+    // A is not active, yet `previous_build_for` finds A's report by explicit root.
+    let got = state
+        .previous_build_for(Path::new("/a"), "cfg")
+        .expect("A's report is readable by root while B is active");
+    assert_eq!(got.diagnostics[0].file, "/a/Bar.cs");
+
+    // A different key in the same workspace, and an unopened workspace, are both None.
+    assert!(state.previous_build_for(Path::new("/a"), "other").is_none());
+    assert!(state
+        .previous_build_for(Path::new("/gone"), "cfg")
+        .is_none());
+}
+
+/// The abstain rule the query decision enforces: an absent cache is NeverBuilt,
+/// a distinct answer, never an empty SucceededClean.
+#[test]
+fn an_absent_cache_reports_never_built_not_a_clean_success() {
+    let report = build_report_or_never_built(None);
+    assert_eq!(report.status, BuildStatus::NeverBuilt);
+    assert!(report.diagnostics.is_empty());
+    assert!(report.warnings.is_empty());
+}
+
+#[test]
+fn a_present_cache_is_reported_verbatim() {
+    let report = build_report_or_never_built(Some(failed_report("/a/Bar.cs")));
+    assert_eq!(report.status, BuildStatus::Failed);
+    assert_eq!(report.diagnostics.len(), 1);
+}

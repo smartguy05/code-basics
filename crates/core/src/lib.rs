@@ -10,6 +10,7 @@ pub mod adapters;
 pub mod architecture;
 pub mod behavioral;
 pub mod browser;
+pub mod build;
 pub mod changelists;
 pub mod config;
 pub mod dap;

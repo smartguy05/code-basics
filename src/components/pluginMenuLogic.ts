@@ -24,6 +24,7 @@ export type PluginAction =
   | { kind: "tasks" }
   | { kind: "roslynMcp" }
   | { kind: "editorMcp" }
+  | { kind: "buildMcp" }
   | { kind: "redis" };
 
 export interface PluginRow {
@@ -138,6 +139,20 @@ const PLUGINS: PluginEntry[] = [
     needsWorkspace: true,
     ready: "Let a coding agent see what you have open and selected, over MCP",
     noWorkspace: "Open a codebase to install the Editor context MCP server for it",
+  },
+  {
+    // Feature-gated on `buildMcp` (like the Editor context server, unlike the
+    // always-on Roslyn server): the pipe host re-reads the feature per call and
+    // refuses when it is off, so with it off there is nothing to install against
+    // and the row is omitted. Needs a codebase because the install is scoped to
+    // it (`--workspace <root>` is baked into the entry) and the status is read
+    // per repository.
+    feature: "buildMcp",
+    commandId: "plugin.buildMcp",
+    action: { kind: "buildMcp" },
+    needsWorkspace: true,
+    ready: "Let a coding agent build this codebase and read its diagnostics, over MCP",
+    noWorkspace: "Open a codebase to install the Build MCP server for it",
   },
   {
     // Always-on like the Roslyn server below (no `FeatureId`): the Redis panel

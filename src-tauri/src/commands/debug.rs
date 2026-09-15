@@ -121,6 +121,13 @@ async fn build_dotnet_target(
         .project
         .as_ref()
         .ok_or_else(|| "a .NET debug configuration must target a project".to_string())?;
+    // The build now requests MSBuild file-logger diagnostics artifacts under
+    // `.code-basics/build/`; the logger does not create that directory, so make
+    // it first (the same pre-creation `invocation::build` does for results).
+    let build_dir = cb_core::config::build_dir(&workspace.root);
+    std::fs::create_dir_all(&build_dir)
+        .map_err(|e| format!("failed to create {}: {e}", build_dir.display()))?;
+
     let build = cb_core::adapters::dotnet::build_action_invocation(
         config,
         cb_core::adapters::dotnet::BuildAction::Build,

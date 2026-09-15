@@ -23,6 +23,7 @@ import { SetupPrompt } from "./SetupPrompt";
 import { McpServerPanel } from "./McpServerPanel";
 import { RoslynMcpPanel } from "./RoslynMcpPanel";
 import { EditorMcpPanel } from "./EditorMcpPanel";
+import { BuildMcpPanel } from "./BuildMcpPanel";
 import { SqlPanel } from "./SqlPanel";
 import { RedisPanel } from "./RedisPanel";
 import {
@@ -195,6 +196,15 @@ export interface WorkspaceTabHandle {
    * this while `editorContextMcp` is off does nothing.
    */
   openEditorMcp(): void;
+  /**
+   * Open the Build & Diagnostics MCP server's installer for this codebase.
+   *
+   * Part of the handle for the same reason `openMcp` is: the Plugins menu is
+   * global titlebar chrome and this acts on the foreground codebase (the install
+   * bakes `--workspace <root>`). The feature gate is inside the tab, so calling
+   * this while `buildMcp` is off does nothing.
+   */
+  openBuildMcp(): void;
 }
 
 /**
@@ -397,6 +407,18 @@ export function WorkspaceTab({
     if (!editorContextEnabled) setEditorMcpPanelOpen(false);
   }, [editorContextEnabled]);
 
+  // The Build & Diagnostics MCP server's installer. Feature-gated on `buildMcp`
+  // (like the Editor context server, unlike the always-on Roslyn server): with
+  // the feature off the pipe host refuses every call, so switching it off closes
+  // this modal rather than leaving it open for a feature the user just turned
+  // off. A transient modal, so closing it is an unmount.
+  const buildMcpEnabled = featureEnabled(features, "buildMcp");
+  const [buildMcpPanelOpen, setBuildMcpPanelOpen] = useState(false);
+  const openBuildMcp = () => setBuildMcpPanelOpen(true);
+  useEffect(() => {
+    if (!buildMcpEnabled) setBuildMcpPanelOpen(false);
+  }, [buildMcpEnabled]);
+
   /**
    * Keep the selected tab on something that still exists. Turning off the
    * feature that owns the tab you are *looking at* would otherwise leave a tab
@@ -444,11 +466,13 @@ export function WorkspaceTab({
     // Registered only while its feature is on, exactly as `plugin.mcp` is.
     if (editorContextEnabled)
       registrations.push(registerCommand("plugin.editorMcp", openEditorMcp));
+    // Registered only while its feature is on, exactly as `plugin.editorMcp` is.
+    if (buildMcpEnabled) registrations.push(registerCommand("plugin.buildMcp", openBuildMcp));
     // Always registered — the Redis plugin is always-on (like the Roslyn server).
     registrations.push(registerCommand("view.redis", openRedis));
     return () => registrations.forEach((unregister) => unregister());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, shownTabs, sqlEnabled, mcpEnabled, tasksEnabled, editorContextEnabled]);
+  }, [active, shownTabs, sqlEnabled, mcpEnabled, tasksEnabled, editorContextEnabled, buildMcpEnabled]);
   const [showSetup, setShowSetup] = useState(false);
   const [inspectRequest, setInspectRequest] = useState<InspectRequest | null>(null);
   const [openRequest, setOpenRequest] = useState<OpenFileRequest | null>(null);
@@ -792,6 +816,7 @@ export function WorkspaceTab({
     openRoslynMcp,
     openRedis,
     openEditorMcp,
+    openBuildMcp,
   });
   handleRef.current = {
     openTerminal,
@@ -808,6 +833,7 @@ export function WorkspaceTab({
     openRoslynMcp,
     openRedis,
     openEditorMcp,
+    openBuildMcp,
   };
   useEffect(() => {
     const stable: WorkspaceTabHandle = {
@@ -826,6 +852,7 @@ export function WorkspaceTab({
       openRoslynMcp: () => handleRef.current.openRoslynMcp(),
       openRedis: () => handleRef.current.openRedis(),
       openEditorMcp: () => handleRef.current.openEditorMcp(),
+      openBuildMcp: () => handleRef.current.openBuildMcp(),
     };
     onRegister(workspace.root, stable);
     return () => onRegister(workspace.root, null);
@@ -1072,6 +1099,16 @@ export function WorkspaceTab({
         <>
           <Occluder />
           <EditorMcpPanel onClose={() => setEditorMcpPanelOpen(false)} />
+        </>
+      )}
+
+      {/* The Build & Diagnostics MCP installer. Feature-gated: an effect closes
+          it when the feature is switched off, so the render need only check the
+          open flag. A modal, so closing it is an unmount. */}
+      {buildMcpPanelOpen && (
+        <>
+          <Occluder />
+          <BuildMcpPanel onClose={() => setBuildMcpPanelOpen(false)} />
         </>
       )}
 

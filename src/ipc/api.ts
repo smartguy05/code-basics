@@ -1780,3 +1780,32 @@ export const editorMcpUninstallPlan = (provider: ProviderId, scope: InstallScope
 /** Perform a removal the user has confirmed; returns the new status. */
 export const uninstallEditorMcp = (provider: ProviderId, scope: InstallScope) =>
   invoke<InstallScope | null>("uninstall_editor_mcp_server", { provider, scope });
+
+// --- The Build & Diagnostics MCP server ------------------------------------
+//
+// The twin of the Roslyn/Editor installers above — the same five-call shape over
+// the same `mcp::install` merge. `cb_core::build::mcp::install` reuses the merge
+// rather than growing a second one. Separate calls rather than a `kind`
+// parameter, because the servers carry different caveats and the failure mode of
+// one shared call is showing somebody the wrong warning before install.
+
+/** Where the Build MCP server is installed for `provider`, if anywhere. */
+export const buildMcpStatus = (provider: ProviderId) =>
+  invoke<InstallScope | null>("build_mcp_server_status", { provider });
+
+/** Exactly what installing it would write. Touches nothing. */
+export const buildMcpInstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("build_mcp_server_install_plan", { provider, scope });
+
+/** Perform an install the user has confirmed; returns the new status. */
+export const installBuildMcp = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("install_build_mcp_server", { provider, scope });
+
+/** Exactly what removing it would rewrite. A zero-write plan means nothing of
+ * ours was there. */
+export const buildMcpUninstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("build_mcp_server_uninstall_plan", { provider, scope });
+
+/** Perform a removal the user has confirmed; returns the new status. */
+export const uninstallBuildMcp = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("uninstall_build_mcp_server", { provider, scope });

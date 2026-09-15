@@ -17,6 +17,7 @@ const ALL_KEYS = [
   "webBrowser",
   "tasks",
   "editorContextMcp",
+  "buildMcp",
 ];
 const ON = ALL_KEYS.map((f) => feature(f, true));
 const OFF = ALL_KEYS.map((f) => feature(f, false));
@@ -36,6 +37,7 @@ const MCP_ONLY = only("mcpSqlServer");
 const BROWSER_ONLY = only("webBrowser");
 const TASKS_ONLY = only("tasks");
 const EDITOR_MCP_ONLY = only("editorContextMcp");
+const BUILD_MCP_ONLY = only("buildMcp");
 
 describe("pluginMenuRows", () => {
   it("offers the SQL console when its feature is on and a codebase is open", () => {
@@ -63,6 +65,7 @@ describe("pluginMenuRows", () => {
       "plugin.browser",
       "plugin.tasks",
       "plugin.editorMcp",
+      "plugin.buildMcp",
       "view.redis",
       "plugin.roslyn",
     ]);
@@ -217,6 +220,31 @@ describe("pluginMenuRows", () => {
     // The install is scoped to a codebase (`--workspace <root>` is baked in), so
     // there must be one.
     const rows = pluginMenuRows({ features: EDITOR_MCP_ONLY, workspaceOpen: false });
+    expect(rows[0]?.disabled).toBe(true);
+    expect(rows[0]?.action).toBe(null);
+    expect(rows[0]?.title).toContain("Open a codebase");
+  });
+
+  it("offers the Build MCP server when its feature is on and a codebase is open", () => {
+    const rows = pluginMenuRows({ features: BUILD_MCP_ONLY, workspaceOpen: true });
+    expect(optionalIds(rows)).toEqual(["plugin.buildMcp"]);
+    expect(rows[0]?.label).toBe("Build MCP server");
+    expect(rows[0]?.disabled).toBe(false);
+    expect(rows[0]?.action).toEqual({ kind: "buildMcp" });
+  });
+
+  it("omits the Build MCP server when its feature is off", () => {
+    // Feature-gated, unlike the always-on Roslyn server: with the feature off the
+    // pipe host refuses every call, so there is nothing to install against.
+    expect(
+      pluginMenuRows({ features: SQL_ONLY, workspaceOpen: true }).map((r) => r.id),
+    ).not.toContain("plugin.buildMcp");
+  });
+
+  it("disables the Build MCP server, with a reason, when no codebase is open", () => {
+    // The install is scoped to a codebase (`--workspace <root>` is baked in), so
+    // there must be one.
+    const rows = pluginMenuRows({ features: BUILD_MCP_ONLY, workspaceOpen: false });
     expect(rows[0]?.disabled).toBe(true);
     expect(rows[0]?.action).toBe(null);
     expect(rows[0]?.title).toContain("Open a codebase");

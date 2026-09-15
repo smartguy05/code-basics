@@ -14,7 +14,8 @@ export type FeatureKey =
   | "mcpSqlServer"
   | "webBrowser"
   | "tasks"
-  | "editorContextMcp";
+  | "editorContextMcp"
+  | "buildMcp";
 
 /**
  * Whether a feature is on.

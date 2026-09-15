@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use cb_core::build::{BuildReport, BuildStatus};
 use cb_core::inspect::InspectGraph;
 use cb_core::intents::{IntentCache, Intents, LoadOptions};
 use cb_core::lsp::session::LspHandle;
@@ -148,6 +149,18 @@ pub struct AppState {
     /// flag.
     #[cfg(windows)]
     editor_pipe: Mutex<Option<crate::editor_context::pipe::PipeListener>>,
+
+    /// The Build & Diagnostics control pipe — the one an agent's `mcp-build`
+    /// server reaches this application through.
+    ///
+    /// **Tied to the process, not to any panel**, exactly like [`Self::roslyn_pipe`]
+    /// and [`Self::editor_pipe`]: a build is per-workspace but the pipe is one per
+    /// application, opened once at startup and never taken down while the app runs.
+    /// Every call resolves its own `--workspace` afresh through
+    /// [`Self::slot_for_root`] and reads or writes that slot's `last_build`.
+    /// Ordinary `Send + Sync` data — a join handle and a flag.
+    #[cfg(windows)]
+    build_pipe: Mutex<Option<crate::build::pipe::PipeListener>>,
 }
 
 impl Default for AppState {
@@ -171,6 +184,8 @@ impl Default for AppState {
             roslyn_pipe: Mutex::new(None),
             #[cfg(windows)]
             editor_pipe: Mutex::new(None),
+            #[cfg(windows)]
+            build_pipe: Mutex::new(None),
         }
     }
 }
@@ -205,6 +220,15 @@ pub struct WorkspaceSlot {
     /// which tests to name. Keyed by config id, which is unique *within* a
     /// workspace.
     last_test_run: Mutex<HashMap<String, TestRunResult>>,
+    /// The most recent build report per configuration, so the build-diagnostics
+    /// MCP server can answer `get_errors`/`get_warnings`/`get_build_status`
+    /// without re-running a build. Keyed by config id, exactly like
+    /// [`WorkspaceSlot::last_test_run`] — a solution build stores its merged
+    /// report under the id of the configuration that produced it, a single
+    /// project build under its own. An id with no entry is
+    /// [`BuildStatus::NeverBuilt`], a distinct answer the reader must not collapse
+    /// into an empty success (see [`build_report_or_never_built`]).
+    last_build: Mutex<HashMap<String, BuildReport>>,
     /// The most recent coverage-of-change map per test configuration, so the
     /// Changes tab can show which changed lines the last coverage run missed
     /// without re-running anything. Keyed by config id, mirroring
@@ -252,6 +276,7 @@ impl WorkspaceSlot {
             supervisor: Supervisor::with_store(running),
             debug: DebugSessions::default(),
             last_test_run: Mutex::new(HashMap::new()),
+            last_build: Mutex::new(HashMap::new()),
             last_coverage: Mutex::new(HashMap::new()),
             last_inspect: Mutex::new(None),
             symbols: Mutex::new(None),
@@ -512,6 +537,42 @@ impl AppState {
         runs.get(config_id).cloned()
     }
 
+    // -- Build reports (keyed by explicit root, read by named workspace) -----
+
+    /// Remember a finished build's parsed report in the slot it came from.
+    ///
+    /// Keyed by the explicit root the build ran under, exactly like
+    /// [`AppState::record_test_run`], so a build started in one workspace and
+    /// finishing after another tab is active records into the right workspace.
+    /// Returns whether it was kept — `false` if that workspace has since been
+    /// closed.
+    pub fn record_build(&self, root: &Path, config_id: &str, report: BuildReport) -> bool {
+        let Some(slot) = self.slot(root) else {
+            return false;
+        };
+        let Ok(mut store) = slot.last_build.lock() else {
+            return false;
+        };
+        store.insert(config_id.to_string(), report);
+        true
+    }
+
+    /// The last recorded build report for a configuration in **a named**
+    /// workspace, or `None` when that workspace is not open or nothing has been
+    /// recorded for the id.
+    ///
+    /// The Build MCP pipe answers by `--workspace`, not by the active pointer, so
+    /// it resolves the cache for the repository the agent was scoped to regardless
+    /// of which window is in front — the same shape as [`Self::lsp_for_root`] and
+    /// [`Self::editor_context_for`], with the same canonicalize fallback. The
+    /// caller turns `None` into the distinct [`BuildStatus::NeverBuilt`] answer via
+    /// [`build_report_or_never_built`] rather than an empty success.
+    pub fn previous_build_for(&self, root: &Path, config_id: &str) -> Option<BuildReport> {
+        let slot = self.slot_for_root(root)?;
+        let store = slot.last_build.lock().ok()?;
+        store.get(config_id).cloned()
+    }
+
     // -- Coverage of change (by explicit root for record, active for read) --
 
     /// Remember a coverage-of-change map in the slot the run came from.
@@ -759,7 +820,7 @@ impl AppState {
     /// read as "not open".
     ///
     /// [`lsp_for_root`]: Self::lsp_for_root
-    fn slot_for_root(&self, root: &Path) -> Option<Arc<WorkspaceSlot>> {
+    pub fn slot_for_root(&self, root: &Path) -> Option<Arc<WorkspaceSlot>> {
         if let Some(slot) = self.slot(root) {
             return Some(slot);
         }
@@ -1016,6 +1077,43 @@ impl AppState {
         }
     }
 
+    /// The listener currently published for the Build control pipe, if any.
+    ///
+    /// Read whenever the build instance registry is republished — a workspace
+    /// opening or closing changes the `workspaces` list but not the pipe, which is
+    /// process-global and outlives every individual workspace, exactly as the
+    /// Roslyn and editor pipes are.
+    #[cfg(windows)]
+    pub fn build_pipe_published(&self) -> Option<cb_core::build::mcp::instances::Listener> {
+        self.build_pipe
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|p| p.published())
+    }
+
+    /// Hand the Build control pipe over to this state, stopping whatever was
+    /// there.
+    ///
+    /// Replacing rather than refusing, exactly as [`Self::set_roslyn_pipe`]: the
+    /// pipe name carries the pid so a second could never bind, and a stale listener
+    /// must not be left running beside a new one.
+    #[cfg(windows)]
+    pub fn set_build_pipe(&self, listener: Option<crate::build::pipe::PipeListener>) {
+        let previous = {
+            let mut slot = self
+                .build_pipe
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            std::mem::replace(&mut *slot, listener)
+        };
+        // Stopped after the guard is dropped: `stop` aborts a task, and holding a
+        // `std::sync::Mutex` across that is the shape to avoid.
+        if let Some(previous) = previous {
+            previous.stop();
+        }
+    }
+
     /// Read one codebase's browser data without an `AppHandle` and without
     /// touching the main thread.
     ///
@@ -1048,6 +1146,19 @@ impl AppState {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         write(&mut guard)
     }
+}
+
+/// The build report to hand a caller, given whatever the cache held for a
+/// configuration.
+///
+/// A command body decides nothing, so this is the one decision the build
+/// diagnostics query makes, extracted here to be tested without an `AppState`.
+/// The abstain rule: an absent cache entry is [`BuildStatus::NeverBuilt`] — a
+/// distinct answer — never an empty [`BuildStatus::SucceededClean`]. "No build
+/// has run" and "a build ran and found nothing" must not collapse into one, so a
+/// caller with nothing cached must not report a clean success.
+pub fn build_report_or_never_built(cached: Option<BuildReport>) -> BuildReport {
+    cached.unwrap_or_else(|| BuildReport::of_status(BuildStatus::NeverBuilt))
 }
 
 #[cfg(test)]

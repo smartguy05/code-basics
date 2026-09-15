@@ -137,7 +137,10 @@ fn every_server_has_a_distinct_stable_id_and_label() {
     let count = ids.len();
     ids.dedup();
     assert_eq!(ids.len(), count, "two servers share an id");
-    assert_eq!(ids, vec!["browser", "editor", "roslyn", "sql", "tasks"]);
+    assert_eq!(
+        ids,
+        vec!["browser", "build", "editor", "roslyn", "sql", "tasks"]
+    );
 }
 
 #[test]
@@ -157,6 +160,26 @@ fn the_editor_context_server_is_known() {
             "get_selection",
             "get_open_files",
             "get_recent_files"
+        ]
+    );
+}
+
+#[test]
+fn the_build_server_is_known() {
+    assert_eq!(ServerId::Build.id(), "build");
+    assert_eq!(ServerId::Build.label(), "Build");
+    let names: Vec<String> = ServerId::Build
+        .descriptors()
+        .iter()
+        .map(|t| t.name.to_string())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "build_solution",
+            "get_errors",
+            "get_warnings",
+            "get_build_status"
         ]
     );
 }

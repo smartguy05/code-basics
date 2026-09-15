@@ -12,6 +12,7 @@
 // `cb_core::browser::consent::decide`) has no in-window caller by design: the
 // user driving their own panel needs no consent from themselves.
 pub mod browser;
+mod build;
 mod editor_context;
 mod roslyn;
 mod state;
@@ -22,6 +23,7 @@ mod commands {
     pub mod behavioral;
     pub mod browser;
     pub mod browser_mcp;
+    pub mod build_mcp;
     pub mod changelists;
     pub mod debug;
     pub mod editor_context_mcp;
@@ -54,6 +56,7 @@ mod commands {
 }
 
 mod mcp_browser;
+mod mcp_build;
 mod mcp_editor;
 mod mcp_redis;
 mod mcp_roslyn;
@@ -154,6 +157,17 @@ pub fn run() {
         mcp_editor::run();
     }
 
+    // The eighth self-dispatch mode, and the sixth MCP server out of this one
+    // executable: the Build & Diagnostics server. Like the Roslyn and editor
+    // servers it answers nothing itself — the build runs in a window in another
+    // process — so it forwards over a named pipe and hands back that application's
+    // own words. Like the Roslyn server the boundary is the `--workspace` it was
+    // installed for. Same two rules as the others: never a window, and never a byte
+    // on stdout that is not an MCP frame.
+    if mcp_build::is_mcp_build_invocation() {
+        mcp_build::run();
+    }
+
     let state = AppState::default();
     workspace_from_args(&state);
 
@@ -226,6 +240,18 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     let state = handle.state::<AppState>();
                     editor_context::start_listener(state.inner(), &handle);
+                });
+            }
+            // Open the process-global Build control pipe and publish this
+            // application in the build instance registry — the twin of the Roslyn
+            // and editor pipes above, and spawned for the same reason (`pipe::start`
+            // uses `tokio::spawn` for its accept loop and so must run inside the
+            // async runtime, which `setup` is not).
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = handle.state::<AppState>();
+                    build::start_listener(state.inner(), &handle);
                 });
             }
             Ok(())
@@ -370,6 +396,11 @@ pub fn run() {
             commands::editor_context_mcp::editor_mcp_server_uninstall_plan,
             commands::editor_context_mcp::uninstall_editor_mcp_server,
             commands::editor_context_mcp::set_editor_context,
+            commands::build_mcp::build_mcp_server_status,
+            commands::build_mcp::build_mcp_server_install_plan,
+            commands::build_mcp::install_build_mcp_server,
+            commands::build_mcp::build_mcp_server_uninstall_plan,
+            commands::build_mcp::uninstall_build_mcp_server,
             commands::qgate::quality_gate_status,
             commands::qgate::quality_gate_install_plan,
             commands::qgate::install_quality_gate,
@@ -506,6 +537,8 @@ pub fn run() {
                 let _ = roslyn::registry::withdraw(std::process::id());
                 // And out of the editor instance registry, for the same reason.
                 let _ = editor_context::registry::withdraw(std::process::id());
+                // And out of the build instance registry, for the same reason.
+                let _ = build::registry::withdraw(std::process::id());
             }
         });
 }

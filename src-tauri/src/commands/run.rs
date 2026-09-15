@@ -202,6 +202,15 @@ pub async fn build_project(
     }
     let config = &config;
 
+    // A build (or rebuild) asks MSBuild's file logger to write diagnostics
+    // artifacts into `.code-basics/build/`; the logger does not create the
+    // directory, so ensure it exists first, exactly as `invocation::build`
+    // pre-creates the results directory. (A clean requests no logger, but the
+    // directory is cheap and harmless to create either way.)
+    let build_dir = cb_core::config::build_dir(&workspace.root);
+    std::fs::create_dir_all(&build_dir)
+        .map_err(|e| format!("failed to create {}: {e}", build_dir.display()))?;
+
     let invocation =
         cb_core::adapters::dotnet::build_action_invocation(config, action, &workspace.root);
 

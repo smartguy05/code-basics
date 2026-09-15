@@ -51,17 +51,19 @@ pub enum ServerId {
     Roslyn,
     Browser,
     EditorContext,
+    Build,
 }
 
 impl ServerId {
     /// Every server this build knows about, in the order the settings page lists
     /// them.
-    pub const ALL: [ServerId; 5] = [
+    pub const ALL: [ServerId; 6] = [
         ServerId::Sql,
         ServerId::Tasks,
         ServerId::Roslyn,
         ServerId::Browser,
         ServerId::EditorContext,
+        ServerId::Build,
     ];
 
     /// Stable id used in the store key and across IPC.
@@ -72,6 +74,7 @@ impl ServerId {
             ServerId::Roslyn => "roslyn",
             ServerId::Browser => "browser",
             ServerId::EditorContext => "editor",
+            ServerId::Build => "build",
         }
     }
 
@@ -83,6 +86,7 @@ impl ServerId {
             ServerId::Roslyn => "Roslyn",
             ServerId::Browser => "Web browser",
             ServerId::EditorContext => "Editor context",
+            ServerId::Build => "Build",
         }
     }
 
@@ -96,6 +100,7 @@ impl ServerId {
             ServerId::Roslyn => crate::roslyn::tools::descriptors(),
             ServerId::Browser => crate::browser::tools::descriptors(),
             ServerId::EditorContext => crate::editor_context::tools::descriptors(),
+            ServerId::Build => crate::build::mcp::tools::descriptors(),
         }
     }
 

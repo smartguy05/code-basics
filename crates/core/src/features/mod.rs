@@ -46,17 +46,21 @@ pub enum FeatureId {
     /// The per-workspace editor-context MCP server (active file, selection,
     /// cursor, open and recent files), for a coding agent to read.
     EditorContextMcp,
+    /// The per-workspace build & diagnostics MCP server (run a build, read its
+    /// errors, warnings and status), for a coding agent to read.
+    BuildMcp,
 }
 
 impl FeatureId {
     /// Every feature this build knows about, in the order the picker lists them.
-    pub const ALL: [FeatureId; 6] = [
+    pub const ALL: [FeatureId; 7] = [
         FeatureId::SqlConsole,
         FeatureId::AskCodebase,
         FeatureId::McpSqlServer,
         FeatureId::WebBrowser,
         FeatureId::Tasks,
         FeatureId::EditorContextMcp,
+        FeatureId::BuildMcp,
     ];
 
     /// Stable id used across IPC, in the store file, and by both installers.
@@ -68,6 +72,7 @@ impl FeatureId {
             FeatureId::WebBrowser => "webBrowser",
             FeatureId::Tasks => "tasks",
             FeatureId::EditorContextMcp => "editorContextMcp",
+            FeatureId::BuildMcp => "buildMcp",
         }
     }
 
@@ -80,6 +85,7 @@ impl FeatureId {
             FeatureId::WebBrowser => "Web browser",
             FeatureId::Tasks => "Tasks",
             FeatureId::EditorContextMcp => "Editor context MCP",
+            FeatureId::BuildMcp => "Build MCP",
         }
     }
 
@@ -100,6 +106,10 @@ impl FeatureId {
             FeatureId::EditorContextMcp => {
                 "Let a coding agent read your live editor state (active file, selection, \
                  cursor, open and recent files) over MCP."
+            }
+            FeatureId::BuildMcp => {
+                "Let a coding agent run this workspace's build and read its errors, warnings \
+                 and status over MCP."
             }
         }
     }
@@ -146,6 +156,12 @@ impl FeatureId {
             // separate, previewed install step, so the feature being visible
             // grants an agent nothing on its own. Read-only either way.
             FeatureId::EditorContextMcp => true,
+            // On, like the others: an existing app gaining capability. While on,
+            // an agent that installed the Build MCP entry can run and read this
+            // workspace's build; installing that entry is a separate, previewed
+            // step, so the feature being visible grants nothing on its own. A
+            // build writes compiler output but changes no source file.
+            FeatureId::BuildMcp => true,
         }
     }
 

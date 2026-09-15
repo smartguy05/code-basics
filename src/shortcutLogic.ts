@@ -41,6 +41,7 @@ export const PLUGIN_LABELS: Record<string, string> = {
   webBrowser: "Web browser",
   tasks: "Tasks",
   editorContextMcp: "Editor context MCP server",
+  buildMcp: "Build MCP server",
   // Not a `FeatureKey`: the Roslyn/LSP server is always-on, so it is keyed by
   // its own string. It still lives here so the Plugins menu and Settings name it
   // from one place, like every other plugin.
@@ -100,6 +101,13 @@ export const COMMANDS: CommandDefinition[] = [
   // heading in Settings and `pluginMenuRows` names it from `PLUGIN_LABELS`, and
   // registered as a handler by `WorkspaceTab` only while the feature is on.
   { id: "plugin.editorMcp", label: "Editor context MCP server", category: "Agent", context: "workspace", defaultBinding: null, plugin: "editorContextMcp" },
+  // The Build & Diagnostics MCP server installer. Feature-gated (`buildMcp`),
+  // like the Editor context server: the pipe host re-reads the feature per call
+  // and refuses when it is off, so with the feature off there is nothing to
+  // install against. Tagged `plugin` so `commandSections` files it under its own
+  // heading in Settings and `pluginMenuRows` names it from `PLUGIN_LABELS`, and
+  // registered as a handler by `WorkspaceTab` only while the feature is on.
+  { id: "plugin.buildMcp", label: "Build MCP server", category: "Agent", context: "workspace", defaultBinding: null, plugin: "buildMcp" },
   // `allowInText` on the search overlays: the caret is almost always inside a
   // `.cm-editor` when the user reaches for Search All, so without it
   // `eventIsTyping` filters the command out of `dispatchShortcut` and Ctrl+N

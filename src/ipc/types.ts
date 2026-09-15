@@ -29,6 +29,70 @@ export type RunKind = "app" | "test";
 /** A build-system action on a .NET project (`adapters/dotnet.rs`). */
 export type BuildAction = "build" | "rebuild" | "clean";
 
+// ---------------------------------------------------------------------------
+// Build diagnostics (`crates/core/src/build/model.rs`)
+// ---------------------------------------------------------------------------
+//
+// The Build & Diagnostics MCP server's parsed view of a build. Keys are pinned
+// by `build_tests.rs` (`build_diagnostic_serialises_with_the_keys_the_ui_reads`,
+// `build_report_serialises_with_the_keys_the_ui_reads`,
+// `build_enums_serialise_in_camel_case`); change a field here and there together.
+
+/** Whether a diagnostic is an error or a warning. */
+export type BuildSeverity = "error" | "warning";
+
+/**
+ * The state of the most recent build for a workspace.
+ *
+ * Six distinct answers, never collapsed (the abstain philosophy, mirroring the
+ * LSP `Availability` and DAP `DebugState`). A pure parse of the artifacts can
+ * only produce the middle three; the app layer supplies the other three from
+ * state the artifacts cannot describe.
+ */
+export type BuildStatus =
+  | "neverBuilt"
+  | "building"
+  | "succeededClean"
+  | "succeededWithWarnings"
+  | "failed"
+  | "couldNotStart";
+
+/**
+ * One structured build diagnostic, parsed from a canonical MSBuild file-logger
+ * line: `PATH(line,col): severity CODE: message [project]`.
+ *
+ * `column` and `project` cross as `null` (not absent) when MSBuild omitted them,
+ * so the UI can tell an honest "no column" from a parser that forgot the field.
+ */
+export interface BuildDiagnostic {
+  file: string;
+  /** 1-based line number. */
+  line: number;
+  /** 1-based column, or `null` when MSBuild reported none. */
+  column: number | null;
+  /** Diagnostic code, e.g. `CS0103`, `MSB3021`, `NU1605`. */
+  code: string;
+  severity: BuildSeverity;
+  /** Human-readable message; multi-line continuations are joined with newlines. */
+  message: string;
+  /** Owning project, from the trailing `[...]`, or `null` when absent. */
+  project: string | null;
+}
+
+/**
+ * The parsed result of a build: a status, the structured diagnostics, and the
+ * lines the parser could not interpret.
+ *
+ * `warnings` is **not** build warnings — those are diagnostics with severity
+ * `"warning"`. It is the parser's own abstentions: any artifact line that did
+ * not match the canonical shape, preserved verbatim rather than dropped.
+ */
+export interface BuildReport {
+  status: BuildStatus;
+  diagnostics: BuildDiagnostic[];
+  warnings: string[];
+}
+
 export type ConfigSource = "detected" | "userFile" | "riderImport";
 
 export interface Project {

@@ -319,7 +319,7 @@ The Running panel: what the app has running now (across every open codebase) plu
 
 ## MCP server installation
 
-The install/uninstall command bridges for the self-dispatched MCP servers (`mcp-sql`, `mcp-browser`, `mcp-roslyn`, `mcp-editor`) — including the `set_editor_context` push that feeds the editor-context server — live in [MCP server installation commands](mcp-servers.md), split out so this file stays within its size budget. The Tasks server's install bridge stays with [the Tasks plugin](#tasks-plugin) above.
+The install/uninstall command bridges for the self-dispatched MCP servers (`mcp-sql`, `mcp-browser`, `mcp-roslyn`, `mcp-editor`, `mcp-build`) — including the `set_editor_context` push that feeds the editor-context server — live in [MCP server installation commands](mcp-servers.md), split out so this file stays within its size budget. The Tasks server's install bridge stays with [the Tasks plugin](#tasks-plugin) above.
 
 ## First-open setup
 

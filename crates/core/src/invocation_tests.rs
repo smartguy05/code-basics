@@ -513,6 +513,56 @@ fn plan_solution_build_emits_one_dotnet_build_per_resolved_project() {
     );
 }
 
+/// `build_solution` reuses `plan_solution_build`, so each per-project step must
+/// carry the build-diagnostics file loggers, and each project's artifacts must be
+/// distinct — otherwise the second project's build would overwrite the first's
+/// diagnostics before the app parsed them, and the merged report would be wrong.
+#[test]
+fn plan_solution_build_steps_write_distinct_diagnostics_artifacts() {
+    let sln = sln_referencing(&[("App", "App/App.csproj"), ("Lib", "Lib/Lib.csproj")]);
+    let (_dir, ws) = workspace_with(&[
+        ("App/App.csproj", EXE_CSPROJ),
+        ("Lib/Lib.csproj", EXE_CSPROJ),
+        ("Sln.sln", &sln),
+    ]);
+
+    let (steps, _warnings) = plan_solution_build(&ws, &ws.solutions[0], BuildAction::Build);
+    assert_eq!(steps.len(), 2);
+
+    // Every step requests both file loggers.
+    for step in &steps {
+        assert!(
+            step.invocation
+                .args
+                .iter()
+                .any(|a| a.starts_with("-flp1:errorsOnly")),
+            "step {} missing errors logger: {:?}",
+            step.name,
+            step.invocation.args
+        );
+        assert!(
+            step.invocation
+                .args
+                .iter()
+                .any(|a| a.starts_with("-flp2:warningsOnly")),
+            "step {} missing warnings logger: {:?}",
+            step.name,
+            step.invocation.args
+        );
+    }
+
+    // The two projects' errors artifacts differ, so neither clobbers the other.
+    let logger = |step: &crate::invocation::SolutionBuildStep| -> String {
+        step.invocation
+            .args
+            .iter()
+            .find(|a| a.starts_with("-flp1:errorsOnly"))
+            .cloned()
+            .unwrap()
+    };
+    assert_ne!(logger(&steps[0]), logger(&steps[1]));
+}
+
 #[test]
 fn plan_solution_build_warns_about_a_member_the_scan_did_not_find() {
     // The solution references a project that is not on disk: it cannot be built,

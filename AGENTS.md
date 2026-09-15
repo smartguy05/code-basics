@@ -112,8 +112,24 @@ server-side read-only mode, so the write gate is structural — a `WriteOp` runs
 path. The panel itself may always write; `allow_writes` gates only the agent. No connection
 string, path or driver message ever reaches an agent.
 
+The Build & Diagnostics MCP server (`build/`, `mcp-build`, opened from the Plugins menu) lets
+a coding agent build one repository and read the build's **structured** diagnostics —
+`build_solution`, `get_errors`, `get_warnings`, `get_build_status` — over the same per-pid
+named-pipe pattern as Roslyn/Editor context. It exists because the bundled Roslyn advertises
+no `diagnosticProvider`, so `get_diagnostics` abstains `Unsupported` for C#; this server runs
+`dotnet build` with MSBuild errors-only/warnings-only file loggers (invariant culture, full
+paths) and parses the artifacts into a `BuildReport` — the `testing/trx.rs` "parse what the
+tool emitted" model, pure and tested in `build/{model,parse}.rs`. `BuildStatus` is six distinct
+answers (**neverBuilt / building / succeededClean / succeededWithWarnings / failed /
+couldNotStart**, all reachable — `Building` is written before the build is awaited so a
+concurrent `get_build_status` is never stale); an unparseable line lands in `warnings` not
+`diagnostics`; no driver/OS text crosses to the agent. `--workspace`-scoped (the consent
+boundary) and gated by `FeatureId::BuildMcp` (default on) two ways — re-read per call. Installs
+into the same agent configs with the preview-then-apply flow; its caveat states that a build
+writes compiler output (`bin/`, `obj/`) but edits no source.
+
 Per-**tool** MCP gating lives in `tool_gate/` (user-global `mcp-tools.json`): each of the
-five built-in servers (SQL, Tasks, Roslyn, Browser, Editor context) filters its `tools/list`
+six built-in servers (SQL, Tasks, Roslyn, Browser, Editor context, Build) filters its `tools/list`
 through `tool_gate::filter_descriptors` and
 refuses a disabled-but-known tool at dispatch (re-read per call). It is a **preference, not
 a security boundary** — a missing/corrupt store means every tool on, the opposite of the

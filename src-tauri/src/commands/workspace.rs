@@ -76,11 +76,12 @@ pub async fn open_workspace(
     crate::commands::lsp::spawn_session(app.clone());
     spawn_build(app, workspace.clone(), Rebuild::Cached);
     spawn_archive_stale(workspace.root.clone());
-    // The set of open workspaces changed, so the roslyn and editor instance
-    // registries' `workspaces` lists — what an `mcp-roslyn`/`mcp-editor` client
-    // narrows on — are now stale.
+    // The set of open workspaces changed, so the roslyn, editor and build
+    // instance registries' `workspaces` lists — what an
+    // `mcp-roslyn`/`mcp-editor`/`mcp-build` client narrows on — are now stale.
     crate::roslyn::registry::republish(state.inner());
     crate::editor_context::registry::republish(state.inner());
+    crate::build::registry::republish(state.inner());
     Ok(workspace)
 }
 
@@ -110,6 +111,7 @@ pub async fn set_active_workspace(state: State<'_, AppState>, root: String) -> R
     // still appear, and republishing is idempotent.
     crate::roslyn::registry::republish(state.inner());
     crate::editor_context::registry::republish(state.inner());
+    crate::build::registry::republish(state.inner());
     Ok(())
 }
 
@@ -137,10 +139,11 @@ pub async fn close_workspace(
         }
     }
 
-    // A workspace closed, so the roslyn and editor registries' `workspaces` lists
-    // are stale.
+    // A workspace closed, so the roslyn, editor and build registries' `workspaces`
+    // lists are stale.
     crate::roslyn::registry::republish(state.inner());
     crate::editor_context::registry::republish(state.inner());
+    crate::build::registry::republish(state.inner());
     Ok(new_active.map(|p| p.display().to_string()))
 }
 

@@ -1,7 +1,7 @@
 # MCP server installation commands
 
 The install/uninstall command bridges for the MCP servers this app self-dispatches
-into (`cb-app mcp-sql`, `mcp-browser`, `mcp-roslyn`, `mcp-editor`). Each is
+into (`cb-app mcp-sql`, `mcp-browser`, `mcp-roslyn`, `mcp-editor`, `mcp-build`). Each is
 previewed exactly as the agent hooks are: a plan command touches nothing and is
 what the confirmation dialog renders, and the apply commands write through
 `providers::apply_writes_atomically` (temp file + rename) before re-reading the
@@ -14,7 +14,8 @@ hook installers use. The entry is `command` = this executable + an `args` array 
 **separate fields**, never a quoted command string. Codex has no project scope.
 See also the per-server guides: [SQL](../guides/sql-mcp-server.md),
 [Roslyn](../guides/roslyn-mcp-server.md),
-[Editor context](../guides/editor-context-mcp.md); the Tasks server's install
+[Editor context](../guides/editor-context-mcp.md),
+[Build & Diagnostics](../guides/build-mcp-server.md); the Tasks server's install
 bridge is documented with [the Tasks plugin](commands.md#tasks-plugin).
 
 ## SQL MCP server
@@ -60,3 +61,15 @@ Codex has no project scope: `mcp_server_install_plan(codex, project)` is an erro
 | `editor_mcp_server_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change removing the server would make. **Touches nothing.** An empty `writes` means that configuration holds no entry of ours. Every other configured server survives |
 | `uninstall_editor_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed removal, backing the file up first, then re-read the status |
 | `set_editor_context` | `root: String, ctx: EditorContext` | `()` | **The push.** Editor state lives in the React frontend, so the frontend feeds it into `AppState` (debounced) for the pipe host to read back — the twin of the browser panel's automation-consent push. Called **only while the `editorContextMcp` feature is on**; this command only records. The feature-off gate is two-fold — the frontend stops calling, and the pipe host re-checks the feature before serving — so a context left here by a feature switched off after a push is never exposed. A push whose workspace has since closed is a harmless no-op |
+
+## Build & Diagnostics MCP server
+
+`src-tauri/src/commands/build_mcp.rs` — installing the **Build & Diagnostics** MCP server (which lets a coding agent build one repository and read the build's structured diagnostics from the same build the editor runs) into an agent's configuration, previewed exactly as the SQL, browser, Roslyn and Editor context servers are. Decisions live in `cb_core::build::mcp::install`, which reuses `mcp::install`'s merge wholesale. The server name is `code-basics-build`. The entry's `args` = `["mcp-build"]` (plus `--workspace <root>` at project scope) — `--workspace` **is** the consent boundary, so an agent configured for one repository cannot build another. The caveats' access note states, last so it is not scrolled past, that a build writes compiler output (`bin/`, `obj/`) but changes no source file and there is no tool here that edits code. Gated by the `buildMcp` feature. See [the Build MCP server guide](../guides/build-mcp-server.md).
+
+| Command | Parameters | Returns | Notes |
+|---------|-----------|---------|-------|
+| `build_mcp_server_status` | `provider: ProviderId` | `InstallScope \| null` | Where the build server is installed for this workspace and provider (project wins over user), or `null` |
+| `build_mcp_server_install_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact final contents of the write — Claude Code `<root>/.mcp.json` (project) or `~/.claude.json` (user), Codex `$CODEX_HOME/config.toml` (user only). **Touches nothing** — what the preview renders, caveats included |
+| `install_build_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install, then re-read the status from disk. A user-scope entry names no workspace, so it answers `noWorkspace` until scoped to a repository |
+| `build_mcp_server_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change removing the server would make. **Touches nothing.** An empty `writes` means that configuration holds no entry of ours. Every other configured server survives |
+| `uninstall_build_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed removal, backing the file up first, then re-read the status |

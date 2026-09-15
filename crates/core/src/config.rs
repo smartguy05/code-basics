@@ -31,6 +31,13 @@ pub const RESULTS_DIR: &str = "results";
 /// [`IGNORED`]: a server log is a verbose trace of one person's editing session
 /// and is rewritten on every launch.
 pub const LSP_LOG_DIR: &str = "lsp-logs";
+/// Where the build-diagnostics feature writes its MSBuild file-logger
+/// artifacts (`-flp1`/`-flp2`).
+///
+/// Inside the config directory for the same reason as [`RESULTS_DIR`] — one
+/// `.gitignore` entry covers everything — and it *must* be listed in [`IGNORED`]:
+/// a build log is one machine's absolute paths, rewritten on every build.
+pub const BUILD_DIR: &str = "build";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -188,6 +195,11 @@ pub fn lsp_log_dir(root: &Path) -> PathBuf {
     config_dir(root).join(LSP_LOG_DIR)
 }
 
+/// Where the build-diagnostics feature writes its file-logger artifacts.
+pub fn build_dir(root: &Path) -> PathBuf {
+    config_dir(root).join(BUILD_DIR)
+}
+
 /// Load the configuration file, returning an empty configuration when absent.
 pub fn load(root: &Path) -> Result<WorkspaceConfig> {
     let path = config_path(root);
@@ -309,6 +321,9 @@ const IGNORED: &[&str] = &[
     // (`--extensionLogDirectory`), so without this entry the app would be
     // writing uncommittable files into a committed directory.
     "lsp-logs/",
+    // Build-diagnostics file-logger artifacts: one machine's absolute paths,
+    // rewritten on every build, and derived from the source tree — never shared.
+    "build/",
     // Run-once record: which "Run Agent" prompts finished on this machine.
     // Local state, not something to share through the repository.
     crate::enhancements::runs::RUNS_FILE,

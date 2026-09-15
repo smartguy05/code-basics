@@ -759,7 +759,15 @@ fn a_build_with_no_project_passes_no_target() {
 
     let inv = build_action_invocation(&c, BuildAction::Build, root);
 
-    assert_eq!(inv.args, vec!["build"]);
+    // The build verb is present and no target argument is invented. The
+    // diagnostics file-logger args a build now always carries are not a target,
+    // so the property under test — "no project passed" — is unchanged.
+    assert_eq!(inv.args[0], "build");
+    assert!(
+        !inv.args.iter().any(|a| a.ends_with(".csproj")),
+        "no target should be passed: {:?}",
+        inv.args
+    );
     assert_eq!(inv.cwd, PathBuf::from("/repo"));
 }
 
@@ -946,7 +954,17 @@ fn program_arguments_do_not_leak_into_a_build() {
 
     let inv = build_action_invocation(&c, BuildAction::Build, root);
 
-    assert_eq!(inv.args, vec!["build"]);
+    // The program arguments do not leak into the build command line. The
+    // diagnostics file-logger args the build carries are the app's, not the
+    // configuration's, so they do not count against this property.
+    assert_eq!(inv.args[0], "build");
+    assert!(
+        !inv.args
+            .iter()
+            .any(|a| a == "--serve" || a == "--port=8080"),
+        "program args must not leak: {:?}",
+        inv.args
+    );
 }
 
 #[test]
@@ -1683,5 +1701,155 @@ fn mtp_gets_the_package_name_instead_of_a_flag_it_ignores() {
             .any(|w| w.contains("Microsoft.Testing.Extensions.CrashDump")),
         "{:?}",
         inv.warnings
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Build & Diagnostics: MSBuild file-logger args + invariant culture
+// ---------------------------------------------------------------------------
+
+fn build_config() -> RunConfig {
+    let mut c = RunConfig::new(
+        "src-App-App.csproj:run:debug",
+        "app",
+        RunKind::App,
+        "dotnet",
+        ConfigSource::Detected,
+    );
+    c.project = Some(PathBuf::from("src/App/App.csproj"));
+    c
+}
+
+/// A build requests two file-logger artifacts — errors-only and warnings-only —
+/// under `.code-basics/build/`, plus full paths, so the app can parse structured
+/// diagnostics back out of a defined location.
+#[test]
+fn a_build_requests_the_errors_and_warnings_file_loggers() {
+    let root = Path::new("/repo");
+    let inv = build_action_invocation(&build_config(), BuildAction::Build, root);
+
+    let (errors, warnings) = build_log_paths(root, "src-App-App.csproj:run:debug");
+    let flp1 = format!("-flp1:errorsOnly;logfile={}", errors.display());
+    let flp2 = format!("-flp2:warningsOnly;logfile={}", warnings.display());
+
+    assert!(
+        inv.args.contains(&flp1),
+        "missing errors logger: {:?}",
+        inv.args
+    );
+    assert!(
+        inv.args.contains(&flp2),
+        "missing warnings logger: {:?}",
+        inv.args
+    );
+    assert!(
+        inv.args.contains(&"/p:GenerateFullPaths=true".to_string()),
+        "missing GenerateFullPaths: {:?}",
+        inv.args
+    );
+}
+
+/// The artifacts land inside `.code-basics/build/`, the gitignored per-workspace
+/// state directory, not loose in the repository.
+#[test]
+fn the_file_logger_artifacts_live_under_the_build_directory() {
+    let root = Path::new("/repo");
+    let (errors, warnings) = build_log_paths(root, "some:config");
+
+    let build_dir = crate::config::build_dir(root);
+    assert!(
+        errors.starts_with(&build_dir),
+        "errors: {}",
+        errors.display()
+    );
+    assert!(
+        warnings.starts_with(&build_dir),
+        "warnings: {}",
+        warnings.display()
+    );
+    assert_ne!(errors, warnings, "the two artifacts must be distinct files");
+}
+
+/// Two configurations (as a solution build mints, one per project) write to
+/// distinct artifacts, so building one project cannot clobber another's
+/// diagnostics before the app has parsed them.
+#[test]
+fn different_configs_write_to_distinct_artifacts() {
+    let root = Path::new("/repo");
+    let (a_err, a_warn) = build_log_paths(root, "solution-build:Api");
+    let (b_err, b_warn) = build_log_paths(root, "solution-build:Web");
+
+    assert_ne!(a_err, b_err);
+    assert_ne!(a_warn, b_warn);
+}
+
+/// Rebuild is a build too, so it carries the same diagnostics loggers.
+#[test]
+fn a_rebuild_also_requests_the_file_loggers() {
+    let root = Path::new("/repo");
+    let inv = build_action_invocation(&build_config(), BuildAction::Rebuild, root);
+
+    assert!(
+        inv.args.iter().any(|a| a.starts_with("-flp1:errorsOnly")),
+        "{:?}",
+        inv.args
+    );
+    assert!(
+        inv.args.iter().any(|a| a.starts_with("-flp2:warningsOnly")),
+        "{:?}",
+        inv.args
+    );
+    // Still a rebuild: the incremental flag survives beside the loggers.
+    assert!(inv.args.contains(&"--no-incremental".to_string()));
+}
+
+/// A clean produces no diagnostics, so it requests no file logger — attaching
+/// one would only write empty artifacts.
+#[test]
+fn a_clean_requests_no_file_logger() {
+    let root = Path::new("/repo");
+    let inv = build_action_invocation(&build_config(), BuildAction::Clean, root);
+
+    assert!(
+        !inv.args.iter().any(|a| a.starts_with("-flp")),
+        "clean must not attach a file logger: {:?}",
+        inv.args
+    );
+    assert!(
+        !inv.args.iter().any(|a| a.contains("GenerateFullPaths")),
+        "{:?}",
+        inv.args
+    );
+}
+
+/// The build is forced to emit its diagnostics in the invariant (English)
+/// culture, so the canonical `error CS####` shape the parser expects does not
+/// become `erreur CS####` on a localized machine.
+#[test]
+fn a_build_forces_invariant_culture() {
+    let root = Path::new("/repo");
+    let inv = build_action_invocation(&build_config(), BuildAction::Build, root);
+
+    assert_eq!(
+        inv.env.get("DOTNET_CLI_UI_LANGUAGE").map(String::as_str),
+        Some("en-US")
+    );
+}
+
+/// A user who set the UI language themselves keeps it: the culture default is
+/// layered *underneath* the configuration's own environment, the same
+/// precedence the crash-dump and colour defaults use.
+#[test]
+fn a_users_culture_override_wins_over_the_default() {
+    let root = Path::new("/repo");
+    let mut c = build_config();
+    c.env
+        .insert("DOTNET_CLI_UI_LANGUAGE".into(), "fr-FR".into());
+
+    let inv = build_action_invocation(&c, BuildAction::Build, root);
+
+    assert_eq!(
+        inv.env.get("DOTNET_CLI_UI_LANGUAGE").map(String::as_str),
+        Some("fr-FR")
     );
 }
