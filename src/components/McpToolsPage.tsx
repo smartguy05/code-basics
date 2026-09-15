@@ -23,6 +23,10 @@ const SERVER_FEATURE: Record<string, FeatureKey | null> = {
   tasks: "tasks",
   browser: "webBrowser",
   roslyn: null,
+  // The editor-context server is gated by its own feature, which also controls
+  // whether the frontend pushes editor state at all — so the server toggle here
+  // and the push are one switch, not two.
+  editor: "editorContextMcp",
 };
 
 export function McpToolsPage() {

@@ -23,6 +23,7 @@ export type PluginAction =
   | { kind: "browser" }
   | { kind: "tasks" }
   | { kind: "roslynMcp" }
+  | { kind: "editorMcp" }
   | { kind: "redis" };
 
 export interface PluginRow {
@@ -124,6 +125,19 @@ const PLUGINS: PluginEntry[] = [
     needsWorkspace: true,
     ready: "Open the task list for the active codebase",
     noWorkspace: "Open a codebase to manage its tasks",
+  },
+  {
+    // Feature-gated on `editorContextMcp` (unlike the always-on Roslyn server):
+    // the same feature gates whether the frontend pushes editor state at all, so
+    // with it off there is nothing to install against and the row is omitted.
+    // Needs a codebase because the install is scoped to it (`--workspace <root>`
+    // is baked into the entry) and the status is read per repository.
+    feature: "editorContextMcp",
+    commandId: "plugin.editorMcp",
+    action: { kind: "editorMcp" },
+    needsWorkspace: true,
+    ready: "Let a coding agent see what you have open and selected, over MCP",
+    noWorkspace: "Open a codebase to install the Editor context MCP server for it",
   },
   {
     // Always-on like the Roslyn server below (no `FeatureId`): the Redis panel

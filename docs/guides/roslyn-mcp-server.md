@@ -204,4 +204,4 @@ Everything in `cb-core` is pure and unit-tested headlessly with no MCP client an
 no language server installed. See also [Language servers](language-servers.md)
 (the warm session this server exposes), [the SQL MCP server](sql-mcp-server.md)
 and [the Tasks plugin](tasks-plugin.md) (whose `--workspace` boundary this one
-follows), and [the Tauri command reference](../reference/commands.md#roslyn-mcp-server).
+follows), and [the Tauri command reference](../reference/mcp-servers.md#roslyn-mcp-server).

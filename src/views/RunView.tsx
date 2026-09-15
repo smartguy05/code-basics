@@ -44,6 +44,12 @@ import {
   workspaceFile,
   type OpenEditorFile,
 } from "../components/editorSourceLogic";
+import {
+  buildEditorContext,
+  editorContextEqual,
+  pushRecent,
+  type LiveEditorPosition,
+} from "../components/editorContextLogic";
 import { Sidebar } from "../components/Sidebar";
 import { useShortcutHint } from "../shortcuts";
 import { withShortcut } from "../shortcutLogic";
@@ -81,6 +87,7 @@ import type {
   BuildAction,
   ComparisonMode,
   DebugEvent,
+  EditorContext,
   InspectStatus,
   ProcessEvent,
   RenameResult,
@@ -237,6 +244,7 @@ export function RunView({
   onPaneChange,
   tabForeground,
   codebaseActive,
+  editorContextEnabled,
   behavioral,
   onOpenReview,
   onRunBehavioral,
@@ -259,6 +267,13 @@ export function RunView({
    */
   tabForeground: boolean;
   codebaseActive: boolean;
+  /**
+   * Whether the `editorContextMcp` feature is on. The frontend half of the
+   * privacy gate: while it is off, no editor context is pushed to the backend at
+   * all (the pipe host re-checking the feature is the other half). Read in
+   * `WorkspaceTab` and passed down so this view never reads the feature store.
+   */
+  editorContextEnabled: boolean;
   /** The finished before/after report, for the intent cards' badges. */
   behavioral: BehavioralReport | null;
   onOpenReview: () => void;
@@ -424,6 +439,23 @@ export function RunView({
    * and persisting the pins without the files they name would be half a feature.
    */
   const [pinnedFiles, setPinnedFiles] = useState<Set<string>>(new Set());
+  /**
+   * Recently edited workspace paths, most-recent-first, for the Editor Context
+   * MCP push. In-memory to match `openFiles` — neither survives a workspace
+   * change (this view is keyed by `workspace.root`) — and bounded by
+   * `pushRecent`'s cap.
+   */
+  const [recentPaths, setRecentPaths] = useState<string[]>([]);
+  /**
+   * The active editor's last-reported live position, tagged with the reporting
+   * tab's id so a background editor's snapshot is never mistaken for the active
+   * one. Consumed by the push effect only when `id === activeFile`.
+   */
+  const [editorLive, setEditorLive] = useState<{ id: string; position: LiveEditorPosition } | null>(
+    null,
+  );
+  /** The last context actually pushed, so identical context is not re-pushed. */
+  const lastPushedContext = useRef<EditorContext | null>(null);
   const [split, setSplit] = useState(() => loadSplit(localStorage, workspace.root));
   const [consoleCollapsed, setConsoleCollapsed] = useState(() =>
     loadCollapsed(localStorage, workspace.root),
@@ -806,6 +838,17 @@ export function RunView({
       else next.delete(id);
       return next;
     });
+    // A file becoming dirty is an edit — the moment that defines "recently
+    // edited" for the Editor Context push. Only workspace files carry a path;
+    // a secrets tab's id is no path (`pushRecent` returns the same reference
+    // when nothing moves, so no needless re-render).
+    if (dirty) {
+      const file = openFiles.find((f) => f.id === id);
+      if (file?.source.kind === "workspace") {
+        const path = file.source.path;
+        setRecentPaths((previous) => pushRecent(previous, path));
+      }
+    }
   }
 
   /** Drag the editor/console divider; the fraction persists across sessions. */
@@ -1102,6 +1145,46 @@ export function RunView({
     onLspPollKeyChange?.(lspPollKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lspPollKey]);
+
+  // Push the live editor context to the backend for the Editor Context MCP shim,
+  // debounced, and **only while the feature is on** — the frontend half of the
+  // privacy gate. The live position is taken only when it belongs to the active
+  // tab; `buildEditorContext` drops it anyway for a non-workspace active tab.
+  // Nothing is pushed when the built context is identical to the last one, so an
+  // unrelated re-render does not fire an IPC call.
+  useEffect(() => {
+    if (!editorContextEnabled) return;
+    const live =
+      editorLive !== null && editorLive.id === activeFile ? editorLive.position : null;
+    const ctx = buildEditorContext({
+      openFiles,
+      activeFileId: activeFile,
+      dirtyIds: dirtyFiles,
+      pinnedIds: pinnedFiles,
+      recent: recentPaths,
+      live,
+    });
+    if (lastPushedContext.current !== null && editorContextEqual(lastPushedContext.current, ctx)) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      lastPushedContext.current = ctx;
+      void api.setEditorContext(workspace.root, ctx).catch(() => {
+        // A push is best-effort live state; the next change re-sends it, and the
+        // pipe host abstains cleanly when there is nothing recorded.
+      });
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [
+    editorContextEnabled,
+    openFiles,
+    activeFile,
+    dirtyFiles,
+    pinnedFiles,
+    recentPaths,
+    editorLive,
+    workspace.root,
+  ]);
 
   // Whether this codebase's editor area is holding anything, for the window
   // transparency decision in `App`.
@@ -2236,6 +2319,14 @@ export function RunView({
                           }
                           onRenameApplied={distributeRename}
                           onRenameNote={(report) => onNotify?.(report)}
+                          // Only wired while the feature is on, so a background
+                          // scroll never churns state (and never pushes) when the
+                          // user has switched editor context off.
+                          onEditorContextChange={
+                            editorContextEnabled
+                              ? (position) => setEditorLive({ id: file.id, position })
+                              : undefined
+                          }
                         />
                       </DockableEditorSlot>
                       ),

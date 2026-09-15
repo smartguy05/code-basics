@@ -57,9 +57,11 @@ pub async fn open_workspace(
     // abandoned, so neither sits between choosing a folder and seeing it.
     crate::commands::lsp::spawn_session(app.clone());
     spawn_build(app, workspace.clone(), Rebuild::Cached);
-    // The set of open workspaces changed, so the roslyn instance registry's
-    // `workspaces` list — what an `mcp-roslyn` client narrows on — is now stale.
+    // The set of open workspaces changed, so the roslyn and editor instance
+    // registries' `workspaces` lists — what an `mcp-roslyn`/`mcp-editor` client
+    // narrows on — are now stale.
     crate::roslyn::registry::republish(state.inner());
+    crate::editor_context::registry::republish(state.inner());
     Ok(workspace)
 }
 
@@ -88,6 +90,7 @@ pub async fn set_active_workspace(state: State<'_, AppState>, root: String) -> R
     // window that opened its first workspace by activating a pre-loaded slot must
     // still appear, and republishing is idempotent.
     crate::roslyn::registry::republish(state.inner());
+    crate::editor_context::registry::republish(state.inner());
     Ok(())
 }
 
@@ -115,8 +118,10 @@ pub async fn close_workspace(
         }
     }
 
-    // A workspace closed, so the roslyn registry's `workspaces` list is stale.
+    // A workspace closed, so the roslyn and editor registries' `workspaces` lists
+    // are stale.
     crate::roslyn::registry::republish(state.inner());
+    crate::editor_context::registry::republish(state.inner());
     Ok(new_active.map(|p| p.display().to_string()))
 }
 

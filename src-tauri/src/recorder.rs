@@ -102,6 +102,18 @@ fn record() -> anyhow::Result<Option<String>> {
         return Ok(None);
     }
 
+    // Most specific wins. A user-scope hook fires for every repository on the
+    // machine, so when this workspace has its own project-scope record hook the
+    // global invocation would write every edit and label a second time. Stand
+    // down and let the specific hook record the single copy.
+    if hook::defers_to_project_hook(
+        invocation.provider,
+        invocation.workspace.is_some(),
+        hook::project_record_hook_present(&root),
+    ) {
+        return Ok(None);
+    }
+
     hook::ingest(&root, invocation.provider, invocation.event, &payload)?;
 
     // Deliberately after `ingest`: the label this turn *did* produce is written

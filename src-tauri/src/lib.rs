@@ -12,6 +12,7 @@
 // `cb_core::browser::consent::decide`) has no in-window caller by design: the
 // user driving their own panel needs no consent from themselves.
 pub mod browser;
+mod editor_context;
 mod roslyn;
 mod state;
 
@@ -23,6 +24,7 @@ mod commands {
     pub mod browser_mcp;
     pub mod changelists;
     pub mod debug;
+    pub mod editor_context_mcp;
     pub mod enhancements;
     pub mod erosion;
     pub mod features;
@@ -52,6 +54,7 @@ mod commands {
 }
 
 mod mcp_browser;
+mod mcp_editor;
 mod mcp_redis;
 mod mcp_roslyn;
 mod mcp_sql;
@@ -139,6 +142,18 @@ pub fn run() {
         mcp_redis::run();
     }
 
+    // The seventh self-dispatch mode, and the fifth MCP server out of this one
+    // executable: the editor-context server. Like the Roslyn and browser servers
+    // it answers nothing itself — the live editor state lives in a window in
+    // another process — so it forwards over a named pipe and hands back that
+    // application's own words. Like the Roslyn server, the boundary is the
+    // `--workspace` it was installed for rather than the active window. Same two
+    // rules as the others: never a window, and never a byte on stdout that is not
+    // an MCP frame.
+    if mcp_editor::is_mcp_editor_invocation() {
+        mcp_editor::run();
+    }
+
     let state = AppState::default();
     workspace_from_args(&state);
 
@@ -198,6 +213,19 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     let state = handle.state::<AppState>();
                     roslyn::start_listener(state.inner(), &handle);
+                });
+            }
+            // Open the process-global editor-context control pipe and publish this
+            // application in the editor instance registry — the twin of the Roslyn
+            // pipe above, and spawned for the same reason (`pipe::start` uses
+            // `tokio::spawn` for its accept loop and so must run inside the async
+            // runtime, which `setup` is not). It reads the live editor state the
+            // frontend pushes, so nothing here needs the frontend to have started.
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = handle.state::<AppState>();
+                    editor_context::start_listener(state.inner(), &handle);
                 });
             }
             Ok(())
@@ -336,6 +364,12 @@ pub fn run() {
             commands::roslyn_mcp::install_roslyn_mcp_server,
             commands::roslyn_mcp::roslyn_mcp_server_uninstall_plan,
             commands::roslyn_mcp::uninstall_roslyn_mcp_server,
+            commands::editor_context_mcp::editor_mcp_server_status,
+            commands::editor_context_mcp::editor_mcp_server_install_plan,
+            commands::editor_context_mcp::install_editor_mcp_server,
+            commands::editor_context_mcp::editor_mcp_server_uninstall_plan,
+            commands::editor_context_mcp::uninstall_editor_mcp_server,
+            commands::editor_context_mcp::set_editor_context,
             commands::qgate::quality_gate_status,
             commands::qgate::quality_gate_install_plan,
             commands::qgate::install_quality_gate,
@@ -470,6 +504,8 @@ pub fn run() {
                 let _ = browser::registry::withdraw(std::process::id());
                 // And out of the roslyn instance registry, for the same reason.
                 let _ = roslyn::registry::withdraw(std::process::id());
+                // And out of the editor instance registry, for the same reason.
+                let _ = editor_context::registry::withdraw(std::process::id());
             }
         });
 }

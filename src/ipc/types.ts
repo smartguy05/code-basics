@@ -2974,3 +2974,66 @@ export interface BrowserNetworkBatch {
    */
   coverage: string;
 }
+
+// ---------------------------------------------------------------------------
+// Editor context (pushed frontend -> backend, read by the editor MCP shim)
+// ---------------------------------------------------------------------------
+
+/** A caret position: 1-based line, 0-based UTF-16 character. */
+export interface EditorCursor {
+  line: number;
+  character: number;
+}
+
+/** The visible line range of an editor, both 1-based and inclusive. */
+export interface EditorViewport {
+  firstVisibleLine: number;
+  lastVisibleLine: number;
+}
+
+/**
+ * A non-empty selection with its text (capped by the frontend). Positions are
+ * 1-based line, 0-based UTF-16 character.
+ */
+export interface EditorSelection {
+  startLine: number;
+  startCharacter: number;
+  endLine: number;
+  endCharacter: number;
+  text: string;
+}
+
+/** One open editor tab. */
+export interface EditorOpenFile {
+  /** Workspace-relative path, forward slashes. */
+  path: string;
+  active: boolean;
+  dirty: boolean;
+  pinned: boolean;
+}
+
+/** One recently edited file. */
+export interface EditorRecentFile {
+  /** Workspace-relative path, forward slashes. */
+  path: string;
+}
+
+/**
+ * A live snapshot of what the user is looking at in the editor.
+ *
+ * Unlike most types here this flows **frontend → backend**: the React editor
+ * owns it and pushes it into `AppState` while the `editorContextMcp` feature is
+ * enabled, and the per-workspace editor MCP shim reads it back.
+ *
+ * The "what am I looking at" fields are **nullable, not optional**: the Rust
+ * side has no `skip_serializing_if`, so each key is always present (`null` when
+ * absent), which lets the shim tell an honest nothing from a missing key.
+ */
+export interface EditorContext {
+  activeFile: string | null;
+  cursor: EditorCursor | null;
+  viewport: EditorViewport | null;
+  selection: EditorSelection | null;
+  openFiles: EditorOpenFile[];
+  recentFiles: EditorRecentFile[];
+}

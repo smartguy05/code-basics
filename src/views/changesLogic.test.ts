@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSections,
+  reconcileSelection,
   sortFilesByRisk,
   statusLetter,
   type FileSection,
 } from "./changesLogic";
-import type { ChangeKind, Changelist, FileChange } from "../ipc/types";
+import type {
+  ChangeKind,
+  Changelist,
+  FileChange,
+  GroupFile,
+  IntentGroup,
+} from "../ipc/types";
 
 function change(
   path: string,
@@ -218,5 +225,50 @@ describe("sortFilesByRisk", () => {
     const sorted = sortFilesByRisk(sections, riskOf({}));
     expect(sorted.map((s) => s.key)).toEqual(["staged", "group:feature", "unstaged"]);
     expect(sorted.map((s) => s.keepWhenEmpty)).toEqual([false, true, false]);
+  });
+});
+
+describe("reconcileSelection", () => {
+  const file = (path: string, lineIndices: number[], hunks: number[]): GroupFile => ({
+    path,
+    lineIndices,
+    hunks,
+  });
+  const group = (id: string, files: GroupFile[]): IntentGroup =>
+    ({ id, files }) as unknown as IntentGroup;
+
+  const numpad = group("intent:label:numpad", [file("a.ts", [80, 81], [1])]);
+  const zeroStep = group("intent:label:zero-step", [file("a.ts", [49, 50], [0])]);
+
+  it("skips when no card is selected", () => {
+    expect(reconcileSelection([numpad, zeroStep], null, "a.ts")).toEqual({ kind: "skip" });
+  });
+
+  it("re-derives the highlight from the current group after a reload", () => {
+    // The same card, but its lines have moved as the diff renumbered.
+    const moved = group("intent:label:numpad", [file("a.ts", [82, 83], [1])]);
+    expect(reconcileSelection([moved, zeroStep], "intent:label:numpad", "a.ts")).toEqual({
+      kind: "update",
+      highlight: [82, 83],
+      groupHunks: [1],
+    });
+  });
+
+  it("clears a selection whose card no longer exists once groups have loaded", () => {
+    expect(reconcileSelection([zeroStep], "intent:label:numpad", "a.ts")).toEqual({
+      kind: "clear",
+    });
+  });
+
+  it("keeps the selection while a reload is briefly empty", () => {
+    expect(reconcileSelection([], "intent:label:numpad", "a.ts")).toEqual({ kind: "skip" });
+  });
+
+  it("falls back to the card's first file when the selected path is gone", () => {
+    expect(reconcileSelection([numpad], "intent:label:numpad", "other.ts")).toEqual({
+      kind: "update",
+      highlight: [80, 81],
+      groupHunks: [1],
+    });
   });
 });

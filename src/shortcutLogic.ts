@@ -40,6 +40,7 @@ export const PLUGIN_LABELS: Record<string, string> = {
   mcpSqlServer: "SQL MCP server",
   webBrowser: "Web browser",
   tasks: "Tasks",
+  editorContextMcp: "Editor context MCP server",
   // Not a `FeatureKey`: the Roslyn/LSP server is always-on, so it is keyed by
   // its own string. It still lives here so the Plugins menu and Settings name it
   // from one place, like every other plugin.
@@ -92,6 +93,13 @@ export const COMMANDS: CommandDefinition[] = [
   // feature is on, exactly as `plugin.mcp` is, so the advertised command always
   // has a handler and a switched-off feature never acts.
   { id: "plugin.tasks", label: "Tasks", category: "Panels", context: "workspace", defaultBinding: null, plugin: "tasks" },
+  // The Editor context MCP server installer. Feature-gated (`editorContextMcp`),
+  // unlike the always-on Roslyn server: the feature also gates whether the
+  // frontend pushes editor state at all, so with it off there is nothing to
+  // install against. Tagged `plugin` so `commandSections` files it under its own
+  // heading in Settings and `pluginMenuRows` names it from `PLUGIN_LABELS`, and
+  // registered as a handler by `WorkspaceTab` only while the feature is on.
+  { id: "plugin.editorMcp", label: "Editor context MCP server", category: "Agent", context: "workspace", defaultBinding: null, plugin: "editorContextMcp" },
   // `allowInText` on the search overlays: the caret is almost always inside a
   // `.cm-editor` when the user reaches for Search All, so without it
   // `eventIsTyping` filters the command out of `dispatchShortcut` and Ctrl+N

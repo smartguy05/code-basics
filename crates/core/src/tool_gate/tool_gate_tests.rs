@@ -64,10 +64,10 @@ fn an_unknown_key_in_the_store_is_inert() {
 }
 
 #[test]
-fn list_reports_all_four_servers_with_their_real_tools() {
+fn list_reports_every_server_with_their_real_tools() {
     let gate = ToolGateFile::default();
     let list = gate.list();
-    assert_eq!(list.len(), 4);
+    assert_eq!(list.len(), ServerId::ALL.len());
 
     for (info, server) in list.iter().zip(ServerId::ALL) {
         assert_eq!(info.id, server.id());
@@ -128,4 +128,35 @@ fn server_id_round_trips_through_its_string() {
         assert_eq!(ServerId::from_id(server.id()), Ok(server));
     }
     assert!(ServerId::from_id("nope").is_err());
+}
+
+#[test]
+fn every_server_has_a_distinct_stable_id_and_label() {
+    let mut ids: Vec<&str> = ServerId::ALL.iter().map(|s| s.id()).collect();
+    ids.sort_unstable();
+    let count = ids.len();
+    ids.dedup();
+    assert_eq!(ids.len(), count, "two servers share an id");
+    assert_eq!(ids, vec!["browser", "editor", "roslyn", "sql", "tasks"]);
+}
+
+#[test]
+fn the_editor_context_server_is_known() {
+    // Stage 2: the editor_context module now supplies the real four tools.
+    assert_eq!(ServerId::EditorContext.id(), "editor");
+    assert_eq!(ServerId::EditorContext.label(), "Editor context");
+    let names: Vec<String> = ServerId::EditorContext
+        .descriptors()
+        .iter()
+        .map(|t| t.name.to_string())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "get_active_file",
+            "get_selection",
+            "get_open_files",
+            "get_recent_files"
+        ]
+    );
 }

@@ -29,12 +29,14 @@ Start here. Each section links to focused documents kept under 500 lines; relate
 - [The SQL MCP server](guides/sql-mcp-server.md) - letting an agent read the databases you are already connected to, read-only and by explicit per-connection consent
 - [The Tasks plugin](guides/tasks-plugin.md) — a per-codebase task list, "assign to AI" that launches the agent in a terminal, and a write-capable MCP server
 - [The Roslyn MCP server](guides/roslyn-mcp-server.md) — exposing the app's warm per-workspace language-server session to a coding agent over MCP, read-only and scoped to one repository
+- [The Editor context MCP server](guides/editor-context-mcp.md) — exposing the user's live editor state (active file, cursor, selection, open and recent files) to a coding agent over MCP, read-only, feature-gated and scoped to one repository
 - [Inspecting objects](guides/inspecting-objects.md) — reading the real heap of a crash dump, and what crash dump capture costs
 - [Language servers](guides/language-servers.md) — which server per language, how to install each, and how to point config at one
 
 ## Reference
 
 - [Tauri command surface](reference/commands.md) — every IPC command with parameters and return types
+- [MCP server installation commands](reference/mcp-servers.md) — the install/uninstall command bridges for the SQL, browser, Roslyn and editor-context MCP servers
 - [Configuration](reference/configuration.md) — `.code-basics/` layout, `config.json`, `RunConfig` fields, and the user-global stores
 - [Test report formats](reference/test-reports.md) — TRX, Jest/Vitest JSON, and JUnit XML
 

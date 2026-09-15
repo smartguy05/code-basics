@@ -34,7 +34,15 @@ import {
 import { registerCommand } from "../shortcuts";
 import { onEditorFontSizeChange } from "../editorFontSize";
 import * as api from "../ipc/api";
-import type { DeclarationAnchor, Highlight, RangeEdit, RenameResult, Target } from "../ipc/types";
+import type {
+  DeclarationAnchor,
+  EditorCursor,
+  EditorSelection,
+  Highlight,
+  RangeEdit,
+  RenameResult,
+  Target,
+} from "../ipc/types";
 import {
   ANCHOR_RETRY_LIMIT,
   ANCHOR_RETRY_MS,
@@ -67,11 +75,13 @@ import {
 import {
   setUsageRows,
   usagesExtension,
+  visibleLineRange,
   type GotoRequest,
   type UsageRowClick,
   type UsageRowSpec,
   type VisibleLines,
 } from "./usagesExtension";
+import { capSelectionText, type LiveEditorPosition } from "./editorContextLogic";
 
 /**
  * How long an edit is allowed to settle before the servers are told about it.
@@ -82,6 +92,17 @@ import {
  * while a change is still owed to the server (see {@link requestVisible}).
  */
 const CHANGE_DEBOUNCE_MS = 250;
+
+/**
+ * How long editor-context activity (selection, scroll, edit) settles before the
+ * live state is reported upward for the Editor Context MCP push.
+ *
+ * A caret drag or a wheel gesture produces many updates and each must not become
+ * an IPC push; `RunView` debounces the push itself as well, so this only has to
+ * collapse the burst within one editor. Shorter than {@link CHANGE_DEBOUNCE_MS}
+ * because it feeds no round trip — it only updates a local snapshot.
+ */
+const EDITOR_CONTEXT_DEBOUNCE_MS = 150;
 
 /**
  * How many references queries may be in flight at once.
@@ -212,6 +233,7 @@ export function FileEditor({
   onPendingEditsConsumed,
   onRenameApplied,
   onRenameNote,
+  onEditorContextChange,
 }: {
   /** What backs this tab. A FileEditor is keyed by its identity and never rebinds. */
   /**
@@ -284,6 +306,17 @@ export function FileEditor({
   }) => void;
   /** Something worth telling the user about, en route to the notification host. */
   onRenameNote?: (report: RenameReport) => void;
+  /**
+   * Report this editor's live position — caret, selection and visible range —
+   * for the Editor Context MCP push, debounced.
+   *
+   * Only a **workspace** file reports: a diff never reaches `FileEditor` (the
+   * Project tab renders it through `DiffPane`), and a secrets file is outside the
+   * workspace, so its position is not "what the user is looking at in this repo".
+   * `RunView` uses the snapshot only when this tab is the active one, so a
+   * background editor reporting on a rare geometry change is harmless.
+   */
+  onEditorContextChange?: (position: LiveEditorPosition) => void;
 }) {
   /**
    * The tab's stable identity: the build effect's dependency, and — for a
@@ -358,6 +391,7 @@ export function FileEditor({
     onRenameApplied,
     onRenameNote,
     onPendingEditsConsumed,
+    onEditorContextChange,
   });
   handlers.current = {
     onDirtyChange,
@@ -365,8 +399,59 @@ export function FileEditor({
     onRenameApplied,
     onRenameNote,
     onPendingEditsConsumed,
+    onEditorContextChange,
   };
   const dirty = useRef(false);
+
+  // -------------------------------------------------------------------------
+  // Editor-context reporting (for the Editor Context MCP push).
+  //
+  // A workspace file reports its live caret, selection and visible range upward,
+  // debounced, so `RunView` can push it to the backend while the feature is on.
+  // All in refs and a component-body function that reads only refs, so the
+  // update-listener built once at mount stays correct.
+  // -------------------------------------------------------------------------
+
+  /** The debounce handle for {@link scheduleContextReport}. */
+  const contextTimer = useRef<number | null>(null);
+
+  /** Read the live caret, selection and visible range off the view. */
+  const liveEditorPosition = (view: EditorView): LiveEditorPosition => {
+    const { doc } = view.state;
+    const main = view.state.selection.main;
+    const headLine = doc.lineAt(main.head);
+    // `Line.number` is 1-based and `head - line.from` is a 0-based UTF-16 offset:
+    // exactly the wire's two conventions, so nothing is converted (the same rule
+    // `usagesExtension` relies on).
+    const cursor: EditorCursor = { line: headLine.number, character: main.head - headLine.from };
+    let selection: EditorSelection | null = null;
+    if (!main.empty) {
+      const fromLine = doc.lineAt(main.from);
+      const toLine = doc.lineAt(main.to);
+      selection = {
+        startLine: fromLine.number,
+        startCharacter: main.from - fromLine.from,
+        endLine: toLine.number,
+        endCharacter: main.to - toLine.from,
+        // Capped in the tested logic module, not sliced here: a whole-file
+        // selection must not push megabytes on every keystroke.
+        text: capSelectionText(doc.sliceString(main.from, main.to)),
+      };
+    }
+    return { cursor, viewport: visibleLineRange(view), selection };
+  };
+
+  /** Report the live position upward, at most once per debounce window. */
+  const scheduleContextReport = () => {
+    if (source.kind !== "workspace") return;
+    if (contextTimer.current !== null) window.clearTimeout(contextTimer.current);
+    contextTimer.current = window.setTimeout(() => {
+      contextTimer.current = null;
+      const view = viewRef.current;
+      if (!view) return;
+      handlers.current.onEditorContextChange?.(liveEditorPosition(view));
+    }, EDITOR_CONTEXT_DEBOUNCE_MS);
+  };
 
   // -------------------------------------------------------------------------
   // Language-server state.
@@ -1157,6 +1242,23 @@ export function FileEditor({
             lsp.current.flushChange();
           }, CHANGE_DEBOUNCE_MS);
         }),
+        // Report the live caret / selection / viewport for the Editor Context
+        // MCP push, on any change that moves what the user is looking at. The
+        // whole thing is debounced and gated to workspace files inside
+        // `scheduleContextReport`, and `RunView` uses the snapshot only for the
+        // active tab, so a background editor firing on a geometry change is cheap
+        // and harmless.
+        EditorView.updateListener.of((update) => {
+          if (
+            update.docChanged ||
+            update.selectionSet ||
+            update.viewportChanged ||
+            update.geometryChanged ||
+            update.focusChanged
+          ) {
+            scheduleContextReport();
+          }
+        }),
         EditorView.theme({
           "&": { height: "100%" },
           ".cm-scroller": { overflow: "auto" },
@@ -1210,6 +1312,11 @@ export function FileEditor({
         setError(null);
         // A jump requested while the file was still loading.
         applyReveal();
+        // An initial editor-context report: the update-listener only fires on
+        // *changes*, so without this a freshly opened file's caret and viewport
+        // would not reach the push until the user first moved. No-ops for a
+        // secrets file (gated inside `scheduleContextReport`).
+        scheduleContextReport();
 
         // The editor's own text, not the string just read from disk: they are
         // the same here today, and taking it from the buffer is what keeps this
@@ -1249,8 +1356,10 @@ export function FileEditor({
       gen.current += 1;
       if (changeTimer.current !== null) window.clearTimeout(changeTimer.current);
       if (anchorTimer.current !== null) window.clearTimeout(anchorTimer.current);
+      if (contextTimer.current !== null) window.clearTimeout(contextTimer.current);
       changeTimer.current = null;
       anchorTimer.current = null;
+      contextTimer.current = null;
       queue.current = [];
       clearUsageAnswers(answers.current);
       anchors.current = [];

@@ -22,6 +22,7 @@ import { Occluder } from "./occlusionContext";
 import { SetupPrompt } from "./SetupPrompt";
 import { McpServerPanel } from "./McpServerPanel";
 import { RoslynMcpPanel } from "./RoslynMcpPanel";
+import { EditorMcpPanel } from "./EditorMcpPanel";
 import { SqlPanel } from "./SqlPanel";
 import { RedisPanel } from "./RedisPanel";
 import {
@@ -185,6 +186,15 @@ export interface WorkspaceTabHandle {
    * is no feature gate — the Redis plugin is always-on, like the Roslyn server.
    */
   openRedis(): void;
+  /**
+   * Open the Editor context MCP server's installer for this codebase.
+   *
+   * Part of the handle for the same reason `openMcp` is: the Plugins menu is
+   * global titlebar chrome and this acts on the foreground codebase (the install
+   * bakes `--workspace <root>`). The feature gate is inside the tab, so calling
+   * this while `editorContextMcp` is off does nothing.
+   */
+  openEditorMcp(): void;
 }
 
 /**
@@ -375,6 +385,18 @@ export function WorkspaceTab({
   const [roslynMcpPanelOpen, setRoslynMcpPanelOpen] = useState(false);
   const openRoslynMcp = () => setRoslynMcpPanelOpen(true);
 
+  // The Editor context MCP server's installer. Feature-gated on
+  // `editorContextMcp` (unlike the always-on Roslyn server): switching the
+  // feature off both stops the frontend pushing editor state and closes this
+  // modal rather than leaving it open for a feature the user just turned off. A
+  // transient modal, so closing it is an unmount.
+  const editorContextEnabled = featureEnabled(features, "editorContextMcp");
+  const [editorMcpPanelOpen, setEditorMcpPanelOpen] = useState(false);
+  const openEditorMcp = () => setEditorMcpPanelOpen(true);
+  useEffect(() => {
+    if (!editorContextEnabled) setEditorMcpPanelOpen(false);
+  }, [editorContextEnabled]);
+
   /**
    * Keep the selected tab on something that still exists. Turning off the
    * feature that owns the tab you are *looking at* would otherwise leave a tab
@@ -419,11 +441,14 @@ export function WorkspaceTab({
     if (mcpEnabled) registrations.push(registerCommand("plugin.mcp", openMcp));
     // Registered only while its feature is on, exactly as `plugin.mcp` is.
     if (tasksEnabled) registrations.push(registerCommand("plugin.tasks", openTasks));
+    // Registered only while its feature is on, exactly as `plugin.mcp` is.
+    if (editorContextEnabled)
+      registrations.push(registerCommand("plugin.editorMcp", openEditorMcp));
     // Always registered — the Redis plugin is always-on (like the Roslyn server).
     registrations.push(registerCommand("view.redis", openRedis));
     return () => registrations.forEach((unregister) => unregister());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, shownTabs, sqlEnabled, mcpEnabled, tasksEnabled]);
+  }, [active, shownTabs, sqlEnabled, mcpEnabled, tasksEnabled, editorContextEnabled]);
   const [showSetup, setShowSetup] = useState(false);
   const [inspectRequest, setInspectRequest] = useState<InspectRequest | null>(null);
   const [openRequest, setOpenRequest] = useState<OpenFileRequest | null>(null);
@@ -766,6 +791,7 @@ export function WorkspaceTab({
     openTasks,
     openRoslynMcp,
     openRedis,
+    openEditorMcp,
   });
   handleRef.current = {
     openTerminal,
@@ -781,6 +807,7 @@ export function WorkspaceTab({
     openTasks,
     openRoslynMcp,
     openRedis,
+    openEditorMcp,
   };
   useEffect(() => {
     const stable: WorkspaceTabHandle = {
@@ -798,6 +825,7 @@ export function WorkspaceTab({
       openTasks: () => handleRef.current.openTasks(),
       openRoslynMcp: () => handleRef.current.openRoslynMcp(),
       openRedis: () => handleRef.current.openRedis(),
+      openEditorMcp: () => handleRef.current.openEditorMcp(),
     };
     onRegister(workspace.root, stable);
     return () => onRegister(workspace.root, null);
@@ -866,6 +894,7 @@ export function WorkspaceTab({
           // three visibility terms separately (see `ChangesVisibility`).
           tabForeground={tab === "project"}
           codebaseActive={active}
+          editorContextEnabled={editorContextEnabled}
           behavioral={behavioralReport}
           onOpenReview={openReview}
           onRunBehavioral={(configId, httpFiles) => openBehavioral(configId, httpFiles, false)}
@@ -1033,6 +1062,16 @@ export function WorkspaceTab({
         <>
           <Occluder />
           <RoslynMcpPanel onClose={() => setRoslynMcpPanelOpen(false)} />
+        </>
+      )}
+
+      {/* The Editor context MCP installer. Feature-gated: an effect closes it
+          when the feature is switched off, so the render need only check the
+          open flag. A modal, so closing it is an unmount. */}
+      {editorMcpPanelOpen && (
+        <>
+          <Occluder />
+          <EditorMcpPanel onClose={() => setEditorMcpPanelOpen(false)} />
         </>
       )}
 

@@ -1,6 +1,38 @@
 /** Typed wrappers over the Tauri command surface. */
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import {
+  isDebugTerminal,
+  isProcessTerminal,
+  isSqlTerminal,
+  isTerminalStreamTerminal,
+} from "./channelLogic";
+
+/** A handler that captures nothing, used to release a spent channel's closure. */
+const NOOP = () => {};
+
+/**
+ * Deliver a streamed channel's events to `onEvent`, then release the handler
+ * once the stream ends.
+ *
+ * Tauri registers `onmessage` in the webview's `__TAURI_INTERNALS__` registry
+ * for the life of the page and never drops it, so a per-call `onEvent` (which
+ * pins React state) leaks for every run/build/test/terminal/query. Swapping in a
+ * no-op on the terminal event releases that closure while leaving live streams
+ * untouched. Not `null` — the `onmessage` type forbids it. See {@link
+ * ./channelLogic} for why each `isTerminal` names a single unambiguous end
+ * marker.
+ */
+function streaming<T>(
+  channel: Channel<T>,
+  onEvent: (event: T) => void,
+  isTerminal: (event: T) => boolean,
+): void {
+  channel.onmessage = (event) => {
+    onEvent(event);
+    if (isTerminal(event)) channel.onmessage = NOOP;
+  };
+}
 import type {
   BrowserConsoleBatch,
   BrowserNetworkBatch,
@@ -24,6 +56,7 @@ import type {
   DetectedShells,
   DiagramFile,
   DirEntry,
+  EditorContext,
   ElidedReason,
   EnhancementInfo,
   ErosionReport,
@@ -337,7 +370,7 @@ export function startRun(
   buildConfiguration?: string,
 ): Promise<void> {
   const channel = new Channel<ProcessEvent>();
-  channel.onmessage = onEvent;
+  streaming(channel, onEvent, isProcessTerminal);
   return invoke<void>("start_run", { configId, channel, env, buildConfiguration });
 }
 
@@ -350,7 +383,7 @@ export function buildProject(
   buildConfiguration?: string,
 ): Promise<void> {
   const channel = new Channel<ProcessEvent>();
-  channel.onmessage = onEvent;
+  streaming(channel, onEvent, isProcessTerminal);
   return invoke<void>("build_project", { configId, action, channel, buildConfiguration });
 }
 
@@ -367,7 +400,7 @@ export function startDebug(
   buildConfiguration?: string,
 ): Promise<void> {
   const channel = new Channel<DebugEvent>();
-  channel.onmessage = onEvent;
+  streaming(channel, onEvent, isDebugTerminal);
   return invoke<void>("start_debug", { configId, channel, env, buildConfiguration });
 }
 
@@ -389,7 +422,7 @@ export function runTests(
   withCoverage = false,
 ): Promise<TestRunOutcome> {
   const channel = new Channel<ProcessEvent>();
-  channel.onmessage = onEvent;
+  streaming(channel, onEvent, isProcessTerminal);
   return invoke<TestRunOutcome>("run_tests", {
     configId,
     onlyFailed,
@@ -445,7 +478,7 @@ export function startReview(
   promptBody?: string,
 ): Promise<void> {
   const channel = new Channel<ProcessEvent>();
-  channel.onmessage = onEvent;
+  streaming(channel, onEvent, isProcessTerminal);
   return invoke<void>("start_review", {
     promptId,
     promptBody,
@@ -510,7 +543,7 @@ export function terminalOpen(
   args?: string[],
 ): Promise<string> {
   const channel = new Channel<TerminalEvent>();
-  channel.onmessage = onEvent;
+  streaming(channel, onEvent, isTerminalStreamTerminal);
   return invoke<string>("terminal_open", { cwd, cols, rows, label, program, args, channel });
 }
 
@@ -584,7 +617,7 @@ export function launchCommand(
   onEvent: (event: ProcessEvent) => void,
 ): Promise<LaunchedApp> {
   const channel = new Channel<ProcessEvent>();
-  channel.onmessage = onEvent;
+  streaming(channel, onEvent, isProcessTerminal);
   return invoke<LaunchedApp>("launch_command", { ...spec, channel });
 }
 
@@ -768,7 +801,7 @@ export function gitNetwork(
   onEvent: (event: ProcessEvent) => void,
 ): Promise<number | null> {
   const channel = new Channel<ProcessEvent>();
-  channel.onmessage = onEvent;
+  streaming(channel, onEvent, isProcessTerminal);
   return invoke<number | null>("git_network", { kind, channel });
 }
 
@@ -1024,7 +1057,7 @@ export function behavioralDiff(
   onEvent: (event: ProcessEvent) => void,
 ): Promise<BehavioralReport> {
   const channel = new Channel<ProcessEvent>();
-  channel.onmessage = onEvent;
+  streaming(channel, onEvent, isProcessTerminal);
   return invoke<BehavioralReport>("behavioral_diff", { configId, httpFiles, channel });
 }
 
@@ -1057,7 +1090,7 @@ export function inspectCapture(
   onEvent: (event: ProcessEvent) => void,
 ): Promise<InspectGraph> {
   const channel = new Channel<ProcessEvent>();
-  channel.onmessage = onEvent;
+  streaming(channel, onEvent, isProcessTerminal);
   return invoke<InspectGraph>("inspect_capture", {
     target,
     root,
@@ -1561,7 +1594,7 @@ export function sqlExecute(
   onEvent: (event: SqlEvent) => void,
 ): Promise<void> {
   const channel = new Channel<SqlEvent>();
-  channel.onmessage = onEvent;
+  streaming(channel, onEvent, isSqlTerminal);
   return invoke<void>("sql_execute", { queryId, connectionId, sql, channel });
 }
 
@@ -1707,3 +1740,43 @@ export const roslynMcpUninstallPlan = (provider: ProviderId, scope: InstallScope
 /** Perform a removal the user has confirmed; returns the new status. */
 export const uninstallRoslynMcp = (provider: ProviderId, scope: InstallScope) =>
   invoke<InstallScope | null>("uninstall_roslyn_mcp_server", { provider, scope });
+
+// --- The Editor context MCP server -----------------------------------------
+//
+// The twin of the Roslyn installer above — the same five-call shape over the
+// same `mcp::install` merge — plus one thing no other MCP server has: a push.
+// Editor state lives in the React frontend, so `setEditorContext` feeds it into
+// the backend (exactly as the browser's automation consent is fed), and the
+// per-workspace shim reads it back. The command only records; the feature-off
+// gate is the frontend not calling it plus the pipe host re-checking the feature.
+
+/**
+ * Push the live editor state for `root` into the backend.
+ *
+ * Called debounced, and **only while the `editorContextMcp` feature is on** — the
+ * caller (`RunView`) is one half of the privacy gate; the pipe host re-checking
+ * the feature before serving is the other.
+ */
+export const setEditorContext = (root: string, ctx: EditorContext) =>
+  invoke<void>("set_editor_context", { root, ctx });
+
+/** Where the Editor context MCP server is installed for `provider`, if anywhere. */
+export const editorMcpStatus = (provider: ProviderId) =>
+  invoke<InstallScope | null>("editor_mcp_server_status", { provider });
+
+/** Exactly what installing it would write. Touches nothing. */
+export const editorMcpInstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("editor_mcp_server_install_plan", { provider, scope });
+
+/** Perform an install the user has confirmed; returns the new status. */
+export const installEditorMcp = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("install_editor_mcp_server", { provider, scope });
+
+/** Exactly what removing it would rewrite. A zero-write plan means nothing of
+ * ours was there. */
+export const editorMcpUninstallPlan = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallPlan>("editor_mcp_server_uninstall_plan", { provider, scope });
+
+/** Perform a removal the user has confirmed; returns the new status. */
+export const uninstallEditorMcp = (provider: ProviderId, scope: InstallScope) =>
+  invoke<InstallScope | null>("uninstall_editor_mcp_server", { provider, scope });

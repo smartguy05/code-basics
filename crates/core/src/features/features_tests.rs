@@ -11,6 +11,7 @@ fn every_feature_has_a_distinct_stable_id() {
         ids,
         vec![
             "askCodebase",
+            "editorContextMcp",
             "mcpSqlServer",
             "sqlConsole",
             "tasks",
@@ -120,6 +121,7 @@ fn every_feature_states_its_own_default() {
             ("mcpSqlServer", true),
             ("webBrowser", true),
             ("tasks", true),
+            ("editorContextMcp", true),
         ]
     );
 }

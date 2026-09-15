@@ -317,40 +317,9 @@ The Running panel: what the app has running now (across every open codebase) plu
 | `quality_gate_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change turning the gate off would make. **Touches nothing.** An empty `writes` means there was nothing to remove. Removes only the gate's own marked `Stop` entry; the intent recorder's `Stop` entry (distinct marker) survives |
 | `uninstall_quality_gate` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed uninstall, backing the file up first. Returns the new status (`null` once removed) |
 
-## SQL MCP server
+## MCP server installation
 
-`src-tauri/src/commands/mcp.rs` — installing the read-only SQL MCP server into an agent's configuration, previewed exactly as the hooks are. Decisions live in `cb_core::mcp::install`.
-
-Nothing new crosses IPC: a status is exactly `InstallScope | null`, and the plan is the same `InstallPlan`/`PlannedWrite` the hook installers use. Writes go through `providers::apply_writes_atomically` (temp file + rename), because `~/.claude.json` is large and is rewritten continuously by a running Claude Code.
-
-| Command | Parameters | Returns | Notes |
-|---------|-----------|---------|-------|
-| `mcp_server_status` | `provider: ProviderId` | `InstallScope \| null` | Where the server is installed for this workspace and provider (project wins over user), or `null` |
-| `mcp_server_install_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact final contents of the write — Claude Code `<root>/.mcp.json` (project) or `~/.claude.json` (user), Codex `$CODEX_HOME/config.toml` (user only). **Touches nothing** — what the preview renders, caveats included |
-| `install_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install. The entry is `command` = this executable + `args` = `["mcp-sql"]` (plus `--workspace <root>` at project scope), so no path is ever quoted into a string. Returns the new status |
-| `mcp_server_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change removing the server would make. **Touches nothing.** An empty `writes` means that configuration holds no entry of ours — the panel says so rather than disabling a button. Every other configured server survives |
-| `uninstall_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed removal, backing the file up first. Returns the new status (`null` once removed) |
-| `browser_mcp_status` | `provider: ProviderId` | `InstallScope \| null` | Where the **browser** MCP server is installed for this workspace and provider (project wins over user), or `null`. A different server name from the SQL one, so the two are reported separately |
-| `browser_mcp_install_plan` | `provider`, `scope` | `InstallPlan` | Exactly what installing the browser server would write. Touches nothing. The caveats are the browser feature own ones, not the SQL server ones: what an agent gains here is the page the user is looking at, in their own logged-in session |
-| `install_browser_mcp` | `provider`, `scope` | `InstallScope \| null` | Applies a confirmed browser-server install through `apply_writes_atomically`, then re-reads the status from disk |
-| `browser_mcp_uninstall_plan` | `provider`, `scope` | `InstallPlan` | What removing it would rewrite. Zero writes means no entry of ours was there |
-| `uninstall_browser_mcp` | `provider`, `scope` | `InstallScope \| null` | Applies a confirmed removal, then re-reads the status |
-
-Codex has no project scope: `mcp_server_install_plan(codex, project)` is an error naming `$CODEX_HOME/config.toml`, rather than inventing a `<root>/.codex/config.toml` that would look installed and never be read.
-
-## Roslyn MCP server
-
-`src-tauri/src/commands/roslyn_mcp.rs` — installing the **Roslyn / LSP** MCP server (which exposes the app's warm per-workspace language-server session to an agent) into an agent's configuration, previewed exactly as the SQL and browser servers are. Decisions live in `cb_core::roslyn::install`, which reuses `mcp::install`'s merge wholesale. The server name is `code-basics-roslyn`.
-
-Nothing new crosses IPC: a status is exactly `InstallScope | null`, and the plan is the same `InstallPlan`/`PlannedWrite`. Writes go through `providers::apply_writes_atomically`. The entry is `command` = this executable + `args` = `["mcp-roslyn"]` (plus `--workspace <root>` at project scope) — `--workspace` **is** the consent boundary, so an agent configured for one repository cannot reach another's semantic model. See [the Roslyn MCP server guide](../guides/roslyn-mcp-server.md).
-
-| Command | Parameters | Returns | Notes |
-|---------|-----------|---------|-------|
-| `roslyn_mcp_server_status` | `provider: ProviderId` | `InstallScope \| null` | Where the Roslyn server is installed for this workspace and provider (project wins over user), or `null` |
-| `roslyn_mcp_server_install_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact final contents of the write — Claude Code `<root>/.mcp.json` (project) or `~/.claude.json` (user), Codex `$CODEX_HOME/config.toml` (user only). **Touches nothing** — what the preview renders, read-only caveats included |
-| `install_roslyn_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed install, then re-read the status from disk. A user-scope entry names no workspace, so it answers `noWorkspace` until scoped to a repository |
-| `roslyn_mcp_server_uninstall_plan` | `provider: ProviderId, scope: InstallScope` | `InstallPlan` | The exact change removing the server would make. **Touches nothing.** An empty `writes` means that configuration holds no entry of ours. Every other configured server survives |
-| `uninstall_roslyn_mcp_server` | `provider: ProviderId, scope: InstallScope` | `InstallScope \| null` | Perform a confirmed removal, backing the file up first, then re-read the status |
+The install/uninstall command bridges for the self-dispatched MCP servers (`mcp-sql`, `mcp-browser`, `mcp-roslyn`, `mcp-editor`) — including the `set_editor_context` push that feeds the editor-context server — live in [MCP server installation commands](mcp-servers.md), split out so this file stays within its size budget. The Tasks server's install bridge stays with [the Tasks plugin](#tasks-plugin) above.
 
 ## First-open setup
 

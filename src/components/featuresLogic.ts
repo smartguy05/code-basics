@@ -13,7 +13,8 @@ export type FeatureKey =
   | "askCodebase"
   | "mcpSqlServer"
   | "webBrowser"
-  | "tasks";
+  | "tasks"
+  | "editorContextMcp";
 
 /**
  * Whether a feature is on.

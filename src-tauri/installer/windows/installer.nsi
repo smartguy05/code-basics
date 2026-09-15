@@ -444,11 +444,13 @@ Var FeatureAskCodebase
 Var FeatureMcpSqlServer
 Var FeatureWebBrowser
 Var FeatureTasks
+Var FeatureEditorContextMcp
 Var FeatureSqlConsoleCheckbox
 Var FeatureAskCodebaseCheckbox
 Var FeatureMcpSqlServerCheckbox
 Var FeatureWebBrowserCheckbox
 Var FeatureTasksCheckbox
+Var FeatureEditorContextMcpCheckbox
 
 Page custom PageFeatures PageLeaveFeatures
 
@@ -501,6 +503,11 @@ Function PageFeatures
   ${NSD_CreateLabel} 14u 158u -14u 20u "A per-codebase task list an agent can read and write over MCP."
   Pop $0
 
+  ${NSD_CreateCheckBox} 0 176u 100% 10u "Editor context MCP"
+  Pop $FeatureEditorContextMcpCheckbox
+  ${NSD_CreateLabel} 14u 188u -14u 20u "Let a coding agent read your live editor state (active file, selection, cursor, open and recent files) over MCP."
+  Pop $0
+
   ${If} $FeatureSqlConsole != "0"
     ${NSD_Check} $FeatureSqlConsoleCheckbox
   ${EndIf}
@@ -515,6 +522,9 @@ Function PageFeatures
   ${EndIf}
   ${If} $FeatureTasks != "0"
     ${NSD_Check} $FeatureTasksCheckbox
+  ${EndIf}
+  ${If} $FeatureEditorContextMcp != "0"
+    ${NSD_Check} $FeatureEditorContextMcpCheckbox
   ${EndIf}
 
   ${NSD_SetFocus} $FeatureSqlConsoleCheckbox
@@ -556,6 +566,13 @@ Function PageLeaveFeatures
   ${Else}
     StrCpy $FeatureTasks 0
   ${EndIf}
+
+  ${NSD_GetState} $FeatureEditorContextMcpCheckbox $0
+  ${If} $0 = ${BST_CHECKED}
+    StrCpy $FeatureEditorContextMcp 1
+  ${Else}
+    StrCpy $FeatureEditorContextMcp 0
+  ${EndIf}
 FunctionEnd
 
 ; Writes the installer seed that cb_core::features::store reads exactly once:
@@ -563,7 +580,7 @@ FunctionEnd
 ; then writes it through to <config>\code-basics\features.json.
 ;
 ; The bytes are exactly this, with no trailing newline:
-;   {"version":1,"enabled":{"sqlConsole":true,"askCodebase":true,"mcpSqlServer":true,"webBrowser":true,"tasks":true}}
+;   {"version":1,"enabled":{"sqlConsole":true,"askCodebase":true,"mcpSqlServer":true,"webBrowser":true,"tasks":true,"editorContextMcp":true}}
 ;
 ; Two encoding notes. FileWrite in a Unicode installer writes the string as
 ; ANSI (the active codepage), not UTF-16 -- which is what is wanted here,
@@ -613,6 +630,12 @@ Function WriteFeaturesSeed
   ${EndIf}
   FileWrite $9 ',"tasks":'
   ${If} $FeatureTasks == "0"
+    FileWrite $9 'false'
+  ${Else}
+    FileWrite $9 'true'
+  ${EndIf}
+  FileWrite $9 ',"editorContextMcp":'
+  ${If} $FeatureEditorContextMcp == "0"
     FileWrite $9 'false'
   ${Else}
     FileWrite $9 'true'

@@ -41,6 +41,8 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -426,6 +428,109 @@ pub fn load(root: &Path, options: &LoadOptions) -> Result<Intents> {
     Ok(intents)
 }
 
+/// A file's change-detection stamp: last-modified time and length.
+///
+/// The intent logs are append-only, so every hook write grows the length; a
+/// compaction shrinks it; a same-length rewrite (rare) is caught by the mtime.
+/// A missing file is a real, stable state (recording never enabled), stamped as
+/// `(None, 0)` so it compares equal to itself and reloads the moment the file
+/// appears.
+#[derive(Clone, PartialEq, Eq)]
+struct FileStamp {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+impl FileStamp {
+    fn of(path: &Path) -> Self {
+        match std::fs::metadata(path) {
+            Ok(meta) => FileStamp {
+                modified: meta.modified().ok(),
+                len: meta.len(),
+            },
+            Err(_) => FileStamp {
+                modified: None,
+                len: 0,
+            },
+        }
+    }
+}
+
+/// Every input [`load`] reads, stamped so an unchanged read is reused.
+///
+/// All three files `load` touches are here — `edits.jsonl`, `labels.jsonl` and
+/// the user-move file — plus the branch filter, because `load_edits` drops
+/// records from other branches. Miss any input and a card move or a branch
+/// switch would serve stale data.
+#[derive(Clone, PartialEq, Eq)]
+struct IntentCacheKey {
+    edits: FileStamp,
+    labels: FileStamp,
+    user: FileStamp,
+    branch: Option<String>,
+}
+
+impl IntentCacheKey {
+    fn current(root: &Path, options: &LoadOptions) -> Self {
+        IntentCacheKey {
+            edits: FileStamp::of(&edits_path(root)),
+            labels: FileStamp::of(&labels_path(root)),
+            user: FileStamp::of(&user::user_intents_path(root)),
+            branch: options.branch.clone(),
+        }
+    }
+}
+
+/// Memoises the parse of the intent log across repeated [`load`] calls.
+///
+/// The intent view polls `intent_groups` every two seconds, and each call parsed
+/// the whole `edits.jsonl` — which grows without bound and had reached 12&nbsp;MB
+/// here — into a `Vec` on every tick. The *review* still recomputes against the
+/// live diff each call (that is cheap and must stay per-call); only the file
+/// parse is cached. Keyed on all three logs' mtime+len and the branch filter, so
+/// any append, compaction or branch switch reloads. Held per workspace slot.
+#[derive(Default)]
+pub struct IntentCache {
+    key: Option<IntentCacheKey>,
+    value: Option<Arc<Intents>>,
+}
+
+impl IntentCache {
+    /// The parsed intents for `root`, reusing the last parse when none of the
+    /// files it was built from has changed.
+    pub fn load(&mut self, root: &Path, options: &LoadOptions) -> Result<Arc<Intents>> {
+        let key = IntentCacheKey::current(root, options);
+        if self.key.as_ref() == Some(&key) {
+            if let Some(value) = &self.value {
+                return Ok(Arc::clone(value));
+            }
+        }
+
+        // A miss means a log changed and we are about to read it — the one place
+        // it is free to also shrink a log the double-install hook bloated. This
+        // may rewrite the file, so the stored key is stamped *after* compaction:
+        // stamping before would make our own rewrite look like a change and miss
+        // forever.
+        compact_if_large(root);
+        let post_compaction_key = IntentCacheKey::current(root, options);
+
+        let intents = Arc::new(load(root, options)?);
+        self.key = Some(post_compaction_key);
+        self.value = Some(Arc::clone(&intents));
+        Ok(intents)
+    }
+
+    /// Forget the memo so the next [`Self::load`] re-reads from disk.
+    ///
+    /// The stamp already catches every change to the files, so this is only
+    /// needed after a same-process rewrite whose new stamp might, in principle,
+    /// coincide with the old — the compaction path calls it to be certain.
+    pub fn invalidate(&mut self) {
+        self.key = None;
+        self.value = None;
+    }
+}
+
 /// Read the recorded user prompts, keyed by turn id.
 ///
 /// Kept separate from [`Intents`] (which is a widely-constructed value type) so
@@ -517,6 +622,89 @@ fn read_jsonl<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
         .filter(|line| !line.is_empty())
         .filter_map(|line| serde_json::from_str::<T>(line).ok())
         .collect())
+}
+
+/// The size past which [`IntentCache`] compacts a log before reparsing it.
+///
+/// Small logs are left alone — the whole point is to bound a pathologically
+/// large one (this file reached 12 MB) cheaply, at the moment we are about to
+/// read it anyway. 1 MiB is far above an ordinary workspace's log.
+const COMPACT_THRESHOLD_BYTES: u64 = 1024 * 1024;
+
+/// Remove exact-duplicate lines from a JSON-lines log, keeping the first of each.
+///
+/// This targets one specific, safe-to-remove artifact: the `record-intent` hook
+/// being installed at both project and user scope wrote every record **twice**,
+/// producing byte-identical lines. [`load_edits`] and the label reader already
+/// dedup by id on read, so dropping identical lines changes nothing they
+/// produce — it only shrinks the file. Order and content are otherwise
+/// preserved, so the sequence high-water mark (the maximum `seq`, carried by the
+/// surviving first copy) is unchanged; nothing here reorders, renumbers or drops
+/// a *distinct* record.
+///
+/// Returns how many lines were removed. Writes only when there was something to
+/// remove, atomically (temp + rename) with a `.bak` of the original first, so a
+/// crash mid-rewrite never loses the log. A missing file is a no-op.
+fn compact_duplicate_lines(path: &Path) -> Result<usize> {
+    if !path.exists() {
+        return Ok(0);
+    }
+
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut kept: Vec<&str> = Vec::new();
+    for line in content.lines() {
+        // Blank lines carry nothing; drop them rather than deduping to one.
+        if line.trim().is_empty() {
+            continue;
+        }
+        if seen.insert(line) {
+            kept.push(line);
+        }
+    }
+
+    let removed = content.lines().filter(|l| !l.trim().is_empty()).count() - kept.len();
+    if removed == 0 {
+        return Ok(0);
+    }
+
+    // Back up before replacing, then write a temp file in the same directory and
+    // rename it over the original — a rename is atomic on both platforms, so a
+    // reader never sees a half-written log.
+    let backup = path.with_extension("jsonl.bak");
+    std::fs::copy(path, &backup)
+        .with_context(|| format!("failed to back up {}", path.display()))?;
+
+    let mut rewritten = kept.join("\n");
+    rewritten.push('\n');
+    let temp = path.with_extension("jsonl.compact.tmp");
+    std::fs::write(&temp, rewritten.as_bytes())
+        .with_context(|| format!("failed to write {}", temp.display()))?;
+    std::fs::rename(&temp, path)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+
+    Ok(removed)
+}
+
+/// Compact a workspace's edit and label logs if either has grown large.
+///
+/// Called by [`IntentCache`] on a cache miss — the moment it is about to read
+/// the log anyway — so an idle poll (a cache hit) pays nothing. Best-effort: a
+/// failure to compact is not a failure to load, so the error is dropped and the
+/// oversized file is read as-is.
+pub fn compact_if_large(root: &Path) -> usize {
+    let mut removed = 0;
+    for path in [edits_path(root), labels_path(root)] {
+        let large = std::fs::metadata(&path)
+            .map(|m| m.len() >= COMPACT_THRESHOLD_BYTES)
+            .unwrap_or(false);
+        if large {
+            removed += compact_duplicate_lines(&path).unwrap_or(0);
+        }
+    }
+    removed
 }
 
 /// Append one record, creating the directory and gitignore entry if needed.

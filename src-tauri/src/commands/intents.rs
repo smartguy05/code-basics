@@ -56,7 +56,12 @@ pub async fn intent_groups(
 
     // Records made on another branch describe code that is not in this tree.
     let branch = repo.status().ok().and_then(|s| s.branch);
-    let intents = intents::load(&root, &LoadOptions { branch }).map_err(|e| format!("{e:#}"))?;
+    // Cached parse: this command is the Intent view's 2-second poll, and the
+    // log is unbounded (12 MB here). The review below still recomputes against
+    // the live diff every call — only the file parse is reused when the log has
+    // not changed. `retire::run_if_head_moved` above rewrites the log when HEAD
+    // moves, which changes its stamp and reloads, so no staleness.
+    let intents = state.load_intents(&root, &LoadOptions { branch })?;
 
     let attributions = attribution::attribute(&diffs, &intents, Options::default());
     Ok(coverage::review(&diffs, &attributions, &intents))

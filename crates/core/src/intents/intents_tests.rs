@@ -960,3 +960,140 @@ fn rebasing_from_zero_leaves_the_first_record_alone() {
         vec![0, 1, 3]
     );
 }
+
+// --- IntentCache: the memo behind the 2s intent poll ---------------------
+
+#[test]
+fn intent_cache_reuses_the_parse_when_the_log_is_unchanged() {
+    let dir = workspace();
+    append_edit(dir.path(), &record(0, "src/a.rs", &["old"], &["new"])).unwrap();
+
+    let mut cache = IntentCache::default();
+    let first = cache.load(dir.path(), &LoadOptions::default()).unwrap();
+    let second = cache.load(dir.path(), &LoadOptions::default()).unwrap();
+
+    // The second load returns the very same allocation — nothing was re-read or
+    // re-parsed. This is the whole point: a quiet poll tick does no work.
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(first.records.len(), 1);
+}
+
+#[test]
+fn intent_cache_reloads_after_an_append() {
+    let dir = workspace();
+    append_edit(dir.path(), &record(0, "src/a.rs", &["old"], &["new"])).unwrap();
+
+    let mut cache = IntentCache::default();
+    let first = cache.load(dir.path(), &LoadOptions::default()).unwrap();
+
+    // A hook appends another edit: the file's length changes, so the stamp
+    // differs and the cache re-reads.
+    append_edit(dir.path(), &record(1, "src/b.rs", &["x"], &["y"])).unwrap();
+    let second = cache.load(dir.path(), &LoadOptions::default()).unwrap();
+
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert_eq!(first.records.len(), 1);
+    assert_eq!(second.records.len(), 2);
+}
+
+#[test]
+fn intent_cache_reloads_after_a_user_move_file_change() {
+    let dir = workspace();
+    append_edit(dir.path(), &record(0, "src/a.rs", &["old"], &["new"])).unwrap();
+
+    let mut cache = IntentCache::default();
+    let first = cache.load(dir.path(), &LoadOptions::default()).unwrap();
+    // Unchanged: reused.
+    let again = cache.load(dir.path(), &LoadOptions::default()).unwrap();
+    assert!(Arc::ptr_eq(&first, &again));
+
+    // Writing the user-move file is one of the three inputs to `load`; touching
+    // it must invalidate the memo even though `edits.jsonl` did not move.
+    user::save(dir.path(), &[]).unwrap();
+    let after = cache.load(dir.path(), &LoadOptions::default()).unwrap();
+    assert!(!Arc::ptr_eq(&first, &after));
+}
+
+#[test]
+fn intent_cache_invalidate_forces_a_reload() {
+    let dir = workspace();
+    append_edit(dir.path(), &record(0, "src/a.rs", &["old"], &["new"])).unwrap();
+
+    let mut cache = IntentCache::default();
+    let first = cache.load(dir.path(), &LoadOptions::default()).unwrap();
+    cache.invalidate();
+    let second = cache.load(dir.path(), &LoadOptions::default()).unwrap();
+
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert_eq!(second.records.len(), 1);
+}
+
+// --- Compaction of the double-install duplicate lines --------------------
+
+#[test]
+fn compact_removes_exact_duplicate_lines_keeping_first() {
+    let dir = workspace();
+    let path = edits_path(dir.path());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    // Two distinct records, each written twice (the double-install artifact),
+    // interleaved, plus a blank line.
+    std::fs::write(&path, "A\nB\nA\n\nB\n").unwrap();
+
+    let removed = compact_duplicate_lines(&path).unwrap();
+
+    assert_eq!(removed, 2);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "A\nB\n");
+    // The original is preserved as a .bak before the rewrite.
+    assert!(path.with_extension("jsonl.bak").exists());
+}
+
+#[test]
+fn compact_is_a_noop_and_writes_nothing_when_there_are_no_duplicates() {
+    let dir = workspace();
+    let path = edits_path(dir.path());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "A\nB\nC\n").unwrap();
+
+    let removed = compact_duplicate_lines(&path).unwrap();
+
+    assert_eq!(removed, 0);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "A\nB\nC\n");
+    // No rewrite means no backup file was created.
+    assert!(!path.with_extension("jsonl.bak").exists());
+}
+
+#[test]
+fn compact_preserves_distinct_records_and_the_seq_high_water_mark() {
+    let dir = workspace();
+    // Real records: append seq 0, 1, 2, then re-append the seq-2 line (a
+    // duplicate). Compaction must keep 0/1/2 and leave 2 as the maximum.
+    append_edit(dir.path(), &record(0, "a.rs", &[], &["x"])).unwrap();
+    append_edit(dir.path(), &record(1, "b.rs", &[], &["y"])).unwrap();
+    let dup = record(2, "c.rs", &[], &["z"]);
+    append_edit(dir.path(), &dup).unwrap();
+    append_edit(dir.path(), &dup).unwrap();
+
+    let removed = compact_duplicate_lines(&edits_path(dir.path())).unwrap();
+    assert_eq!(removed, 1);
+
+    let intents = load(dir.path(), &LoadOptions::default()).unwrap();
+    let seqs: Vec<u64> = intents.records.iter().map(|r| r.seq).collect();
+    assert_eq!(seqs, vec![0, 1, 2]);
+    // next_seq must never regress below the surviving maximum.
+    assert!(next_seq(dir.path()) > 2);
+}
+
+#[test]
+fn compact_if_large_leaves_a_small_log_untouched() {
+    let dir = workspace();
+    let path = edits_path(dir.path());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    // Under the 1 MiB threshold, duplicates and all: the file is small enough
+    // that reparsing it is cheap, so it is not rewritten.
+    std::fs::write(&path, "A\nA\n").unwrap();
+
+    let removed = compact_if_large(dir.path());
+
+    assert_eq!(removed, 0);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "A\nA\n");
+}

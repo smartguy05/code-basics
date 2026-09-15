@@ -43,16 +43,20 @@ pub enum FeatureId {
     WebBrowser,
     /// The per-codebase task list panel and its MCP server.
     Tasks,
+    /// The per-workspace editor-context MCP server (active file, selection,
+    /// cursor, open and recent files), for a coding agent to read.
+    EditorContextMcp,
 }
 
 impl FeatureId {
     /// Every feature this build knows about, in the order the picker lists them.
-    pub const ALL: [FeatureId; 5] = [
+    pub const ALL: [FeatureId; 6] = [
         FeatureId::SqlConsole,
         FeatureId::AskCodebase,
         FeatureId::McpSqlServer,
         FeatureId::WebBrowser,
         FeatureId::Tasks,
+        FeatureId::EditorContextMcp,
     ];
 
     /// Stable id used across IPC, in the store file, and by both installers.
@@ -63,6 +67,7 @@ impl FeatureId {
             FeatureId::McpSqlServer => "mcpSqlServer",
             FeatureId::WebBrowser => "webBrowser",
             FeatureId::Tasks => "tasks",
+            FeatureId::EditorContextMcp => "editorContextMcp",
         }
     }
 
@@ -74,6 +79,7 @@ impl FeatureId {
             FeatureId::McpSqlServer => "SQL MCP server",
             FeatureId::WebBrowser => "Web browser",
             FeatureId::Tasks => "Tasks",
+            FeatureId::EditorContextMcp => "Editor context MCP",
         }
     }
 
@@ -91,6 +97,10 @@ impl FeatureId {
                 "A floating browser panel, for checking a deployment without leaving the app."
             }
             FeatureId::Tasks => "A per-codebase task list an agent can read and write over MCP.",
+            FeatureId::EditorContextMcp => {
+                "Let a coding agent read your live editor state (active file, selection, \
+                 cursor, open and recent files) over MCP."
+            }
         }
     }
 
@@ -130,6 +140,12 @@ impl FeatureId {
             // at it is a separate, previewed install step, so the feature being
             // visible grants nothing on its own.
             FeatureId::Tasks => true,
+            // On, like the others: an existing app gaining capability. While on,
+            // the frontend pushes live editor state into the backend; but that
+            // state only reaches an agent once the editor MCP server is a
+            // separate, previewed install step, so the feature being visible
+            // grants an agent nothing on its own. Read-only either way.
+            FeatureId::EditorContextMcp => true,
         }
     }
 

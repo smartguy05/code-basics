@@ -370,6 +370,92 @@ pub struct TestNode {
     pub children: Vec<TestNode>,
 }
 
+// ---------------------------------------------------------------------------
+// Editor context (pushed from the frontend, read back by the editor MCP shim)
+// ---------------------------------------------------------------------------
+
+/// A live snapshot of what the user is looking at in the editor.
+///
+/// Unlike most types here, this flows **frontend → backend**: the React editor
+/// owns this state, pushes it into `AppState` while the `EditorContextMcp`
+/// feature is enabled (like the browser's automation consent slot), and the
+/// per-workspace editor MCP shim reads it back to answer an agent.
+///
+/// Every "what am I looking at" field is optional so an honest *nothing* can be
+/// told apart from a fabricated answer: no file active, no cursor, no viewport,
+/// no selection. Positions follow the app-wide convention — 1-based line,
+/// 0-based UTF-16 character. `selection.text` is capped by the frontend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorContext {
+    /// Workspace-relative path (forward slashes) of the active editor tab, or
+    /// `None` when no file is active.
+    pub active_file: Option<String>,
+    /// Caret position in the active editor, or `None` when there is no active
+    /// file.
+    pub cursor: Option<EditorCursor>,
+    /// The visible line range of the active editor, or `None` when there is no
+    /// active file.
+    pub viewport: Option<EditorViewport>,
+    /// The current selection, or `None` when the selection is empty.
+    pub selection: Option<EditorSelection>,
+    /// Every open editor tab.
+    pub open_files: Vec<EditorOpenFile>,
+    /// Recently edited files, most-recent first (edit-recency order, capped by
+    /// the frontend).
+    pub recent_files: Vec<EditorRecentFile>,
+}
+
+/// A caret position: 1-based line, 0-based UTF-16 character.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorCursor {
+    pub line: u32,
+    pub character: u32,
+}
+
+/// The visible line range of an editor, both 1-based and inclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorViewport {
+    pub first_visible_line: u32,
+    pub last_visible_line: u32,
+}
+
+/// A non-empty selection with its text (capped by the frontend). Positions are
+/// 1-based line, 0-based UTF-16 character.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSelection {
+    pub start_line: u32,
+    pub start_character: u32,
+    pub end_line: u32,
+    pub end_character: u32,
+    pub text: String,
+}
+
+/// One open editor tab.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorOpenFile {
+    /// Workspace-relative path, forward slashes.
+    pub path: String,
+    /// Whether this is the active tab.
+    pub active: bool,
+    /// Whether the tab has unsaved changes.
+    pub dirty: bool,
+    /// Whether the tab is pinned.
+    pub pinned: bool,
+}
+
+/// One recently edited file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorRecentFile {
+    /// Workspace-relative path, forward slashes.
+    pub path: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -685,5 +771,105 @@ mod tests {
         let json = serde_json::to_value(&config).unwrap();
 
         assert_eq!(json["compound"], serde_json::json!(["member"]));
+    }
+
+    // -- editor context ------------------------------------------------------
+
+    #[test]
+    fn editor_context_serialises_with_the_keys_the_shim_reads() {
+        let ctx = EditorContext {
+            active_file: Some("src/main.rs".into()),
+            cursor: Some(EditorCursor {
+                line: 12,
+                character: 4,
+            }),
+            viewport: Some(EditorViewport {
+                first_visible_line: 1,
+                last_visible_line: 40,
+            }),
+            selection: Some(EditorSelection {
+                start_line: 12,
+                start_character: 4,
+                end_line: 12,
+                end_character: 9,
+                text: "hello".into(),
+            }),
+            open_files: vec![EditorOpenFile {
+                path: "src/main.rs".into(),
+                active: true,
+                dirty: false,
+                pinned: false,
+            }],
+            recent_files: vec![EditorRecentFile {
+                path: "src/main.rs".into(),
+            }],
+        };
+
+        let json = serde_json::to_value(&ctx).unwrap();
+        assert_eq!(
+            keys(&json),
+            [
+                "activeFile",
+                "cursor",
+                "openFiles",
+                "recentFiles",
+                "selection",
+                "viewport"
+            ]
+        );
+        assert_eq!(keys(&json["cursor"]), ["character", "line"]);
+        assert_eq!(
+            keys(&json["viewport"]),
+            ["firstVisibleLine", "lastVisibleLine"]
+        );
+        assert_eq!(
+            keys(&json["selection"]),
+            [
+                "endCharacter",
+                "endLine",
+                "startCharacter",
+                "startLine",
+                "text"
+            ]
+        );
+        assert_eq!(
+            keys(&json["openFiles"][0]),
+            ["active", "dirty", "path", "pinned"]
+        );
+        assert_eq!(keys(&json["recentFiles"][0]), ["path"]);
+    }
+
+    /// The optional "what am I looking at" fields cross as `null`, not absent,
+    /// so `types.ts` mirrors them as `X | null` and the shim can tell an honest
+    /// nothing from a missing key.
+    #[test]
+    fn an_empty_editor_context_keeps_its_null_keys() {
+        let ctx = EditorContext {
+            active_file: None,
+            cursor: None,
+            viewport: None,
+            selection: None,
+            open_files: vec![],
+            recent_files: vec![],
+        };
+
+        let json = serde_json::to_value(&ctx).unwrap();
+        assert_eq!(
+            keys(&json),
+            [
+                "activeFile",
+                "cursor",
+                "openFiles",
+                "recentFiles",
+                "selection",
+                "viewport"
+            ]
+        );
+        assert!(json["activeFile"].is_null());
+        assert!(json["cursor"].is_null());
+        assert!(json["viewport"].is_null());
+        assert!(json["selection"].is_null());
+        assert_eq!(json["openFiles"], serde_json::json!([]));
+        assert_eq!(json["recentFiles"], serde_json::json!([]));
     }
 }

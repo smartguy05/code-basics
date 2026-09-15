@@ -1386,3 +1386,56 @@ fn event_names_are_matched_exactly_rather_than_loosely() {
     assert!(HookEvent::parse("Stop ").is_none());
     assert!(HookEvent::parse("Stopped").is_none());
 }
+
+// -- Most-specific hook wins (deduplicating a user + project double install) -
+
+/// The pure rule. Only a *global* Claude Code invocation, and only when a
+/// project-scope hook exists to record in its place, stands down.
+#[test]
+fn only_a_global_claude_invocation_defers_to_a_project_hook() {
+    // Global (no --workspace) and a project hook is present: defer, so the
+    // project hook records the single copy.
+    assert!(defers_to_project_hook(ProviderId::ClaudeCode, false, true));
+    // The workspace-named invocation *is* the specific hook and always records.
+    assert!(!defers_to_project_hook(ProviderId::ClaudeCode, true, true));
+    // Nothing more specific to defer to: the global hook must record.
+    assert!(!defers_to_project_hook(
+        ProviderId::ClaudeCode,
+        false,
+        false
+    ));
+    // Codex has no per-repository config and no observed duplication.
+    assert!(!defers_to_project_hook(ProviderId::Codex, false, true));
+}
+
+/// A workspace carrying its own project-scope record hook is detected; a bare
+/// workspace is not.
+#[test]
+fn a_project_scope_record_hook_is_detected() {
+    let dir = workspace();
+    let root = dir.path();
+    assert!(!project_record_hook_present(root));
+
+    let settings = root.join(".claude").join("settings.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let (text, _) =
+        crate::intents::providers::hooks_json::plan_merge(&settings, Some(root)).unwrap();
+    std::fs::write(&settings, text).unwrap();
+
+    assert!(project_record_hook_present(root));
+}
+
+/// A user-scope entry (no `--workspace`) that happens to sit in a project
+/// settings file is not a project hook: it names no workspace, so the global
+/// invocation must still record or capture is lost.
+#[test]
+fn a_user_scope_entry_is_not_treated_as_a_project_hook() {
+    let dir = workspace();
+    let root = dir.path();
+    let settings = root.join(".claude").join("settings.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let (text, _) = crate::intents::providers::hooks_json::plan_merge(&settings, None).unwrap();
+    std::fs::write(&settings, text).unwrap();
+
+    assert!(!project_record_hook_present(root));
+}

@@ -13,6 +13,7 @@ pub mod browser;
 pub mod changelists;
 pub mod config;
 pub mod dap;
+pub mod editor_context;
 pub mod enhancements;
 pub mod erosion;
 pub mod features;

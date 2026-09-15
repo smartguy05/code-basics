@@ -792,6 +792,41 @@ pub fn is_enabled(root: &Path) -> bool {
     super::intents_dir(root).is_dir()
 }
 
+/// Does this workspace carry its own project-scope record hook?
+///
+/// A project-scope hook lives in `<root>/.claude/settings.json` and names the
+/// workspace with `--workspace`; a user-scope hook lives under the home
+/// directory and names none. So a record hook here pinned to *this* root is the
+/// project-scope one — the specific hook a global invocation should defer to.
+/// Read through the same tested reader the installer uses; a missing or
+/// unreadable file is simply "no project hook", so the global invocation still
+/// records (a rare duplicate beats a dropped record).
+pub fn project_record_hook_present(root: &Path) -> bool {
+    let settings = root.join(".claude").join("settings.json");
+    super::providers::hooks_json::pinned_workspace(&settings).is_some()
+        && super::providers::hooks_json::pinned_elsewhere(&settings, root).is_none()
+}
+
+/// Should a global (user-scope) recorder invocation stand down?
+///
+/// "Most specific wins." When both a project-scope hook (which names the
+/// workspace) and a user-scope hook (which fires for every repository on the
+/// machine) are installed, both record every edit — writing each record, and
+/// each label, twice. The global invocation defers to the specific one so every
+/// edit lands exactly once.
+///
+/// Only the global invocation ever defers: one that named `--workspace` *is* the
+/// specific hook. Claude Code only — it is the agent whose per-repository
+/// `.claude/settings.json` can carry a project hook; Codex has no per-repo
+/// config and no observed duplication.
+pub fn defers_to_project_hook(
+    provider: ProviderId,
+    had_explicit_workspace: bool,
+    project_hook_present: bool,
+) -> bool {
+    provider == ProviderId::ClaudeCode && !had_explicit_workspace && project_hook_present
+}
+
 /// Where a hook invocation should record, given what the payload says.
 ///
 /// The workspace named on the command line wins; the payload's `cwd` is the

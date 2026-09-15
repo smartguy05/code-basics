@@ -1282,6 +1282,7 @@ export function App() {
                 if (row.action.kind === "browser") activeHandle()?.openBrowser();
                 if (row.action.kind === "tasks") activeHandle()?.openTasks();
                 if (row.action.kind === "roslynMcp") activeHandle()?.openRoslynMcp();
+                if (row.action.kind === "editorMcp") activeHandle()?.openEditorMcp();
                 if (row.action.kind === "redis") activeHandle()?.openRedis();
               }}
             >

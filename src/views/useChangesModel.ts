@@ -25,6 +25,7 @@ import {
   type ChangesVisibility,
 } from "../components/projectViewLogic";
 import * as api from "../ipc/api";
+import { reconcileSelection } from "./changesLogic";
 import type {
   ChangeCoverage,
   Changelist,
@@ -60,6 +61,11 @@ const GROUPING_KEY = "code-basics.changesGrouping";
  * the working tree actually changed.
  */
 const POLL_MS = 2000;
+
+/** Two index arrays that hold the same values in the same order. */
+function sameIndices(a: readonly number[], b: readonly number[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
 
 /** How the changes panel organises the working tree. */
 export type Grouping = "files" | "intent" | "stashes" | "erosion";
@@ -257,7 +263,12 @@ export function useChangesModel({
    */
   const refreshIntent = useCallback(async () => {
     if (grouping !== "intent") return;
-    setIntentLoading(true);
+    // Show the "Loading intents" state only when there is nothing to show yet:
+    // the very first load, or after a mode switch (which nulls the signature).
+    // Every 2s poll tick calls this too, and toggling the flag on each one made
+    // the indicator flash constantly even when the de-churn found no change.
+    const firstLoad = intentSignature.current === null;
+    if (firstLoad) setIntentLoading(true);
     try {
       const [review, captureStatus] = await Promise.all([
         api.intentGroups(mode),
@@ -278,7 +289,7 @@ export function useChangesModel({
     } catch (e) {
       setError(api.errorMessage(e));
     } finally {
-      setIntentLoading(false);
+      if (firstLoad) setIntentLoading(false);
     }
   }, [grouping, mode]);
 
@@ -412,6 +423,47 @@ export function useChangesModel({
     refreshErosion,
     refreshCoverage,
   ]);
+
+  /**
+   * Force a full refresh when the window becomes visible again.
+   *
+   * The poll skips every tick while `document.hidden`, and the intent records
+   * are written by an out-of-process hook — typically while the user is watching
+   * an agent run and the app is in the background. So the panel can hold a stale
+   * set of cards until something forces a re-read (which is why reopening the
+   * file "fixed" it). Reading the moment the window returns closes that gap.
+   */
+  useEffect(() => {
+    const onVisible = () => {
+      if (!document.hidden) void refreshAll();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [refreshAll]);
+
+  /**
+   * Keep an open card's highlight tied to the latest cards.
+   *
+   * When the cards are recomputed under a live selection (a poll tick, or the
+   * visibility refresh above), the diff renumbers and the selected card's lines
+   * move; a highlight captured at click time would then paint against stale line
+   * numbers. Re-derive it from the current groups, and drop a selection whose
+   * card genuinely went away. De-churned so an unchanged result never re-renders.
+   */
+  useEffect(() => {
+    const next = reconcileSelection(intentGroups, selectedGroup, selectedPath);
+    if (next.kind === "skip") return;
+    if (next.kind === "clear") {
+      setSelectedGroup(null);
+      setHighlight([]);
+      setGroupHunks(null);
+      return;
+    }
+    setHighlight((prev) => (sameIndices(prev, next.highlight) ? prev : next.highlight));
+    setGroupHunks((prev) =>
+      prev !== null && sameIndices(prev, next.groupHunks ?? []) ? prev : next.groupHunks,
+    );
+  }, [intentGroups, selectedGroup, selectedPath]);
 
   async function withBusy(action: () => Promise<void>) {
     setBusy(true);

@@ -1,4 +1,4 @@
-import type { Changelist, FileChange } from "../ipc/types";
+import type { Changelist, FileChange, IntentGroup } from "../ipc/types";
 
 /**
  * The letter and colour for a file *within a given section*.
@@ -112,4 +112,44 @@ export function sortFilesByRisk(
       .sort((a, b) => b.score - a.score || a.index - b.index)
       .map((entry) => entry.file),
   }));
+}
+
+/** What an open card's highlight should become after the groups reload. */
+export type SelectionReconcile =
+  | { kind: "skip" }
+  | { kind: "update"; highlight: number[]; groupHunks: number[] | null }
+  | { kind: "clear" };
+
+/**
+ * Re-derive an open card's highlight from freshly loaded intent groups.
+ *
+ * The cards are recomputed out from under a selection whenever the poll — or a
+ * visibility refresh — picks up records an out-of-process hook wrote: the diff
+ * renumbers and a card's `lineIndices` move. A highlight captured when the card
+ * was clicked would then paint against stale line numbers (this is how a card
+ * came to highlight another card's region until the file was reopened).
+ *
+ * - No card is selected: `skip` — a plain open file owns its own view.
+ * - The selected card is gone but groups did load: `clear` the selection.
+ * - Groups are momentarily empty (a reload in flight): `skip`, so a transient
+ *   empty result never discards a live selection.
+ * - Otherwise: `update` to the card's current lines for the selected file (or
+ *   its first file, matching how a card opens).
+ */
+export function reconcileSelection(
+  groups: IntentGroup[],
+  selectedGroupId: string | null,
+  selectedPath: string | null,
+): SelectionReconcile {
+  if (selectedGroupId === null) return { kind: "skip" };
+
+  const group = groups.find((g) => g.id === selectedGroupId);
+  if (!group) return groups.length === 0 ? { kind: "skip" } : { kind: "clear" };
+
+  const file =
+    (selectedPath !== null && group.files.find((f) => f.path === selectedPath)) ||
+    group.files[0];
+  if (!file) return { kind: "clear" };
+
+  return { kind: "update", highlight: file.lineIndices, groupHunks: file.hunks };
 }

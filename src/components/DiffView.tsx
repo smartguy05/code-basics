@@ -7,7 +7,14 @@ import {
   useState,
   type RefObject,
 } from "react";
-import { EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
+import {
+  ChangeSet,
+  EditorState,
+  StateEffect,
+  StateField,
+  Transaction,
+  type Extension,
+} from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -18,7 +25,14 @@ import {
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { gotoLine, highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { Change, MergeView, presentableDiff, unifiedMergeView } from "@codemirror/merge";
+import {
+  Change,
+  MergeView,
+  getOriginalDoc,
+  originalDocChangeEffect,
+  presentableDiff,
+  unifiedMergeView,
+} from "@codemirror/merge";
 import { editorColors, languageFor } from "./language";
 import {
   changeMarks,
@@ -338,6 +352,28 @@ export function DiffView({
   const handlers = useRef({ onSave, onSelectionChange, lineWhy });
   handlers.current = { onSave, onSelectionChange, lineWhy };
 
+  // The current document contents, read through refs so the *construction*
+  // effect can seed a fresh editor without listing `baseline`/`working` as
+  // dependencies — that is the whole point of the split below: content changes
+  // (every stage/unstage/revert re-fetches the file) must feed the *existing*
+  // editor a new document rather than build a new `MergeView`. Rebuilding two
+  // CodeMirror editors on every git mutation was the WebView2 memory leak: the
+  // JS side destroyed the old view correctly, but the native compositor/GPU
+  // layers were not reclaimed, so rapid staging climbed without bound.
+  const baselineRef = useRef(baseline);
+  const workingRef = useRef(working);
+  baselineRef.current = baseline;
+  workingRef.current = working;
+  // The `{baseline, working}` last written into the editors, so the sync effect
+  // skips the redundant dispatch right after a construction seeded the same
+  // content. `null` until the first editor is built.
+  const syncedRef = useRef<{ baseline: string | null; working: string } | null>(null);
+
+  // Whether there is a committed baseline to diff against. A change here is
+  // *structural* (side-by-side `MergeView` / unified original vs. a plain
+  // editor), so it triggers a rebuild rather than a doc sync.
+  const hasBaseline = baseline != null;
+
   /**
    * Map each working-copy line number to the diff line index that produced it.
    *
@@ -470,8 +506,16 @@ export function DiffView({
     // disk (`\r\n` on Windows). `@codemirror/merge` diffs the two raw strings,
     // so an ending mismatch alone would mark every line changed. Both sides are
     // brought to `\n` for the comparison — git filters the same difference.
-    const baselineDoc = baseline == null ? null : normaliseEndings(baseline);
-    const workingDoc = normaliseEndings(working);
+    //
+    // Read through refs: content is deliberately absent from this effect's
+    // dependency array so a re-fetched file feeds the existing editor (the sync
+    // effect below) instead of rebuilding it. Record what was seeded so the
+    // sync effect skips its redundant first pass.
+    const baselineValue = baselineRef.current;
+    const workingValue = workingRef.current;
+    const baselineDoc = baselineValue == null ? null : normaliseEndings(baselineValue);
+    const workingDoc = normaliseEndings(workingValue);
+    syncedRef.current = { baseline: baselineValue, working: workingValue };
 
     // A CodeMirror failure must degrade to a message for this one file, not
     // take down the whole UI (an effect error unmounts the React tree).
@@ -569,7 +613,74 @@ export function DiffView({
       setEditorError(e instanceof Error ? `${e.message}\n${e.stack ?? ""}` : String(e));
       return;
     }
-  }, [path, baseline, working, layout, editable, collapseUnchanged, ignoreWhitespace]);
+    // Content (`baseline`/`working`) is intentionally *not* a dependency — the
+    // sync effect below feeds new content to this same editor. Only structural
+    // changes (a different file, layout, editability, folding, whitespace mode,
+    // or the appearance/disappearance of a baseline) rebuild.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, layout, editable, collapseUnchanged, ignoreWhitespace, hasBaseline]);
+
+  /**
+   * Feed re-fetched content to the existing editor instead of rebuilding it.
+   *
+   * Runs on every content change (a stage/unstage/revert re-reads the file), and
+   * dispatches a whole-document replacement into the panes the construction
+   * effect built. A rebuild here — `new MergeView(...)` for the side-by-side
+   * layout — was the leak: WebView2 does not promptly reclaim the native layers
+   * of a destroyed editor, so staging across a large changeset climbed to
+   * gigabytes. Declared immediately after construction so it runs before the
+   * decoration paints, which re-dispatch against the new document.
+   */
+  useEffect(() => {
+    const synced = syncedRef.current;
+    // Construction just seeded this exact content, or there is no editor (the
+    // error state) — leave it to the construction effect.
+    if (!synced || (synced.baseline === baseline && synced.working === working)) return;
+    const view = viewRef.current;
+    if (!view) return;
+
+    const baselineDoc = baseline == null ? null : normaliseEndings(baseline);
+    const workingDoc = normaliseEndings(working);
+
+    try {
+      // Replace the working copy (the inline editor, or `merge.b` side-by-side).
+      // Kept out of the undo history: this is a fresh read from disk, not an
+      // edit the user could sensibly undo back to a stale version.
+      if (view.state.doc.toString() !== workingDoc) {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: workingDoc },
+          annotations: Transaction.addToHistory.of(false),
+        });
+      }
+
+      const [paneA, paneB] = panesRef.current;
+      if (paneA && paneB && baselineDoc != null) {
+        // Side-by-side: the baseline is `merge.a`'s own document; the MergeView
+        // re-diffs both sides whenever either changes.
+        if (paneA.state.doc.toString() !== baselineDoc) {
+          paneA.dispatch({
+            changes: { from: 0, to: paneA.state.doc.length, insert: baselineDoc },
+            annotations: Transaction.addToHistory.of(false),
+          });
+        }
+      } else if (baselineDoc != null) {
+        // Inline unified view: the baseline is the merge *original*, updated
+        // through the library's own effect so the chunks recompute.
+        const current = getOriginalDoc(view.state);
+        if (current.toString() !== baselineDoc) {
+          const changes = ChangeSet.of(
+            [{ from: 0, to: current.length, insert: baselineDoc }],
+            current.length,
+          );
+          view.dispatch({ effects: originalDocChangeEffect(view.state, changes) });
+        }
+      }
+
+      syncedRef.current = { baseline, working };
+    } catch (e) {
+      setEditorError(e instanceof Error ? `${e.message}\n${e.stack ?? ""}` : String(e));
+    }
+  }, [baseline, working]);
 
   /**
    * Re-read what the scrollbar and the marker strip describe.

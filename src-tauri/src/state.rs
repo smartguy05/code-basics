@@ -43,8 +43,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cb_core::inspect::InspectGraph;
+use cb_core::intents::{IntentCache, Intents, LoadOptions};
 use cb_core::lsp::session::LspHandle;
-use cb_core::model::TestRunResult;
+use cb_core::model::{EditorContext, TestRunResult};
 use cb_core::process::Supervisor;
 use cb_core::pty::PtyManager;
 use cb_core::running::RunningStore;
@@ -134,6 +135,19 @@ pub struct AppState {
     /// exactly as `browser_pipe` is.
     #[cfg(windows)]
     roslyn_pipe: Mutex<Option<crate::roslyn::pipe::PipeListener>>,
+
+    /// The editor-context control pipe — the one an agent's `mcp-editor` server
+    /// reaches this application through.
+    ///
+    /// **Tied to the process, not to any panel**, exactly like [`Self::roslyn_pipe`]:
+    /// the editor state is per-workspace but the pipe is one per application,
+    /// opened once at startup and never taken down while the app runs. Every call
+    /// resolves its own `--workspace` afresh through [`Self::editor_context_for`],
+    /// so a live application always carries a listener and there is no "panel
+    /// closed" state to publish. Ordinary `Send + Sync` data — a join handle and a
+    /// flag.
+    #[cfg(windows)]
+    editor_pipe: Mutex<Option<crate::editor_context::pipe::PipeListener>>,
 }
 
 impl Default for AppState {
@@ -155,6 +169,8 @@ impl Default for AppState {
             browser_pipe: Mutex::new(None),
             #[cfg(windows)]
             roslyn_pipe: Mutex::new(None),
+            #[cfg(windows)]
+            editor_pipe: Mutex::new(None),
         }
     }
 }
@@ -207,10 +223,23 @@ pub struct WorkspaceSlot {
     /// This workspace's language servers, addressed through one actor handle.
     /// Torn down on [`AppState::close`], not on a tab switch.
     lsp: Mutex<Option<LspHandle>>,
+    /// Memoises the parse of this workspace's intent log across the Intent
+    /// view's 2-second poll. The log is append-only and unbounded, and every
+    /// `intent_groups` call re-read and re-parsed the whole file (12 MB here)
+    /// before this. The review still recomputes against the live diff each call;
+    /// only the parse is cached. See [`cb_core::intents::IntentCache`].
+    intents: Mutex<IntentCache>,
     /// Which session start for this workspace is the current one. Per-slot: a
     /// global counter would reject a legitimate start for one workspace because a
     /// start for another had bumped it.
     lsp_generation: AtomicU64,
+    /// The live editor state the React frontend pushes in while the
+    /// `EditorContextMcp` feature is enabled — the twin of the browser's
+    /// automation-consent slot, and the one field here written *from* the
+    /// frontend rather than derived by the backend. The editor-context MCP pipe
+    /// reads it back to answer an agent. `None` until the frontend has pushed
+    /// anything, which is [`cb_core::editor_context::answer::EditorRefusal::NoContext`].
+    editor_context: Mutex<Option<EditorContext>>,
 }
 
 impl WorkspaceSlot {
@@ -229,6 +258,8 @@ impl WorkspaceSlot {
             symbols_build: Arc::new(SymbolsBuild::default()),
             lsp: Mutex::new(None),
             lsp_generation: AtomicU64::new(0),
+            intents: Mutex::new(IntentCache::default()),
+            editor_context: Mutex::new(None),
         }
     }
 
@@ -608,6 +639,27 @@ impl AppState {
         true
     }
 
+    // -- Intent log (cached parse, by explicit root) ------------------------
+
+    /// The parsed intent log for `root`, reusing the last parse when none of the
+    /// files behind it has changed.
+    ///
+    /// Keyed by explicit root like the other per-slot caches. The 2-second
+    /// Intent poll calls this every tick; the cache is what stops it re-reading
+    /// and re-parsing the whole (unbounded) `edits.jsonl` each time. The review
+    /// is still recomputed against the live diff by the caller — only the file
+    /// parse is memoised.
+    pub fn load_intents(&self, root: &Path, options: &LoadOptions) -> Result<Arc<Intents>, String> {
+        let slot = self
+            .slot(root)
+            .ok_or_else(|| "no workspace is open".to_string())?;
+        let mut cache = slot
+            .intents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.load(root, options).map_err(|e| format!("{e:#}"))
+    }
+
     // -- Language server (active-resolving) ---------------------------------
 
     /// Claim the generation the active workspace's next session start runs under.
@@ -693,6 +745,70 @@ impl AppState {
     /// so this is safe to call while the process is shutting down.
     pub fn all_lsp_handles(&self) -> Vec<LspHandle> {
         self.map().values().filter_map(|slot| slot.lsp()).collect()
+    }
+
+    // -- Editor context (frontend-pushed, by explicit root) -----------------
+
+    /// Look a slot up by the root as given, then by its canonical form.
+    ///
+    /// The editor context is addressed by the `--workspace` root — from the
+    /// frontend on the push side and from the registry-published
+    /// `Workspace.root.display()` on the pipe side — while the slot map is keyed by
+    /// the canonical root. This is the same canonicalize fallback [`lsp_for_root`]
+    /// makes, for the same reason: a separator or short-name difference must not
+    /// read as "not open".
+    ///
+    /// [`lsp_for_root`]: Self::lsp_for_root
+    fn slot_for_root(&self, root: &Path) -> Option<Arc<WorkspaceSlot>> {
+        if let Some(slot) = self.slot(root) {
+            return Some(slot);
+        }
+        let canonical = dunce::canonicalize(root).ok()?;
+        self.slot(&canonical)
+    }
+
+    /// Record the live editor state the frontend pushed for `root`.
+    ///
+    /// By explicit root (with the canonicalize fallback above), so a push from a
+    /// background codebase's editor lands in the workspace it came from rather than
+    /// the foreground one — the same rule every other `record_*` here follows.
+    /// Returns whether it was kept — `false` if that workspace has since been
+    /// closed, which the push command surfaces.
+    ///
+    /// Feature-off gating is the frontend's job (it stops pushing while the
+    /// `EditorContextMcp` feature is off); this only records. The pipe host
+    /// re-checks the feature before answering, so a stale context left here by a
+    /// feature turned off after a push is never served — see
+    /// [`crate::editor_context::agent::answer`].
+    pub fn record_editor_context(&self, root: &Path, ctx: EditorContext) -> bool {
+        let Some(slot) = self.slot_for_root(root) else {
+            return false;
+        };
+        let Ok(mut store) = slot.editor_context.lock() else {
+            return false;
+        };
+        *store = Some(ctx);
+        true
+    }
+
+    /// The live editor state pushed for **a named** workspace, if that workspace
+    /// is open and the frontend has pushed anything.
+    ///
+    /// The editor-context MCP pipe answers by `--workspace`, not by the active
+    /// pointer, so it resolves the state for the repository the agent was scoped to
+    /// regardless of which window is in front — the same shape as [`lsp_for_root`].
+    /// `None` means the workspace is not open, or nothing has been pushed yet,
+    /// which the caller turns into
+    /// [`cb_core::editor_context::answer::EditorRefusal::NoContext`].
+    ///
+    /// [`lsp_for_root`]: Self::lsp_for_root
+    pub fn editor_context_for(&self, root: &Path) -> Option<EditorContext> {
+        let slot = self.slot_for_root(root)?;
+        let store = slot
+            .editor_context
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        store.clone()
     }
 
     /// The active workspace's root, or `None` when nothing is open.
@@ -851,6 +967,44 @@ impl AppState {
         let previous = {
             let mut slot = self
                 .roslyn_pipe
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            std::mem::replace(&mut *slot, listener)
+        };
+        // Stopped after the guard is dropped: `stop` aborts a task, and holding a
+        // `std::sync::Mutex` across that is the shape to avoid.
+        if let Some(previous) = previous {
+            previous.stop();
+        }
+    }
+
+    /// The listener currently published for the editor-context control pipe, if
+    /// any.
+    ///
+    /// Read whenever the editor instance registry is republished — a workspace
+    /// opening or closing changes the `workspaces` list but not the pipe, which is
+    /// process-global and outlives every individual workspace, exactly as the
+    /// Roslyn pipe is.
+    #[cfg(windows)]
+    pub fn editor_pipe_published(&self) -> Option<cb_core::editor_context::instances::Listener> {
+        self.editor_pipe
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|p| p.published())
+    }
+
+    /// Hand the editor-context control pipe over to this state, stopping whatever
+    /// was there.
+    ///
+    /// Replacing rather than refusing, exactly as [`Self::set_roslyn_pipe`]: the
+    /// pipe name carries the pid so a second could never bind, and a stale listener
+    /// must not be left running beside a new one.
+    #[cfg(windows)]
+    pub fn set_editor_pipe(&self, listener: Option<crate::editor_context::pipe::PipeListener>) {
+        let previous = {
+            let mut slot = self
+                .editor_pipe
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             std::mem::replace(&mut *slot, listener)

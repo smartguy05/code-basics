@@ -89,6 +89,18 @@ tool is capability-gated and **abstains** (`Unsupported`) for a language whose s
 not support it; a symbol whose position is ambiguous is refused and listed, never guessed;
 and no internal error text crosses to the agent.
 
+The Editor Context MCP server (`editor_context/`, `mcp-editor`, opened from the Plugins menu)
+is the **Roslyn twin** for *what the user is looking at*: four **read-only** tools —
+`get_active_file`, `get_selection`, `get_open_files`, `get_recent_files` — answered over a
+per-pid named pipe from state the frontend **pushes** into `AppState` per workspace
+(`set_editor_context`), not from a language server. Positions are 1-based line / 0-based
+UTF-16 char; selection text and the recent-edited list are capped. It is `--workspace`-scoped
+(the consent boundary) and gated by `FeatureId::EditorContextMcp` (default on) **two ways** —
+the frontend stops pushing when the feature is off, and the pipe host re-reads the feature per
+call and refuses `Disabled` — with `NoWorkspace`/`Disabled`/`NoContext`/`NoActiveFile` kept as
+distinct refusals. Installs into the same agent configs with the preview-then-apply flow, its
+caveat stating that selection text and file paths reach the agent.
+
 The Redis plugin (`redis/`, opened from the Plugins menu; always-on, no `FeatureId`) is a
 RedisInsight-style panel plus a **write-capable** `mcp-redis` server, modelled on the SQL
 console. It discovers connections from appsettings/user-secrets/`.env` (filesystem only,
@@ -101,7 +113,8 @@ path. The panel itself may always write; `allow_writes` gates only the agent. No
 string, path or driver message ever reaches an agent.
 
 Per-**tool** MCP gating lives in `tool_gate/` (user-global `mcp-tools.json`): each of the
-four built-in servers filters its `tools/list` through `tool_gate::filter_descriptors` and
+five built-in servers (SQL, Tasks, Roslyn, Browser, Editor context) filters its `tools/list`
+through `tool_gate::filter_descriptors` and
 refuses a disabled-but-known tool at dispatch (re-read per call). It is a **preference, not
 a security boundary** — a missing/corrupt store means every tool on, the opposite of the
 consent stores. Surfaced in Settings → **MCP tools**. Redis is not one of the gated
