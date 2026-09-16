@@ -74,7 +74,9 @@ use crate::workspace::Workspace;
 ///   boxes and no containment (its members live in `pnpm-workspace.yaml`, which
 ///   was reported but never read); it now yields [`EdgeKind::Contains`] edges
 ///   from a container drawn from that file's `packages:` globs.
-pub const SCANNER_VERSION: u32 = 3;
+/// * `4` — .NET app-kind detection (web apps, mobile apps) and launchSettings
+///   promotion in the component map.
+pub const SCANNER_VERSION: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // Types crossing IPC
@@ -135,6 +137,21 @@ pub enum ArchKind {
     /// It carries no host, no port and no database name for the same reason
     /// [`super::signals`] refuses to read a connection string's value at all.
     DataStore,
+    /// A project the scan found that **declares it is a web or client-facing
+    /// application** — an ASP.NET Core web app, a Blazor/MVC front end, or a
+    /// JS/TS app depending on a browser framework.
+    ///
+    /// A narrower [`ArchKind::Project`] like [`ArchKind::Service`], carrying the
+    /// same [`ArchNode::project_id`], [`ArchNode::path`] and
+    /// [`ArchNode::ecosystem`]. Only [`super::signals`] produces it.
+    WebApp,
+    /// A project the scan found that **declares it is a mobile or desktop
+    /// application** — a MAUI/Xamarin project, or a desktop shell.
+    ///
+    /// A narrower [`ArchKind::Project`] like [`ArchKind::Service`], carrying the
+    /// same [`ArchNode::project_id`], [`ArchNode::path`] and
+    /// [`ArchNode::ecosystem`]. Only [`super::signals`] produces it.
+    MobileApp,
 }
 
 /// What an edge asserts about its two endpoints.

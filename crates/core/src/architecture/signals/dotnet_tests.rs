@@ -414,7 +414,12 @@ fn an_application_url_attaches_to_the_service_the_sdk_declared_naming_the_profil
 }
 
 #[test]
-fn an_application_url_never_creates_a_service_no_sdk_declared() {
+fn an_application_url_promotes_an_unclassified_project_to_a_service() {
+    // This used to assert the opposite — that a launch profile on a project with
+    // no application SDK created nothing and was refused as medium-without-high.
+    // A runnable project that declares a url it answers on is now promoted to a
+    // service on the strength of that declaration: the one path by which a
+    // project with no application SDK earns a service box.
     let (_dir, _out, gated) = admitted(&[
         ("src/Lib/Lib.csproj", &csproj("", &[])),
         (
@@ -423,18 +428,23 @@ fn an_application_url_never_creates_a_service_no_sdk_declared() {
         ),
     ]);
 
-    assert!(
-        gated.components.is_empty(),
-        "a launch profile brought a service into existence: {:?}",
+    assert_eq!(
+        labels(&gated, ComponentKind::HttpService),
+        ["Lib"],
+        "the launch profile did not promote the project to a service: {:?}",
         gated.components
     );
     assert!(
-        gated
+        !gated
             .discarded
             .iter()
             .any(|d| d.reason == DiscardReason::MediumWithoutHigh),
-        "the refusal was not counted: {:?}",
+        "a promotion must not also be refused: {:?}",
         gated.discarded
+    );
+    assert!(
+        !format!("{gated:?}").contains("7080"),
+        "the promotion must elide the url: {gated:?}"
     );
 }
 

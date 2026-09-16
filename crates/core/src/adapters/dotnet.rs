@@ -57,6 +57,15 @@ pub struct ProjectFile {
     /// `<UserSecretsId>` — names the secrets store under the user profile.
     pub user_secrets_id: Option<String>,
     pub package_references: Vec<String>,
+    /// `<FrameworkReference Include="..." />` — the shared frameworks a project
+    /// opts into. The one that matters for classification is
+    /// `Microsoft.AspNetCore.App`: a project on the plain `Microsoft.NET.Sdk`
+    /// declares it is an ASP.NET Core application this way rather than through
+    /// the Web SDK, so without reading it such a service is invisible.
+    ///
+    /// Not normalised or case-folded here — stored exactly as written, the same
+    /// as [`Self::package_references`].
+    pub framework_references: Vec<String>,
     /// `<ProjectReference Include="..." />` — the raw `Include` attribute of
     /// every project reference, **exactly as written in the file**.
     ///
@@ -146,6 +155,11 @@ pub fn parse_project_file(xml: &str) -> ProjectFile {
                         out.project_references.push(include);
                     }
                 }
+                if name.eq_ignore_ascii_case("FrameworkReference") {
+                    if let Some(include) = attr_value(&e, "Include") {
+                        out.framework_references.push(include);
+                    }
+                }
                 if name.eq_ignore_ascii_case("Project") {
                     out.sdk = attr_value(&e, "Sdk");
                 }
@@ -167,6 +181,11 @@ pub fn parse_project_file(xml: &str) -> ProjectFile {
                 if name.eq_ignore_ascii_case("ProjectReference") {
                     if let Some(include) = attr_value(&e, "Include") {
                         out.project_references.push(include);
+                    }
+                }
+                if name.eq_ignore_ascii_case("FrameworkReference") {
+                    if let Some(include) = attr_value(&e, "Include") {
+                        out.framework_references.push(include);
                     }
                 }
                 if name.eq_ignore_ascii_case("Sdk") {

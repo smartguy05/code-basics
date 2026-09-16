@@ -1694,7 +1694,9 @@ export type ArchKind =
   | "solutionFolder"
   | "external"
   | "service"
-  | "dataStore";
+  | "dataStore"
+  | "webApp"
+  | "mobileApp";
 
 /**
  * What an arrow asserts about its two endpoints.

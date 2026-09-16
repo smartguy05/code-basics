@@ -148,6 +148,8 @@ fn an_arch_graph_serialises_with_the_keys_the_ui_reads() {
         ArchKind::External,
         ArchKind::Service,
         ArchKind::DataStore,
+        ArchKind::WebApp,
+        ArchKind::MobileApp,
     ]
     .iter()
     .map(|kind| serde_json::to_value(kind).unwrap())
@@ -160,7 +162,9 @@ fn an_arch_graph_serialises_with_the_keys_the_ui_reads() {
             "solutionFolder",
             "external",
             "service",
-            "dataStore"
+            "dataStore",
+            "webApp",
+            "mobileApp"
         ],
         "src/ipc/types.ts spells the ArchKind union by hand — update it with this test"
     );

@@ -77,6 +77,32 @@ fn launch_settings(url: &str) -> String {
     )
 }
 
+/// A MAUI application: the plain SDK with `<UseMaui>true</UseMaui>`, which is
+/// how the workload marks a project regardless of `<OutputType>`.
+fn maui_csproj() -> String {
+    "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\
+     <TargetFramework>net8.0-android</TargetFramework><UseMaui>true</UseMaui>\
+     </PropertyGroup>\n</Project>"
+        .to_string()
+}
+
+/// A project on the plain SDK that declares itself an ASP.NET Core app through
+/// a `<FrameworkReference>` rather than the Web SDK.
+fn framework_ref_csproj(framework: &str) -> String {
+    format!(
+        "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\
+         <TargetFramework>net8.0</TargetFramework></PropertyGroup>\n  <ItemGroup>\n    \
+         <FrameworkReference Include=\"{framework}\" />\n  </ItemGroup>\n</Project>"
+    )
+}
+
+/// An Aspire app host: the plain SDK with `<IsAspireHost>true</IsAspireHost>`.
+fn aspire_host_csproj() -> String {
+    "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\
+     <IsAspireHost>true</IsAspireHost></PropertyGroup>\n</Project>"
+        .to_string()
+}
+
 fn nodes_of(graph: &ArchGraph, kind: ArchKind) -> Vec<&ArchNode> {
     graph.nodes.iter().filter(|n| n.kind == kind).collect()
 }
@@ -267,6 +293,138 @@ fn a_project_that_is_both_a_service_and_a_data_client_is_drawn_once_as_a_service
         nodes_of(&graph, ArchKind::Project).is_empty(),
         "a service must not also appear as a plain project: {:?}",
         graph.nodes
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Application kinds beyond the HTTP service
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_blazor_wasm_project_becomes_a_webapp_node() {
+    // The Blazor WebAssembly SDK is a web *app*, not an HTTP service, even
+    // though it is a `Microsoft.NET.Sdk.*` web SDK. The classification is on the
+    // full SDK name, so it must not collapse into the HttpService the plain Web
+    // SDK earns.
+    let (_dir, graph) = mapped(&[(
+        "src/Storefront/Storefront.csproj",
+        &sdk_csproj("Microsoft.NET.Sdk.BlazorWebAssembly", &[]),
+    )]);
+
+    assert_eq!(labels_of(&graph, ArchKind::WebApp), ["Storefront"]);
+    assert!(
+        nodes_of(&graph, ArchKind::Service).is_empty(),
+        "a Blazor WASM app is not an HTTP service: {:?}",
+        graph.nodes
+    );
+}
+
+#[test]
+fn a_maui_project_becomes_a_mobileapp_node() {
+    let (_dir, graph) = mapped(&[("src/Mobile/Mobile.csproj", &maui_csproj())]);
+
+    assert_eq!(labels_of(&graph, ArchKind::MobileApp), ["Mobile"]);
+    assert!(
+        nodes_of(&graph, ArchKind::Service).is_empty(),
+        "a MAUI app is not an HTTP service: {:?}",
+        graph.nodes
+    );
+}
+
+#[test]
+fn an_aspnetcore_framework_reference_becomes_a_service_node() {
+    // A project on the plain SDK is still an ASP.NET Core service when it names
+    // the `Microsoft.AspNetCore.App` shared framework, which is invisible unless
+    // `<FrameworkReference>` is parsed at all.
+    let (_dir, graph) = mapped(&[(
+        "src/Orders.Api/Orders.Api.csproj",
+        &framework_ref_csproj("Microsoft.AspNetCore.App"),
+    )]);
+
+    assert_eq!(labels_of(&graph, ArchKind::Service), ["Orders.Api"]);
+}
+
+#[test]
+fn a_worker_sdk_project_becomes_a_service_node() {
+    let (_dir, graph) = mapped(&[(
+        "src/Ingest.Worker/Ingest.Worker.csproj",
+        &sdk_csproj("Microsoft.NET.Sdk.Worker", &[]),
+    )]);
+
+    assert_eq!(labels_of(&graph, ArchKind::Service), ["Ingest.Worker"]);
+}
+
+#[test]
+fn a_project_with_only_a_launch_profile_url_is_promoted_to_a_service() {
+    // A plain class-library SDK, no application marker in the `.csproj` — but a
+    // `launchSettings.json` says it answers on a url, so it is a runnable
+    // service. It is promoted to a service box on the strength of that
+    // declaration alone.
+    let (_dir, graph) = mapped(&[
+        ("src/Runner/Runner.csproj", &lib_csproj(&[])),
+        (
+            "src/Runner/Properties/launchSettings.json",
+            &launch_settings("http://localhost:5080"),
+        ),
+    ]);
+
+    assert_eq!(labels_of(&graph, ArchKind::Service), ["Runner"]);
+}
+
+#[test]
+fn a_classified_project_with_a_launch_profile_emits_no_medium_without_high_about_itself() {
+    // The double-node-avoidance rule from the other side: a project the `.csproj`
+    // already classified must have its launch profile enrich that same node, at
+    // that node's kind — never become a stray MEDIUM HttpService the gate then
+    // refuses as medium-without-high. Here the project is a Blazor WebApp, so a
+    // launch-profile signal fixed at HttpService would have no HIGH to attach to.
+    let (_dir, graph) = mapped(&[
+        (
+            "src/Storefront/Storefront.csproj",
+            &sdk_csproj("Microsoft.NET.Sdk.BlazorWebAssembly", &[]),
+        ),
+        (
+            "src/Storefront/Properties/launchSettings.json",
+            &launch_settings("http://localhost:5080"),
+        ),
+    ]);
+
+    assert_eq!(
+        labels_of(&graph, ArchKind::WebApp),
+        ["Storefront"],
+        "the launch profile must enrich the web app it belongs to, not spawn a service: {:?}",
+        graph.nodes
+    );
+    assert!(
+        !warned_about(&graph, &["medium-without-high"]),
+        "a classified project's own launch profile is not a refused signal: {:?}",
+        graph.warnings
+    );
+}
+
+#[test]
+fn a_promoted_service_from_a_credentialed_launch_profile_leaks_nothing() {
+    // The promotion path cites the `launchSettings.json` with the url value
+    // elided, so a credential checked into that url reaches no exported string —
+    // the same guarantee the classified-enrichment path already carried.
+    let (_dir, graph) = mapped(&[
+        ("src/Runner/Runner.csproj", &lib_csproj(&[])),
+        (
+            "src/Runner/Properties/launchSettings.json",
+            &launch_settings("https://launchuser:launchpass77@launch-host.corp.internal:9443"),
+        ),
+    ]);
+
+    // Without the box this proves only that an empty graph leaks nothing.
+    assert_eq!(labels_of(&graph, ArchKind::Service), ["Runner"]);
+    leaks_nothing(
+        &graph,
+        &[
+            "launchpass77",
+            "launchuser",
+            "launch-host.corp.internal",
+            "9443",
+        ],
     );
 }
 
@@ -479,24 +637,25 @@ fn a_matched_base_address_draws_a_service_call_arrow() {
 /// match to anything on the diagram — it is not drawn, not labelled, and not a
 /// path they can open.
 ///
-/// A matched `AddHttpClient` call is now an *arrow*, not a note, so this pins
-/// the vocabulary on the remaining cross-project note there is: a launch-profile
-/// detail attaching to a box a *different* project earned. That needs two
-/// projects sharing a `Project::name` — the ordinary `samples/` copy — so the
-/// `sample`'s launch profile enriches the box the real project owns.
+/// A matched `AddHttpClient` call is now an *arrow*, and a launch profile now
+/// enriches its own project (or promotes it) rather than becoming a cross-project
+/// note, so this pins the vocabulary on the remaining cross-project note there
+/// is: an Aspire app host's `AddProject` reference, recorded about the box the
+/// *referenced* service earned.
 #[test]
 fn a_cross_project_note_names_the_project_the_way_the_diagram_labels_it() {
     let (_dir, graph) = mapped(&[
-        ("src/Foo/Foo.csproj", &web_csproj(&[])),
-        ("samples/Foo/Foo.csproj", &lib_csproj(&[])),
+        ("src/AppHost/AppHost.csproj", &aspire_host_csproj()),
         (
-            "samples/Foo/Properties/launchSettings.json",
-            &launch_settings("http://localhost:5102"),
+            "src/AppHost/Program.cs",
+            "var b = DistributedApplication.CreateBuilder(args);\n\
+             b.AddProject<Projects.Orders_Api>(\"orders\");\n",
         ),
+        ("src/Orders.Api/Orders.Api.csproj", &web_csproj(&[])),
     ]);
 
     assert!(
-        warned_about(&graph, &["Foo: ", "note rather than an arrow"]),
+        warned_about(&graph, &["AppHost: ", "note rather than an arrow"]),
         "the note has to open with the name on the box: {:?}",
         graph.warnings
     );
@@ -504,7 +663,7 @@ fn a_cross_project_note_names_the_project_the_way_the_diagram_labels_it() {
         !graph
             .warnings
             .iter()
-            .any(|w| w.contains("samples-Foo-Foo.csproj")),
+            .any(|w| w.contains("src-AppHost-AppHost.csproj")),
         "a raw project id reached a warning a person reads: {:?}",
         graph.warnings
     );
@@ -622,17 +781,19 @@ fn a_gate_refusal_and_a_producer_refusal_both_reach_the_same_list() {
 /// translation belongs at the relay, which is what this pins.
 #[test]
 fn a_gate_refusal_names_the_project_the_way_the_diagram_labels_it() {
-    // A launch profile on a project that is *not* a web SDK emits a MEDIUM
-    // HttpService signal with no HIGH behind it, so the gate refuses it — and
-    // the refusal carried `src-Orders.Api-Orders.Api.csproj`, which is drawn
-    // nowhere, labels nothing and is not even a path the reader can open.
-    let (_dir, graph) = mapped(&[
-        ("src/Orders.Api/Orders.Api.csproj", &lib_csproj(&[])),
-        (
-            "src/Orders.Api/Properties/launchSettings.json",
-            &launch_settings("http://localhost:5080"),
-        ),
-    ]);
+    // This used to use a plain-SDK project with only a `launchSettings.json`
+    // url, which the gate refused as medium-without-high. That fixture now
+    // *promotes* to a service (see `a_project_with_only_a_launch_profile_url_is_
+    // promoted_to_a_service`), so the refusal it relied on is gone. A
+    // `devDependencies` data client is still a MEDIUM signal with no HIGH behind
+    // it, so it still exercises the gate's relay — which must name the project by
+    // its `package.json` name, not the raw scan id the signal carried.
+    let (_dir, ws, index) = scanned(&[(
+        "apps/orders-api/package.json",
+        r#"{ "name": "orders-api", "devDependencies": { "ioredis": "^5.0.0" } }"#,
+    )]);
+    let graph = component_graph(&ws, &index);
+    let raw_ids: Vec<String> = ws.projects.iter().map(|p| p.id.clone()).collect();
 
     assert!(
         warned_about(&graph, &["medium-without-high"]),
@@ -641,18 +802,17 @@ fn a_gate_refusal_names_the_project_the_way_the_diagram_labels_it() {
         graph.warnings
     );
     assert!(
-        warned_about(&graph, &["Orders.Api: ", "medium-without-high"]),
+        warned_about(&graph, &["orders-api: ", "medium-without-high"]),
         "the gate's refusal has to open with the name on the box: {:?}",
         graph.warnings
     );
-    assert!(
-        !graph
-            .warnings
-            .iter()
-            .any(|w| w.contains("src-Orders.Api-Orders.Api.csproj")),
-        "a raw scan id reached a warning a person reads: {:?}",
-        graph.warnings
-    );
+    for id in &raw_ids {
+        assert!(
+            !graph.warnings.iter().any(|w| w.contains(id.as_str())),
+            "the raw scan id '{id}' reached a warning a person reads: {:?}",
+            graph.warnings
+        );
+    }
 }
 
 #[test]
@@ -692,21 +852,15 @@ fn a_connection_string_value_never_reaches_the_graph() {
 #[test]
 fn a_credentialed_launch_profile_url_reaches_no_string_the_component_map_exports() {
     // `launchSettings.json` is a checked-in file and people do put credentials
-    // in its `applicationUrl`. The launch-profile signal is MEDIUM and carries
-    // that url as its detail, and a MEDIUM detail whose project did not earn
-    // the box is printed verbatim by `cross_project_notes` — so the url lands
-    // in `ArchGraph::warnings` and from there in the exported mermaid.
-    //
-    // Reaching it needs two scanned projects sharing a `Project::name`, which
-    // is what makes the fixture look contrived and is entirely ordinary in a
-    // solution with a `samples/` copy: the component is keyed on the name, the
-    // web project earns it, and the sample's launch profile enriches a box it
-    // does not own.
+    // in its `applicationUrl`. A launch profile now either enriches its own
+    // project's box (with the profile *name* as the detail, the url never read)
+    // or promotes an unclassified project (with the value elided). Here the
+    // project is already a service, so the profile enriches its own box — and
+    // nothing it carries reaches an exported string.
     let (_dir, graph) = mapped(&[
         ("src/Foo/Foo.csproj", &web_csproj(&[])),
-        ("samples/Foo/Foo.csproj", &lib_csproj(&[])),
         (
-            "samples/Foo/Properties/launchSettings.json",
+            "src/Foo/Properties/launchSettings.json",
             &launch_settings("https://launchuser:launchpass77@launch-host.corp.internal:9443"),
         ),
     ]);
@@ -727,31 +881,27 @@ fn a_credentialed_launch_profile_url_reaches_no_string_the_component_map_exports
 
 #[test]
 fn a_cross_project_note_names_the_file_and_never_quotes_the_text_it_read() {
-    // The claim `cross_project_notes` documents about itself. The note must
-    // still be there — a refusal nobody is told about is the outcome the phase
-    // rules out — and it must locate the evidence by path and line rather than
-    // by copying it.
+    // The claim `cross_project_notes` documents about itself, on the cross-project
+    // note that remains — an Aspire `AddProject` reference. The note must still be
+    // there (a refusal nobody is told about is the outcome the phase rules out),
+    // it must locate the evidence by path and line, and a distinctive token on
+    // that source line must not survive into any exported string.
     let (_dir, graph) = mapped(&[
-        ("src/Foo/Foo.csproj", &web_csproj(&[])),
-        ("samples/Foo/Foo.csproj", &lib_csproj(&[])),
+        ("src/AppHost/AppHost.csproj", &aspire_host_csproj()),
         (
-            "samples/Foo/Properties/launchSettings.json",
-            &launch_settings("https://admin:s3cr3t-pw@internal-host.example:8443"),
+            "src/AppHost/Program.cs",
+            "var b = DistributedApplication.CreateBuilder(args);\n\
+             b.AddProject<Projects.Orders_Api>(\"super-secret-resource-tag\");\n",
         ),
+        ("src/Orders.Api/Orders.Api.csproj", &web_csproj(&[])),
     ]);
 
     assert!(
-        warned_about(
-            &graph,
-            &["launchSettings.json", "note rather than an arrow"]
-        ),
-        "the refused enrichment still has to be reported: {:?}",
+        warned_about(&graph, &["Program.cs", "note rather than an arrow"]),
+        "the refused enrichment still has to be reported by file: {:?}",
         graph.warnings
     );
-    leaks_nothing(
-        &graph,
-        &["s3cr3t-pw", "admin:", "internal-host.example", "8443"],
-    );
+    leaks_nothing(&graph, &["super-secret-resource-tag"]);
 }
 
 #[test]

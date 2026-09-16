@@ -757,12 +757,57 @@ fn health_checks_hubs_grpc_services_and_razor_pages_are_not_rest_routes() {
         "MapGrpcService",
         "MapRazorPages",
     ] {
-        assert!(
-            !warnings_mentioning(&found, needle).is_empty(),
-            "{needle} was dropped silently: {:?}",
+        let mentions = warnings_mentioning(&found, needle);
+        // One collapsed summary per kind, not one line per call.
+        assert_eq!(
+            mentions.len(),
+            1,
+            "{needle} should produce exactly one summary warning: {:?}",
             found.warnings
         );
+        // A single registration reads in the singular.
+        assert!(
+            mentions[0].contains(&format!("1 {needle} registration was not read as a route")),
+            "{needle} summary read wrong: {:?}",
+            mentions[0]
+        );
     }
+}
+
+#[test]
+fn many_grpc_registrations_collapse_into_one_counted_summary() {
+    // A gRPC-heavy service registers the same declined call dozens of times.
+    // The whole point of the aggregation is that this yields one warning
+    // carrying the count, not sixty-five near-identical lines.
+    const N: usize = 65;
+    let mut program = String::from(PROGRAM_HEAD);
+    for i in 0..N {
+        program.push_str(&format!("app.MapGrpcService<Service{i}>();\n"));
+    }
+    program.push_str("\napp.Run();\n");
+
+    let found = api_with(&[("src/Orders.Api/Program.cs", &program)]);
+
+    assert!(found.signals.is_empty(), "{:?}", details(&found));
+    let grpc = warnings_mentioning(&found, "MapGrpcService");
+    assert_eq!(
+        grpc.len(),
+        1,
+        "expected exactly one gRPC summary, got: {:?}",
+        found.warnings
+    );
+    assert!(
+        grpc[0].contains(&format!(
+            "{N} MapGrpcService registrations were not read as routes"
+        )),
+        "the count or plural was wrong: {:?}",
+        grpc[0]
+    );
+    assert!(
+        grpc[0].contains("a gRPC service's path comes from a .proto file, which is not read here"),
+        "the reason text was lost: {:?}",
+        grpc[0]
+    );
 }
 
 #[test]

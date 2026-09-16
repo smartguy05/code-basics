@@ -41,6 +41,8 @@ pub enum ComponentKind {
     Database,
     Cache,
     MessageQueue,
+    WebApp,
+    MobileApp,
     Unknown,
 }
 
@@ -55,6 +57,8 @@ impl ComponentKind {
             ComponentKind::Database => "database",
             ComponentKind::Cache => "cache",
             ComponentKind::MessageQueue => "queue",
+            ComponentKind::WebApp => "webapp",
+            ComponentKind::MobileApp => "mobile",
             ComponentKind::Unknown => "unknown",
         }
     }

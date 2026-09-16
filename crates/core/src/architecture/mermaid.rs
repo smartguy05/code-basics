@@ -254,6 +254,8 @@ fn write_node(
                 ArchKind::Solution | ArchKind::SolutionFolder => key.container = true,
                 ArchKind::Service => key.service = true,
                 ArchKind::DataStore => key.data_store = true,
+                ArchKind::WebApp => key.web_app = true,
+                ArchKind::MobileApp => key.mobile_app = true,
             }
             out.push_str(&format!("{indent}{}\n", shaped(&id, &label, node.kind)));
         }
@@ -332,6 +334,8 @@ fn shaped(id: &str, label: &str, kind: ArchKind) -> String {
         ArchKind::Solution | ArchKind::SolutionFolder => format!("{id}[[\"{label}\"]]"),
         ArchKind::Service => format!("{id}(\"{label}\")"),
         ArchKind::DataStore => format!("{id}[(\"{label}\")]"),
+        ArchKind::WebApp => format!("{id}{{{{\"{label}\"}}}}"),
+        ArchKind::MobileApp => format!("{id}[/\"{label}\"/]"),
     }
 }
 
@@ -405,6 +409,8 @@ struct Key {
     container: bool,
     service: bool,
     data_store: bool,
+    web_app: bool,
+    mobile_app: bool,
     reference: bool,
     package: bool,
     contains: bool,
@@ -421,6 +427,8 @@ impl Key {
             self.container,
             self.service,
             self.data_store,
+            self.web_app,
+            self.mobile_app,
             self.reference,
             self.package,
             self.contains,
@@ -534,6 +542,16 @@ fn write_legend(out: &mut String, key: &Key) {
         // that it uses one — is the arrow's to make, not the box's.
         out.push_str(&format!(
             "{inner}legend_data_store[(\"database, cache or broker\")]\n"
+        ));
+    }
+    if key.web_app {
+        out.push_str(&format!(
+            "{inner}legend_web_app{{{{\"web or client app\"}}}}\n"
+        ));
+    }
+    if key.mobile_app {
+        out.push_str(&format!(
+            "{inner}legend_mobile_app[/\"mobile or desktop app\"/]\n"
         ));
     }
 

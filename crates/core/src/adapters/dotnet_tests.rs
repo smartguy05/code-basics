@@ -96,6 +96,40 @@ fn a_project_reference_written_as_an_open_element_is_also_parsed() {
 }
 
 #[test]
+fn framework_references_are_parsed_from_both_element_forms() {
+    // `<FrameworkReference>` is how a project on the plain `Microsoft.NET.Sdk`
+    // declares it is an ASP.NET Core app, so it has to be read from the same two
+    // element forms `PackageReference` is — a fix to one arm silently misses the
+    // other.
+    let xml = r#"<Project Sdk="Microsoft.NET.Sdk">
+      <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+        <FrameworkReference Include="Microsoft.Windows.SDK.NET.Ref"></FrameworkReference>
+      </ItemGroup>
+    </Project>"#;
+    let p = parse_project_file(xml);
+    assert_eq!(
+        p.framework_references,
+        vec![
+            "Microsoft.AspNetCore.App".to_string(),
+            "Microsoft.Windows.SDK.NET.Ref".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn a_framework_reference_without_an_include_is_ignored() {
+    let xml = r#"<Project Sdk="Microsoft.NET.Sdk">
+      <ItemGroup>
+        <FrameworkReference Update="Microsoft.AspNetCore.App" />
+        <FrameworkReference />
+      </ItemGroup>
+    </Project>"#;
+    let p = parse_project_file(xml);
+    assert_eq!(p.framework_references, Vec::<String>::new());
+}
+
+#[test]
 fn a_project_reference_without_an_include_is_ignored() {
     let xml = r#"<Project Sdk="Microsoft.NET.Sdk">
       <ItemGroup>

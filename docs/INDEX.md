@@ -13,8 +13,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/build.rs` | 9 |  |
 | `crates/core/src/adapters/cargo.rs` | 254 | The Cargo (Rust) ecosystem adapter — manifest reading only. |
 | `crates/core/src/adapters/cargo_tests.rs` | 437 | Tests for the Cargo adapter. |
-| `crates/core/src/adapters/dotnet.rs` | 1193 | The .NET ecosystem adapter. |
-| `crates/core/src/adapters/dotnet_tests.rs` | 1855 | Tests for the .NET adapter. |
+| `crates/core/src/adapters/dotnet.rs` | 1212 | The .NET ecosystem adapter. |
+| `crates/core/src/adapters/dotnet_tests.rs` | 1889 | Tests for the .NET adapter. |
 | `crates/core/src/adapters/manifest.rs` | 600 | Declarative adapters: adding an ecosystem without writing Rust. |
 | `crates/core/src/adapters/mod.rs` | 28 | Ecosystem adapters. |
 | `crates/core/src/adapters/msbuild.rs` | 157 | Optional, accurate MSBuild evaluation. |
@@ -23,22 +23,22 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/adapters/node_tests.rs` | 489 | Tests for the JS/TS adapter. |
 | `crates/core/src/adapters/solution.rs` | 316 | Reading .NET solution files. |
 | `crates/core/src/adapters/solution_tests.rs` | 139 | Tests for solution parsing. Included by `solution.rs` under `#[cfg(test)]`. |
-| `crates/core/src/architecture/components.rs` | 469 | The component map: which services this workspace runs, which data stores |
-| `crates/core/src/architecture/components_tests.rs` | 997 | Tests for [`super::components`]. |
-| `crates/core/src/architecture/graph.rs` | 1782 | The derived project graph: nodes, edges, and the rules that produce them. |
-| `crates/core/src/architecture/graph_tests.rs` | 2112 | Tests for [`super::graph`]. |
-| `crates/core/src/architecture/mermaid.rs` | 1332 | Rendering an [`ArchGraph`](super::graph::ArchGraph) to Mermaid source, and |
+| `crates/core/src/architecture/components.rs` | 496 | The component map: which services this workspace runs, which data stores |
+| `crates/core/src/architecture/components_tests.rs` | 1147 | Tests for [`super::components`]. |
+| `crates/core/src/architecture/graph.rs` | 1799 | The derived project graph: nodes, edges, and the rules that produce them. |
+| `crates/core/src/architecture/graph_tests.rs` | 2116 | Tests for [`super::graph`]. |
+| `crates/core/src/architecture/mermaid.rs` | 1350 | Rendering an [`ArchGraph`](super::graph::ArchGraph) to Mermaid source, and |
 | `crates/core/src/architecture/mermaid_tests.rs` | 1534 | Tests for [`super::mermaid`]. |
 | `crates/core/src/architecture/mod.rs` | 77 | The derived project graph: what this workspace is made of, and what points |
-| `crates/core/src/architecture/signals/dotnet.rs` | 1387 | Component signals read out of .NET manifests, configuration and source. |
-| `crates/core/src/architecture/signals/dotnet_tests.rs` | 1202 | Tests for [`super::dotnet`]. |
-| `crates/core/src/architecture/signals/framework.rs` | 925 | The signal types and [`admit`] — the one gate every candidate component in |
+| `crates/core/src/architecture/signals/dotnet.rs` | 1487 | Component signals read out of .NET manifests, configuration and source. |
+| `crates/core/src/architecture/signals/dotnet_tests.rs` | 1212 | Tests for [`super::dotnet`]. |
+| `crates/core/src/architecture/signals/framework.rs` | 929 | The signal types and [`admit`] — the one gate every candidate component in |
 | `crates/core/src/architecture/signals/framework_tests.rs` | 832 | Tests for [`super::framework`]. |
 | `crates/core/src/architecture/signals/mod.rs` | 88 | Components that are not projects: the databases, caches, queues and HTTP |
 | `crates/core/src/architecture/signals/node.rs` | 1379 | Component signals read out of `package.json`, out of the framework |
 | `crates/core/src/architecture/signals/node_tests.rs` | 1357 | Tests for [`super::node`]. |
-| `crates/core/src/architecture/signals/routes.rs` | 1613 | Signals about the routes an ASP.NET service exposes. |
-| `crates/core/src/architecture/signals/routes_tests.rs` | 886 | Tests for [`super::routes`]. |
+| `crates/core/src/architecture/signals/routes.rs` | 1642 | Signals about the routes an ASP.NET service exposes. |
+| `crates/core/src/architecture/signals/routes_tests.rs` | 931 | Tests for [`super::routes`]. |
 | `crates/core/src/architecture/store.rs` | 596 | Diagrams on disk: where they live, how they say where they came from, and |
 | `crates/core/src/architecture/store_tests.rs` | 631 | Tests for [`super::store`]. |
 | `crates/core/src/behavioral/attribute.rs` | 127 | Mapping observable deltas back to the intent card that plausibly caused them. |
@@ -99,7 +99,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `crates/core/src/browser/url_tests.rs` | 276 | What the URL bar accepts and refuses. Included by `url.rs`. |
 | `crates/core/src/browser/wire.rs` | 309 | What travels on the browser control pipe, in both directions. |
 | `crates/core/src/browser/wire_tests.rs` | 292 |  |
-| `crates/core/src/build/build_tests.rs` | 232 | Tests for the build-diagnostics parser and model. |
+| `crates/core/src/build/build_tests.rs` | 257 | Tests for the build-diagnostics parser and model. |
 | `crates/core/src/build/mcp/answer.rs` | 114 | Every answer this server can give that is not data — and they are all different |
 | `crates/core/src/build/mcp/answer_tests.rs` | 73 |  |
 | `crates/core/src/build/mcp/argv.rs` | 84 | Is this process the Build MCP server, or the application? |
@@ -466,7 +466,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/App.tsx` | 1478 |  |
 | `src/appearance.ts` | 87 |  |
 | `src/appearanceLogic.test.ts` | 89 |  |
-| `src/appearanceLogic.ts` | 196 |  |
+| `src/appearanceLogic.ts` | 261 |  |
 | `src/components/AboutDialog.tsx` | 138 |  |
 | `src/components/AppOutputPanel.tsx` | 237 |  |
 | `src/components/AskPanel.tsx` | 265 |  |
@@ -650,7 +650,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/ipc/api.ts` | 1811 | Typed wrappers over the Tauri command surface. |
 | `src/ipc/channelLogic.test.ts` | 74 |  |
 | `src/ipc/channelLogic.ts` | 53 |  |
-| `src/ipc/types.ts` | 3103 | TypeScript mirrors of the `cb-core` model types. |
+| `src/ipc/types.ts` | 3105 | TypeScript mirrors of the `cb-core` model types. |
 | `src/main.tsx` | 24 |  |
 | `src/recentsLogic.test.ts` | 88 |  |
 | `src/recentsLogic.ts` | 19 | Workspaces the user has opened before, so reopening is one click. |
@@ -658,7 +658,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/shortcutLogic.test.ts` | 133 |  |
 | `src/shortcutLogic.ts` | 357 |  |
 | `src/shortcuts.ts` | 78 |  |
-| `src/views/ArchitectureView.tsx` | 679 |  |
+| `src/views/ArchitectureView.tsx` | 700 |  |
 | `src/views/ChangesView.tsx` | 1062 |  |
 | `src/views/HistoryView.tsx` | 542 |  |
 | `src/views/InspectView.tsx` | 1086 |  |
@@ -667,6 +667,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/TestsView.tsx` | 426 |  |
 | `src/views/architecture/DiagramCanvas.tsx` | 760 |  |
 | `src/views/architecture/DiagramEditor.tsx` | 324 |  |
+| `src/views/architecture/GraphCanvas.tsx` | 460 |  |
 | `src/views/architecture/architectureLogic.test.ts` | 176 |  |
 | `src/views/architecture/architectureLogic.ts` | 258 | The Architecture tab's list of diagrams, and the two labels that sit beside |
 | `src/views/architecture/copyLogic.test.ts` | 65 |  |
@@ -675,6 +676,10 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src/views/architecture/emptyStateLogic.ts` | 43 | Which of the two empty answers a derived graph is giving. |
 | `src/views/architecture/frontMatterLogic.test.ts` | 86 |  |
 | `src/views/architecture/frontMatterLogic.ts` | 91 |  |
+| `src/views/architecture/graphStyleLogic.test.ts` | 147 |  |
+| `src/views/architecture/graphStyleLogic.ts` | 156 | How each node and edge in a derived architecture graph is coloured, and which |
+| `src/views/architecture/layoutLogic.test.ts` | 129 |  |
+| `src/views/architecture/layoutLogic.ts` | 232 | Placing the nodes of a derived architecture graph as a top-down hierarchy, |
 | `src/views/architecture/nodeTargets.test.ts` | 407 |  |
 | `src/views/architecture/nodeTargets.ts` | 460 | Where clicking a box in a diagram takes you — or, more often than any other |
 | `src/views/architecture/panZoomLogic.test.ts` | 213 |  |
@@ -720,7 +725,7 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/browser/registry_tests.rs` | 284 |  |
 | `src-tauri/src/browser/shared.rs` | 575 | The browser host's **data**: what the panel and an agent read, and every |
 | `src-tauri/src/browser/shared_tests.rs` | 574 | Tests for the browser host's data layer. |
-| `src-tauri/src/build/agent.rs` | 221 | Answering an agent's Build tool call: check the feature, run or read the build, |
+| `src-tauri/src/build/agent.rs` | 235 | Answering an agent's Build tool call: check the feature, run or read the build, |
 | `src-tauri/src/build/agent_tests.rs` | 70 | The one decision the Build host makes without a running build: turning a cached |
 | `src-tauri/src/build/mod.rs` | 57 | The application's side of the Build & Diagnostics MCP server: the |
 | `src-tauri/src/build/pipe.rs` | 436 | The Build control pipe: the one way an agent's `mcp-build` server reaches this |
@@ -787,8 +792,8 @@ Use this file to locate things fast: every first-party source file with its one-
 | `src-tauri/src/roslyn/pipe.rs` | 476 | The Roslyn control pipe: the one way an agent's `mcp-roslyn` server reaches |
 | `src-tauri/src/roslyn/pipe_tests.rs` | 80 |  |
 | `src-tauri/src/roslyn/registry.rs` | 124 | Publishing what an `mcp-roslyn` client needs to find this application. |
-| `src-tauri/src/state.rs` | 1177 | Shared application state. |
-| `src-tauri/src/state_tests.rs` | 872 | Tests for the multi-workspace [`AppState`]. |
+| `src-tauri/src/state.rs` | 1166 | Shared application state. |
+| `src-tauri/src/state_tests.rs` | 881 | Tests for the multi-workspace [`AppState`]. |
 | `scripts/build-sidecar.mjs` | 110 | Publish the object-inspector sidecar into the Tauri bundle. |
 | `scripts/check-docs.mjs` | 70 | Documentation health check. |
 | `scripts/fetch-debuggers.mjs` | 228 | Vendor the debug adapters into the Tauri bundle. |

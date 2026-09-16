@@ -181,7 +181,7 @@ reported with its reason while the rest still go.
 
 Diagrams of the workspace, drawn from what the manifests actually say.
 
-The list opens on two built-ins. **Project map** is what is in this repository — the projects the scan found and the references between them, from `<ProjectReference>`, `package.json` dependencies, `.sln` grouping and workspace globs. **Component map** is what the system consists of when it runs: the services and the data stores they declare. They are two questions rather than two zoom levels, so the component map drops every project-reference arrow and adds stores that appear nowhere in the first. Any diagrams saved in the workspace follow underneath.
+The list opens on two built-ins. **Project map** is what is in this repository — the projects the scan found and the references between them, from `<ProjectReference>`, `package.json` dependencies, `.sln` grouping and workspace globs. **Component map** is what the system consists of when it runs: the backend services, web apps (Blazor) and mobile apps (MAUI) it runs — each classified from what its project file declares — and the data stores they speak to. They are two questions rather than two zoom levels, so the component map drops every project-reference arrow and adds stores that appear nowhere in the first. Any diagrams saved in the workspace follow underneath.
 
 Nothing is cached. Every time you select a diagram it is derived again from the files as they are on disk right now, and **Regenerate** does the same on demand — an arrow drawn from a stale manifest would assert a dependency you may have deleted since.
 

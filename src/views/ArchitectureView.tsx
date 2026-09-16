@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Sidebar } from "../components/Sidebar";
 import { DiagramCanvas } from "./architecture/DiagramCanvas";
+import { GraphCanvas } from "./architecture/GraphCanvas";
 import { DiagramEditor } from "./architecture/DiagramEditor";
 import { diagramEntries, type DiagramEntry } from "./architecture/architectureLogic";
 import { emptyGraphKind } from "./architecture/emptyStateLogic";
@@ -625,11 +626,31 @@ export function ArchitectureView({ workspace, onOpenFile }: ArchitectureViewProp
                   </>
                 )}
               </div>
-            ) : shown !== null ? (
-              <DiagramCanvas
+            ) : shown !== null && shown.graph !== null ? (
+              // A built-in map arrives with a structured graph, which is
+              // everything the bespoke renderer needs: it draws straight from
+              // nodes and edges and ignores the Mermaid `source` entirely.
+              <GraphCanvas
                 // Remounted per diagram: a canvas keeps pan and zoom, and a
                 // second diagram inheriting the first one's viewport would open
                 // scrolled to a corner of a picture that is not the same shape.
+                key={selectedId}
+                graph={shown.graph}
+                warnings={shown.warnings}
+                derivation={shown.derivation}
+                edited={shown.edited}
+                initialView={loadViewport(localStorage, vpKey)}
+                onViewChange={(next) => saveViewport(localStorage, vpKey, next)}
+                onOpenNode={(target) => {
+                  const name = target.path.split("/").pop() ?? target.path;
+                  onOpenFile?.(target.path, name, target.line);
+                }}
+                onError={setError}
+              />
+            ) : shown !== null ? (
+              // A saved or agent-authored diagram has no structured graph, only
+              // Mermaid text, so it keeps the Mermaid renderer.
+              <DiagramCanvas
                 key={selectedId}
                 source={shown.source}
                 graph={shown.graph}

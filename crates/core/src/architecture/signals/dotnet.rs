@@ -11,12 +11,20 @@
 //! * A `<PackageReference>` on a known data client is **HIGH**: the author
 //!   wrote down that this project speaks a protocol. See [`DATA_CLIENTS`] for
 //!   the exact table and for the limit of what a package reference proves.
-//! * `Sdk="Microsoft.NET.Sdk.Web"` and `<IsAspireHost>` are **HIGH**: an SDK
-//!   attribute is the author declaring what kind of program this is.
-//! * An `applicationUrl` in `launchSettings.json`, a `connectionStrings` key in
-//!   `appsettings*.json` and an Aspire `AddProject<Projects.X>()` are
-//!   **MEDIUM**. Each of them can label something that already exists; none of
-//!   them may bring anything into existence.
+//! * The application a project's `.csproj` declares itself to be is **HIGH**:
+//!   the Blazor WebAssembly SDK is a [`ComponentKind::WebApp`], `<UseMaui>` a
+//!   [`ComponentKind::MobileApp`], and the Web/Worker/Aspire SDKs, an
+//!   `<IsAspireHost>` and a `Microsoft.AspNetCore.App` `<FrameworkReference>`
+//!   are each a [`ComponentKind::HttpService`]. One kind per project — see
+//!   [`classify`].
+//! * A `connectionStrings` key in `appsettings*.json` and an Aspire
+//!   `AddProject<Projects.X>()` are **MEDIUM**: each can label something that
+//!   already exists but may not bring anything into existence.
+//! * An `applicationUrl` in `launchSettings.json` is **MEDIUM when its project
+//!   was already classified** — it enriches that project's own node, at that
+//!   node's kind — and a **HIGH HttpService promotion when it was not**, which
+//!   is the one way a project with no application SDK becomes a service box. The
+//!   url itself is elided on both paths; see [`Bindings::of`].
 //! * An `AddHttpClient` registration whose literal base address matches exactly
 //!   one other project's `applicationUrl` is a **HIGH call** — a
 //!   [`Signal::call`], not a component signal. It claims a service → service
@@ -282,10 +290,22 @@ pub fn signals(workspace: &Workspace) -> DotnetSignals {
 
     for read in &reads {
         packages(read, &mut out);
-        http_service(read, &mut out);
+        classified_component(read, &mut out);
     }
 
-    let services = Bindings::of(workspace, &reads, &mut out);
+    // Which projects the `.csproj` already classified, so the launch-profile
+    // rule below can tell an enrichment of an existing node from a promotion
+    // that has to create one. Keyed by [`Project::id`]; a project id is not
+    // injective, but the collision is already handled downstream by
+    // `graph::NodeIds`, and here the worst a collision does is enrich or promote
+    // the wrong same-named project, which is the same ambiguity the whole file
+    // carries.
+    let classified: BTreeMap<String, ComponentKind> = reads
+        .iter()
+        .filter_map(|read| classify(read).map(|kind| (read.project.id.clone(), kind)))
+        .collect();
+
+    let services = Bindings::of(workspace, &reads, &classified, &mut out);
 
     for read in &reads {
         connection_strings(workspace, read, &mut out);
@@ -395,46 +415,101 @@ fn matches_package(package: &str, name: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// HIGH: HTTP services
+// HIGH: the application a project's .csproj declares it to be
 // ---------------------------------------------------------------------------
 
-/// Emit the service a project's SDK declares it to be.
+/// Every SDK name a project declares, ready to compare.
 ///
-/// Both triggers are attributes of the `<Project>` element or a property beside
-/// it, which is as declared as a fact gets: `Microsoft.NET.Sdk.Web` brings in
-/// the ASP.NET Core targets, and `<IsAspireHost>` is what the Aspire tooling
-/// itself keys on.
-///
-/// The Aspire app host is included even though it is an orchestrator rather
-/// than an API, because it does serve the dashboard over HTTP and — more to the
-/// point — the alternative is a host that orchestrates a diagram's worth of
-/// services while being absent from it.
-fn http_service(read: &Read<'_>, out: &mut DotnetSignals) {
-    let sdks = std::iter::once(read.parsed.sdk.as_deref().unwrap_or_default())
-        .chain(read.parsed.sdk_imports.iter().map(String::as_str));
+/// The `Sdk` attribute of `<Project>` plus every nested `<Sdk Name>` import,
+/// each split on `;` (a project may name several SDKs in one attribute) and
+/// truncated at `/` (a pinned version: `Aspire.AppHost.Sdk/13.4.6`), with the
+/// empties dropped.
+fn sdk_names(parsed: &ProjectFile) -> impl Iterator<Item = &str> {
+    std::iter::once(parsed.sdk.as_deref().unwrap_or_default())
+        .chain(parsed.sdk_imports.iter().map(String::as_str))
+        .flat_map(|sdk| sdk.split(';'))
+        .map(|name| name.split('/').next().unwrap_or(name).trim())
+        .filter(|name| !name.is_empty())
+}
 
-    let mut trigger = None;
-    for sdk in sdks {
-        for name in sdk.split(';') {
-            // `Sdk="Aspire.AppHost.Sdk/13.4.6"` pins a version after a slash.
-            let name = name.split('/').next().unwrap_or(name).trim();
-            if name.eq_ignore_ascii_case("Microsoft.NET.Sdk.Web")
-                || name.eq_ignore_ascii_case("Aspire.AppHost.Sdk")
-            {
-                trigger = Some(name.to_string());
-            }
-        }
+/// The single application kind a project's `.csproj` declares it to be, or
+/// `None` when the project file states no application role.
+///
+/// Read from the project file *and nothing else* — never from
+/// `launchSettings.json`, source, or configuration. That restriction is what
+/// makes the result a HIGH fact: every branch below rests on an SDK attribute,
+/// a `<UseMaui>` property, an `<IsAspireHost>` property or a
+/// `<FrameworkReference>`, each of which is the author writing down what kind of
+/// program this is.
+///
+/// # Order is load-bearing
+///
+/// A Blazor WebAssembly project is a web *app*, not an HTTP service, and MAUI is
+/// a mobile/desktop app — so both are decided before the broad HTTP-service test
+/// a plain `Microsoft.NET.Sdk.Web` would also pass. There is exactly one kind
+/// per project: the first branch that fires wins, and nothing accumulates.
+fn classify(read: &Read<'_>) -> Option<ComponentKind> {
+    classify_with_trigger(read).map(|(kind, _)| kind)
+}
+
+/// [`classify`] plus the token to cite as its evidence in the `.csproj`.
+///
+/// The trigger is a literal that appears in the project file on the line the
+/// classification rests on — an SDK name, `UseMaui`, `IsAspireHost` or the
+/// `Microsoft.AspNetCore.App` framework reference — so [`declaration_line`] can
+/// quote the exact line rather than falling back to a description.
+fn classify_with_trigger(read: &Read<'_>) -> Option<(ComponentKind, &'static str)> {
+    let parsed = &read.parsed;
+    let has_sdk = |wanted: &str| sdk_names(parsed).any(|name| name.eq_ignore_ascii_case(wanted));
+
+    if has_sdk("Microsoft.NET.Sdk.BlazorWebAssembly") {
+        return Some((ComponentKind::WebApp, "Microsoft.NET.Sdk.BlazorWebAssembly"));
     }
-    if trigger.is_none() && read.parsed.is_aspire_host == Some(true) {
-        trigger = Some("IsAspireHost".to_string());
+    if parsed.use_maui == Some(true) {
+        return Some((ComponentKind::MobileApp, "UseMaui"));
     }
-    let Some(trigger) = trigger else {
+    if has_sdk("Microsoft.NET.Sdk.Web") {
+        return Some((ComponentKind::HttpService, "Microsoft.NET.Sdk.Web"));
+    }
+    if has_sdk("Aspire.AppHost.Sdk") {
+        return Some((ComponentKind::HttpService, "Aspire.AppHost.Sdk"));
+    }
+    if parsed.is_aspire_host == Some(true) {
+        return Some((ComponentKind::HttpService, "IsAspireHost"));
+    }
+    if parsed
+        .framework_references
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case("Microsoft.AspNetCore.App"))
+    {
+        return Some((ComponentKind::HttpService, "Microsoft.AspNetCore.App"));
+    }
+    if has_sdk("Microsoft.NET.Sdk.Worker") {
+        return Some((ComponentKind::HttpService, "Microsoft.NET.Sdk.Worker"));
+    }
+    None
+}
+
+/// Emit the one component a project's `.csproj` declares it to be.
+///
+/// One HIGH signal at the kind [`classify`] decided, labelled by the project
+/// name and cited at the line of the `.csproj` that earned it. A project file
+/// that declares no application role emits nothing here — its box, if it has
+/// one, comes from a data-client reference or a launch-profile promotion, not
+/// from this rule.
+///
+/// The Aspire app host is included even though it is an orchestrator rather than
+/// an API, because it does serve the dashboard over HTTP and — more to the point
+/// — the alternative is a host that orchestrates a diagram's worth of services
+/// while being absent from it.
+fn classified_component(read: &Read<'_>, out: &mut DotnetSignals) {
+    let Some((kind, trigger)) = classify_with_trigger(read) else {
         return;
     };
 
-    let (line, excerpt) = declaration_line(&read.text, &[&trigger]);
+    let (line, excerpt) = declaration_line(&read.text, &[trigger]);
     out.signals.push(Signal::high(
-        ComponentKind::HttpService,
+        kind,
         &read.project.name,
         &read.project.id,
         Evidence::new(&read.manifest, line, excerpt),
@@ -494,7 +569,12 @@ struct Binding {
 }
 
 impl Bindings {
-    fn of(workspace: &Workspace, reads: &[Read<'_>], out: &mut DotnetSignals) -> Self {
+    fn of(
+        workspace: &Workspace,
+        reads: &[Read<'_>],
+        classified: &BTreeMap<String, ComponentKind>,
+        out: &mut DotnetSignals,
+    ) -> Self {
         let mut by_authority: BTreeMap<(String, u16), Vec<Binding>> = BTreeMap::new();
 
         for read in reads {
@@ -513,15 +593,35 @@ impl Bindings {
                     continue;
                 };
                 let line = line_containing(&text, "applicationUrl");
-                out.signals.push(
-                    Signal::medium(
+
+                match classified.get(&read.project.id) {
+                    // The `.csproj` already earned this project a node. The
+                    // launch profile only enriches it, and it enriches it at
+                    // *that* node's kind — a WebApp's launch profile must not
+                    // become a MEDIUM HttpService that, having no HIGH
+                    // HttpService to attach to, is refused as medium-without-high.
+                    Some(&kind) => out.signals.push(
+                        Signal::medium(
+                            kind,
+                            &read.project.name,
+                            &read.project.id,
+                            Evidence::elided_value(&relative, line, "applicationUrl"),
+                        )
+                        .with_detail(format!("launch profile '{}'", profile.name)),
+                    ),
+                    // Nothing in the `.csproj` said what this project is, but it
+                    // declares a url it answers on, so it is a runnable service.
+                    // Promote it: a HIGH HttpService whose evidence is the
+                    // declaration file, with the url itself elided. This is the
+                    // only place a project with no application SDK becomes a
+                    // service box.
+                    None => out.signals.push(Signal::high(
                         ComponentKind::HttpService,
                         &read.project.name,
                         &read.project.id,
                         Evidence::elided_value(&relative, line, "applicationUrl"),
-                    )
-                    .with_detail(format!("launch profile '{}'", profile.name)),
-                );
+                    )),
+                }
 
                 for url in urls.split(';') {
                     if let Some(authority) = authority(url.trim()) {

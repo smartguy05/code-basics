@@ -139,29 +139,31 @@ pub fn component_graph(workspace: &Workspace, index: &SymbolIndex) -> ArchGraph 
         builder.warn(warning);
     }
 
-    // Services first, so that the builder's first-wins insertion cannot let a
-    // project that is both a service and a data-store consumer be filed as an
-    // ordinary project. Ordering the two passes is the whole mechanism; there
-    // is no second place where a node's kind is decided.
+    // Application nodes first, so that the builder's first-wins insertion cannot
+    // let a project that is both an application and a data-store consumer be
+    // filed as an ordinary project. Ordering the two passes is the whole
+    // mechanism; there is no second place where a node's kind is decided.
     //
-    // The service node ids are collected as they are drawn, because the
-    // service-call pass below may only connect boxes this pass created — see
-    // there.
-    let mut service_ids: BTreeSet<&str> = BTreeSet::new();
+    // "Application" is any component kind [`app_arch_kind`] maps to a project
+    // node — a service, a web app or a mobile app — as opposed to the data
+    // stores PASS 2 draws. The ids are collected as they are drawn, because the
+    // service-call pass below may only connect boxes this pass created, and any
+    // application node may be an endpoint of such a call.
+    let mut app_ids: BTreeSet<&str> = BTreeSet::new();
     for component in &admitted.components {
-        if component.kind != ComponentKind::HttpService {
+        let Some(arch_kind) = app_arch_kind(component.kind) else {
             continue;
-        }
+        };
         for usage in &component.usages {
             if let Some(project) = projects.resolve(&usage.project_id, &mut builder) {
-                builder.add_node(project_node(workspace, project, ArchKind::Service));
-                service_ids.insert(project.id.as_str());
+                builder.add_node(project_node(workspace, project, arch_kind));
+                app_ids.insert(project.id.as_str());
             }
         }
     }
 
     for component in &admitted.components {
-        if component.kind == ComponentKind::HttpService {
+        if app_arch_kind(component.kind).is_some() {
             continue;
         }
         builder.add_node(store_node(component));
@@ -190,7 +192,7 @@ pub fn component_graph(workspace: &Workspace, index: &SymbolIndex) -> ArchGraph 
         let Some(callee) = projects.resolve(&call.to_project, &mut builder) else {
             continue;
         };
-        if service_ids.contains(caller.id.as_str()) && service_ids.contains(callee.id.as_str()) {
+        if app_ids.contains(caller.id.as_str()) && app_ids.contains(callee.id.as_str()) {
             builder.add_edge(&caller.id, &callee.id, EdgeKind::ServiceCall);
         } else {
             builder.warn(format!(
@@ -200,7 +202,7 @@ pub fn component_graph(workspace: &Workspace, index: &SymbolIndex) -> ArchGraph 
                 projects.display_name(&call.from_project),
                 projects.display_name(&call.to_project),
                 display_path(&call.evidence.path),
-                projects.display_name(if service_ids.contains(callee.id.as_str()) {
+                projects.display_name(if app_ids.contains(callee.id.as_str()) {
                     &call.from_project
                 } else {
                     &call.to_project
@@ -312,6 +314,31 @@ impl<'w> Projects<'w> {
             Some([only]) => relative_to_root(self.root, &only.manifest_path),
             _ => project_id.to_string(),
         }
+    }
+}
+
+/// The [`ArchKind`] a component kind is drawn as when it is an **application
+/// node** — a project in this workspace that runs — or `None` when it is a data
+/// store.
+///
+/// This split is the whole shape of the two node passes. `Some` is a real
+/// project node: openable, runnable, carrying the project's id, path and
+/// ecosystem, and eligible to be an endpoint of a service-call arrow. `None` is
+/// a data store — a box for a technology that is not in this workspace at all,
+/// with none of those fields.
+///
+/// Written as an exhaustive match with no wildcard on purpose: a new
+/// [`ComponentKind`] must be a deliberate decision here — application node or
+/// store — and not silently fall through to one side.
+fn app_arch_kind(kind: ComponentKind) -> Option<ArchKind> {
+    match kind {
+        ComponentKind::HttpService => Some(ArchKind::Service),
+        ComponentKind::WebApp => Some(ArchKind::WebApp),
+        ComponentKind::MobileApp => Some(ArchKind::MobileApp),
+        ComponentKind::Database
+        | ComponentKind::Cache
+        | ComponentKind::MessageQueue
+        | ComponentKind::Unknown => None,
     }
 }
 

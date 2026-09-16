@@ -284,6 +284,11 @@ fn scan_project(
     let mut found = Found::default();
     let mut pending: Vec<PendingRoute> = Vec::new();
     let mut grouped = false;
+    // Counts of each declined `Map*` kind, accumulated across the project's
+    // files and collapsed into one summary warning per kind below. A
+    // gRPC-heavy service registers dozens of `MapGrpcService` calls, and a
+    // warning apiece would bury the route list it belongs beside.
+    let mut declined: BTreeMap<&'static str, usize> = BTreeMap::new();
 
     for (scanned, relative) in files.iter().enumerate() {
         if scanned >= MAX_SCANNED_FILES_PER_PROJECT {
@@ -299,7 +304,19 @@ fn scan_project(
         };
         let file = SourceFile::new(relative, &text);
         scan_controllers(project, &file, classes, &mut found);
-        grouped |= scan_map_calls(project, &file, &mut found, &mut pending);
+        grouped |= scan_map_calls(project, &file, &mut found, &mut pending, &mut declined);
+    }
+
+    // One summary warning per declined kind, in `DECLINED_MAPS` order so the
+    // result is deterministic and each reason is quoted exactly once.
+    for (name, why) in DECLINED_MAPS {
+        let count = declined.get(name).copied().unwrap_or(0);
+        if count == 0 {
+            continue;
+        }
+        found
+            .warnings
+            .push(declined_map_summary(&project.name, name, count, why));
     }
 
     emit_pending(project, grouped, pending, &mut found);
@@ -741,6 +758,7 @@ fn scan_map_calls(
     file: &SourceFile,
     found: &mut Found,
     pending: &mut Vec<PendingRoute>,
+    declined: &mut BTreeMap<&'static str, usize>,
 ) -> bool {
     let mut grouped = false;
 
@@ -772,14 +790,12 @@ fn scan_map_calls(
     for call in &calls {
         let line = file.line_number(call.line_index);
 
-        if let Some((_, why)) = DECLINED_MAPS.iter().find(|(name, _)| *name == call.name) {
-            found.warnings.push(refusal(
-                &project.name,
-                &format!("the {} registration", call.name),
-                &file.path,
-                Some(line),
-                why,
-            ));
+        if let Some((name, _)) = DECLINED_MAPS.iter().find(|(name, _)| *name == call.name) {
+            // Counted rather than warned about on the spot: one summary per
+            // (project, kind) is emitted after the whole project is scanned,
+            // so a service with dozens of gRPC registrations produces one line
+            // rather than one per call. See `scan_project`.
+            *declined.entry(name).or_default() += 1;
             continue;
         }
 
@@ -1050,6 +1066,19 @@ fn route_signal(
         Evidence::new(path.to_path_buf(), Some(line), excerpt),
     )
     .with_detail(format!("{verb} {route}"))
+}
+
+/// One summary line for every declined `Map*` registration of a single kind in
+/// a project, replacing the run of near-identical per-call refusals that used
+/// to bury a route list. The reason text is the same `DECLINED_MAPS` prose the
+/// per-call warning quoted; only the count and the plural agreement change.
+fn declined_map_summary(project: &str, name: &str, count: usize, why: &str) -> String {
+    let (registrations, were, routes) = if count == 1 {
+        ("registration", "was", "a route")
+    } else {
+        ("registrations", "were", "routes")
+    };
+    format!("{project}: {count} {name} {registrations} {were} not read as {routes} because {why}")
 }
 
 fn refusal(project: &str, subject: &str, path: &Path, line: Option<u32>, why: &str) -> String {
