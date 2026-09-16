@@ -84,14 +84,79 @@ const lightColors: ThemeColors = {
   syntaxMeta: "#5b6472", syntaxInvalid: "#c73545", syntaxLink: "#315fca",
 };
 
+// SNES / 16-bit console palette: deep indigo/purple field, bright saturated
+// accents. Diff overlay tokens stay rgba so they wash over the text below them.
+const retroDarkColors: ThemeColors = {
+  bg: "#1a1033", bgRaised: "#2a1a4a", bgInset: "#120a26", border: "#4a3570",
+  borderStrong: "#6b4ca0", text: "#f0e9ff", textDim: "#b39ddb", textFaint: "#7a6aa8",
+  accent: "#ff5fa2", accentDim: "#7a2e5a", pass: "#5fe37a", fail: "#ff5964",
+  skip: "#ffd23f", addBg: "rgba(95, 227, 122, 0.16)", delBg: "rgba(255, 89, 100, 0.16)",
+  diffAddLine: "rgba(95, 227, 122, 0.18)", diffAddWord: "rgba(95, 227, 122, 0.42)",
+  diffDelLine: "rgba(255, 89, 100, 0.18)", diffDelWord: "rgba(255, 89, 100, 0.42)",
+  diffAddEdge: "#5fe37a", diffDelEdge: "#ff5964", diffModEdge: "#ff5fa2",
+  syntaxKeyword: "#ff5fa2", syntaxString: "#5fe37a", syntaxComment: "#7a6aa8",
+  syntaxNumber: "#ffd23f", syntaxLiteral: "#4fd6ff", syntaxFunction: "#ffcf5f",
+  syntaxType: "#4fe3d0", syntaxProperty: "#8fd0ff", syntaxTag: "#4fd6ff",
+  syntaxOperator: "#f0e9ff", syntaxBracket: "#ffd23f", syntaxRegexp: "#ff9d5f",
+  syntaxMeta: "#b39ddb", syntaxInvalid: "#ff5964", syntaxLink: "#4fd6ff",
+};
+
+// Light variant: cream box-art "paper" field with the same accents darkened for
+// contrast on a bright background.
+const retroLightColors: ThemeColors = {
+  bg: "#f4ecd8", bgRaised: "#fffaf0", bgInset: "#e8dcc0", border: "#cbb98f",
+  borderStrong: "#a8935f", text: "#2a1a4a", textDim: "#6b4ca0", textFaint: "#9a86b8",
+  accent: "#c81e6e", accentDim: "#f3c6dc", pass: "#1f8f3c", fail: "#cc2836",
+  skip: "#a67a00", addBg: "rgba(31, 143, 60, 0.14)", delBg: "rgba(204, 40, 54, 0.14)",
+  diffAddLine: "rgba(31, 143, 60, 0.16)", diffAddWord: "rgba(31, 143, 60, 0.34)",
+  diffDelLine: "rgba(204, 40, 54, 0.16)", diffDelWord: "rgba(204, 40, 54, 0.34)",
+  diffAddEdge: "#1f8f3c", diffDelEdge: "#cc2836", diffModEdge: "#c81e6e",
+  syntaxKeyword: "#c81e6e", syntaxString: "#1f7a34", syntaxComment: "#9a86b8",
+  syntaxNumber: "#9a6a00", syntaxLiteral: "#0b6fa0", syntaxFunction: "#8a5a00",
+  syntaxType: "#0a7d70", syntaxProperty: "#155e8a", syntaxTag: "#0b6fa0",
+  syntaxOperator: "#2a1a4a", syntaxBracket: "#9a6a00", syntaxRegexp: "#b04510",
+  syntaxMeta: "#6b4ca0", syntaxInvalid: "#cc2836", syntaxLink: "#0b6fa0",
+};
+
+// "Tan Brown, Blue & Red" (schemecolor.com): Auburn #A52D2D, Malt #D7B78D,
+// Café au Lait #A97B58, Aesthetic Blue #2A548D, Astronaut #203973. Tan/brown are
+// the primary window field; blue and Auburn red are the accents. A warm light
+// theme. The palette has no green, so a muted olive is derived for test-pass /
+// diff-add to keep the pass/fail signal legible.
+const tanBrownColors: ThemeColors = {
+  bg: "#d7b78d", bgRaised: "#e8d4b0", bgInset: "#c6a778", border: "#a97b58",
+  borderStrong: "#8a5f3f", text: "#3a2818", textDim: "#6b4a30", textFaint: "#8a6a4a",
+  accent: "#2a548d", accentDim: "#b9c8e0", pass: "#4f7a3a", fail: "#a52d2d",
+  skip: "#8a5f00", addBg: "rgba(79, 122, 58, 0.14)", delBg: "rgba(165, 45, 45, 0.14)",
+  diffAddLine: "rgba(79, 122, 58, 0.16)", diffAddWord: "rgba(79, 122, 58, 0.34)",
+  diffDelLine: "rgba(165, 45, 45, 0.16)", diffDelWord: "rgba(165, 45, 45, 0.34)",
+  diffAddEdge: "#4f7a3a", diffDelEdge: "#a52d2d", diffModEdge: "#2a548d",
+  syntaxKeyword: "#2a548d", syntaxString: "#7a4a20", syntaxComment: "#8a6a4a",
+  syntaxNumber: "#6b4a30", syntaxLiteral: "#203973", syntaxFunction: "#8a5f00",
+  syntaxType: "#2f6a4a", syntaxProperty: "#315f8a", syntaxTag: "#203973",
+  syntaxOperator: "#3a2818", syntaxBracket: "#8a5f00", syntaxRegexp: "#a5432d",
+  syntaxMeta: "#6b4a30", syntaxInvalid: "#a52d2d", syntaxLink: "#2a548d",
+};
+
 const fonts: ThemeFonts = {
   ui: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif',
   code: '"JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
 };
 
+// Pixel font on UI chrome only (--font); the editor/terminal keep a readable
+// monospace (--mono). The fallback chain keeps chrome usable if the bundled
+// font ever fails to load.
+const retroFonts: ThemeFonts = {
+  ui: '"Press Start 2P", ' + fonts.ui,
+  code: fonts.code,
+};
+
 export const BUILTIN_THEMES: ThemeDefinition[] = [
   { id: "builtin-dark", name: "Dark", mode: "dark", colors: darkColors, fonts },
   { id: "builtin-light", name: "Light", mode: "light", colors: lightColors, fonts },
+  { id: "builtin-retro-90s-dark", name: "90's Retro (Dark)", mode: "dark", colors: retroDarkColors, fonts: retroFonts },
+  { id: "builtin-retro-90s-light", name: "90's Retro (Light)", mode: "light", colors: retroLightColors, fonts: retroFonts },
+  { id: "builtin-tan-brown-blue-red", name: "Tan Brown, Blue & Red", mode: "light", colors: tanBrownColors, fonts },
 ];
 
 export const DEFAULT_APPEARANCE: AppearanceSettings = {

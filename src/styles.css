@@ -1,5 +1,13 @@
-/* A single dark theme. The app is small enough that a theme switcher would
-   cost more than it earns, and Rider users generally run dark anyway. */
+/* Themes are data (see appearanceLogic.ts BUILTIN_THEMES); the values in :root
+   below are only the first-paint fallback before applyAppearance runs. */
+
+@font-face {
+  /* Bundled locally: the CSP is default-src 'self' with no font-src, so a CDN
+     web font is blocked. Used by the "90's Retro" themes for UI chrome only. */
+  font-family: "Press Start 2P";
+  src: url("./assets/fonts/PressStart2P-Regular.ttf") format("truetype");
+  font-display: swap;
+}
 
 :root {
   --bg: #16181d;
